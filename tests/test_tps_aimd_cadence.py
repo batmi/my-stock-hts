@@ -19,15 +19,10 @@ import config
 
 @pytest.fixture
 def sess():
-    from collections import deque
-    s = api.ThrottledSession.__new__(api.ThrottledSession)
-    import threading
-    s.lock = threading.Lock()
-    s.adaptive_limit_real = None
-    s._last_tps_raise = 0.0
-    s.request_history_real = deque()
-    s.request_history_sim = deque()
-    return s
+    # [수정 2026-08-09] __new__ 로 껍데기만 만들고 필요한 속성을 손으로 채우던 방식은,
+    #  세션에 진단용 필드가 하나 늘 때마다 AttributeError 로 무너졌다(실제로 무너졌다).
+    #  생성자는 네트워크를 타지 않으므로 그냥 정상 생성한다.
+    return api.ThrottledSession()
 
 
 def test_increase_happens_at_most_once_per_window(sess):
@@ -105,7 +100,9 @@ def test_rate_limit_logs_observed_send_rate(sess, caplog):
 
     msg = "\n".join(r.message for r in caplog.records)
     assert "EGW00201" in msg
-    assert "직전 1초 전송 3건" in msg, f"1초 내 전송 건수가 없거나 틀리다: {msg}"
+    # 종전 문구는 '직전 1초 전송'이었는데, 실제로는 응답 수신 시각 기준이라 RTT만큼
+    #  밀린 창을 재고 있었다. 어느 시각 기준인지 이름으로 드러낸다.
+    assert "수신시각 기준 1초 3건" in msg, f"1초 내 전송 건수가 없거나 틀리다: {msg}"
     assert "1.1초 창 4건" in msg
     assert "TPS" in msg
 
@@ -148,3 +145,82 @@ def test_single_reject_backs_off_once(sess):
     src = open(os.path.join(root, "api.py"), encoding="utf-8").read()
     assert "rate_limited_handled = False" in src, "중복 백오프 방지 플래그가 없다"
     assert "not rate_limited_handled" in src, "msg_cd 분기가 플래그를 확인하지 않는다"
+
+
+# ==========================================================
+# [추가 2026-08-09] 거부 원인을 가르는 계측
+# ==========================================================
+def test_rate_limit_log_carries_cause_discriminators(sess, caplog):
+    """[핵심] 거부 로그만 보고 원인 후보를 가를 수 있어야 한다.
+
+    후보는 셋이다 — (a) 같은 앱키를 쓰는 다른 프로세스, (b) 명목보다 낮은 계정 한도,
+    (c) 게이트를 안 거친 재전송. 종전 로그에는 셋 중 어느 것도 판정할 값이 없어서
+    분석이 매번 추측에서 멈췄다. 실측 495건을 다시 뜯어야 했던 이유가 이것이다.
+    """
+    import logging
+    now = time.time()
+    sent_at = now - 0.4                     # 응답이 0.4초 뒤에 돌아온 상황
+    sess._send_log_real.extend([sent_at - 0.1, sent_at - 0.2, sent_at - 0.3,
+                                sent_at - 0.9, sent_at - 1.4])   # 마지막 1건은 창 밖
+    sess.request_history_real.append(now - 0.05)
+    sess.gate_grants_real = 1234
+    sess.adaptive_limit_real = 18.0
+
+    with caplog.at_level(logging.WARNING, logger="api"):
+        sess._tps_on_rate_limit_real(url="https://x/uapi/domestic-stock/v1/quotations/inquire-price?a=1",
+                                     tr_id="FHKST01010100", sent_at=sent_at)
+
+    msg = "\n".join(r.message for r in caplog.records)
+    assert "전송시각 기준 1초 4건" in msg, f"전송 시각 기준 전송률이 없다: {msg}"
+    assert "RTT 0.4" in msg, f"전송→응답 지연이 없다: {msg}"
+    assert "TR=FHKST01010100" in msg and "URL=inquire-price" in msg, f"거부된 요청을 특정할 수 없다: {msg}"
+    assert "게이트 통과 1,234건" in msg
+    assert "게이트 미경유 재전송" in msg
+    assert "중복 프로세스" in msg
+
+
+def test_send_log_survives_history_pruning(sess):
+    """전송 시각 링버퍼는 1.1초 창(히스토리)이 잘려도 남는다.
+
+    응답이 돌아왔을 때 '보낼 때 몇 건이었나'를 되짚으려면, 게이트가 이미 지워 버린
+    구간까지 남아 있어야 한다. 둘을 같은 자료구조로 쓰면 이 진단은 불가능하다.
+    """
+    assert sess._send_log_real is not sess.request_history_real
+
+
+def test_adapter_retries_are_sealed():
+    """[회귀 방지] 어댑터 레벨 재시도는 0이어야 한다.
+
+    어댑터 재시도는 TPS 게이트 아래에서 일어나 히스토리에 잡히지 않는다. 하나라도
+    열려 있으면 한 논리 요청이 소켓에는 여러 번 나가고, 게이트가 세는 전송률과 서버가
+    보는 전송률이 갈린다 — '한도보다 낮은데 거부당한다'의 유력한 후보였다.
+    """
+    assert isinstance(api.retry_strategy, api.GatedRetry)
+    assert api.retry_strategy.total == 0, "어댑터 재시도가 다시 열렸다(게이트 우회 경로)"
+    assert 500 not in (api._token_session.get_adapter("https://x").max_retries.status_forcelist or []), \
+        "토큰 세션이 HTTP 500을 재시도한다 — EGW00201이 500으로 오므로 게이트 밖에서 연사된다"
+
+
+def test_gated_retry_counts_only_actual_resends():
+    """계수기는 '실제로 다시 보낸' 횟수만 센다(예산 소진 후의 시도는 재전송이 아니다)."""
+    before = api.GatedRetry.ungated_resends
+    r = api.GatedRetry(total=1, backoff_factor=0)
+    r2 = r.increment(method="GET", url="/x", error=Exception("boom"))
+    assert api.GatedRetry.ungated_resends == before + 1
+
+    from urllib3.exceptions import MaxRetryError
+    with pytest.raises(MaxRetryError):
+        r2.increment(method="GET", url="/x", error=Exception("boom"))
+    assert api.GatedRetry.ungated_resends == before + 1, "재전송하지 않은 시도까지 셌다"
+
+
+def test_connection_drop_uses_short_wait():
+    """끊긴 keep-alive 는 장애용 지수 백오프가 아니라 짧은 대기로 재시도한다.
+
+    어댑터 재시도를 봉인하면서 이 흔한 경우가 앱 레벨로 올라왔다. 지수 백오프를 그대로
+    태우면 서버가 유휴 소켓을 닫을 때마다 초 단위로 멈춘다.
+    """
+    drop = api._retry_wait_seconds(2, "('Connection aborted.', RemoteDisconnected('...'))")
+    fault = api._retry_wait_seconds(2, "KIS Server Intermittent Error (MCI): 게이트웨이")
+    assert drop <= api.RATE_LIMIT_RETRY_WAIT_MAX + 0.5 + 1e-9
+    assert fault > drop, "연결 끊김이 진짜 장애와 같은 대기를 쓴다"

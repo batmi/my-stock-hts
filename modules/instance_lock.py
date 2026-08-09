@@ -13,6 +13,7 @@
 
 [범위] 계좌 단위로 잠근다. 다른 계좌를 동시에 돌리는 것은 막지 않는다.
 """
+import hashlib
 import logging
 import os
 
@@ -36,13 +37,19 @@ def _lock_dir():
 class InstanceLock:
     """계좌 단위 배타 잠금. with 문 없이 acquire/release 로 수명을 직접 관리한다."""
 
+    prefix = "autotrade"    # 잠금 파일 접두어(=잠금의 범위). 하위 클래스가 바꾼다.
+    label = "account"       # 잠금 파일에 남길 키 이름(진단용)
+
     def __init__(self, account_key):
-        # 계좌번호에 경로 구분자가 섞여도 파일명이 깨지지 않게 한다.
-        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(account_key or "default"))
         self.account_key = account_key
-        self.path = os.path.join(_lock_dir(), f"autotrade_{safe}.lock")
+        self.path = os.path.join(_lock_dir(), self._lock_name(account_key))
         self._fd = None
         self.holder = ""
+
+    def _lock_name(self, key):
+        # 키에 경로 구분자가 섞여도 파일명이 깨지지 않게 한다.
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(key or "default"))
+        return f"{self.prefix}_{safe}.lock"
 
     def acquire(self):
         """잠금 획득 성공 여부. 실패 시 self.holder 에 선점자 정보가 담긴다."""
@@ -65,7 +72,7 @@ class InstanceLock:
             return False
 
         os.ftruncate(fd, 0)
-        os.write(fd, f"pid={os.getpid()} account={self.account_key}".encode('utf-8'))
+        os.write(fd, f"pid={os.getpid()} {self.label}={self.account_key}".encode('utf-8'))
         try:
             os.fsync(fd)
         except OSError:
@@ -86,3 +93,76 @@ class InstanceLock:
                 os.close(fd)    # 파일은 지우지 않는다 — 지우는 순간과 남의 open 이 겹치면
             except Exception:   #  서로 다른 inode를 잠가 배타성이 깨진다.
                 pass
+
+
+# ==========================================================
+# [추가 2026-08-09] 앱키 단위 중복 프로세스 감지
+# ==========================================================
+# EGW00201(초당 거래건수 초과) 진단에서, '같은 앱키를 쓰는 다른 프로세스'는 1순위
+#  후보였는데도 확인할 방법이 없었다. 위 InstanceLock 은 자동매매 엔진이 계좌 단위로만
+#  잡으므로, 조회 전용 인스턴스를 하나 더 띄우면 아무 잠금도 걸리지 않는다.
+#  실측 로그에도 25분간 6회 재시작(2026-08-07)처럼 겹칠 여지가 충분한 흔적이 있었다.
+#
+# [왜 계좌가 아니라 앱키인가] KIS의 TPS(20)·웹소켓 동시 연결(1)·토큰 발급(1분 1회)
+#  제약은 전부 앱키 단위다. 계좌가 달라도 앱키가 같으면 유량을 함께 쓴다.
+#  (mode 4 가상투자가 VIRT_APP_KEY로 키를 분리하는 이유와 같은 제약이다)
+#
+# [왜 차단이 아니라 감지가 기본인가] 조회 인스턴스를 하나 더 띄우는 것은 정상 작업
+#  흐름이고, 실주문 중복은 이미 계좌 단위 InstanceLock 이 막는다. 여기서 필요한 것은
+#  EGW00201 이 떴을 때 '다른 프로세스 때문인가'를 로그만 보고 판정할 근거다.
+#  차단이 필요하면 config.APPKEY_DUP_ABORT 를 켠다.
+APPKEY_DUPLICATE = False   # 같은 앱키를 쓰는 다른 프로세스가 있는가
+APPKEY_HOLDER = ""         # 있다면 그 프로세스 정보(pid=…)
+_APPKEY_LOCK = None        # 프로세스 수명 동안 fd 를 살려 둔다(GC 되면 잠금이 풀린다)
+
+
+def _appkey_fingerprint(app_key):
+    """앱키를 파일명에 그대로 쓰지 않는다 — 잠금 파일명은 평문으로 남는다."""
+    raw = str(app_key or "").strip().encode('utf-8')
+    return hashlib.sha256(raw).hexdigest()[:12] if raw else "empty"
+
+
+class AppKeyLock(InstanceLock):
+    """앱키 단위 배타 잠금. 계좌 잠금과 파일이 겹치지 않게 접두어만 다르다."""
+
+    prefix = "appkey"
+    label = "appkey"
+
+    def __init__(self, app_key):
+        super().__init__(_appkey_fingerprint(app_key))
+
+
+def guard_appkey(app_key):
+    """앱키 잠금을 잡고 중복 여부를 모듈 전역에 기록한다. (중복이면 False)
+
+    반환값은 '이 프로세스가 유일한가'다. 잠금 객체는 전역에 붙들어 프로세스가 살아 있는
+    동안 유지한다 — 해제는 프로세스 종료 시 커널이 한다(비정상 종료도 동일).
+    """
+    global APPKEY_DUPLICATE, APPKEY_HOLDER, _APPKEY_LOCK
+
+    if not app_key:
+        return True
+    try:
+        lock = AppKeyLock(app_key)
+        if lock.acquire():
+            _APPKEY_LOCK = lock
+            APPKEY_DUPLICATE, APPKEY_HOLDER = False, ""
+            return True
+    except Exception as e:
+        # 잠금 장치가 고장 났다고 프로그램을 막지는 않는다(보조 진단 장치다).
+        logger.debug(f"[AppKeyLock] 검사 실패 — 건너뜁니다: {e}")
+        return True
+
+    APPKEY_DUPLICATE, APPKEY_HOLDER = True, (lock.holder or "unknown")
+    logger.warning(
+        f"[AppKeyLock] 같은 앱키를 쓰는 다른 프로세스가 이미 실행 중입니다 ({APPKEY_HOLDER}). "
+        f"KIS의 TPS(20)·웹소켓(1)·토큰 발급 제약은 앱키 단위라 두 프로세스가 유량을 나눠 쓰게 되며, "
+        f"EGW00201(초당 거래건수 초과)의 직접 원인이 됩니다.")
+    return False
+
+
+def appkey_duplicate_note():
+    """진단 로그에 붙일 한 줄. api.py의 TPS 경고가 그대로 인용한다."""
+    if APPKEY_DUPLICATE:
+        return f"중복 프로세스 감지됨({APPKEY_HOLDER})"
+    return "중복 프로세스 없음"

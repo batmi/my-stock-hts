@@ -312,10 +312,17 @@ def _fmt_holding_days_cell(res):
     return f"{days}일"
 
 def _fmt_profit_cell(amount_str, rate_str, color=""):
-    """평가손익 = 금액 + 그 아래 괄호친 수익률. 최고가(MFE) 칸과 같은 모양으로 맞춘다.
+    """평가손익 = 금액 + 그 아래 수익률. 최고가(MFE) 칸과 같은 모양으로 맞춘다.
 
-    금액은 다른 금액 열들과 자릿수가 맞아야 하므로 우측 정렬, 수익률만 가운데 정렬이다.
-    한 셀 안에서 줄마다 정렬이 다르므로 문자열이 아니라 Group으로 돌려준다 — 공백을
+    [표기] 두 줄 모두 우측 정렬이고 괄호는 없다.
+     - 괄호: 한 칸 안에 있다는 것만으로 수익률이 금액의 부속값임은 이미 자명한데,
+       괄호까지 두면 좁은 열에서 두 칸을 더 먹는다.
+     - 정렬: 가운데 정렬이면 자릿수가 다른 종목마다 소수점 위치가 흔들려 세로로
+       훑을 수가 없다. 금액과 같은 축(우측)에 걸어야 종목 간 비교가 눈으로 된다.
+     - 색: 금액과 같은 색상룰(상승 red · 하락 blue · 보합 white)을 수익률에도 건다.
+       한 칸의 두 줄이 같은 사실을 말하는데 한 줄만 무채색이면 부호를 두 번 읽게 된다.
+
+    한 셀 안에서 줄마다 스타일이 다르므로 문자열이 아니라 Group으로 돌려준다 — 공백을
     채워 밀어내는 방식은 통하지 않는다(렌더러가 줄 끝 공백을 잘라내며, NBSP도 파이썬
     rstrip 대상이라 살아남지 못한다).
     """
@@ -323,8 +330,9 @@ def _fmt_profit_cell(amount_str, rate_str, color=""):
     from rich.text import Text
 
     amount = f"{color}{amount_str}[/]" if color else amount_str
+    rate = f"{color}{rate_str}[/]" if color else rate_str
     return Group(Text.from_markup(amount, justify="right"),
-                 Text.from_markup(f"[dim]({rate_str})[/dim]", justify="center"))
+                 Text.from_markup(rate, justify="right"))
 
 
 def _fmt_mfe_cell(res, is_overseas=False):
@@ -338,7 +346,8 @@ def _fmt_mfe_cell(res, is_overseas=False):
 
     price_str = f"${highest:,.2f}" if is_overseas else f"{int(highest):,}"
     mfe = res.get('max_profit_rate') or 0.0
-    return f"{price_str}\n[dim]({mfe:+.1f}%)[/dim]"
+    # 괄호 없이 둘째 줄로만 구분한다(평가손익 칸과 동일 규칙).
+    return f"{price_str}\n[dim]{mfe:+.1f}%[/dim]"
 
 def _fmt_ts_stop(res, is_overseas=False, buy_price=0):
     """샹들리에 TS 청산선. 고정/ATR 손절과 달리 실제 주청산선이라 별도 줄로 표시한다.
@@ -516,7 +525,7 @@ def build_domestic_holdings_table(items, holding_analysis, marks_ctx=None, title
             f"{cur_price:,}원",
             f"{pchs_amt:,}원",
             f"{eval_amt:,}원",
-            _fmt_profit_cell(f"{profit:+,}원", f"{rate:.2f}%", p_color),
+            _fmt_profit_cell(f"{profit:+,}원", f"{rate:+.2f}%", p_color),
             _fmt_holding_days_cell(res),
             _fmt_mfe_cell(res, is_overseas=False),
             _fmt_stop_cell(res, buy_price, is_overseas=False, code=code)

@@ -30,6 +30,7 @@ config.silence_yfinance_numpy_warning()
 import context # [추가] 상태 관리 모듈
 import constants
 import toss_api  # [추가] 토스증권(mode 3) 클라이언트
+from modules import instance_lock  # [추가] 앱키 단위 중복 프로세스 감지(TPS 진단)
 from modules.executors import tg_sender_executor
 
 logger = logging.getLogger(__name__)
@@ -1770,6 +1771,11 @@ def start_overview_warmer():
 RATE_LIMIT_RETRY_WAIT = 0.2      # 시도 회차마다 선형 증가 (0.2 → 0.4 → 0.6 …)
 RATE_LIMIT_RETRY_WAIT_MAX = 1.0  # 지터 제외 상한
 
+# 서버가 유휴 keep-alive 소켓을 닫아 생기는 '연결 끊김'의 예외 문구들.
+#  진짜 장애(게이트웨이 오류·타임아웃)와 달리 즉시 재전송하면 그대로 성공한다.
+_CONNECTION_DROP_MARKS = ("RemoteDisconnected", "Connection aborted",
+                          "Connection reset", "ProtocolError", "ConnectionResetError")
+
 
 def _retry_wait_seconds(attempt, reason):
     """재시도 전 대기 시간(초).
@@ -1783,7 +1789,14 @@ def _retry_wait_seconds(attempt, reason):
     그 외(연결 끊김·게이트웨이 오류 등 진짜 장애)는 종전 지수 백오프를 유지한다.
     """
     jitter = random.uniform(0.1, 0.5)   # 동시 재시도 스레드가 한꺼번에 깨어나는 것 방지
-    if "Rate Limit" in (reason or ""):
+    r = reason or ""
+    if "Rate Limit" in r:
+        return min(RATE_LIMIT_RETRY_WAIT * (attempt + 1), RATE_LIMIT_RETRY_WAIT_MAX) + jitter
+    # [추가 2026-08-09] 끊긴 keep-alive 연결도 짧은 대기로 분리한다.
+    #  어댑터 레벨 재시도를 봉인(total=0)하면서 이 흔한 경우가 앱 레벨로 올라왔는데,
+    #  장애용 지수 백오프(1→2→4초)를 태우면 서버가 유휴 소켓을 닫을 때마다 초 단위로
+    #  멈춘다. 재전송은 어차피 TPS 게이트를 다시 지나므로 일찍 깨어나도 한도를 넘지 않는다.
+    if any(k in r for k in _CONNECTION_DROP_MARKS):
         return min(RATE_LIMIT_RETRY_WAIT * (attempt + 1), RATE_LIMIT_RETRY_WAIT_MAX) + jitter
     base_delay = getattr(config, 'RETRY_DELAY_SERVER', 1.0)
     return (base_delay * (2 ** attempt)) + jitter
@@ -1826,6 +1839,12 @@ class ThrottledSession(requests.Session):
         # [Fix] 가산 증가를 마지막으로 적용한 시각. AIMD의 '증가'는 요청당이 아니라
         #  윈도우(1초)당 한 번이어야 한다 — 아래 _tps_on_success_real 주석 참조.
         self._last_tps_raise = 0.0
+        # [진단 2026-08-09] 전송 시각 링버퍼(최근 5초). request_history_real 은 게이트가
+        #  1.1초로 잘라내므로, 응답이 돌아온 뒤에는 '보낼 때 몇 건이었나'를 되짚을 수 없다.
+        #  거부 원인을 가르려면 수신 시각이 아니라 전송 시각 기준 전송률이 필요하다.
+        #  (항목 수는 5초 × 20 TPS ≈ 100개 — 라즈베리파이에서도 무시할 수 있는 크기다)
+        self._send_log_real = deque()
+        self.gate_grants_real = 0      # 게이트를 통과한 누적 전송 건수(실전)
 
     def _real_tps_bounds(self):
         nominal = config.REAL_TX_PER_SECOND
@@ -1854,14 +1873,24 @@ class ThrottledSession(requests.Session):
             cur = self.adaptive_limit_real if self.adaptive_limit_real is not None else start
             self.adaptive_limit_real = min(hi, cur + getattr(config, 'TPS_ADAPT_STEP', 0.05))
 
-    def _tps_on_rate_limit_real(self):
+    def _tps_on_rate_limit_real(self, url=None, tr_id=None, sent_at=None):
         """실전 EGW00201(초당 거래건수 초과) 시 실효 TPS를 곱셈 감소(마진 확대)시킨다.
 
         [진단] 게이트는 1.1초 창 한도와 최소 간격을 동시에 걸어, 한 프로세스가 실효
         한도를 넘길 수 없다. 그런데도 서버가 거부한다면 원인은 게이트 밖이다 —
         같은 앱키를 쓰는 다른 프로세스이거나, 계정의 실제 한도가 명목(20 TPS)보다
-        낮거나, 우리 창 계산이 서버의 1초 카운터와 어긋난 것이다. 셋은 '거부 시점의
-        클라이언트 실제 전송률'로 갈린다. 추측하지 않도록 그 값을 남긴다.
+        낮거나, 우리 창 계산이 서버의 1초 카운터와 어긋난 것이다.
+
+        [Fix 2026-08-09] 종전 로그는 그 셋을 가르지 못했다. 실측(08-06~08-08, 495건)에서
+        거부 시점의 전송률은 8~9건/초에 고정돼 있었는데, 이는 저우선순위 캡(17×0.5=8.5)에
+        **정확히 붙은 값**이다. 즉 '한도보다 낮은데 거부됐다'가 아니라 '자기 캡을 포화시킨
+        상태에서 거부됐다'였고, 종전 문구는 근거보다 한 칸 앞서 단정하고 있었다.
+        원인을 가르려면 세 가지가 더 필요하다.
+         1) 전송 '시각' 기준 전송률. 종전 값은 응답 수신 시각 기준이라 RTT만큼 밀린 창을
+            재고 있었다 — 낮은 전송률이 측정 아티팩트인지 실제인지 구분할 수 없었다.
+         2) 거부된 요청의 TR/URL. 특정 TR에 몰리면 엔드포인트 하위 한도, 고르게 퍼지면
+            앱키 단위 문제다.
+         3) 게이트를 안 거친 재전송 누적. 0이 아니면 원인은 게이트 '밖'이 아니라 '아래'다.
         """
         with self.lock:
             lo, hi, start = self._real_tps_bounds()
@@ -1870,20 +1899,37 @@ class ThrottledSession(requests.Session):
             # 물러난 직후 곧바로 올리지 않는다(한 윈도우는 낮춘 값으로 관찰한다).
             now = time.time()
             self._last_tps_raise = now
-            sent_1s = sum(1 for t in self.request_history_real if t > now - 1.0)
+            recv_1s = sum(1 for t in self.request_history_real if t > now - 1.0)
             sent_window = len(self.request_history_real)
             at_floor = self.adaptive_limit_real <= lo + 1e-9
+            grants = self.gate_grants_real
+            # 전송 시각 창은 게이트 히스토리가 아니라 진단 링버퍼에서 센다
+            #  (히스토리는 1.1초로 잘려 이미 지워졌을 수 있다).
+            send_1s = (sum(1 for t in self._send_log_real if sent_at - 1.0 < t <= sent_at)
+                       if sent_at else None)
 
         try:
             th = threading.current_thread().name
         except Exception:
             th = "?"
+
+        head = ""
+        if send_1s is not None:
+            head = f"전송시각 기준 1초 {send_1s}건 / "
+        rtt = f", RTT {max(0.0, now - sent_at):.2f}s" if sent_at else ""
+        where = ""
+        if tr_id or url:
+            tail = str(url or "").split('?')[0].rstrip('/').split('/')[-1]
+            where = f", TR={tr_id or '-'}, URL={tail or '-'}"
         logger.warning(
-            f"[TPS] EGW00201 — 직전 1초 전송 {sent_1s}건 / 1.1초 창 {sent_window}건, "
-            f"실효 한도 {cur:.2f} → {self.adaptive_limit_real:.2f} TPS"
-            f"{' (하한 도달)' if at_floor else ''}, 스레드={th}. "
-            f"전송률이 한도보다 낮은데 거부되면 원인은 게이트 밖이다 "
-            f"(같은 앱키를 쓰는 다른 프로세스 · 명목보다 낮은 계정 한도).")
+            f"[TPS] EGW00201 — {head}수신시각 기준 1초 {recv_1s}건 / 1.1초 창 {sent_window}건"
+            f"{rtt}, 실효 한도 {cur:.2f} → {self.adaptive_limit_real:.2f} TPS"
+            f"{' (하한 도달)' if at_floor else ''}, 스레드={th}{where} | "
+            f"게이트 통과 {grants:,}건 · 게이트 미경유 재전송 {GatedRetry.ungated_resends:,}건 · "
+            f"{instance_lock.appkey_duplicate_note()}. "
+            f"자기 캡을 포화시키지 않았는데 거부되면 원인은 게이트 밖이고"
+            f"(같은 앱키를 쓰는 다른 프로세스 · 명목보다 낮은 계정 한도), "
+            f"'게이트 미경유 재전송'이 0이 아니면 원인은 게이트 아래다.")
 
     def request(self, method, url, *args, **kwargs):
         is_real_server = "openapi.koreainvestment.com" in url and "openapivts" not in url
@@ -1898,6 +1944,12 @@ class ThrottledSession(requests.Session):
             max_retries += 1
         
         response = None
+        sent_at = None
+        # 거부 진단용. 어느 TR이 거부되는지가 '엔드포인트 하위 한도 vs 앱키 단위 한도'를 가른다.
+        try:
+            req_tr_id = (kwargs.get('headers') or {}).get('tr_id')
+        except Exception:
+            req_tr_id = None
         # [TPS 우선순위] 스레드 단위로 한 번만 판정한다(재시도 중에 바뀌지 않는다).
         is_priority = _is_system_priority()
 
@@ -1954,6 +2006,14 @@ class ThrottledSession(requests.Session):
                             if len(history) < gate_limit and time_since_last >= gate_interval:
                                 history.append(now)
                                 current_tps = len(history)
+                                if is_real_server:
+                                    # [진단] 게이트 통과 누적 + 전송 시각 링버퍼(최근 5초).
+                                    #  히스토리(1.1초)와 달리 응답이 돌아온 뒤에도 '보낼 때'를
+                                    #  되짚을 수 있어야 거부 원인을 가른다.
+                                    self.gate_grants_real += 1
+                                    self._send_log_real.append(now)
+                                    while self._send_log_real and self._send_log_real[0] <= now - 5.0:
+                                        self._send_log_real.popleft()
                                 break # 락 해제 후 전송 진행
                             else:
                                 wait_from_window = (history[0] + window_size) - now if len(history) >= gate_limit else 0
@@ -1977,6 +2037,9 @@ class ThrottledSession(requests.Session):
                 if 'timeout' not in kwargs:
                     kwargs['timeout'] = config.DEFAULT_TIMEOUT
 
+                # [진단] 전송 시각. 레이트리밋 로그가 '수신 시각'이 아니라 이 시각을 기준으로
+                #  전송률을 계산한다(RTT만큼 밀린 창을 재던 문제 — _tps_on_rate_limit_real 참조).
+                sent_at = time.time()
                 response = super().request(method, url, *args, **kwargs)
 
                 if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"] and (is_sim_server or is_real_server):
@@ -2017,7 +2080,8 @@ class ThrottledSession(requests.Session):
                         if 'EGW00201' in body_preview or 'EGW00215' in body_preview:
                             logger.debug(f"[Rate Limit] TPS 초과 응답 → 스로틀 백오프 후 재시도. URL: {url}")
                             if is_real_server:
-                                self._tps_on_rate_limit_real()  # [#7] 실효 TPS 곱셈 감소
+                                # [#7] 실효 TPS 곱셈 감소 (+ 거부된 요청의 TR·URL·전송시각 기록)
+                                self._tps_on_rate_limit_real(url=url, tr_id=req_tr_id, sent_at=sent_at)
                                 # [Fix] 아래 msg_cd 분기가 같은 응답을 한 번 더 처리한다.
                                 #  한 번의 거부에 백오프가 두 번 걸려 실효 한도가 실제보다
                                 #  두 배 빠르게 내려가고, 진단 로그도 매번 두 줄씩 남았다.
@@ -2066,7 +2130,7 @@ class ThrottledSession(requests.Session):
                                     should_retry = True
                                     retry_reason = f"Rate Limit Exceeded ({msg_cd}): {msg1_disp}"
                                     if is_real_server and not rate_limited_handled:
-                                        self._tps_on_rate_limit_real()  # [#7] 실효 TPS 곱셈 감소
+                                        self._tps_on_rate_limit_real(url=url, tr_id=req_tr_id, sent_at=sent_at)
                                 elif msg_cd == 'EGW00215' and 'inquire' not in url:
                                     # 주문과 같이 상태 변화가 있는 API는 중복 방지를 위해 재시도하지 않음
                                     req_body = kwargs.get('data', '')
@@ -2139,13 +2203,41 @@ class ThrottledSession(requests.Session):
 
 session = ThrottledSession()
 
-# [수정] 연결 끊김(RemoteDisconnected) 등 '네트워크 레벨' 에러만 어댑터에서 자동 재시도.
-# [중요] HTTP 5xx(특히 EGW00201/EGW00215는 Status 500으로 내려옴)는 어댑터 재시도 대상에서 제외한다.
-#  - 어댑터 레벨 재시도는 ThrottledSession의 TPS 게이트를 거치지 않고 super().request() 내부에서
-#    연사되므로, 모의투자(2 TPS) 서버에서는 재시도 자체가 초당 거래건수 초과(EGW00201)를 유발한다.
-#  - 5xx/Rate-Limit 재시도는 TPS 게이트 + 지수 백오프를 갖춘 앱 레벨(ThrottledSession)에서만 처리한다.
-retry_strategy = Retry(
-    total=2,
+class GatedRetry(Retry):
+    """어댑터(urllib3) 레벨 재시도 횟수를 세는 Retry.
+
+    [왜 세는가] 어댑터 재시도는 super().request() 내부(=TPS 게이트 아래)에서 일어나므로
+    게이트의 전송 히스토리에 잡히지 않는다. 즉 한 논리 요청이 소켓에는 여러 번 나가도
+    로그에는 1건으로 보인다 — '전송률은 낮은데 서버가 EGW00201로 거부한다'는 관측과
+    정확히 같은 모양이라, 재시도가 봉인돼 있는지 로그로 확인할 수 있어야 한다.
+    이 값이 0이 아니면 원인은 게이트 밖(다른 프로세스)이 아니라 게이트 아래다.
+
+    Retry.new() 가 type(self) 로 복제하므로 재시도 사슬 전체가 이 클래스를 유지한다.
+    """
+
+    ungated_resends = 0
+    _count_lock = threading.Lock()
+
+    def increment(self, *args, **kwargs):
+        # 예산이 소진되면 super() 가 MaxRetryError 를 던진다 — 그때는 재전송이 없으므로
+        #  세지 않는다(예외가 이 줄을 건너뛴다).
+        new_retry = super().increment(*args, **kwargs)
+        with GatedRetry._count_lock:
+            GatedRetry.ungated_resends += 1
+        return new_retry
+
+
+# [수정] 어댑터 레벨 재시도를 전면 봉인한다(total=0).
+# [중요] HTTP 5xx(특히 EGW00201/EGW00215는 Status 500으로 내려옴)는 원래 제외돼 있었지만,
+#  연결 끊김(RemoteDisconnected)에 대한 재시도 2회가 남아 있었다. 그 재전송은 TPS 게이트를
+#  거치지 않으므로 한 논리 요청이 소켓에는 최대 3번 나간다 — 게이트가 8.5 TPS로 세는 동안
+#  실제로는 최대 25 TPS가 나갈 수 있고, 그러면 서버는 거부하는데 우리 로그는 여유롭게
+#  보인다(2026-08-09 EGW00201 진단).
+#  기능 손실은 없다. 연결 끊김은 앱 레벨(ThrottledSession.request)의 except 가 그대로
+#  재시도하며, 그 경로는 게이트를 다시 지난다. 대기 시간도 _retry_wait_seconds 가
+#  연결 끊김을 짧은 선형 대기로 분리해 종전 체감 지연을 유지한다.
+retry_strategy = GatedRetry(
+    total=0,
     backoff_factor=0.5,
     status_forcelist=[],
     allowed_methods=["GET", "POST"],
@@ -2161,10 +2253,14 @@ def _create_token_session():
     """토큰 발급 전용 requests 세션을 생성합니다. (강화된 재시도 로직 포함)"""
     session = requests.Session()
     # KIS API 서버의 일시적 장애(5xx 에러) 및 네트워크 오류에 대응하기 위한 재시도 전략
-    retry_strategy = Retry(
+    # [수정 2026-08-09] 500을 재시도 목록에서 뺀다. KIS는 EGW00201(초당 거래건수 초과)을
+    #  HTTP 500으로 내려주므로, 토큰 발급이 레이트리밋에 걸리면 이 어댑터가 TPS 게이트
+    #  밖에서 최대 6연사한다 — 한도를 풀어야 할 상황에서 오히려 부하를 6배로 키운다.
+    #  진짜 게이트웨이 장애(502/503/504)와 429는 그대로 재시도한다.
+    retry_strategy = GatedRetry(
         total=5,  # 총 5회 재시도
         backoff_factor=1, # 실패 시 대기 시간 (1s, 2s, 4s, 8s, 16s...)
-        status_forcelist=[429, 500, 502, 503, 504], # 재시도할 HTTP 상태 코드
+        status_forcelist=[429, 502, 503, 504], # 재시도할 HTTP 상태 코드
         allowed_methods=["POST"], # POST 요청에 대해서도 재시도
         raise_on_status=False
     )

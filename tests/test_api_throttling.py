@@ -28,6 +28,13 @@ class TestThrottledSession(unittest.TestCase):
         # (성공 시 실효 TPS가 미세 상향되면 두 번째 요청 간격이 1/9에서 어긋나 검증이 흔들린다)
         self.original_tps_adapt_step = getattr(config, 'TPS_ADAPT_STEP', 0.05)
         config.TPS_ADAPT_STEP = 0.0
+        # [수정 2026-08-09] 이 테스트는 '기본 게이트 간격'을 검증한다. 그런데 나중에 들어온
+        #  우선순위 배분(LOW_PRIORITY_TPS_SHARE=0.5)이 조회성 스레드의 간격을 2배로 벌리고,
+        #  테스트는 MainThread(=조회성)에서 돈다 — 그래서 기대값이 전부 절반 한도로 어긋나
+        #  세 케이스가 계속 실패하고 있었다. 여기서는 배분을 끄고 기본 간격만 본다.
+        #  (배분 자체는 아래 test_low_priority_thread_gets_half_the_rate 가 따로 검증한다)
+        self.original_low_share = getattr(config, 'LOW_PRIORITY_TPS_SHARE', 0.5)
+        config.LOW_PRIORITY_TPS_SHARE = 1.0
         
         # requests.Session.request 모킹 (실제 네트워크 요청 방지)
         self.patcher_request = patch('requests.Session.request')
@@ -72,6 +79,7 @@ class TestThrottledSession(unittest.TestCase):
         config.REAL_TX_PER_SECOND = self.original_real_tps
         config.REAL_TPS_SAFETY = self.original_real_safety
         config.TPS_ADAPT_STEP = self.original_tps_adapt_step
+        config.LOW_PRIORITY_TPS_SHARE = self.original_low_share
         
         for patcher in [self.patcher_request, self.patcher_time, self.patcher_sleep]:
             try:
@@ -119,6 +127,25 @@ class TestThrottledSession(unittest.TestCase):
         # 실전투자 상태 변수가 두 번째 요청 통과 시점(≈ 2000 + min_interval)으로 갱신되었는지 확인
         # (무한루프 방지용 sleep 최소 전진(0.001)으로 한 틱 밀릴 수 있어 places=2로 검증)
         self.assertAlmostEqual(self.session.request_history_real[-1], 2000.0 + expected_wait, places=2)
+
+    def test_low_priority_thread_gets_half_the_rate(self):
+        """[핵심] 조회성 스레드는 한도의 LOW_PRIORITY_TPS_SHARE 만큼만 쓴다.
+
+        EGW00201 진단(2026-08-09)에서 실측 거부 시점의 전송률이 8~9건/초로 고정돼 있던
+        이유가 이 배분이다(17 × 0.5 = 8.5). '한도(17)보다 한참 낮은데 거부된다'로 읽으면
+        원인을 잘못 짚게 되므로, 실제 상한이 절반이라는 사실을 테스트로 못박는다.
+        """
+        config.LOW_PRIORITY_TPS_SHARE = 0.5
+        url = "https://openapi.koreainvestment.com/uapi/test"
+
+        self.current_time = 3000.0
+        self.session.request('GET', url)   # MainThread = 조회성(비우선순위)
+        self.session.request('GET', url)
+
+        effective_limit = config.REAL_TX_PER_SECOND * config.REAL_TPS_SAFETY
+        base_interval = 1.0 / effective_limit
+        self.assertAlmostEqual(self.mock_sleep.max_wait, base_interval / 0.5, places=4,
+                               msg="조회성 스레드인데 간격이 벌어지지 않았다")
 
     def test_reserve_then_wait_concurrency(self):
         """선예약 후대기(Reserve-then-Wait) 로직의 동시성 처리 확인"""

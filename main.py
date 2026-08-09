@@ -972,6 +972,23 @@ def main():
     # 1. 환경 설정 로드 (모드 선택)
     config.session.initialize(mode=args.mode)
 
+    # 1-1. [추가] 같은 앱키를 쓰는 다른 프로세스 감지.
+    #  KIS의 TPS·웹소켓·토큰 발급 제약이 전부 앱키 단위라, 두 인스턴스가 뜨면 서로를 모른 채
+    #  각자 자기 한도까지 밀어 양쪽 다 EGW00201(초당 거래건수 초과)에 갇힌다. 종전에는 이걸
+    #  확인할 방법이 없어 레이트리밋 원인 분석이 매번 추측에서 멈췄다(2026-08-09).
+    if not config.session.is_toss:
+        from modules import instance_lock
+        if not instance_lock.guard_appkey(config.session.app_key):
+            holder = instance_lock.APPKEY_HOLDER
+            config.console.print(
+                f"\n[bold yellow]⚠️ 같은 앱키로 다른 프로세스가 이미 실행 중입니다 ({holder}).[/bold yellow]")
+            config.console.print(
+                "[dim]  KIS 유량(20 TPS)·웹소켓(1개)·토큰 발급 제약은 앱키 단위입니다. "
+                "두 인스턴스가 유량을 나눠 쓰면서 양쪽 모두 초당 거래건수 초과에 걸립니다.[/dim]")
+            if getattr(config, 'APPKEY_DUP_ABORT', False):
+                config.console.print("[bold red]중복 실행 차단 설정(APPKEY_DUP_ABORT)이 켜져 있어 종료합니다.[/bold red]")
+                sys.exit(1)
+
     # 2. 사전 점검
     preflight_success = False
     for attempt in range(3):

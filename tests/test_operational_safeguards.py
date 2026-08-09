@@ -277,3 +277,70 @@ def test_lost_message_log_is_bounded():
     for _ in range(telegram_notify.LOST_MESSAGE_KEEP + 15):
         _send(status_code=500)
     assert len(telegram_notify.get_delivery_health()['lost']) == telegram_notify.LOST_MESSAGE_KEEP
+
+
+# ==========================================================
+# [추가 2026-08-09] 앱키 단위 중복 프로세스 감지
+# ==========================================================
+def test_same_appkey_twice_is_detected(tmp_path):
+    """[핵심] 같은 앱키를 쓰는 두 번째 프로세스를 감지한다.
+
+    KIS의 TPS(20)·웹소켓(1)·토큰 발급(1분 1회) 제약은 전부 앱키 단위다. 계좌 단위
+    잠금(InstanceLock)은 자동매매 엔진만 잡으므로, 조회 전용 인스턴스를 하나 더 띄우면
+    아무것도 걸리지 않고 유량만 반으로 갈린다 — EGW00201의 1순위 후보였는데도 확인할
+    방법이 없었다.
+    """
+    with patch.object(config, 'DB_FILE_PATH', str(tmp_path / "t.db")):
+        a = instance_lock.AppKeyLock("PSxxxxAPPKEY")
+        b = instance_lock.AppKeyLock("PSxxxxAPPKEY")
+        try:
+            assert a.acquire() is True
+            assert b.acquire() is False, "같은 앱키로 두 번 잠갔다"
+            assert str(os.getpid()) in b.holder
+        finally:
+            a.release(); b.release()
+
+
+def test_appkey_lock_file_does_not_leak_the_key(tmp_path):
+    """잠금 파일명에 앱키 평문이 남으면 안 된다(파일명은 그대로 노출된다)."""
+    with patch.object(config, 'DB_FILE_PATH', str(tmp_path / "t.db")):
+        lock = instance_lock.AppKeyLock("PSxxxxSECRETKEY")
+        try:
+            assert "PSxxxxSECRETKEY" not in lock.path
+            assert lock.path.endswith(".lock") and "appkey_" in lock.path
+        finally:
+            lock.release()
+
+
+def test_different_appkeys_do_not_block_each_other(tmp_path):
+    """앱키가 다르면 막지 않는다 — mode 4(VIRT_APP_KEY) 동시 운용이 정상 흐름이다."""
+    with patch.object(config, 'DB_FILE_PATH', str(tmp_path / "t.db")):
+        a = instance_lock.AppKeyLock("REAL_KEY")
+        b = instance_lock.AppKeyLock("VIRT_KEY")
+        try:
+            assert a.acquire() and b.acquire(), "다른 앱키인데 서로를 막았다"
+        finally:
+            a.release(); b.release()
+
+
+def test_appkey_lock_does_not_collide_with_account_lock(tmp_path):
+    """계좌 잠금과 앱키 잠금은 다른 파일을 쓴다(둘이 겹치면 한쪽이 무력해진다)."""
+    with patch.object(config, 'DB_FILE_PATH', str(tmp_path / "t.db")):
+        acct = instance_lock.InstanceLock("12345678-01")
+        key = instance_lock.AppKeyLock("12345678-01")
+        try:
+            assert acct.path != key.path
+            assert acct.acquire() and key.acquire()
+        finally:
+            acct.release(); key.release()
+
+
+def test_duplicate_note_is_quotable_by_the_tps_log(tmp_path):
+    """감지 결과는 TPS 경고가 그대로 인용할 수 있는 한 줄이어야 한다."""
+    with patch.object(config, 'DB_FILE_PATH', str(tmp_path / "t.db")):
+        with patch.object(instance_lock, 'APPKEY_DUPLICATE', False):
+            assert "없음" in instance_lock.appkey_duplicate_note()
+        with patch.object(instance_lock, 'APPKEY_DUPLICATE', True), \
+             patch.object(instance_lock, 'APPKEY_HOLDER', "pid=999"):
+            note = instance_lock.appkey_duplicate_note()
+            assert "감지" in note and "pid=999" in note
