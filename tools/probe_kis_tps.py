@@ -143,18 +143,24 @@ def _render(rows, market):
     t.add_column("기타오류", justify="right")
     t.add_column("거부율", justify="right")
     t.add_column("첫 거부", justify="right")
+    t.add_column("오류 상세", justify="left")
     for r in rows:
         color = "[red]" if r["reject_pct"] > 0 else "[green]"
         first = f"{r['first_reject_at']:.1f}s" if r["first_reject_at"] is not None else "-"
+        detail = ", ".join(f"{k}×{v}" for k, v in r["details"].most_common(3)
+                           if k not in ('EGW00201', 'EGW00215')) or "-"
         t.add_row(f"{r['rate']:g}", f"{r['actual_tps']:.1f}", f"{r['sent']:,}",
                   f"{r['ok']:,}", f"{color}{r['reject']:,}[/]",
-                  f"{r['other']:,}", f"{color}{r['reject_pct']:.1f}%[/]", first)
+                  f"{r['other']:,}", f"{color}{r['reject_pct']:.1f}%[/]", first, detail)
     console.print(t)
 
 
 def main():
     ap = argparse.ArgumentParser(description="KIS 실효 TPS 한도 실측(고정 속도 스윕)")
-    ap.add_argument('--mode', default='2', choices=['1', '2'], help='1: 모의, 2: 실전(기본)')
+    ap.add_argument('--mode', default='2', choices=['1', '2', '4'],
+                    help='1: 모의, 2: 실전(REAL_APP_KEY, 기본), 4: 가상투자(VIRT_APP_KEY·실전 서버)')
+    ap.add_argument('--force-token', action='store_true',
+                    help='토큰을 강제 재발급한다(캐시된 토큰이 서버측에서 무효화된 경우)')
     ap.add_argument('--market', default='domestic', choices=['domestic', 'overseas', 'both'])
     ap.add_argument('--rates', default='1,2,3,4,5,6,8,10,13,16,20', help='시험할 TPS 목록(쉼표)')
     ap.add_argument('--seconds', type=int, default=12, help='속도당 지속 시간(초)')
@@ -179,14 +185,42 @@ def main():
             return
 
     config.session.initialize(mode=args.mode)
-    token = api.get_access_token() if args.mode == '1' else api.get_real_access_token()
+    # 모드 4는 VIRT_APP_KEY 를 real_* 슬롯에 넣고 실전 서버를 쓴다(session.py 참조).
+    #  즉 토큰 종류는 'REAL'이며, 측정 대상 앱키만 달라진다.
+    if args.mode == '1':
+        token = api.get_access_token(force_refresh=args.force_token)
+    else:
+        token = api.get_real_access_token(force_refresh=args.force_token)
     if not token:
         console.print("[red]토큰 발급 실패. 환경변수(~/.htsrc)를 확인하세요.[/red]")
         return
+    console.print(f"[dim]앱키 …{str(config.session.real_app_key or config.session.app_key)[-6:]} / "
+                  f"서버 {config.session.url_base}[/dim]")
 
     for market in markets:
         target = _build_target(market)
         console.print(f"[dim]TR={target[3]} · {target[0].split('/')[-1]}[/dim]")
+
+        # [사전 점검] 1건만 보내 본다. 여기서 실패하면 스윕을 돌려 봐야 전 구간 '기타오류'로
+        #  채워질 뿐이고, 거부율 0%가 '한도가 높다'로 오독된다(2026-08-09 라즈베리파이 실측에서
+        #  실제로 700건 전부 실패했는데 표에는 거부율 0%만 보였다).
+        with api.requests.Session() as _s:
+            try:
+                _res = _s.get(target[0], headers=target[1], params=target[2], timeout=8)
+                _kind, _detail = _classify(_res)
+                _body = _res.text[:200]
+            except Exception as e:
+                _kind, _detail, _body = "other", type(e).__name__, str(e)[:200]
+        if _kind != "ok":
+            console.print(f"[bold red]사전 점검 실패 — 측정을 중단합니다.[/bold red] ({_detail})")
+            console.print(f"[dim]{_body}[/dim]")
+            if str(_detail).startswith('EGW001'):
+                console.print("[yellow]토큰 문제로 보입니다. --force-token 을 붙여 재발급 후 다시 시도하세요.[/yellow]")
+                console.print("[dim]  같은 앱키로 다른 기기에서 토큰을 새로 받으면 이전 토큰이 서버에서 "
+                              "무효화됩니다 — 로컬 캐시는 유효해 보여도 서버가 거부합니다.[/dim]")
+            return
+        console.print("[dim]사전 점검 통과(1건 성공). 스윕을 시작합니다.[/dim]")
+
         rows = []
         with api.requests.Session() as session:
             # 어댑터 재시도 금지 — 재전송이 섞이면 '보낸 속도'가 우리가 정한 값이 아니게 된다.
@@ -200,6 +234,11 @@ def main():
                 if i < len(rates) - 1 and args.gap > 0:
                     time.sleep(args.gap)
         _render(rows, market)
+
+        if any(r['ok'] == 0 for r in rows):
+            console.print("\n[bold red]성공 0건인 구간이 있습니다 — 이 측정은 무효입니다.[/bold red] "
+                          "위 '오류 상세'를 먼저 해결하세요(거부율 0%는 한도와 무관합니다).")
+            continue
 
         clean = [r['rate'] for r in rows if r['reject'] == 0]
         dirty = [r['rate'] for r in rows if r['reject'] > 0]
