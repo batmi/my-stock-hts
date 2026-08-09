@@ -65,16 +65,19 @@ def test_backoff_holds_for_one_window(sess):
     assert sess.adaptive_limit_real == pytest.approx(lowered)
 
 
-def test_recovery_to_ceiling_takes_realistic_time(sess):
-    """천장 복귀에 걸리는 시간이 '초 단위'가 아니라 '분 단위'여야 한다.
+def test_recovery_to_ceiling_is_fast(sess):
+    """[정책 2026-08-09] 천장 복귀는 빨라야 한다 — 속도 최우선.
 
-    이 여유가 있어야 컨트롤러가 천장이 아니라 실제 한도 아래에서 수렴한다.
+    종전에는 '천장에 상시 붙지 않도록' 복귀를 분 단위로 늦췄다. 그 전제는 천장이 실제
+    한도보다 위에 있어서 붙으면 손해라는 것이었는데, 실측은 반대였다 — 성공 처리량이
+    목표 TPS에 단조 증가한다(6 TPS 5.92/s → 20 TPS 15.58/s). 물러나 있는 시간이 곧 손해다.
+    한 번 물러났으면 수 초 안에 명목 한도로 돌아와야 한다.
     """
     lo, hi, _start = sess._real_tps_bounds()
-    step = getattr(config, 'TPS_ADAPT_STEP', 0.05)
-    windows_needed = (hi - lo) / step
-    assert windows_needed >= 30, (
-        f"바닥에서 천장까지 {windows_needed:.0f}초 — 너무 빨라 천장에 상시 붙는다")
+    step = getattr(config, 'TPS_ADAPT_STEP', 0.5)
+    seconds_needed = (hi - lo) / step
+    assert seconds_needed <= 15, (
+        f"바닥에서 천장까지 {seconds_needed:.0f}초 — 속도 우선 정책에서 너무 오래 물러나 있다")
 
 
 def test_bounds_stay_within_nominal_limit(sess):
@@ -120,6 +123,7 @@ def test_rate_limit_log_does_not_spam(sess, caplog):
     sess.adaptive_limit_real = 18.0
     with caplog.at_level(logging.WARNING, logger="api"):
         for _ in range(30):
+            sess._last_tps_drop = 0.0     # 서로 다른 혼잡 창을 가정
             sess._tps_on_rate_limit_real(tr_id="FHKST01010100")
 
     lines = [r for r in caplog.records if "EGW00201" in r.message]
@@ -127,26 +131,24 @@ def test_rate_limit_log_does_not_spam(sess, caplog):
     assert sess.adaptive_limit_real < 18.0 * 0.9, "로그를 묶느라 백오프까지 건너뛰었다"
 
 
-def test_band_can_reach_the_measured_knee(sess):
-    """[핵심] AIMD 밴드는 실측 무릎을 품어야 한다 — 그러지 못하면 컨트롤러가 정지한다.
+def test_band_is_speed_first_but_capped_at_nominal(sess):
+    """[정책 2026-08-09] 밴드는 명목 한도(20) 아래에 붙되, 실측 무릎(6)까지 내려가지 않는다.
 
-    [실측 2026-08-09 · tools/probe_kis_tps.py 고정 속도 스윕]
-      앱키 2개(REAL·VIRT) × 기기 2대에서 같은 무릎이 나왔다.
-        ~5 TPS 거부 0% · 6 TPS 1.7% · 7 TPS 12.9% · 8 TPS 14.4%
+    [실측 · tools/probe_kis_tps.py 고정 속도 스윕]
+        6 TPS → 5.92/s 통과(거부 0%)      10 TPS →  8.33/s (15.8%)
+        8 TPS → 6.83/s (14.6%)            20 TPS → 15.58/s (22.1%)
+    거부는 초과분만 쳐낼 뿐 처벌이 아니고, 성공 처리량은 목표 TPS에 단조 증가한다.
+    그래서 '무릎(6)에서 수렴'은 처리량을 2.6배 버리는 선택이다 — 운용 판단은 속도 우선이고,
+    문서 한도 20을 넘지 않는 선에서 최대한 붙여 운행한다.
 
-    종전 밴드는 [17.0, 19.6]으로, 무릎(6)보다 **통째로 위**에 있었다. 그래서 어떤 입력을
-    줘도 하한에 눌린 채 움직일 수 없었고, 운영 로그 495건(08-06~08-08)의 100%가
-    '하한 도달'이었다 — AIMD가 4일 내내 정지 상태였다는 뜻이다.
-
-    (종전 이 자리에는 '하한을 내려도 거부는 그대로고 처리량만 깎인다'는 2026-08-05
-     관측이 근거로 박혀 있었다. 그 관측은 지금 고친 잘못된 지표(수신 시각 기준 전송률)로
-     읽은 것이라 기각한다. 통제된 속도로 다시 재니 무릎은 분명히 존재했다.)
+    (이 자리에는 직전까지 '밴드가 무릎을 품어야 한다'는 테스트가 있었다. 거부를 없애는
+     것이 목표라면 맞지만, 목표가 속도라면 틀린 기준이다. 정책이 바뀌었으므로 함께 바꾼다.)
     """
-    lo, hi, _start = sess._real_tps_bounds()
-    knee = 6.0
-    assert lo < knee < hi, (
-        f"밴드 [{lo:.2f}, {hi:.2f}]가 실측 무릎 {knee} TPS를 품지 못한다 — "
-        f"컨트롤러가 한쪽 끝에 눌려 적응이 멈춘다")
+    lo, hi, start = sess._real_tps_bounds()
+    nominal = config.REAL_TX_PER_SECOND
+    assert hi <= nominal and start <= nominal, f"명목 한도({nominal})를 넘는다: start={start}, hi={hi}"
+    assert lo >= nominal * 0.7, (
+        f"하한 {lo:.1f} — 속도 우선 정책에서 이만큼 물러나면 처리량 손실이 크다")
 
 
 def test_backoff_descends_then_holds_at_floor(sess):
@@ -155,6 +157,7 @@ def test_backoff_descends_then_holds_at_floor(sess):
     sess.adaptive_limit_real = _hi          # 천장에서 시작
     seen = []
     for _ in range(40):   # 명목 20 → 하한 1까지 ×0.9 로 약 29회 필요
+        sess._last_tps_drop = 0.0     # 매번 다른 혼잡 창으로 본다(같은 창은 1회만 내린다)
         sess._tps_on_rate_limit_real()
         seen.append(sess.adaptive_limit_real)
 
@@ -215,3 +218,44 @@ def test_connection_drop_uses_short_wait():
     fault = api._retry_wait_seconds(2, "KIS Server Intermittent Error (MCI): 게이트웨이")
     assert drop <= api.RATE_LIMIT_RETRY_WAIT_MAX + 0.5 + 1e-9
     assert fault > drop, "연결 끊김이 진짜 장애와 같은 대기를 쓴다"
+
+
+# ==========================================================
+# [추가 2026-08-09] 곱셈 감소의 주기와 기준
+# ==========================================================
+def test_backoff_applies_once_per_congestion_window(sess):
+    """[핵심] 한 번의 혼잡에 한 번만 물러난다.
+
+    초과가 나면 여러 스레드가 동시에 거부당한다. 그걸 건건이 곱하면 한 혼잡에 ×0.9가
+    수십 번 걸려 한도가 바닥까지 무너진다 — 실측에서 거부 20건이 실효 한도를 20 → 2.43
+    까지 끌어내렸고, 조회 캡이 1 TPS(요청 간격 1초)가 되어 메뉴 2-5가 눈에 띄게 느려졌다.
+    종전에는 하한 17이 이 붕괴를 가려 주고 있었을 뿐이다.
+    TCP의 곱셈 감소가 RTT당 1회인 것과 같은 이유다 — 같은 창의 추가 손실은 이미 반영됐다.
+    """
+    now = time.time()
+    sess.adaptive_limit_real = 20.0
+    sess.request_history_real.extend([now - i * 0.05 for i in range(18)])   # 실제 18건/초
+
+    for _ in range(20):
+        sess._tps_on_rate_limit_real(tr_id="FHKST01010100")
+
+    assert sess.adaptive_limit_real == pytest.approx(18 * config.TPS_ADAPT_BACKOFF), (
+        f"한 혼잡에 백오프가 여러 번 걸렸다 — 실효 한도가 {sess.adaptive_limit_real:.2f}까지 무너졌다")
+
+
+def test_backoff_anchors_to_measured_send_rate(sess):
+    """[핵심] 물러나는 기준은 설정 한도가 아니라 직전 1초의 실제 전송 건수다.
+
+    한도가 20인데 실제로는 8/s를 보내는 중이면 20×0.9=18은 아무것도 바꾸지 못하는
+    헛걸음이다. 그 헛걸음이 쌓여야 비로소 실효가 되는데, 그때는 이미 지나치게 내려간 뒤다.
+    실측 전송률에서 물러나면 한 번에 맞는 자리로 간다.
+    """
+    now = time.time()
+    sess.adaptive_limit_real = 20.0
+    # 하한(15) 위에서 봐야 기준이 드러난다 — 그 아래는 클램프가 가린다.
+    sess.request_history_real.extend([now - i * 0.05 for i in range(18)])   # 실제 18건/초
+
+    sess._tps_on_rate_limit_real(tr_id="FHKST01010100")
+
+    assert sess.adaptive_limit_real == pytest.approx(18 * config.TPS_ADAPT_BACKOFF), (
+        f"실측 18건/초에서 물러났어야 하는데 {sess.adaptive_limit_real:.2f}가 됐다")

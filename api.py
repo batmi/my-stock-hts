@@ -1774,8 +1774,13 @@ def start_overview_warmer():
 # Rate Limit(초당 한도 초과) 재시도 대기. 서버 장애용 지수 백오프와 분리한다 —
 #  한도 초과는 다음 TPS 창만 비면 풀리므로, 재시도까지 몇 초씩 잠들 이유가 없다.
 #  (전송 직전 스로틀이 TPS 창을 다시 지키므로 짧게 깨어나도 한도를 넘지 않는다)
-RATE_LIMIT_RETRY_WAIT = 0.2      # 시도 회차마다 선형 증가 (0.2 → 0.4 → 0.6 …)
-RATE_LIMIT_RETRY_WAIT_MAX = 1.0  # 지터 제외 상한
+# [속도 2026-08-09] 레이트리밋 재시도는 **싸야 한다.**
+#  명목 한도(20 TPS)에 붙여 운행하면 실측상 20% 안팎이 거부되는데, 그 20%가 매번 0.2~1.5초를
+#  자면 체감 속도가 그대로 무너진다. 거부는 장애가 아니라 '다음 창을 기다리라'는 신호일 뿐이고,
+#  재전송은 어차피 TPS 게이트를 다시 지나므로 일찍 깨어나도 한도를 넘지 않는다.
+#  게이트의 최소 대기(1/20 = 50ms)가 실질 하한 역할을 한다.
+RATE_LIMIT_RETRY_WAIT = 0.05     # 시도 회차마다 선형 증가 (0.05 → 0.10 → 0.15 …)
+RATE_LIMIT_RETRY_WAIT_MAX = 0.3  # 지터 제외 상한
 
 # 서버가 유휴 keep-alive 소켓을 닫아 생기는 '연결 끊김'의 예외 문구들.
 #  진짜 장애(게이트웨이 오류·타임아웃)와 달리 즉시 재전송하면 그대로 성공한다.
@@ -1794,10 +1799,13 @@ def _retry_wait_seconds(attempt, reason):
 
     그 외(연결 끊김·게이트웨이 오류 등 진짜 장애)는 종전 지수 백오프를 유지한다.
     """
-    jitter = random.uniform(0.1, 0.5)   # 동시 재시도 스레드가 한꺼번에 깨어나는 것 방지
     r = reason or ""
     if "Rate Limit" in r:
-        return min(RATE_LIMIT_RETRY_WAIT * (attempt + 1), RATE_LIMIT_RETRY_WAIT_MAX) + jitter
+        # 지터도 대기와 같은 눈금으로 준다. 종전에는 0.1~0.5초를 더해, 0.05초 대기에
+        #  0.3초 지터가 붙는 배보다 배꼽이 큰 상황이 됐다.
+        return (min(RATE_LIMIT_RETRY_WAIT * (attempt + 1), RATE_LIMIT_RETRY_WAIT_MAX)
+                + random.uniform(0.01, 0.05))
+    jitter = random.uniform(0.1, 0.5)   # 동시 재시도 스레드가 한꺼번에 깨어나는 것 방지
     # [추가 2026-08-09] 끊긴 keep-alive 연결도 짧은 대기로 분리한다.
     #  어댑터 레벨 재시도를 봉인(total=0)하면서 이 흔한 경우가 앱 레벨로 올라왔는데,
     #  장애용 지수 백오프(1→2→4초)를 태우면 서버가 유휴 소켓을 닫을 때마다 초 단위로
@@ -1845,6 +1853,11 @@ class ThrottledSession(requests.Session):
         # [Fix] 가산 증가를 마지막으로 적용한 시각. AIMD의 '증가'는 요청당이 아니라
         #  윈도우(1초)당 한 번이어야 한다 — 아래 _tps_on_success_real 주석 참조.
         self._last_tps_raise = 0.0
+        # 곱셈 감소도 윈도우당 한 번이다(config.TPS_BACKOFF_WINDOW_SEC 주석 참조).
+        self._last_tps_drop = 0.0
+        # 우선순위(매매) 스레드가 마지막으로 전송을 얻은 시각. 매매가 놀 때는 조회에게
+        #  예약분을 돌려주기 위한 값이다.
+        self._last_priority_grant = 0.0
         self.gate_grants_real = 0      # 게이트를 통과한 누적 전송 건수(실전)
         # [로그 집계] 거부는 초당 수 건까지 나므로 건건이 WARNING을 남기면 로그가 그것만으로
         #  찬다. TPS_LOG_INTERVAL_SEC 마다 한 줄로 묶되(첫 거부는 즉시), 사후에 상황을
@@ -1906,10 +1919,22 @@ class ThrottledSession(requests.Session):
         with self.lock:
             lo, hi, start = self._real_tps_bounds()
             cur = self.adaptive_limit_real if self.adaptive_limit_real is not None else start
-            self.adaptive_limit_real = max(lo, cur * getattr(config, 'TPS_ADAPT_BACKOFF', 0.9))
-            # 물러난 직후 곧바로 올리지 않는다(한 윈도우는 낮춘 값으로 관찰한다).
             now = time.time()
-            self._last_tps_raise = now
+
+            # [1] 곱셈 감소는 윈도우당 한 번. 한 번의 초과에는 여러 스레드가 동시에 거부되는데
+            #  건건이 곱하면 한 혼잡에 ×0.9가 수십 번 걸려 한도가 바닥까지 무너진다.
+            # [2] 기준은 설정 한도가 아니라 **직전 1초에 실제로 보낸 건수**다. 한도가 20인데
+            #  실제로는 8/s를 보내는 중이면 20×0.9=18은 아무것도 바꾸지 못하는 헛걸음이고,
+            #  그 헛걸음이 쌓여 [1]의 붕괴를 만든다. 실측 전송률에서 물러나야 한 번에 맞는다.
+            if now - self._last_tps_drop >= float(getattr(config, 'TPS_BACKOFF_WINDOW_SEC', 1.0) or 0):
+                sent_1s = sum(1 for t in self.request_history_real if t > now - 1.0)
+                ref = min(cur, float(sent_1s)) if sent_1s > 0 else cur
+                self.adaptive_limit_real = max(lo, ref * getattr(config, 'TPS_ADAPT_BACKOFF', 0.9))
+                self._last_tps_drop = now
+                # 물러난 직후 곧바로 올리지 않는다(한 윈도우는 낮춘 값으로 관찰한다).
+                self._last_tps_raise = now
+            elif self.adaptive_limit_real is None:
+                self.adaptive_limit_real = cur   # 창 안이라 안 내리더라도 값은 확정해 둔다
 
             if self._rl_count == 0:                 # 집계 창 시작
                 self._rl_window_start = now
@@ -2026,17 +2051,34 @@ class ThrottledSession(requests.Session):
                             #  절대량 예약은 한도가 어디로 가든 매매 헤드룸을 그대로 지킨다.
                             gate_limit = effective_limit
                             gate_interval = min_interval
+                            # [속도] 균등 전송을 끄면 창 한도만 지키고 그 안에서는 몰아 보낸다.
+                            #  창(1.1초) 상한이 곧 초당 상한이므로 명목 20 TPS를 넘지 않는다 —
+                            #  1.0초는 1.1초의 부분구간이라 어떤 1초를 잘라도 20건 이하다.
+                            #  실측상 몰아 보내는 쪽이 처리량이 높다(30연결 폭주 측정).
+                            #  모의투자(2 TPS)는 여유가 없어 균등 전송을 유지한다.
+                            if is_real_server and not getattr(config, 'TPS_EVEN_PACING', True):
+                                gate_interval = 0.0
+
                             if not is_priority:
                                 reserve = float(getattr(config, 'PRIORITY_RESERVE_TPS', 2.0) or 0.0)
-                                gate_limit = max(1.0, effective_limit - reserve)
-                                # 창 한도만 낮추고 간격을 그대로 두면 순간 버스트가 남는다.
-                                gate_interval = max(min_interval, 1.0 / gate_limit)
+                                # 매매가 지금 돌고 있지 않으면 예약분을 풀어 준다. 떼어 두기만
+                                #  하고 아무도 안 쓰면 그냥 버려지는 몫이다(주말·자동매매 미가동).
+                                idle = float(getattr(config, 'PRIORITY_RESERVE_IDLE_SEC', 10.0) or 0.0)
+                                if idle > 0 and (now - self._last_priority_grant) > idle:
+                                    reserve = 0.0
+                                if reserve > 0:
+                                    gate_limit = max(1.0, effective_limit - reserve)
+                                    if gate_interval > 0:
+                                        # 창 한도만 낮추고 간격을 그대로 두면 순간 버스트가 남는다.
+                                        gate_interval = max(min_interval, 1.0 / gate_limit)
 
                             if len(history) < gate_limit and time_since_last >= gate_interval:
                                 history.append(now)
                                 current_tps = len(history)
                                 if is_real_server:
                                     self.gate_grants_real += 1   # [진단] 집계 로그의 전송률 산출용
+                                if is_priority:
+                                    self._last_priority_grant = now
                                 break # 락 해제 후 전송 진행
                             else:
                                 wait_from_window = (history[0] + window_size) - now if len(history) >= gate_limit else 0
