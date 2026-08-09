@@ -336,12 +336,79 @@ def ts_activation_dynamic():
     return str(config.SELL_STRATEGY.get("TS_ACTIVATION_MODE", "fixed")).lower() == "breakeven"
 
 
-def atr_stop_rate(atr, price, atr_mult=None, max_cap=None):
+# [변동성 국면] 지수 실현변동성의 장기 대비 배율. 손절 캡을 국면에 맞춰 넓히는 데 쓴다.
+#  실매매는 trader가 주기마다 갱신하고, 백테스트는 날짜별 값을 vol_ratio 인자로 직접 준다.
+#  기본 1.0 = 평시 = 캡이 MAX_ATR_STOP_LOSS_RATE 그대로.
+_VOL_REGIME_RATIO = 1.0
+
+
+def set_vol_regime_ratio(ratio):
+    """실매매용 — 주기마다 지수 변동성 배율을 갱신한다. 이상값은 무시하고 1.0을 유지한다."""
+    global _VOL_REGIME_RATIO
+    try:
+        r = float(ratio)
+    except (TypeError, ValueError):
+        return
+    if r > 0 and math.isfinite(r):
+        _VOL_REGIME_RATIO = r
+
+
+def get_vol_regime_ratio():
+    return _VOL_REGIME_RATIO
+
+
+def effective_atr_stop_cap(vol_ratio=None):
+    """[SSOT] 지금 적용할 ATR 손절 캡(%, 음수)을 돌려준다.
+
+    캡 = MAX_ATR_STOP_LOSS_RATE × 배율^power, 상·하한으로 클립.
+
+    [왜 동적인가] 고정 -15%는 평시엔 이상치만 잘라내지만 고변동 국면에서는 상시 구속해
+    ATR 적응 손절을 사실상 고정 손절로 만든다(실측 2026-08-09: 2026-07 봉의 66.4%가
+    구속, 손절폭 중앙 17.4%). 그러면 변동성 상위 = 대개 모멘텀 상위 종목의 청산선이
+    노이즈 안으로 들어온다 — 추세추종에서 가장 비싼 쪽이다.
+
+    [왜 제곱근인가] 배율을 그대로 반영하면 고변동 국면에서 캡이 하한까지 가 사실상
+    해제된다(2026년 중앙 -35%). 제곱근은 같은 방향이되 완만하다 — 배율 3배에서 1.73배만
+    넓어진다(2026년 중앙 -26%, 구속률 26.2%→2.3%).
+
+    [실측 2026-08-09 / 41종목·10년·5구간·15회 짝비교] 구간2·4에서는 수치가 소수점까지
+    동일하다 — 그 국면에서는 캡이 애초에 걸리지 않아 아무 일도 하지 않는다. 유일하게
+    움직인 구간5(최근 2년)에서 수익 140.0 vs 140.5·MDD 동일인데 상위10% 74.3 vs 72.0,
+    최대 185.1 vs 170.2로 fat-tail만 개선됐다. 즉 '평시 무해 + 고변동 국면에서만 작동'.
+    총수익 우위는 없다 — 채택 근거는 성과가 아니라 **비용이 0으로 측정된 보험**이다.
+    """
+    ss = config.SELL_STRATEGY
+    base = ss.get("MAX_ATR_STOP_LOSS_RATE", -15.0)
+    if not base:
+        return base                                    # 0 = 캡 미사용
+    if not ss.get("ATR_CAP_DYNAMIC", True):
+        return base
+
+    r = _VOL_REGIME_RATIO if vol_ratio is None else vol_ratio
+    try:
+        r = float(r)
+    except (TypeError, ValueError):
+        return base
+    if not (r > 0 and math.isfinite(r)):
+        return base
+
+    power = float(ss.get("ATR_CAP_VOL_POWER", 0.5))
+    cap = base * (r ** power)
+    floor = float(ss.get("ATR_CAP_FLOOR", -35.0))      # 가장 넓게 허용
+    ceil = float(ss.get("ATR_CAP_CEIL", -6.0))         # 가장 좁게 허용
+    return max(floor, min(ceil, cap))
+
+
+def atr_stop_rate(atr, price, atr_mult=None, max_cap=None, vol_ratio=None):
     """ATR 손절률(%, 음수)을 구한다. 산출 불가하면 None. (부수효과 없음)
 
     매수 체결 시 trades.stop_loss_rate에 굳는 값과 같은 식이다. 신규 매수·피라미딩·
     보유 분석이 각자 같은 식을 복제하고 있어 캡(MAX_ATR_STOP_LOSS_RATE) 적용 여부가
     갈릴 위험이 있어 SSOT로 모은다.
+
+    max_cap을 명시하지 않으면 effective_atr_stop_cap()이 정한다 — 즉 동적 캡이 켜져 있으면
+    여기를 지나는 **모든 경로**(신규 매수·피라미딩·보유 분석·백테스트 2종)가 자동으로 따른다.
+    vol_ratio는 백테스트가 '그 날짜의' 배율을 주입하는 통로다(실매매는 모듈 상태를 쓴다).
     """
     try:
         atr = float(atr or 0)
@@ -358,7 +425,7 @@ def atr_stop_rate(atr, price, atr_mult=None, max_cap=None):
 
     rate = -((atr * atr_mult / price) * 100)
     if max_cap is None:
-        max_cap = config.SELL_STRATEGY.get("MAX_ATR_STOP_LOSS_RATE", -15.0)
+        max_cap = effective_atr_stop_cap(vol_ratio)
     if max_cap and rate < max_cap:
         rate = max_cap
     return rate

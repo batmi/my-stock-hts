@@ -289,6 +289,39 @@ def get_market_filter_blocked(close, ma_period=None, band_pct=None, release_on_b
 
     return pd.Series(blocked, index=range(len(close)))
 
+def vol_regime_ratio(close, window=None, ref_min=None):
+    """[변동성 국면] 지수 실현변동성의 '장기 대비 배율' 시계열 (float Series).
+
+    ATR 손절 캡을 국면에 맞춰 넓히기 위한 척도다. 배율 1.0이 평시,
+    2.0이면 지수 변동성이 장기 중앙값의 두 배라는 뜻이다.
+
+    [왜 지수인가 — 종목 ATR을 쓰면 안 되는 이유] 손절폭은 그 종목 ATR×배수다. 캡을 같은
+    ATR에 비례시키면 캡은 아무 일도 하지 않는다 — 캡 배수가 손절 배수보다 크면 절대 안
+    걸리고, 작으면 항상 걸린다. 장기 ATR로 척도를 늦춰도 마찬가지다(실측 2026-08-09:
+    ATR120 기준 캡은 2026년 중앙 -15.1%로 고정값과 같아졌다 — 120봉 EMA가 5개월 전
+    국면 전환을 절반밖에 못 따라온다). 지수 변동성은 종목 ATR과 **독립된 시계열**이라
+    이 순환을 끊는다.
+
+    [미래를 보지 않는다] 장기 기준은 확장(expanding) 중앙값에 shift(1)을 걸어 그 시점까지의
+    정보만 쓴다. 워밍업 구간(ref_min 미만)은 1.0을 돌려준다 = 캡이 고정값 그대로 동작.
+
+    실매매(trader)와 백테스트(backtest.prepare_vol_regime)가 이 함수 하나를 공유한다.
+    """
+    if window is None:
+        window = int(config.SELL_STRATEGY.get("ATR_CAP_VOL_WINDOW", 60))
+    if ref_min is None:
+        ref_min = int(config.SELL_STRATEGY.get("ATR_CAP_VOL_REF_MIN", 250))
+
+    s = pd.Series(close, dtype='float64').reset_index(drop=True)
+    ret = s.pct_change()
+    vol = ret.rolling(int(window)).std()
+    ref = vol.expanding(min_periods=int(ref_min)).median().shift(1)
+    lo = float(config.SELL_STRATEGY.get("ATR_CAP_RATIO_MIN", 0.4))
+    hi = float(config.SELL_STRATEGY.get("ATR_CAP_RATIO_MAX", 3.0))
+    ratio = (vol / ref).clip(lo, hi)
+    return ratio.fillna(1.0)
+
+
 def get_macd_full_series(df, fast=None, slow=None, signal=None):
     if fast is None: fast = config.INDICATOR_PARAMS["MACD_FAST"]
     if slow is None: slow = config.INDICATOR_PARAMS["MACD_SLOW"]

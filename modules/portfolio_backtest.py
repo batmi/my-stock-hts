@@ -51,7 +51,7 @@ def precompute_status(dfs, thresholds):
     return out
 
 
-def _atr_stop_rate(atr, price, atr_mult):
+def _atr_stop_rate(atr, price, atr_mult, day=None):
     """진입 시점 ATR 손절률(%).
 
     [SSOT 2026-08-09] 산식·캡은 engine.atr_stop_rate 가 단독 보유한다. 여기서 식을 다시
@@ -60,7 +60,10 @@ def _atr_stop_rate(atr, price, atr_mult):
     그 전제가 깨지면 결과를 실매매에 옮길 수 없다. 반환 규약(0.0)만 여기서 맞춘다.
     """
     from modules.auto_trade import engine as _eng
-    return _eng.atr_stop_rate(atr, price, atr_mult=atr_mult) or 0.0
+    # [동적 손절 캡] 그 날짜의 지수 변동성 배율을 주입한다. 실매매는 trader가 주기마다
+    #  모듈 상태를 갱신하고, 여기서는 과거 각 시점의 값을 직접 준다 — 같은 산식이다.
+    ratio = backtest._VOL_REGIME_STATE["by_date"].get(day) if day else None
+    return _eng.atr_stop_rate(atr, price, atr_mult=atr_mult, vol_ratio=ratio) or 0.0
 
 
 def decide_sell(*, price, high, avg, sl_rate, atr_applied, is_bep, holding_days,
@@ -187,7 +190,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                   pyramiding_max=None, heat_cap_pct=None, invest_ratio=None,
                   atr_mult=None, market_filter_dates=None, reserved_cash=0.0,
                   risk_scale_by_date=None, oversize_limit=None,
-                  ts_act_fn=None, pyr_trigger_fn=None):
+                  ts_act_fn=None, pyr_trigger_fn=None, sl_rate_fn=None):
     """N슬롯 포트폴리오 시뮬레이션.
 
     Args:
@@ -205,6 +208,10 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             않음), '기초 비중에 적용하면 실제로 방어가 되는가'를 검증하기 위한 실험용 경로다.
             콜러블 fn(day, equity) -> 배수 도 받는다 — 계좌 드로다운 축처럼 시뮬레이션 자신의
             자산곡선에 의존하는 축은 사전 계산이 불가능하기 때문이다(tools/audit_drawdown_axis.py).
+        sl_rate_fn: fn(row, price, atr_mult) -> 손절률(%, 음수). **실험용 경로**로, 손절 캡
+            (MAX_ATR_STOP_LOSS_RATE)을 고정값이 아니라 종목·시점에 따라 바꿨을 때의 효과를
+            재기 위한 훅이다(tools/audit_atr_damping.py). None이면 종전과 같이
+            engine.atr_stop_rate(=config의 고정 캡)를 쓴다.
         ts_act_fn / pyr_trigger_fn: fn(atr, price) -> 발동 기준(%). **실험용 경로**로,
             TS 감시 시작·피라미딩 증액의 고정 임계(+10%)를 종목 변동성에 맞춰 동적으로
             바꿨을 때의 효과를 재기 위한 훅이다(tools/audit_trigger_dials.py).
@@ -426,7 +433,10 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                     continue
                 add_price = utils.adjust_to_tick(price * (1 + slippage), False) or price
                 add_qty = min(add_qty, int(cash / add_price))
-                add_sl = _atr_stop_rate(row.get("ATR", 0), add_price, atr_mult) if use_atr else default_sl
+                add_sl = default_sl
+                if use_atr:
+                    add_sl = (sl_rate_fn(row, add_price, atr_mult) if sl_rate_fn is not None
+                              else _atr_stop_rate(row.get("ATR", 0), add_price, atr_mult, day))
                 if heat_budget is not None and add_sl:
                     affordable = heat_budget / (add_price * (abs(add_sl) / 100.0))
                     add_qty = min(add_qty, int(max(0, affordable)))
@@ -474,7 +484,10 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 if len(positions) >= slots:
                     break
                 buy_price = utils.adjust_to_tick(row["close"] * (1 + slippage), False) or row["close"]
-                sl_rate = _atr_stop_rate(row.get("ATR", 0), buy_price, atr_mult) if use_atr else default_sl
+                sl_rate = default_sl
+                if use_atr:
+                    sl_rate = (sl_rate_fn(row, buy_price, atr_mult) if sl_rate_fn is not None
+                               else _atr_stop_rate(row.get("ATR", 0), buy_price, atr_mult, day))
                 amount = allocate_amount(_equity(day), cash, invest_ratio * day_scale, sl_rate,
                                          row.get("ATR", 0), buy_price)
                 if heat_budget is not None and sl_rate:
@@ -585,6 +598,9 @@ def prepare_universe(targets, days, progress_cb=None, is_overseas=False):
             failed.append(name)
         if progress_cb:
             progress_cb(name)
+
+    # [동적 손절 캡] 날짜별 지수 변동성 배율. 실패하면 빈 dict → 배율 1.0(고정 캡).
+    backtest.prepare_vol_regime(days, is_overseas)
 
     dates = sorted({str(d) for df in dfs.values() for d in df["date"]})
     return dfs, mf_dates, dates, failed

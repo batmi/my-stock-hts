@@ -395,6 +395,53 @@ def prepare_market_filter(code, is_overseas, days):
         return None
 
 
+_VOL_REGIME_STATE = {"key": None, "by_date": {}}
+
+
+def prepare_vol_regime(days, is_overseas=False):
+    """[동적 손절 캡] 날짜별 지수 변동성 배율 {YYYYMMDD: ratio} 를 준비한다.
+
+    실매매(trader)는 같은 산식(indicators.vol_regime_ratio)을 그날의 지수 종가에 적용해
+    한 개의 값을 얻는다. 백테스트는 과거 각 시점의 값이 필요하므로 시계열로 만든다.
+
+    [기준 지수는 KOSPI 하나] 종목이 코스닥이어도 KOSPI를 쓴다. 캡은 '시장 전체가 지금
+    얼마나 거친가'를 재는 장치이고, 무엇보다 이 설정을 정한 검증이 KOSPI 단일 기준으로
+    수행됐다 — 실매매가 다른 기준을 쓰면 그 검증이 실거래에 옮겨가지 않는다.
+    (시장 필터는 종목이 속한 시장을 쓰는 것과 대비된다. 그쪽은 '이 시장에 진입할까'를
+     묻고, 이쪽은 '지금 얼마나 거친 장인가'를 묻는다.)
+
+    실패하면 빈 dict를 돌려준다 → 배율 1.0 = 고정 캡으로 동작(fail-safe).
+    """
+    ss = config.SELL_STRATEGY
+    if not ss.get("ATR_CAP_DYNAMIC", True):
+        return {}
+    ticker = "^GSPC" if is_overseas else "^KS11"
+    key = (ticker, days, ss.get("ATR_CAP_VOL_WINDOW"), ss.get("ATR_CAP_VOL_REF_MIN"))
+    if _VOL_REGIME_STATE["key"] == key:
+        return _VOL_REGIME_STATE["by_date"]
+
+    _VOL_REGIME_STATE["key"] = key
+    _VOL_REGIME_STATE["by_date"] = {}
+    try:
+        start_str = (datetime.now() - timedelta(days=days + 800)).strftime("%Y-%m-%d")
+        idx_df = api.fetch_yfinance_data(ticker, start=start_str)
+        if idx_df is None or idx_df.empty:
+            return {}
+        if isinstance(idx_df.columns, pd.MultiIndex):
+            try: idx_df = idx_df.xs(ticker, axis=1, level=1)
+            except Exception: pass
+        idx_df.columns = [c.lower() for c in idx_df.columns]
+        idx_df = idx_df.reset_index()
+        idx_df.rename(columns={'Date': 'date', 'Close': 'close'}, inplace=True)
+        dates = idx_df['date'].apply(
+            lambda x: x.strftime('%Y%m%d') if isinstance(x, datetime) else str(x).replace('-', '')[:8])
+        ratio = indicators.vol_regime_ratio(idx_df['close'])
+        _VOL_REGIME_STATE["by_date"] = {d: float(r) for d, r in zip(dates, ratio.to_numpy())}
+    except Exception:
+        _VOL_REGIME_STATE["by_date"] = {}
+    return _VOL_REGIME_STATE["by_date"]
+
+
 def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, buy_rsi_limit, is_overseas,
                       stop_loss_rate=None, take_profit_rate=None,
                       take_profit_rsi=None, sell_score=None,
@@ -780,7 +827,9 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                         if use_atr_stop and atr_val and atr_val > 0:
                             # [SSOT] 실매매와 같은 함수 — 캡을 바꿔도 두 경로가 갈라지지 않는다.
                             from modules.auto_trade import engine as _eng
-                            atr_sl_rate = _eng.atr_stop_rate(atr_val, add_price, atr_mult=atr_mult) or 0.0
+                            atr_sl_rate = _eng.atr_stop_rate(
+                                atr_val, add_price, atr_mult=atr_mult,
+                                vol_ratio=_VOL_REGIME_STATE["by_date"].get(str(row.get('date')))) or 0.0
 
                         cost = add_qty * add_price
                         balance -= cost
@@ -829,7 +878,9 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             if use_atr_stop and atr_val > 0:
                 # [SSOT] 실매매와 같은 함수 — 캡을 바꿔도 두 경로가 갈라지지 않는다.
                 from modules.auto_trade import engine as _eng
-                atr_sl_rate = _eng.atr_stop_rate(atr_val, buy_price, atr_mult=atr_mult) or 0.0
+                atr_sl_rate = _eng.atr_stop_rate(
+                    atr_val, buy_price, atr_mult=atr_mult,
+                    vol_ratio=_VOL_REGIME_STATE["by_date"].get(str(row.get('date')))) or 0.0
             
             # [수정] 리스크 기반 포지션 사이징 적용 (백테스팅)
             invest_amt = balance
@@ -2088,6 +2139,10 @@ def run_backtest():
                 mf_result = prepare_market_filter(code, is_overseas, days)
             finally:
                 config.USE_MARKET_FILTER = _mf_saved
+
+            # [동적 손절 캡] 날짜별 지수 변동성 배율 준비. 실패해도 배율 1.0(고정 캡)으로
+            #  동작하므로 시뮬레이션은 그대로 진행된다.
+            prepare_vol_regime(days, is_overseas)
 
             if mode_choice == "1":
                 progress.update(task_id, description=f"[cyan]{name} ({code}) 단일 백테스팅 시뮬레이션 진행 중...[/cyan]")

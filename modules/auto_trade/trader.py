@@ -5746,6 +5746,19 @@ class AutoTrader:
                     "current": current_idx
                 }
 
+                # [동적 손절 캡] KOSPI 실현변동성의 장기 대비 배율을 갱신한다. 이 값이
+                #  engine.effective_atr_stop_cap을 통해 손절 캡을 국면에 맞춰 넓힌다.
+                #  [기준 지수는 KOSPI 하나] 코스닥 종목도 KOSPI를 쓴다 — 캡은 '시장 전체가
+                #  지금 얼마나 거친가'를 재는 장치이고, 무엇보다 이 설정을 정한 검증이
+                #  KOSPI 단일 기준으로 수행됐다. 실매매가 다른 기준을 쓰면 그 검증이
+                #  실거래에 옮겨가지 않는다(백테스트 backtest.prepare_vol_regime과 동일 규약).
+                if market_name == "KOSPI":
+                    try:
+                        _pkg().set_vol_regime_ratio(
+                            float(indicators.vol_regime_ratio(df['close']).iloc[-1]))
+                    except Exception as e:
+                        logger.debug(f"[동적 손절 캡] 변동성 배율 갱신 실패(고정 캡 유지): {e}")
+
                 # 상태 변경 알림
                 if not notify:
                     continue
