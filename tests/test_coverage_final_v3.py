@@ -13,10 +13,13 @@ def test_get_telegram_footer():
     config.TELEGRAM_BOT_TOKEN = "TEST"
     config.TELEGRAM_INSTANCE_NAME = "HTS"
     config.session.cano = "12345678"
+    config.session.acnt_prdt_cd = "01"
     config.session.is_simulation = True
     
+    # 꼬리말에는 계좌번호 뒤에 상품코드(-01)까지 붙는다. 인스턴스가 여러 대일 때
+    # 어느 계좌 앞으로 도는 알림인지 번호만으로는 특정되지 않기 때문이다.
     footer = api._get_telegram_footer()
-    assert "[HTS | 모의 12345678]" in footer
+    assert "[HTS | 모의 12345678-01]" in footer
 
 @patch('requests.post')
 def test_send_telegram_photo_retry(mock_post):

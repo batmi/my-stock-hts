@@ -165,8 +165,10 @@ def test_run_backtest_full_flow(mock_status, mock_print, mock_name, mock_get_dat
     """백테스팅 전체 흐름 (단일 실행 + 최적화) 테스트"""
     mock_get_data.return_value = sample_df
     
-    # 6(Manual) -> Code -> n(Preset) -> n(No settings change) -> 1(Single Run) -> n(AI) -> 메인화면(q)
-    mock_ask.side_effect = ["6", "005930", "n", "n", "1", "n", "q"]
+    # 6(직접입력) -> 종목코드 -> n(조건 변경 안 함) -> 1(단일 실행) -> n(AI 진단) -> q(메인)
+    #  [주의] 프리셋 적용 질문은 폐지되어 더 이상 묻지 않는다. 답변 개수가 프롬프트 수와
+    #   어긋나면 실행 모드 선택이 엉뚱한 값을 먹고 res 미할당으로 터진다.
+    mock_ask.side_effect = ["6", "005930", "n", "1", "n", "q"]
     
     mock_status.return_value.__enter__.return_value = MagicMock()
     

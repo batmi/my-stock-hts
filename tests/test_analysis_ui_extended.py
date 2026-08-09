@@ -71,18 +71,32 @@ def test_get_analysis_params_custom(mock_ask):
     assert params['BUY_SCORE'] == 9.0
     assert params['BUY_RSI_MAX'] == 60
 
-@patch('modules.analysis.print_table')
+@patch('modules.analysis.get_market_regime', return_value=("중립", 0.0))
+@patch('modules.analysis.print_table', return_value=[])
 @patch('rich.prompt.Prompt.ask')
-def test_show_stock_analysis_auto_refresh(mock_ask, mock_print):
-    """분석 메뉴 반복 조회(@ 입력) 테스트"""
-    # 1@ 입력 -> 반복 조회 모드 활성화 -> KeyboardInterrupt로 반복 중단
-    # [수정] 반복 중단 시 메인 이탈 대신 메뉴 유지로 바뀌어, 두 번째 입력(q)으로 종료한다
+def test_show_stock_analysis_auto_refresh(mock_ask, mock_print, mock_regime):
+    """분석 메뉴 반복 조회(@ 입력) 테스트
+
+    1@ 입력 -> 반복 조회 모드 활성화 -> 대기 중 Ctrl+C로 반복 중단.
+    반복 중단 시 메인 이탈 대신 메뉴 유지로 바뀌어, 두 번째 입력(q)으로 종료한다.
+
+    [주의] time.sleep을 무조건 KeyboardInterrupt로 만들면 안 된다. 표를 그리기 전에도
+      sleep을 타는 구간(시장 국면 조회의 재시도 백오프 등)이 있고, KeyboardInterrupt는
+      Exception이 아니라서 중간의 except Exception을 그대로 통과해 바깥에서 잡힌다.
+      그러면 print_table이 한 번도 불리지 않은 채 메뉴로 빠져나가, 전체 실행 순서에 따라
+      결과가 뒤집혔다(단독 실행은 통과, 전체 실행은 실패). 중단은 '표를 그린 뒤 대기
+      구간'에서만 일어나야 한다. 국면 조회도 고정해 네트워크 의존을 없앤다.
+    """
     mock_ask.side_effect = ["1@", "q"]
     config.session.stock_data = {"stocks_kr": [{"code": "005930", "name": "Samsung"}]}
 
-    with patch('time.sleep', side_effect=KeyboardInterrupt):
+    def _interrupt_only_after_table(*args, **kwargs):
+        if mock_print.called:
+            raise KeyboardInterrupt
+
+    with patch('time.sleep', side_effect=_interrupt_only_after_table):
         analysis.show_stock_analysis()
-        
+
     assert mock_print.called
 
 @patch('rich.prompt.Prompt.ask')

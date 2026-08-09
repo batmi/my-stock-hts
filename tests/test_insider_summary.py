@@ -138,12 +138,21 @@ def _render(fn, rows, **kw):
     return printed
 
 
+def _first_table(printed):
+    """출력 호출 중 첫 번째 Table을 찾는다.
+
+    렌더러는 간격 조절용으로 인자 없는 console.print()도 부른다. 그 빈 호출에
+    a[0]을 하면 IndexError로 터지므로 반드시 빈 인자를 걸러야 한다.
+    """
+    return next(a[0] for a in printed if a and hasattr(a[0], "columns"))
+
+
 def test_summary_has_last_report_date_column():
     """요약표에 '최근 보고일'이 있어야 신호의 신선도를 판단할 수 있다."""
     rows = [_row(dt="20260601", qty=1000, chg=-100),
             _row(dt="20260715", qty=900, chg=-100, no="20260715000001")]
     printed = _render(insider._render_summary, rows)
-    table = next(a[0] for a in printed if hasattr(a[0], "columns"))
+    table = _first_table(printed)
     headers = [c.header for c in table.columns]
     assert "최근 보고일" in headers
     cells = [c._cells for c in table.columns]
@@ -156,7 +165,7 @@ def test_summary_excludes_bulk_events():
             for i in range(8)]
     trade = [_row(dt="20260710", who="대표이사", qty=5000, chg=-3000)]
     printed = _render(insider._render_summary, bulk + trade)
-    table = next(a[0] for a in printed if hasattr(a[0], "columns"))
+    table = _first_table(printed)
     headers = [c.header for c in table.columns]
     net = str(table.columns[headers.index("순증감(주)")]._cells[0])
     assert "-3,000" in net                       # 일괄 +800이 섞이지 않았다
@@ -169,7 +178,7 @@ def test_detail_table_drops_bulk_rows():
             for i in range(8)]
     trade = [_row(dt="20260710", who="대표이사", qty=5000, chg=-3000)]
     printed = _render(insider._render_insiders, bulk + trade)
-    table = next(a[0] for a in printed if hasattr(a[0], "columns"))
+    table = _first_table(printed)
     headers = [c.header for c in table.columns]
     reporters = [str(x) for x in table.columns[headers.index("보고자")]._cells]
     assert reporters == ["대표이사"]

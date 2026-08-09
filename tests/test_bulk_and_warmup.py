@@ -11,11 +11,25 @@ import api
 import modules.market as market
 
 def test_global_index_background_warming():
-    """4번 기능: 글로벌 지수(yfinance) 백그라운드 예열(Warming) 동작 검증"""
+    """4번 기능: 글로벌 지수(yfinance) 백그라운드 예열(Warming) 동작 검증
+
+    [주의] 이 예열 스레드는 데몬이고 지수 예열이 끝나면 관심종목 루프로 넘어가
+      종목마다 get_chart_data + time.sleep(모의 1.0초)를 돈다. 종목 목록을 비우지 않으면
+      실제 stock.json을 읽어 수십 초를 더 살아 있고, 그 사이 **다른 테스트가 패치해 둔
+      api.get_chart_data 목에 호출을 얹는다**. 실제로 test_chart의
+      assert_called_with(마지막 호출 검증)가 드물게 깨졌다. 종목 목록을 비우고 스레드가
+      끝난 것까지 확인해, 검증 범위를 지수 예열로 한정한다.
+    """
+    import config
+
     # 기존 캐시 초기화
     market.clear_market_yf_cache()
-    
-    with patch('api.fetch_yfinance_data') as mock_fetch:
+
+    # 해외 지수 2개만 남긴다. 국내 지수는 tvDatafeed(웹소켓)를 타는데, requests 기준의
+    # 테스트 격리 가드가 웹소켓은 막지 못해 스레드가 수십 초씩 살아남는다.
+    with patch('api.fetch_yfinance_data') as mock_fetch, \
+         patch('modules.market.ALL_INDICES', [("나스닥", "^IXIC"), ("S&P500", "^GSPC")]), \
+         patch.object(config.session, 'stock_data', {}, create=True):
         import pandas as pd
         # 빈 데이터프레임 반환으로 모킹하여 실제 네트워크를 타지 않게 방어
         mock_fetch.return_value = pd.DataFrame()
@@ -24,7 +38,8 @@ def test_global_index_background_warming():
         thread = api.prefetch_watchlists_async()
         
         # 워커 스레드가 완료될 때까지 대기
-        thread.join(timeout=5.0)
+        thread.join(timeout=10.0)
+        assert not thread.is_alive(), "예열 스레드가 끝나지 않았다 — 다른 테스트의 목을 오염시킨다"
         
         # 전체 지수 개수 / 청크사이즈(15) 번 만큼 fetch가 호출되었는지 검증 (1일봉, 5분봉 2번씩)
         assert mock_fetch.call_count >= 2

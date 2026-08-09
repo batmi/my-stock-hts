@@ -170,28 +170,53 @@ def test_atr_stop_loss_logic(strategy):
     # df=None이므로 기술적 지표에 의한 매도는 발생하지 않음
     assert result_hold['action'] == 'hold'
 
-def test_break_even_stop(strategy):
-    """본전 청산(Break-Even Stop) 테스트: 최고 수익률 달성 후 가격 하락 시 본전(+0.5%) 청산 방어"""
-    thresholds = {
+_BEP_CASE = dict(buy_price=10000,        # 진입가
+                 highest_price=10800,    # +8.0% (본전청산 발동 조건 7.0% 충족)
+                 current_price=10040,    # +0.4% (본전 청산선 +0.5% 하향 이탈)
+                 profit_rate=0.4)
+
+
+def _bep_thresholds(**over):
+    t = {
         "BREAK_EVEN_PROFIT_RATE": 7.0,
         "BREAK_EVEN_STOP_RATE": 0.5,
         "STOP_LOSS_RATE": -7.0,
-        "USE_ATR_STOP": False
+        "USE_ATR_STOP": False,
     }
-    
-    buy_price = 10000
-    highest_price = 10800 # +8.0% (본전청산 발동 조건 7.0% 만족)
-    current_price = 10040 # +0.4% (본전 청산선 0.5% 하향 이탈)
-    profit_rate = 0.4
-    
-    result = strategy.analyze_sell(
-        code="005930", name="삼성전자", df=None, 
-        current_price=current_price, buy_price=buy_price, 
-        profit_rate=profit_rate, thresholds=thresholds, highest_price=highest_price
-    )
-    
+    t.update(over)
+    return t
+
+
+def test_break_even_stop_is_off_by_default(strategy):
+    """기본 설정에서는 BEP가 아니라 트레일링 스탑이 먼저 잡는다.
+
+    2026-08-04 반사실 실측에서 BEP는 fat-tail을 잘라먹지 않는 대신 얻는 것도 없어
+    USE_BREAK_EVEN_STOP 기본값이 False가 됐고, 2026-08-08 TS 발동이 breakeven 연동으로
+    바뀌면서 +8% 고점이면 TS가 이미 무장한다. TS 청산선(고점 -5% = 10,260)은 BEP선
+    (+0.5% = 10,050)보다 항상 위에 있으므로, TS가 켜져 있는 한 BEP는 구조적으로 도달하지
+    않는다. 이 테스트는 그 우선순위가 뒤집히지 않았음을 고정한다.
+    """
+    result = strategy.analyze_sell(code="005930", name="삼성전자", df=None,
+                                   thresholds=_bep_thresholds(), **_BEP_CASE)
+
     assert result['action'] == 'sell'
-    assert "본전청산" in result['reason']
+    assert "트레일링스탑" in result['reason'], f"TS가 주청산이어야 한다: {result['reason']}"
+    assert "본전청산" not in result['reason']
+
+
+def test_break_even_stop_triggers_when_enabled_and_ts_disarmed(strategy):
+    """BEP 로직 자체는 살아 있다 — 명시적으로 켜고 TS를 무장 전으로 두면 본전에서 잡는다.
+
+    TS 발동선을 고정 50%로 두면 고점 +8%로는 무장하지 않아 BEP가 유일한 방어선이 된다.
+    """
+    thresholds = _bep_thresholds(USE_BREAK_EVEN_STOP=True, ts_activation=50.0)
+
+    with patch.dict(config.SELL_STRATEGY, {"TS_ACTIVATION_MODE": "fixed"}):
+        result = strategy.analyze_sell(code="005930", name="삼성전자", df=None,
+                                       thresholds=thresholds, **_BEP_CASE)
+
+    assert result['action'] == 'sell'
+    assert "본전청산" in result['reason'], f"BEP가 발동하지 않았다: {result['reason']}"
 
 @patch('modules.auto_trade.indicators.calculate_indicators')
 @patch('modules.auto_trade.analysis.classify_stock_state')

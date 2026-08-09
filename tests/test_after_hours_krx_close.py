@@ -214,9 +214,14 @@ def _table_row(setting, when=None, holiday=True):
         'ask_bid_ratio': None, 'detail': None,
     }
     md, hp, dt = _at(when or datetime(2026, 7, 26, 15, 0), holiday=holiday)
-    with md as m, hp:
+    # [중요] analysis 쪽 시각도 같이 고정한다. _w52_high_low가 '최근 365일'을 datetime.now()로
+    #  자르는데, 고정 날짜로 만든 이 차트는 실제 시간이 흐르면 앞쪽 봉(52주 저가 51,400)부터
+    #  창 밖으로 밀려난다. 그러면 밴드가 제멋대로 좁아져 52주 위치 기대값이 달력에 따라 바뀐다.
+    with md as m, hp, patch('modules.analysis.datetime') as am:
         m.now.return_value = dt
         m.strptime = datetime.strptime
+        am.now.return_value = dt
+        am.strptime = datetime.strptime
         row = analysis._analyze_table_row(('SK텔레콤', '017670'), '국내 주식', False, False,
                                           {}, {}, 0.0, set(), set(), bundle)
     return row[0] if isinstance(row, tuple) else row

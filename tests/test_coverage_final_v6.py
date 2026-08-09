@@ -211,7 +211,11 @@ def test_get_holdings_message(mock_balance):
     trader = auto_trade.AutoTrader()
     
     # 1. 보유 종목 있음
-    mock_balance.return_value = ([{'prdt_name': 'Samsung', 'hldg_qty': '10', 'prpr': '60000', 'evlu_amt': '600000', 'evlu_pfls_rt': '10.0', 'evlu_pfls_amt': '50000'}], None)
+    # pdno(종목코드)·pchs_avg_pric(매입단가)은 KIS 잔고 응답의 필수 항목이고,
+    # 보유 분석이 이 둘을 키·기준가로 쓴다. 빠지면 메시지가 통째로 '조회 실패'가 된다.
+    mock_balance.return_value = ([{'pdno': '005930', 'prdt_name': 'Samsung', 'hldg_qty': '10',
+                                   'pchs_avg_pric': '54545', 'prpr': '60000', 'evlu_amt': '600000',
+                                   'evlu_pfls_rt': '10.0', 'evlu_pfls_amt': '50000'}], None)
     msg = trader._get_holdings_message("12345678")
     assert "Samsung" in msg
     assert "10주" in msg

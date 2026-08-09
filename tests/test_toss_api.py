@@ -1906,15 +1906,18 @@ def test_today_history_filters_other_days():
 
 
 def test_kosdaq150_no_data_in_toss():
-    """토스 모드: 코스닥150은 tvDatafeed 실패 시 yfinance(^KQ150) 폴백까지 시도하나
-    ^KQ150은 실측 데이터가 없어 빈 응답 → 최종 '-'(None/empty). KIS는 미사용."""
+    """토스 모드: 코스닥150은 tvDatafeed가 실패하면 그대로 '-'(None/empty)다.
+
+    ^KQ150·^KS200은 야후가 제공하지 않는다. 예전에는 최후 폴백으로 한 번 찔러보고
+    빈 응답을 받았지만, 매번 헛호출이 되고 무한 루프 위험이 있어 폴백 대상에서 제외했다
+    (analysis.get_domestic_index_data의 제외 목록). KIS도 토스 모드에서는 쓰지 않는다.
+    """
     import api
     import modules.analysis as analysis
     import pandas as pd
     config.session.is_toss = True
     try:
         # tvDatafeed가 데이터를 못 주는 상황을 결정적으로 재현(라이브 웹소켓 flaky 제거).
-        # 폴백 체인상 yfinance(^KQ150)까지 내려가지만 빈 응답이라 데이터 없음.
         with patch("modules.analysis._fetch_index_via_tvdatafeed", return_value=None), \
              patch("api.get_domestic_index_chart") as mock_kis, \
              patch("api.get_chart_data", return_value=pd.DataFrame()) as mock_yf:
@@ -1923,7 +1926,8 @@ def test_kosdaq150_no_data_in_toss():
         config.session.is_toss = False
     assert df is None or df.empty
     mock_kis.assert_not_called()             # 토스는 KIS 미호출
-    assert mock_yf.call_args.args[0] == "^KQ150"  # 최후 폴백으로 yfinance(^KQ150) 시도됨
+    assert not any(c.args and c.args[0] == "^KQ150" for c in mock_yf.call_args_list), \
+        "야후 미제공 티커(^KQ150)로 헛호출이 나갔다"
 
 
 def test_kospi_kosdaq_use_toss_market_indicator_first():
