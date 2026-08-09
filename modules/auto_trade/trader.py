@@ -704,7 +704,7 @@ class AutoTrader:
 
             if valid_holdings:
                 from modules import account
-                analysis_results = account.run_holding_analysis(valid_holdings, [], _pkg().get_restricted_stocks())
+                analysis_results = account.run_holding_analysis(valid_holdings, [], _pkg().get_restricted_stocks(*_get_trade_account()))
                 msg += "\n\n" + _pkg().format_holdings_block(valid_holdings, analysis_results=analysis_results)
             else:
                 msg += "\n\n📋 [보유 종목] 없음"
@@ -894,7 +894,7 @@ class AutoTrader:
 
                     if valid_holdings:
                         from modules import account
-                        analysis_results = account.run_holding_analysis(valid_holdings, [], _pkg().get_restricted_stocks())
+                        analysis_results = account.run_holding_analysis(valid_holdings, [], _pkg().get_restricted_stocks(*_get_trade_account()))
                         msg += "\n\n" + _pkg().format_holdings_block(valid_holdings, title="최종 보유 종목 현황", analysis_results=analysis_results)
                     else:
                         msg += "\n\n📋 [최종 보유 종목] 없음"
@@ -1243,7 +1243,7 @@ class AutoTrader:
 
         if valid_holdings:
             from modules import account
-            analysis_results = account.run_holding_analysis(valid_holdings, [], _pkg().get_restricted_stocks())
+            analysis_results = account.run_holding_analysis(valid_holdings, [], _pkg().get_restricted_stocks(*_get_trade_account()))
             msg += "\n" + _pkg().format_holdings_block(valid_holdings, analysis_results=analysis_results)
         else:
             msg += "\n📋 [보유 종목] 없음"
@@ -3193,7 +3193,7 @@ class AutoTrader:
 
             if valid_holdings:
                 from modules import account
-                analysis_results = account.run_holding_analysis(valid_holdings, [], _pkg().get_restricted_stocks())
+                analysis_results = account.run_holding_analysis(valid_holdings, [], _pkg().get_restricted_stocks(*_get_trade_account()))
                 msg += "\n\n" + _pkg().format_holdings_block(valid_holdings, analysis_results=analysis_results)
             else:
                 msg += "\n\n📋 [보유 종목] 없음"
