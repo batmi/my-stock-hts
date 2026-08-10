@@ -149,6 +149,7 @@ class AutoTrader:
             cls._instance.risk_manager = RiskManager(cls._instance)   # [추가] 리스크 매니저
             cls._instance.half_tp_cache = set()       # [추가] 반익절 실행 여부 추적 캐시
             cls._instance.portfolio_heat_amt = 0.0    # [추가] 포트폴리오 히트(총 오픈 리스크, 원) 주기별 스냅샷
+            cls._instance.portfolio_heat_unknown = False  # 산출 실패 여부 — '0(없음)'과 '못 셈'을 가른다
             cls._instance.last_emergency_alert_time = 0 # [추가] 긴급 알림 쿨타임용 타임스탬프
             cls._instance.last_wait_alert_time = 0    # [추가] 대기 모드 진입 알림 쿨타임 (진입/복구 반복 시 스팸 방지)
             cls._instance._wait_alert_sent = False    # [추가] 진입 알림 발송 여부 (복구 알림과 짝 맞춤)
@@ -4478,6 +4479,7 @@ class AutoTrader:
         # [최적화] 인자로 전달받은 holdings 사용
         if not holdings:
             self.portfolio_heat_amt = 0.0  # 보유 없음 = 오픈 리스크 0 (매수 경로의 히트 캡 판정용)
+            self.portfolio_heat_unknown = False
             return
 
         # [추가] 개별 룰 로드 ([최적화] 루프에서 주기당 1회 로드해 전달받으면 재조회 생략)
@@ -4502,8 +4504,12 @@ class AutoTrader:
         # [추가] 포트폴리오 히트(총 오픈 리스크) 스냅샷 갱신 — 같은 주기의 피라미딩/신규 매수 캡 판정에 사용
         try:
             self.portfolio_heat_amt = self.risk_manager.compute_portfolio_heat(holdings, buy_trades_map)
-        except Exception:
-            self.portfolio_heat_amt = 0.0
+            self.portfolio_heat_unknown = False
+        except Exception as e:
+            # [fail-closed] 0으로 두면 '오픈 리스크 없음'이 되어 히트 캡의 예산이 통째로 열린다.
+            #  못 센 것과 없는 것은 다르다 — 못 셌다고 표시하고 신규 진입을 막는다.
+            self.portfolio_heat_unknown = True
+            logger.warning(f"[히트] 오픈 리스크 산출 실패 — 신규 진입을 보류한다: {e}")
 
         # [최적화] 보유 종목 실시간 데이터 일괄 수집 (Micro-Cache 사전 예열)
         codes_to_prefetch = []
@@ -4950,7 +4956,10 @@ class AutoTrader:
             reserved_heat = False
             if add_risk > 0:
                 with self._lock:
-                    budget_left = self.risk_manager.portfolio_risk_budget_left()
+                    # 이 경로엔 예수금 변수가 없다. 기준자산이 없을 때의 폴백으로
+                    #  '지금 살 수 있는 금액'(매수가능수량×주문가)을 넘긴다.
+                    budget_left = self.risk_manager.portfolio_risk_budget_left(
+                        avail_cash=max(max_qty, 0) * order_price)
                     if budget_left is not None:
                         if add_risk > budget_left:
                             cap = self.risk_manager.effective_portfolio_cap()
@@ -5731,15 +5740,24 @@ class AutoTrader:
             #  종목당 한도(SYSTEM_RISK_PER_TRADE)와 별개로 '동시 다발 손절' 합산 손실을 통제한다.
             #  손절률이 없는(>=0) 경우 리스크 추정이 불가하므로 게이트를 건너뛴다(allocate_budget과 동일 기조).
             if sl_rate and sl_rate < 0:
-                budget_left = self.risk_manager.portfolio_risk_budget_left()
+                budget_left = self.risk_manager.portfolio_risk_budget_left(avail_cash=avail_cash)
                 if budget_left is not None:
                     cap = self.risk_manager.effective_portfolio_cap()
                     new_risk = invest_amt * (abs(sl_rate) / 100.0)
                     if new_risk > budget_left:
                         allowed_amt = int(max(budget_left, 0) / (abs(sl_rate) / 100.0))
                         if allowed_amt < order_price:
-                            self.log(f"매수 보류: {cand['name']} - 포트폴리오 총 리스크 한도({cap:.1f}%) 도달 "
-                                     f"(현재 오픈 리스크 {self.portfolio_heat_amt:,.0f}원, 남은 예산 {max(budget_left, 0):,.0f}원)")
+                            # 한도에 '닿아서' 막는 것과 한도를 '계산 못 해서' 막는 것은 다르다.
+                            #  같은 문구로 찍으면 데이터 결손을 정상 동작으로 읽게 된다.
+                            if getattr(self, 'portfolio_heat_unknown', False):
+                                why = "오픈 리스크 산출 실패 — 한도를 계산할 수 없어 보류한다"
+                            elif not (getattr(self, 'current_total_asset', 0) or self.initial_asset):
+                                why = "기준자산 미확보 — 한도를 계산할 수 없어 보류한다"
+                            else:
+                                why = (f"포트폴리오 총 리스크 한도({cap:.1f}%) 도달 "
+                                       f"(현재 오픈 리스크 {self.portfolio_heat_amt:,.0f}원, "
+                                       f"남은 예산 {max(budget_left, 0):,.0f}원)")
+                            self.log(f"매수 보류: {cand['name']} - {why}")
                             continue
                         self.log(f"[히트 캡] {cand['name']} 투자금 축소: {invest_amt:,}원 → {allowed_amt:,}원 "
                                  f"(총 오픈 리스크 한도 {cap:.1f}% 준수)")

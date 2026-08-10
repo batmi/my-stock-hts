@@ -2109,7 +2109,7 @@ class RiskManager:
         cap = getattr(config, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0)
         return cap * self.current_risk_scale()
 
-    def portfolio_risk_budget_left(self):
+    def portfolio_risk_budget_left(self, avail_cash=None):
         """히트 캡까지 남은 리스크 예산(원). 캡 미사용(0)·기준자산 미확보 시 None(제한 없음)
 
         [리스크 스케일링] 약세 국면·드로다운 시 캡이 배수만큼 축소된다.
@@ -2117,10 +2117,23 @@ class RiskManager:
         장중 손실이 나면 예산도 함께 줄어드는 보수적 방향으로 동작한다."""
         cap = getattr(config, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0)
         if cap <= 0:
-            return None
+            return None       # 사용자가 캡을 껐다 — 의도된 '제한 없음'
+
+        # [fail-closed] 아래 두 경우는 '제한 없음'이 아니라 '계산 불가'다. None(=게이트 통째로
+        #  스킵)을 돌려주면 한도가 조용히 사라진다 — 데이터가 없을수록 열리는 구조가 된다.
+        #  0을 돌려 신규 진입을 막고, 다음 주기에 자산·히트가 잡히면 저절로 풀린다.
+        if getattr(self.trader, 'portfolio_heat_unknown', False):
+            return 0.0        # 오픈 리스크를 못 셌다 — 얼마가 남았는지 말할 수 없다
+
         equity = getattr(self.trader, 'current_total_asset', 0) or self.trader.initial_asset
         if equity <= 0:
-            return None
+            # 기준자산이 없으면 캡의 분모가 없다. 다만 게이트를 여는 대신, allocate_budget이
+            #  같은 상황에서 쓰는 폴백(예수금)을 그대로 쓴다 — 두 한도가 서로 다른 기준을
+            #  보면 종목당 한도는 걸리는데 합산 한도는 안 걸리는 어긋남이 생긴다.
+            equity = float(avail_cash or 0)
+        if equity <= 0:
+            return 0.0        # 자산도 예수금도 모른다 — 한도를 계산할 수 없다
+
         heat = getattr(self.trader, 'portfolio_heat_amt', 0.0)
         return equity * (cap * self.current_risk_scale() / 100.0) - heat
 
