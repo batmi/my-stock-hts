@@ -468,6 +468,40 @@ def load_daily_initial_asset(account_key):
             return accounts[account_key]
     return 0
 
+# 직전 영업일 대비 이 비율 아래면 '시세 결손으로 예수금만 잡힌 응답'을 의심한다.
+#  engine.check_loss_limit 이 current_total 에 이미 쓰고 있는 것과 같은 기준(0.5)이다.
+BASELINE_SANITY_RATIO = 0.5
+
+
+def is_plausible_baseline(account_key, tot_asset, last_known=None):
+    """오늘의 시작 자산으로 받아들여도 되는 값인가.
+
+    [왜 필요한가] 이 값은 계좌 차단기(일일 손실 한도)의 분모이면서 동시에 포지션 사이징의
+    기준 자산이다. 그런데 저장 조건이 `tot_asset > 0` 뿐이라 어떤 양수든 그날의 기준이 되고,
+    한 번 저장되면 load 가 그대로 돌려주므로 **하루 종일 고정된다**.
+
+    코드는 이 실패 모드를 이미 알고 있다 — engine.check_loss_limit 의 주석이
+    "증권사 API 통신 오류로 주식 평가액이 0으로 수신되어 예수금만 계산될 때"라고 적어 두고
+    current_total 을 그 기준으로 거른다. 정작 더 위험한 쪽(기준선)에는 가드가 없었다.
+    기준선이 실제보다 작게 박히면 손실률이 늘 큰 양수로 계산돼 **차단기가 종일 발동하지
+    않는다**. 아무도 모르는 채로 보호 장치만 사라지는 것이 가장 나쁜 상태다.
+
+    last_known 이 없으면(첫 운용·이력 없음) 판단 근거가 없으므로 통과시킨다.
+    """
+    if tot_asset <= 0:
+        return False
+    if last_known is None:
+        try:
+            from modules import db_manager
+            last_known = db_manager.db.get_last_daily_asset(
+                account_key, datetime.now().strftime("%Y-%m-%d"))
+        except Exception:
+            last_known = None
+    if not last_known or last_known <= 0:
+        return True
+    return tot_asset >= last_known * BASELINE_SANITY_RATIO
+
+
 def save_daily_initial_asset(account_key, asset_value):
     """계좌별 일일 시작 자산을 저장합니다."""
     today_str = datetime.now().strftime("%Y-%m-%d")

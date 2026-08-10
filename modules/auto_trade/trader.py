@@ -41,7 +41,7 @@ from modules.auto_trade.engine import (DefaultStrategy, NO_SELLABLE_ALERT_CYCLES
                                        UNMANAGED_BAD_PRICE, UNMANAGED_ETF,
                                        UNMANAGED_NO_SELLABLE, UNMANAGED_RESTRICTED,
                                        UNMANAGED_STALE_PRICE, UNMANAGED_STUCK_PENDING)
-from modules.auto_trade.common import (_enrich_rules_with_weights, _get_trade_account, get_mystock_log_tail, get_restricted_stocks, is_single_price_break, is_system_market_open, load_daily_initial_asset, save_daily_initial_asset)
+from modules.auto_trade.common import (_enrich_rules_with_weights, _get_trade_account, get_mystock_log_tail, get_restricted_stocks, is_plausible_baseline, is_single_price_break, is_system_market_open, load_daily_initial_asset, save_daily_initial_asset)
 
 console = config.console
 
@@ -389,10 +389,28 @@ class AutoTrader:
                 if tot_asset > 0:
                     account_key = f"{target_cano}-{acnt}"
                     saved_initial = load_daily_initial_asset(account_key)
-                    self.initial_asset = saved_initial if saved_initial > 0 else tot_asset
-                    if saved_initial <= 0:
+                    if saved_initial > 0:
+                        self.initial_asset = saved_initial
+                    elif is_plausible_baseline(account_key, tot_asset):
+                        self.initial_asset = tot_asset
                         save_daily_initial_asset(account_key, self.initial_asset)
                         db_manager.db.save_daily_asset(datetime.now().strftime("%Y-%m-%d"), account_key, self.initial_asset)
+                    else:
+                        # [안전장치] 직전 영업일 대비 반토막 이하 — 시세 결손으로 예수금만 잡힌
+                        #  응답을 의심한다. 이 값을 기준선으로 박으면 차단기의 분모가 작아져
+                        #  손실률이 종일 큰 양수로 계산되고, 보호 장치가 조용히 사라진다.
+                        #  저장하지 않고 0으로 둔다 — 사이징은 예수금 기준으로 폴백하고,
+                        #  차단기가 꺼진 사실은 아래 알림으로 드러난다.
+                        self.initial_asset = 0
+                        last = db_manager.db.get_last_daily_asset(
+                            account_key, datetime.now().strftime("%Y-%m-%d"))
+                        warn = (f"⚠️ [시작 자산 이상] 조회값 {tot_asset:,}원이 직전 기록"
+                                f" {int(last or 0):,}원 대비 지나치게 작습니다.\n"
+                                f"시세 결손(주식 평가액 0 수신)이 의심되어 오늘 기준 자산으로"
+                                f" 삼지 않습니다.\n"
+                                f"계좌 차단기(일일 손실 한도)가 동작하지 않으니 확인해 주세요.")
+                        self.log(warn)
+                        api.send_telegram_message(warn)
                 else:
                     self.initial_asset = 0
 

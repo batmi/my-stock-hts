@@ -1349,6 +1349,21 @@ class DBManager:
         except Exception:
             return None
 
+    def get_last_daily_asset(self, account, before_date):
+        """before_date 이전의 가장 최근 일일 시작자산. 없으면 None.
+
+        오늘 기준선이 그럴듯한 값인지 대조하는 데 쓴다 — 직전 영업일 대비 반토막 이하면
+        시세 결손으로 예수금만 잡힌 응답을 의심한다.
+        """
+        try:
+            cursor = self._get_conn().cursor()
+            cursor.execute("SELECT asset FROM daily_asset_history WHERE account = ? AND date < ? "
+                           "AND asset > 0 ORDER BY date DESC LIMIT 1", (account, before_date))
+            row = cursor.fetchone()
+            return row[0] if row else None
+        except Exception:
+            return None
+
     def get_max_daily_asset(self, start_date, account):
         """특정 날짜 이후의 자산 고점(HWM) 조회 (드로다운 기반 리스크 스케일링용)"""
         try:
