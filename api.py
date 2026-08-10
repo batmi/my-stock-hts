@@ -1887,6 +1887,42 @@ class _RealTpsBucket:
         self.rl_last_emit = 0.0
 
 
+class OrderOutcomeUnknown(Exception):
+    """주문 요청이 거래소에 닿았는지 알 수 없는 상태(응답 유실).
+
+    '실패'와 구분해야 한다. 실패는 재전송해도 되지만 이 상태는 안 된다 —
+    이미 체결됐을 수 있기 때문이다. 호출부는 재전송 대신 **주문 내역을 조회해**
+    실제로 들어갔는지 확인해야 한다(place_order 참조).
+    """
+
+
+# 상태를 바꾸는 엔드포인트(주문·정정·취소). 조회는 몇 번 다시 보내도 무해하지만
+#  이쪽은 한 번 더 나가면 포지션이 하나 더 생긴다.
+_STATE_CHANGING_URL_HINTS = ("order-cash", "order-credit", "order-rvsecncl",
+                             "order-resv", "trading/order")
+
+
+def _is_state_changing(method, url):
+    if str(method).upper() == "GET":
+        return False
+    u = str(url or "")
+    return any(h in u for h in _STATE_CHANGING_URL_HINTS)
+
+
+def _is_response_unknown(exc):
+    """응답을 받지 못해 결과를 알 수 없는 예외인가.
+
+    ConnectTimeout 은 연결 자체가 안 된 것이라 주문이 나갔을 수 없다 — 재전송해도 안전하다.
+    ReadTimeout 은 요청을 보낸 뒤 응답을 못 받은 것이므로 결과를 모른다.
+    그 외 ConnectionError(전송 중 끊김)도 마찬가지로 모른다.
+    """
+    if isinstance(exc, requests.exceptions.ConnectTimeout):
+        return False
+    return isinstance(exc, (requests.exceptions.ReadTimeout,
+                            requests.exceptions.ConnectionError,
+                            requests.exceptions.ChunkedEncodingError))
+
+
 class ThrottledSession(requests.Session):
     #  '수동(운용자)' 버킷은 기존 동작과 이름을 그대로 유지한다 — 아래 프로퍼티 참조.
     BUCKET_MANUAL = "manual"
@@ -2343,6 +2379,18 @@ class ThrottledSession(requests.Session):
                 # [Fix] 토큰 만료 예외는 내부 재시도(ThrottledSession)를 하지 않고 즉시 상위(call_api)로 전파
                 if "Token Expired" in str(e):
                     raise e
+
+                # [Fix 2026-08-10] 응답을 못 받은 주문은 재전송하지 않는다.
+                #  타임아웃은 '실패'가 아니라 '모름'이다. 주문이 거래소에 닿아 체결된 뒤
+                #  응답만 유실됐을 수 있고, 그때 재전송하면 같은 주문이 두 번 나간다.
+                #  포지션이 두 배가 되면 손절폭·변동성 한도·포트폴리오 히트 캡이 한꺼번에
+                #  무의미해진다 — 이 시스템의 1차 통제가 수량 산정 하나에 실려 있기 때문이다.
+                #  응답을 받은 거부(EGW00201 등)는 주문이 안 들어간 것이 확정이므로 종전대로
+                #  재시도한다. 여기서 갈리는 기준은 '응답을 받았는가' 하나다.
+                if _is_state_changing(method, url) and _is_response_unknown(e):
+                    logger.error(f"⚠️ [ORDER_UNKNOWN] 주문 응답 없음 — 재전송하지 않습니다. "
+                                 f"URL: {url} | 사유: {e}")
+                    raise OrderOutcomeUnknown(str(e)) from e
 
                 # [수정] 모든 예외(연결 끊김, API 에러 등)에 대해 백오프 후 재시도
                 if attempt < max_retries:
@@ -6955,6 +7003,107 @@ def _order_with_exchange_fallback(url_path, market, category, action, data, code
     return retry
 
 
+# 주문 응답을 못 받았을 때, 실제로 들어갔는지 확인할 시간 창(초).
+#  너무 넓으면 직전 주기의 같은 종목 주문을 오인하고, 너무 좁으면 지연된 접수를 놓친다.
+ORDER_RECONCILE_WINDOW_SEC = 180
+
+
+def _reconcile_unknown_order(action, code, qty, reason):
+    """응답이 유실된 주문이 실제로 접수됐는지 **조회로** 확인한다.
+
+    [왜 재전송이 아닌가] 타임아웃은 '실패'가 아니라 '모름'이다. 재전송하면 이미 체결된
+      주문 위에 하나가 더 얹힐 수 있고, 그러면 포지션이 두 배가 되어 손절폭·변동성
+      한도·포트폴리오 히트 캡이 한꺼번에 무의미해진다. 확인이 먼저다.
+
+    [무엇으로 확인하나] 당일 주문·체결 내역에서 같은 종목·같은 매매구분·같은 수량의
+      주문을 찾되, **DB에 없는 주문번호**만 후보로 본다. 시스템이 낸 주문은 접수 응답을
+      받는 즉시 DB에 남으므로, 응답을 못 받은 이 주문만이 '거래소에는 있는데 DB에는
+      없는' 상태가 된다.
+
+    [애매하면 손대지 않는다] 후보가 둘 이상이면 어느 것이 이번 주문인지 단정할 수 없다.
+      그때는 자동으로 정하지 않고 운용자에게 넘긴다 — 잘못 고르면 다음 주기가 그 주문을
+      '내 것'으로 알고 관리한다.
+
+    반환: KIS 응답과 같은 모양의 dict. 접수 확인 시 rt_cd='0'.
+    """
+    unknown = {'rt_cd': '1', 'msg_cd': 'ORDER_UNKNOWN',
+               'msg1': f'주문 결과 불명(응답 유실): {reason}', 'output': {}}
+    try:
+        hist = get_today_history()
+        rows = (hist or {}).get('output1') or []
+    except Exception as e:
+        logger.error(f"[ORDER_UNKNOWN] 대사 조회 실패 — 결과 불명으로 둔다: {e}")
+        return unknown
+
+    want_side = '02' if action == 'buy' else '01'      # KIS: 01=매도, 02=매수
+    now = datetime.now()
+    cands = []
+    for r in rows:
+        if str(r.get('pdno') or '').strip() != str(code):
+            continue
+        if str(r.get('sll_buy_dvsn_cd') or '') != want_side:
+            continue
+        try:
+            if int(float(r.get('ord_qty') or 0)) != int(qty):
+                continue
+        except (TypeError, ValueError):
+            continue
+        if _order_age_seconds(r, now) > ORDER_RECONCILE_WINDOW_SEC:
+            continue
+        odno = str(r.get('odno') or '').strip()
+        if odno and not _odno_known_to_db(odno):
+            cands.append(odno)
+
+    if len(cands) == 1:
+        odno = cands[0]
+        logger.warning(f"[ORDER_UNKNOWN] 대사 결과 접수 확인 — 재전송하지 않고 이 주문을 "
+                       f"이어받습니다: {code} {action} {qty}주 / 주문번호 {odno}")
+        return {'rt_cd': '0', 'msg_cd': 'ORDER_RECOVERED',
+                'msg1': '응답 유실 주문을 조회로 확인했습니다',
+                'output': {'ODNO': odno, 'KRX_FWDG_ORD_ORGNO': '', 'ORD_TMD': ''}}
+
+    if not cands:
+        logger.warning(f"[ORDER_UNKNOWN] 대사 결과 접수 흔적 없음 — 미접수로 봅니다: "
+                       f"{code} {action} {qty}주")
+        return {'rt_cd': '1', 'msg_cd': 'ORDER_NOT_PLACED',
+                'msg1': f'주문 미접수(응답 유실 후 대사 확인): {reason}', 'output': {}}
+
+    send_telegram_message(
+        f"⚠️ [주문 결과 불명] {code} {action} {qty}주\n"
+        f"응답이 유실됐고, 같은 조건의 주문이 {len(cands)}건 조회돼 어느 것인지 "
+        f"단정할 수 없습니다.\n재전송하지 않았습니다 — HTS에서 직접 확인해 주세요.\n"
+        f"주문번호 후보: {', '.join(cands)}")
+    return unknown
+
+
+def _order_age_seconds(row, now):
+    """주문 시각으로부터 흐른 초. 시각을 못 읽으면 창 밖으로 본다(보수적)."""
+    tmd = str(row.get('ord_tmd') or '').strip()
+    if len(tmd) != 6 or not tmd.isdigit():
+        return float('inf')
+    try:
+        placed = now.replace(hour=int(tmd[:2]), minute=int(tmd[2:4]),
+                             second=int(tmd[4:]), microsecond=0)
+    except ValueError:
+        return float('inf')
+    return (now - placed).total_seconds()
+
+
+def _odno_known_to_db(odno):
+    """이 주문번호가 이미 시스템 DB에 있는가(=응답을 받아 기록된 주문인가)."""
+    try:
+        from modules import db_manager
+        for status in ("접수", "체결", "체결(추정)", "체결/취소(추정)"):
+            if db_manager.db.check_trade_exists(odno, status):
+                return True
+    except Exception as e:
+        logger.debug(f"[ORDER_UNKNOWN] DB 조회 실패: {e}")
+        # 확인 못 하면 '이미 아는 주문'으로 보수적 판정 — 모르는 주문을 함부로
+        #  이어받는 것보다 결과 불명으로 남기는 편이 안전하다.
+        return True
+    return False
+
+
 def place_order(market, action, code, qty, price, ord_dvsn, exchange_code=None):
     """
     주문 전송 통합 함수
@@ -6991,7 +7140,11 @@ def place_order(market, action, code, qty, price, ord_dvsn, exchange_code=None):
             # 마스터 로드 실패로 낙관 배정한 SOR이 거부되면 KRX로 1회 재시도한다.
             # (실계좌 전용 분기라 모의·가상투자 검증으로는 이 경로가 한 번도 실행되지 않는다)
             if data["EXCG_ID_DVSN_CD"] == "SOR":
-                return _order_with_exchange_fallback(url_path, market, category, action, data)
+                # [Fix 2026-08-10] SOR 경로도 응답 유실 시 재전송하지 않고 조회로 확인한다.
+                try:
+                    return _order_with_exchange_fallback(url_path, market, category, action, data)
+                except OrderOutcomeUnknown as e:
+                    return _reconcile_unknown_order(action, code, qty, str(e))
     else: # overseas
         # [Fix] 해외 주문 시 거래소 코드 보정 (3자리 -> 4자리)
         trade_excd = exchange_code
@@ -7008,7 +7161,15 @@ def place_order(market, action, code, qty, price, ord_dvsn, exchange_code=None):
             "ORD_SVR_DVSN_CD": "0", "ORD_DVSN": ord_dvsn
         }
 
-    return call_api(url_path, market, category, action, data=data, method="POST")
+    # [Fix 2026-08-10] 응답이 유실되면 재전송하지 않고 조회로 확인한다.
+    #  해외는 당일 주문 대사 경로가 없어 확인 없이 '결과 불명'으로 남긴다(자동매매는 국내 전용).
+    try:
+        return call_api(url_path, market, category, action, data=data, method="POST")
+    except OrderOutcomeUnknown as e:
+        if market != "domestic":
+            return {'rt_cd': '1', 'msg_cd': 'ORDER_UNKNOWN',
+                    'msg1': f'해외 주문 결과 불명(응답 유실): {e}', 'output': {}}
+        return _reconcile_unknown_order(action, code, qty, str(e))
 
 def revise_cancel_order(market, action, org_no, code, qty, price, type_cd, ord_dvsn, exchange_code=None):
     """
@@ -7049,7 +7210,16 @@ def revise_cancel_order(market, action, org_no, code, qty, price, type_cd, ord_d
         category = "modify"
     
     # action 파라미터는 TR_ID 조회를 위해 사용됨 (modify/cancel)
-    return call_api(url_path, market, category, action, data=data, method="POST")
+    # [Fix 2026-08-10] 정정·취소도 응답 유실 시 재전송하지 않는다. 다만 주문과 달리
+    #  결과가 애매해도 손해가 누적되지 않는다 — 취소가 안 됐으면 다음 주기가 미체결을
+    #  다시 보고 취소를 건다. 여기서는 실패로 돌려 그 흐름에 맡긴다.
+    try:
+        return call_api(url_path, market, category, action, data=data, method="POST")
+    except OrderOutcomeUnknown as e:
+        logger.warning(f"[ORDER_UNKNOWN] 정정/취소 응답 없음 — 재전송하지 않습니다. "
+                       f"다음 주기에 미체결로 다시 잡힙니다: {code} 원주문 {org_no} / {e}")
+        return {'rt_cd': '1', 'msg_cd': 'ORDER_UNKNOWN',
+                'msg1': f'정정/취소 결과 불명(응답 유실): {e}', 'output': {}}
 
 def get_deposit(cano=None, acnt_prdt_cd=None, retries=None):
     """예수금(주문가능현금) 조회 (국내/모의)"""
