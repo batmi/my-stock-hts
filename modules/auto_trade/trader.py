@@ -4776,6 +4776,19 @@ class AutoTrader:
                     return
 
                 real_qty = api.fetch_sellable_quantity(code)
+
+                # [안전장치] 조회 실패(None)는 '팔 수 없음'이 아니다. 종전에는 실패도 0으로
+                #  와서 아래 분기가 매도를 중단시켰다 — 일시적 API 오류가 손절을 거르는
+                #  결과로 이어진다. 매수 경로는 같은 상황에서 예수금 폴백으로 주문을 내고,
+                #  수동 매매 화면도 잔고 수량으로 폴백한다. 자동 청산만 반대 방향이었다.
+                #  추세추종에서 못 파는 비용 > 못 사는 비용이므로, 이미 확보한 잔고 수량으로
+                #  낸다. 정말 팔 수 없는 상태라면 증권사가 거부하고, 그 비용이 훨씬 싸다.
+                if real_qty is None:
+                    held_qty = api.safe_int(item.get('hldg_qty'))
+                    self.log(f"매도 수량 조회 실패: {name} — 보유 {held_qty}주 기준으로 진행합니다 "
+                             f"(조회 실패를 '매도 불가'로 읽지 않는다)")
+                    real_qty = held_qty
+
                 if real_qty < target_sell_qty:
                     if real_qty > 0:
                         self.log(f"매도 수량 조정: {name} {target_sell_qty}주 -> {real_qty}주")
@@ -5873,8 +5886,21 @@ class AutoTrader:
                 self.trailing_stop_cache.pop(cand['code'], None)
 
             self.log(f"매수 실행: {cand['name']} - {reason}")
+
+            # [히트 캡 선점] 주문을 내기 **전에** 예산을 잡는다. 종전에는 주문 성공 뒤에
+            #  더했는데, 그 사이(네트워크 왕복)에 매도 워커의 피라미딩이 같은 예산을 보고
+            #  자기 몫을 잡을 수 있어 합계가 캡을 넘었다. 피라미딩 경로는 이미 확인과
+            #  선점을 락으로 원자화하고 실패 시 반납한다 — 같은 규약으로 맞춘다.
+            new_risk_amt = (qty * order_price) * (abs(sl_rate) / 100.0) if (sl_rate and sl_rate < 0) else 0.0
+            if new_risk_amt > 0:
+                with self._lock:
+                    self.portfolio_heat_amt += new_risk_amt
+
             # [수정] 매수 시 사유와 점수, 그리고 지정가 가격을 DB 저장을 위해 전달
             odno = self.order_manager.send_order(cand['code'], qty, "buy", name=cand['name'], reason=reason, score=cand['score'], price=order_price, rule=cand.get('rule'), stop_loss_rate=sl_rate)
+            if not odno and new_risk_amt > 0:
+                with self._lock:
+                    self.portfolio_heat_amt -= new_risk_amt   # 주문 실패 시 선점분 반납
             if odno:
                 # [추가] 매수 주문 성공 시 대기 중인 예약 매수 취소 방어 로직 (중복 진입 방지)
                 target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
@@ -5887,10 +5913,7 @@ class AutoTrader:
                 self.half_tp_cache.discard(cand['code']) # 신규 매수 시 기존 반익절 캐시 방어적 초기화
                 avail_cash -= (qty * order_price)
                 current_holdings_count += 1 # [추가] 보유 종목 수 증가 반영
-                # [추가] 히트 캡 스냅샷에 신규 포지션 리스크 반영 (같은 주기의 후순위 후보 판정용)
-                if sl_rate and sl_rate < 0:
-                    with self._lock:
-                        self.portfolio_heat_amt += (qty * order_price) * (abs(sl_rate) / 100.0)
+                # (히트 캡 선점은 주문 전에 끝냈다 — 위 new_risk_amt 참조)
                 record = {
                     "type": "buy",
                     "code": cand['code'],

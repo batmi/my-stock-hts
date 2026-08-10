@@ -115,3 +115,25 @@ def test_recovers_on_next_cycle(rm):
     assert r.portfolio_risk_budget_left() == 0.0
     t.portfolio_heat_unknown = False
     assert r.portfolio_risk_budget_left() == pytest.approx(1_000_000)
+
+
+def test_buy_path_reserves_before_sending_not_after():
+    """예산 선점이 주문 **전**에 끝나야 한다(회귀 방지).
+
+    [왜] 종전에는 주문 성공 뒤에 히트를 더했다. 그 사이(네트워크 왕복)에 매도 워커의
+    피라미딩이 아직 반영되지 않은 예산을 보고 자기 몫을 잡을 수 있어, 두 경로의 합계가
+    포트폴리오 히트 캡을 넘었다. 피라미딩은 이미 확인·선점을 락으로 원자화하고 실패 시
+    반납한다 — 신규 매수도 같은 규약이어야 한다.
+    """
+    import inspect
+    from modules.auto_trade import AutoTrader
+    src = inspect.getsource(AutoTrader._execute_buy_orders)
+
+    reserve = src.index("self.portfolio_heat_amt += new_risk_amt")
+    send = src.index("send_order(cand['code']")
+    release = src.index("self.portfolio_heat_amt -= new_risk_amt")
+
+    assert reserve < send, "주문보다 늦게 선점하면 그 사이 예산이 이중 사용된다"
+    assert send < release, "반납은 주문 실패를 확인한 뒤여야 한다"
+    assert "with self._lock" in src[reserve - 60:reserve], "선점이 락 밖이다"
+    assert "with self._lock" in src[release - 60:release], "반납이 락 밖이다"

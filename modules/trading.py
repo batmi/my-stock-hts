@@ -913,8 +913,11 @@ def send_order(order_type):
                 max_qty = api.fetch_sellable_quantity(stock_code)
                 
             # [추가] 잔고 API 실패 시 기존 선택된 잔고(stock_info) 수량으로 Fallback
-            if max_qty <= 0 and stock_info and stock_info.get('qty', 0) > 0:
+            #  (fetch_sellable_quantity는 조회 실패를 None으로 돌려준다 — 0과 구분된다)
+            if (max_qty is None or max_qty <= 0) and stock_info and stock_info.get('qty', 0) > 0:
                 max_qty = int(stock_info['qty'])
+            if max_qty is None:
+                max_qty = 0
             
             if max_qty > 0:
                 default_qty = str(max_qty)

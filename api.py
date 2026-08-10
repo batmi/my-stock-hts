@@ -4839,10 +4839,19 @@ def fetch_sellable_quantity(stock_code):
 
     params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": "01", "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
     data = call_api(constants.API_URLS["DOMESTIC"]["INQUIRY"]["SELLABLE"], "domestic", "inquiry", "sellable", params=params)
-    if data.get('rt_cd') == '0':
-        for item in data.get('output1', []):
-            if item.get('pdno') == stock_code: return safe_int(item.get('ord_psbl_qty'))
-    return 0
+    # [중요] 조회 실패와 '진짜 못 판다'를 가른다. 종전에는 둘 다 0이었고, 호출부는 0을
+    #  '팔 수 없는 상태'로 읽어 **매도를 중단**했다. 즉 일시적 조회 실패가 손절을 거르는
+    #  결과로 이어졌다. 매수 경로는 반대로 조회 실패 시 예수금 폴백으로 주문을 내는데,
+    #  추세추종에서는 못 사는 것보다 못 파는 것이 훨씬 비싸다 — 방향이 거꾸로였다.
+    #  실패는 None(=알 수 없음)으로 돌려 호출부가 판단하게 한다.
+    if data.get('rt_cd') != '0':
+        return None
+    for item in data.get('output1', []):
+        if item.get('pdno') == stock_code:
+            return safe_int(item.get('ord_psbl_qty'))
+    # 보유 중인 줄 알고 물었는데 응답에 없다 — 페이징(이 조회는 첫 페이지만 본다)이나
+    #  잔고 스냅샷 불일치다. '보유 0'으로 단정하지 않는다.
+    return None
 
 def fetch_overseas_buyable_quantity(stock_code, price, excd):
     # [관찰 모드] 해외 주문은 지원하지 않는다(place_order가 거부). 실계좌를 조회할 이유가
