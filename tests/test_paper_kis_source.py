@@ -108,6 +108,7 @@ ACCOUNT_FUNCS = [
     "get_today_history", "get_period_entry_dates", "get_overseas_today_history",
     "get_domestic_open_orders", "get_overseas_open_orders", "place_order",
     "revise_cancel_order", "get_deposit", "get_foreign_deposit", "get_deposit_balance",
+    "_fetch_period_executions",
 ]
 
 

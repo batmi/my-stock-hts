@@ -9,22 +9,29 @@
   - 실거래 DB: 매도 '판단 시점'의 평가손익을 그대로 실현손익으로 기록 — 비용도 실제
     체결가도 반영되지 않음
 
-요율은 config.BUY_FEE_RATE / config.SELL_FEE_RATE 하나만 본다(증권사·세법이 정하는
-사실이라 전략 설정에 두지 않는다).
+요율은 config 하나만 본다(증권사·세법이 정하는 사실이라 전략 설정에 두지 않는다).
+국내는 BUY/SELL_FEE_RATE, 해외는 OVERSEAS_BUY/SELL_FEE_RATE — 증권거래세가 국내
+세목이므로 요율 자체가 갈린다(2026-08-10 분리).
 """
 import config
 
 
 def buy_fee(amount, is_overseas=False):
-    """매수 위탁수수료. 국내는 원 단위 절사(거래소 관행)."""
-    fee = float(amount) * config.BUY_FEE_RATE
-    return fee if is_overseas else int(fee)
+    """매수 위탁수수료. 국내는 원 단위 절사(거래소 관행), 해외는 소수점 유지."""
+    if is_overseas:
+        return float(amount) * config.OVERSEAS_BUY_FEE_RATE
+    return int(float(amount) * config.BUY_FEE_RATE)
 
 
 def sell_fee(amount, is_overseas=False):
-    """매도 위탁수수료 + 증권거래세."""
-    fee = float(amount) * config.SELL_FEE_RATE
-    return fee if is_overseas else int(fee)
+    """매도 비용. 국내는 위탁수수료 + 증권거래세, 해외는 위탁수수료만.
+
+    [주의] 증권거래세는 국내 세목이다. 해외에 국내 요율을 쓰면 없는 세금을 물리면서
+      정작 국내보다 비싼 해외 수수료는 빠진다(2026-08-10 분리 전이 그랬다).
+    """
+    if is_overseas:
+        return float(amount) * config.OVERSEAS_SELL_FEE_RATE
+    return int(float(amount) * config.SELL_FEE_RATE)
 
 
 def round_trip_cost(buy_price, sell_price, qty, is_overseas=False):

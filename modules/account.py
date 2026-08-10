@@ -1646,6 +1646,70 @@ def export_trade_history_to_excel():
     except Exception as e:
         config.console.print(f"\n[bold red]저장 실패: {e}[/bold red]")
 
+def offer_holdings_backfill():
+    """매수 기록이 없는 보유 종목을 찾아 복원을 제안한다(거래 내역 조회 진입 시).
+
+    HTS·MTS 직접 매수분, 시스템 도입 이전 포지션, DB 이관 중 잃은 기록은 매수 이력이
+    비어 있다. 그러면 실현손익·평단·보유일수가 전부 빈 채로 남는데, 정작 그 사실이
+    드러나는 곳이 이 화면이다. 여기서 바로 복원할 수 있게 한다.
+
+    조회만으로 API를 더 쓰지 않도록, 먼저 DB로 '기록 없는 보유 종목'이 있는지부터 본다.
+    """
+    from modules import holdings_backfill as hb
+
+    cano, acnt = config.session.cano, config.session.acnt_prdt_cd
+    holdings, _ = fetch_domestic_balance(cano, acnt)
+    if not holdings:
+        return
+
+    missing = []
+    for h in holdings:
+        try:
+            if int(float(h.get('hldg_qty') or 0)) <= 0:
+                continue
+        except (TypeError, ValueError):
+            continue
+        code = str(h.get('pdno') or '').strip()
+        try:
+            rows = db_manager.db.get_trades(code=code, is_sim=config.session.is_simulation) or []
+        except Exception:
+            continue
+        if not any('매수' in str(r.get('type') or '') for r in rows):
+            missing.append((code, str(h.get('prdt_name') or '').strip()))
+
+    if not missing:
+        return
+
+    config.console.print()
+    config.console.print(
+        f"[yellow]ℹ 매수 기록이 없는 보유 종목이 {len(missing)}개 있습니다[/yellow] "
+        f"[dim]— {', '.join(n or c for c, n in missing[:3])}"
+        f"{' 외 ' + str(len(missing) - 3) + '종목' if len(missing) > 3 else ''}[/dim]")
+    config.console.print(
+        "[dim]  증권사 체결 내역에서 복원하면 실현손익·평단·보유일수가 채워집니다.[/dim]")
+
+    utils.print_breadcrumb()
+    if Prompt.ask("지금 복원하시겠습니까?", choices=["y", "n"], default="n") != "y":
+        return
+
+    plans = hb.plan(holdings, cano=cano, acnt_prdt_cd=acnt)
+    if not plans:
+        config.console.print("[yellow]증권사 체결 내역에서 복원할 것을 찾지 못했습니다.[/yellow]")
+        return
+
+    for p in plans:
+        new_cnt = len(p['records']) - p['already']
+        if new_cnt <= 0 and p['missing'] <= 0:
+            continue
+        line = f"  {p['name']}({p['code']}) 보유 {p['qty']}주 → 신규 {new_cnt}건"
+        if p['missing'] > 0:
+            line += f" [yellow](부분 복원: {p['missing']}주가 조회 구간보다 과거)[/yellow]"
+        config.console.print(line)
+
+    written, skipped = hb.apply(plans, cano=cano, acnt_prdt_cd=acnt)
+    config.console.print(f"[green]복원 완료: {written}건[/green] [dim]/ 건너뜀 {skipped}건[/dim]")
+
+
 def view_trade_history():
     """DB에 저장된 거래 내역 조회"""
     logger.debug("[HISTORY_DEBUG] view_trade_history() 진입")
@@ -1672,6 +1736,14 @@ def view_trade_history():
     except Exception as e:
         config.console.print(f"[dim red]⚠️ 체결 내역 동기화 중 오류 발생: {e}[/dim red]")
         logger.error(f"[HISTORY_DEBUG] sync_today_trades error: {e}")
+
+    # [추가] 매수 기록이 없는 보유 종목을 이 자리에서 알린다.
+    #  별도 메뉴 항목으로 두면 '존재를 기억해야 쓰는' 기능이 된다. 거래 내역이 비어 있는
+    #  것을 확인하는 화면이 곧 복원을 제안할 자리다.
+    try:
+        offer_holdings_backfill()
+    except Exception as e:
+        logger.debug(f"[HISTORY_DEBUG] 보유분 복원 제안 실패: {e}")
 
     trades = []
     reserved_trades = []

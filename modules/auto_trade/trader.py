@@ -28,6 +28,7 @@ from modules import analysis, account # [수정] account 모듈 재사용
 import math # [추가] math 모듈
 from modules import db_manager # [추가] DB 매니저
 from modules import trading_cost # [추가] 거래비용 단일 계산
+from modules import holdings_backfill # [추가] 기동 시 외부 체결 동기화
 from modules import chart # [추가] 차트 모듈
 from modules import instance_lock # [추가] 자동매매 단일 실행 보장
 from modules import telegram_notify # [추가] 알림 발신 상태 조회
@@ -329,6 +330,7 @@ class AutoTrader:
                     progress.advance(task)
                     return "caches", (ts_cache, half_cache, ok)
 
+
                 with concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="at_init") as executor:
                     # [수정] 모의투자는 잔고 summary에 예수금이 포함되어 있어 별도 예수금 API 호출이 불필요.
                     # 초기화 시 중복 잔고조회(get_domestic_balance)+예수금조회가 2-TPS 경합으로 재시도
@@ -359,6 +361,13 @@ class AutoTrader:
 
                 if holdings is None or deposit_res is None:
                     raise Exception("자산/예수금 조회 실패 (API 응답 없음)")
+
+                # [기동 동기화] 시스템이 꺼져 있던 동안의 외부 체결을 DB에 채운다.
+                #  ConclusionMonitor의 실시간 감지는 '오늘'만 본다(get_today_history). 운용자가
+                #  NXT 애프터나 비운용일에 HTS로 매매하면 그 기록은 영구 누락됐다.
+                #  보유수량 역산이라 얼마나 오래 꺼져 있었든 필요한 만큼만 조회한다.
+                #  잔고가 확정된 뒤에 돌린다 — 위 병렬 블록 안에서는 잔고가 아직 없다.
+                self._sync_external_fills(target_cano, acnt, holdings)
 
                 self.trailing_stop_cache = ts_cache
                 self.half_tp_cache = half_cache
@@ -3203,6 +3212,48 @@ class AutoTrader:
     def is_market_open(self):
         """국내 정규장 운영 시간 확인 (공용 판정 함수 위임)"""
         return is_system_market_open()
+
+    def _sync_external_fills(self, cano, acnt, holdings):
+        """기동 시 외부 체결을 DB에 채우고, 자동 계좌 외부 매수분은 제한 종목으로 올린다.
+
+        [왜 기동 경로인가] 실시간 감지(ConclusionMonitor)는 get_today_history 라 '오늘'만
+          본다. 시스템이 꺼져 있던 날의 외부 체결은 다음 날 켜도 들어오지 않는다.
+
+        [왜 제한까지 거는가] 자동 계좌에서 운용자가 직접 산 종목을 시스템이 '자기
+          포지션'으로 알고 관리하면, 제 손절 기준으로 운용자의 포지션을 청산한다.
+          실시간 경로는 이미 같은 처리를 하는데 기동 경로에만 이 방어가 없었다.
+          수동 계좌는 시스템이 보지도 팔지도 않으므로 제한이 필요 없다.
+
+        동기화 실패가 자동매매 기동 자체를 막아선 안 된다 — 기록은 부가 정보다.
+        """
+        is_auto_account = bool(cano and cano == getattr(config.session, 'auto_cano', None))
+        try:
+            res = holdings_backfill.sync_account(
+                cano, acnt, holdings=holdings, register_restrictions=is_auto_account)
+        except Exception as e:
+            self.log(f"[기동 동기화] 외부 체결 동기화 실패 — 매매는 계속합니다: {e}")
+            return
+
+        if res.get('error'):
+            self.log(f"[기동 동기화] 실패 — 매매는 계속합니다: {res['error']}")
+            return
+        if not res['written'] and not res['restricted']:
+            return
+
+        self.log(f"[기동 동기화] 외부 체결 {res['written']}건을 기록했습니다."
+                 + (f" 제한 등록: {', '.join(res['restricted'])}" if res['restricted'] else ""))
+
+        msg = f"🔄 [기동 동기화] 정지 중 발생한 외부 체결 {res['written']}건을 기록했습니다."
+        if res['restricted']:
+            msg += ("\n\n⛔ 아래 종목은 운용자가 직접 매수한 것으로 보고 "
+                    "시스템 매매에서 제외했습니다.\n· " + "\n· ".join(res['restricted']))
+        if res['partial']:
+            msg += ("\n\n⚠️ 조회 구간보다 과거에 진입해 일부만 복원된 종목:\n· "
+                    + "\n· ".join(f"{n}({c}) {m}주" for c, n, m in res['partial']))
+        try:
+            api.send_telegram_message(msg)
+        except Exception:
+            pass
 
     def _get_holdings_message(self, target_cano):
         """보유 종목 현황 메시지 생성 (장 시작/마감 알림용)"""

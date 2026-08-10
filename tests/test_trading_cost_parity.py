@@ -84,6 +84,29 @@ def test_degenerate_inputs_return_zero(qty, buy, sell):
     assert trading_cost.net_realized_profit(buy, sell, qty) == (0.0, 0.0)
 
 
+def test_overseas_uses_its_own_rates():
+    """증권거래세는 국내 세목이다 — 해외 매도에 국내 요율을 쓰면 없는 세금을 물린다.
+
+    반대로 국내(0.015%)보다 비싼 해외 위탁수수료가 매수에서 빠져 있었다. 결과적으로
+    2026-08-10 이전 해외 종목 백테스트는 왕복 비용을 절반쯤으로 축소 계상했다.
+    """
+    amt = 1_000_000
+    assert trading_cost.sell_fee(amt, is_overseas=True) == pytest.approx(
+        amt * config.OVERSEAS_SELL_FEE_RATE)
+    assert trading_cost.buy_fee(amt, is_overseas=True) == pytest.approx(
+        amt * config.OVERSEAS_BUY_FEE_RATE)
+    # 해외는 국내 요율을 쓰지 않는다
+    assert trading_cost.sell_fee(amt, is_overseas=True) != trading_cost.sell_fee(amt)
+    assert trading_cost.buy_fee(amt, is_overseas=True) != trading_cost.buy_fee(amt)
+
+
+def test_overseas_round_trip_is_not_cheaper_than_domestic():
+    """해외 왕복 비용이 국내보다 싸게 나오면 모델이 뒤집힌 것이다."""
+    dom = trading_cost.round_trip_cost(100_000, 110_000, 10)
+    ovs = trading_cost.round_trip_cost(100_000, 110_000, 10, is_overseas=True)
+    assert ovs > dom
+
+
 def test_domestic_fees_are_truncated_to_won():
     """국내 수수료는 원 단위 절사. 해외는 소수점을 유지한다."""
     assert trading_cost.sell_fee(1_000_333) == int(1_000_333 * config.SELL_FEE_RATE)

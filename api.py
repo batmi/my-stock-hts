@@ -6616,70 +6616,21 @@ def get_period_entry_dates(codes, qty_map=None, cano=None, acnt_prdt_cd=None, mo
             return {}
 
     wanted = set(codes)
-    rows = {c: [] for c in wanted}
-    window_start = None
 
     try:
-        cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
-        url = constants.API_URLS["DOMESTIC"]["INQUIRY"]["HISTORY"]
-        is_sim = config.session.is_simulation
-        tr_recent = constants.TR_ID_CONFIG["domestic"]["inquiry"]["history"]["sim" if is_sim else "real"]
-        tr_old = constants.TR_ID_CONFIG["domestic"]["inquiry"]["history_old"]["sim" if is_sim else "real"]
+        def _done(rows):
+            return all(_replay_entry_date(
+                [(r['date'], r['is_buy'], r['qty']) for r in rows[c]], qty_map.get(c))
+                for c in wanted)
 
-        end = datetime.now()
-
-        for chunk in range(max(1, int(math.ceil(months / 3.0)))):
-            start = end - timedelta(days=90)
-            params = {
-                "CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd,
-                "INQR_STRT_DT": start.strftime("%Y%m%d"),
-                "INQR_END_DT": end.strftime("%Y%m%d"),
-                "SLL_BUY_DVSN_CD": "00",   # 00: 전체 (수량 흐름을 재생하려면 매도도 필요)
-                "INQR_DVSN": "00",
-                "PDNO": "",
-                "CCLD_DVSN": "01",         # 01: 체결분만 (미체결·취소 제외)
-                "ORD_GNO_BRNO": "", "ODNO": "",
-                "INQR_DVSN_3": "00", "INQR_DVSN_1": "",
-                "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
-            }
-
-            res = call_api(url, "domestic", "inquiry", "history", params=params,
-                           tr_id=(tr_recent if chunk == 0 else tr_old))
-            if not res or res.get('rt_cd') != '0':
-                # 과거 조회 TR을 지원하지 않는 계좌·환경이면 여기서 멈춘다(모은 것까지 재생).
-                break
-
-            window_start = start.strftime("%Y%m%d")
-            for row in (res.get('output1') or []):
-                code = str(row.get('pdno') or '').strip()
-                date = str(row.get('ord_dt') or '').strip()
-                if code not in wanted or len(date) != 8:
-                    continue
-                try:
-                    qty = int(float(row.get('tot_ccld_qty') or 0))
-                except (TypeError, ValueError):
-                    continue
-                if qty <= 0:
-                    continue
-                # 02=매수 / 01=매도. 구분값이 없으면 이름으로 판정한다.
-                dvsn = str(row.get('sll_buy_dvsn_cd') or '').strip()
-                if dvsn == '02':
-                    is_buy = True
-                elif dvsn == '01':
-                    is_buy = False
-                else:
-                    is_buy = '매수' in str(row.get('sll_buy_dvsn_cd_name') or '')
-                rows[code].append((date, is_buy, qty))
-
-            # 모든 종목이 '보유수량 0'까지 역산됐으면 더 과거를 볼 필요가 없다.
-            if all(_replay_entry_date(rows[c], qty_map.get(c)) for c in wanted):
-                break
-
-            end = start - timedelta(days=1)
+        rows, window_start = _fetch_period_executions(
+            wanted, cano=cano, acnt_prdt_cd=acnt_prdt_cd, months=months, should_stop=_done)
 
         found = {}
         for code in wanted:
-            d = _replay_entry_date(rows[code], qty_map.get(code), window_start)
+            d = _replay_entry_date(
+                [(r['date'], r['is_buy'], r['qty']) for r in rows[code]],
+                qty_map.get(code), window_start)
             if d:
                 found[code] = d
         _set_micro_cache(cache_key, found)
@@ -6687,6 +6638,123 @@ def get_period_entry_dates(codes, qty_map=None, cano=None, acnt_prdt_cd=None, mo
     except Exception as e:
         logger.debug(f"기간 진입일 조회 실패: {e}")
         return {}
+
+
+def _fetch_period_executions(codes, cano=None, acnt_prdt_cd=None, months=12, should_stop=None):
+    """기간 체결 내역을 종목별로 모은다. ({code: [체결 dict...]}, window_start) 반환.
+
+    체결 dict: date(YYYYMMDD) · time(HHMMSS) · is_buy · qty · price · odno · name · type_name
+
+    [중요] KIS는 3개월 경계로 TR이 갈린다 — 최근 3개월은 TTTC8001R, 그 이전은 CTSC9115R.
+      한 TR로 계속 거슬러 올라가면 3개월 이전 구간이 통째로 빈다. 3개월씩 끊어 최신 구간부터
+      조회하되 두 번째 구간부터 과거용 TR로 바꾼다.
+
+    should_stop(rows) -> bool 을 주면 구간마다 호출해 조기 종료한다(불필요한 과거 조회 절약).
+    """
+    wanted = set(codes)
+    rows = {c: [] for c in wanted}
+    window_start = None
+
+    # [관찰 모드] 가상 계좌에는 증권사 체결 이력이 없다. 호출부(get_period_entry_dates·
+    #  get_period_executions)도 각자 막고 있지만, 계좌 파라미터를 실어 보내는 함수는
+    #  자신이 마지막 방어선을 갖는다 — 새 호출부가 생겨도 실계좌를 긁지 않게.
+    if _paper_active():
+        return rows, None
+
+    cano, acnt_prdt_cd = _prepare_account_params(cano, acnt_prdt_cd)
+    url = constants.API_URLS["DOMESTIC"]["INQUIRY"]["HISTORY"]
+    is_sim = config.session.is_simulation
+    tr_recent = constants.TR_ID_CONFIG["domestic"]["inquiry"]["history"]["sim" if is_sim else "real"]
+    tr_old = constants.TR_ID_CONFIG["domestic"]["inquiry"]["history_old"]["sim" if is_sim else "real"]
+
+    end = datetime.now()
+
+    for chunk in range(max(1, int(math.ceil(months / 3.0)))):
+        start = end - timedelta(days=90)
+        params = {
+            "CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd,
+            "INQR_STRT_DT": start.strftime("%Y%m%d"),
+            "INQR_END_DT": end.strftime("%Y%m%d"),
+            "SLL_BUY_DVSN_CD": "00",   # 00: 전체 (수량 흐름을 재생하려면 매도도 필요)
+            "INQR_DVSN": "00",
+            "PDNO": "",
+            "CCLD_DVSN": "01",         # 01: 체결분만 (미체결·취소 제외)
+            "ORD_GNO_BRNO": "", "ODNO": "",
+            "INQR_DVSN_3": "00", "INQR_DVSN_1": "",
+            "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
+        }
+
+        res = call_api(url, "domestic", "inquiry", "history", params=params,
+                       tr_id=(tr_recent if chunk == 0 else tr_old))
+        if not res or res.get('rt_cd') != '0':
+            # 과거 조회 TR을 지원하지 않는 계좌·환경이면 여기서 멈춘다(모은 것까지 쓴다).
+            break
+
+        window_start = start.strftime("%Y%m%d")
+        for row in (res.get('output1') or []):
+            parsed = _parse_execution_row(row, wanted)
+            if parsed:
+                rows[parsed['code']].append(parsed)
+
+        if should_stop and should_stop(rows):
+            break
+
+        end = start - timedelta(days=1)
+
+    for c in wanted:
+        rows[c].sort(key=lambda r: (r['date'], r['time'], r['odno']))
+    return rows, window_start
+
+
+def _parse_execution_row(row, wanted):
+    """inquire-daily-ccld 의 output1 한 줄을 체결 dict 로 바꾼다. 대상 밖이면 None."""
+    code = str(row.get('pdno') or '').strip()
+    date = str(row.get('ord_dt') or '').strip()
+    if code not in wanted or len(date) != 8:
+        return None
+    try:
+        qty = int(float(row.get('tot_ccld_qty') or 0))
+    except (TypeError, ValueError):
+        return None
+    if qty <= 0:
+        return None
+
+    # 02=매수 / 01=매도. 구분값이 없으면 이름으로 판정한다.
+    dvsn = str(row.get('sll_buy_dvsn_cd') or '').strip()
+    if dvsn == '02':
+        is_buy = True
+    elif dvsn == '01':
+        is_buy = False
+    else:
+        is_buy = '매수' in str(row.get('sll_buy_dvsn_cd_name') or '')
+
+    # 체결평균가 우선. 없으면 체결금액/수량, 그것도 없으면 주문단가.
+    price = safe_int(row.get('avg_prvs'))
+    if price <= 0:
+        amt = safe_int(row.get('tot_ccld_amt'))
+        price = int(amt / qty) if amt > 0 else safe_int(row.get('ord_unpr'))
+
+    return {
+        'code': code, 'date': date,
+        'time': str(row.get('ord_tmd') or '').strip().zfill(6),
+        'is_buy': is_buy, 'qty': qty, 'price': price,
+        'odno': str(row.get('odno') or '').strip(),
+        'name': str(row.get('prdt_name') or '').strip(),
+        'type_name': str(row.get('sll_buy_dvsn_cd_name') or '').strip(),
+    }
+
+
+def get_period_executions(codes, cano=None, acnt_prdt_cd=None, months=12):
+    """보유 종목의 기간 체결 내역(공개 진입점). 실패 시 빈 dict."""
+    if not codes or _paper_active() or config.session.is_toss:
+        return {}
+    try:
+        rows, _ = _fetch_period_executions(codes, cano=cano, acnt_prdt_cd=acnt_prdt_cd, months=months)
+        return rows
+    except Exception as e:
+        logger.debug(f"기간 체결 내역 조회 실패: {e}")
+        return {}
+
 
 def get_overseas_today_history(cano=None, acnt_prdt_cd=None, retries=None, target_date=None):
     """금일 해외주식 체결 내역 조회"""
