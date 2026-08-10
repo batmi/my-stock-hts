@@ -18,7 +18,22 @@
      뜻이므로, 결함이 아니라 편향의 크기로 보고해야 한다.
   → ①은 high를 양쪽에 똑같이 주고 재고, ②는 실매매식 high(종가 최댓값)로 다시 재서 차이를 본다.
 
+[수급(스마트머니) 축] 기본값은 양쪽 False 고정이다. 이 도구는 자격 증명을 싣지 않으므로,
+그냥 두면 양쪽의 KIS 투자자 조회가 **모두 실패해** smart_money 가 조용히 False 로 통일된다.
+그러면 '불일치 0'이 축 하나를 건너뛴 결과인지 진짜 일치인지 구분할 수 없다 — 아래 --set
+도움말이 경계하는 무의미한 0과 같은 종류다. 그래서 명시적으로 고정하고 출력에 적는다.
+
+--smart-money live 로 축까지 굴릴 수 있다(실측 2026-08-10: 20종목 730일에서 백테스트
+smart_money 가 15,022봉 중 322봉(2.14%) True — 축은 실제로 발현한다. 그 상태에서도
+청산 판정 불일치는 0건이었다).
+
+  [한계] 그래도 '축까지 검증했다'고 말하면 안 된다. 백테스트는 그날의 수급을 보지만
+  실매매 경로(analysis.check_smart_money_turnaround)는 **오늘** 값만 안다 — 과거를
+  재생할 방법이 없다. 즉 두 경로는 같은 날의 같은 신호를 비교하는 것이 아니다.
+  불일치 0은 '이 표본의 청산 판정을 수급 축이 가르지 않았다'로 읽어야 한다.
+
 [실행] python tools/audit_exit_parity.py [--stocks 20] [--days 730] [--step 10]
+       python tools/audit_exit_parity.py --smart-money live
 """
 import argparse
 import json
@@ -179,6 +194,12 @@ def main():
     ap.add_argument("--overseas", action="store_true",
                     help="해외 일봉으로 대조한다(stocks_us + etfs_us). 청산 로직은 국내와 "
                          "같은 analyze_sell을 타지만 데이터 소스가 다르다")
+    ap.add_argument("--smart-money", choices=["off", "live"], default="off",
+                    help="수급(스마트머니) 축 처리. off=양쪽 모두 False로 고정하고 채점 로직만 "
+                         "비교(기본·재현 가능). live=실제 API로 양쪽을 굴려 축까지 대조 "
+                         "(실전 시세 계좌 필요, 결과가 조회 성공 여부에 좌우된다)")
+    ap.add_argument("--mode", default="4", choices=["1", "2", "4"],
+                    help="--smart-money live 일 때 쓸 투자 모드 (기본 4=가상투자)")
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                     help="SELL_STRATEGY 값을 덮어쓰고 잰다. 기본 OFF인 청산 스위치는 "
                          "그냥 돌리면 두 구현 모두 그 분기를 타지 않아 '불일치 0'이 "
@@ -198,6 +219,26 @@ def main():
                 val = v
         config.SELL_STRATEGY[key] = val
         print(f"[오버라이드] SELL_STRATEGY[{key!r}] = {val!r}")
+
+    # [중요] 수급 축을 '어쩌다 꺼진 채로' 재지 않는다.
+    #  이 도구는 자격 증명을 싣지 않아, 세션 없는 환경에서 돌리면 양쪽의 KIS 투자자 조회가
+    #  모두 실패해 smart_money 가 조용히 False 로 통일된다. 그러면 '불일치 0'이 축 하나를
+    #  건너뛴 결과인지 진짜 일치인지 구분할 수 없다 — --set 도움말이 경계하는 그 무의미한
+    #  0과 같은 종류다. 기본값은 양쪽을 명시적으로 False 로 고정하고, 그 사실을 출력한다.
+    if args.smart_money == "off":
+        from modules import analysis as _an
+        _an.check_smart_money_turnaround = lambda code, is_overseas=False: (False, "")
+        _orig_append = backtest._append_smart_money_signal
+        def _no_smart(df, code, is_overseas):
+            df = df.copy()
+            df["smart_money"] = False
+            return df
+        backtest._append_smart_money_signal = _no_smart
+        sm_note = "수급 축: 양쪽 False 고정 (채점 로직만 비교 · API 호출 없음)"
+    else:
+        config.session.initialize(args.mode)
+        sm_note = f"수급 축: 실제 조회 (mode {args.mode}) — 조회 실패 시 결과가 무의미해진다"
+    print(f"[준비] {sm_note}")
 
     data = json.load(open(config.STOCK_DATA_FILE))
     keys = ("stocks_us", "etfs_us") if args.overseas else ("stocks_kr",)
@@ -222,7 +263,7 @@ def main():
         n, mism, cross = run(dfs, status, args.step, live_high, thresholds, args.min_history)
         rate = len(mism) / n * 100 if n else 0.0
         print(f"\n{'=' * 78}\n{label}\n{'=' * 78}")
-        print(f"비교 {n:,}건 · 불일치 {len(mism):,}건 ({rate:.2f}%)")
+        print(f"비교 {n:,}건 · 불일치 {len(mism):,}건 ({rate:.2f}%)   [{sm_note}]")
 
         if mism:
             pat = Counter((m["backtest"], m["live"]) for m in mism)
