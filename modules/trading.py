@@ -1766,6 +1766,8 @@ def _condition_text(condition_type, target_price=0.0, target_time="",
         return "외국인/기관 순매수 전환"
     if ct == 'NEW_HIGH':
         return "사상 최고가 경신" if tp == 0 else "52주 신고가 경신"
+    if ct == 'ATR_BREAKOUT':
+        return f"전일 종가 ± (ATR × {tp}) 돌파"
     if ct.startswith('STATE_'):
         return {'STATE_STRONGBUY': '강매수 진입', 'STATE_BUY': '매수 진입',
                 'STATE_MR': '역매수 진입'}.get(ct, ct)
@@ -1878,31 +1880,70 @@ def _rsv_resolve_expire(choice):
     return digits
 
 
+# 예약 발동 조건 메뉴 — 방향(매수/매도)은 앞 단계에서 이미 정해지므로 조건에서 다시 나누지 않는다.
+#  종전에는 STOP/BREAKOUT, TRAILING_BUY/TRAILING_SELL처럼 같은 조건이 방향별로 쪼개져
+#  아홉 개가 되었고, 그 중 절반이 현재 방향에서 못 쓰는 회색 항목이었다.
+RSV_COND_ITEMS = [
+    ("1", "지정가 도달 (PRICE)", "현재가가 목표가를 상향 돌파 / 하향 이탈 시"),
+    ("2", "트레일링 (TRAILING)", "매수=최저점 대비 N% 반등 / 매도=최고점 대비 N% 하락"),
+    ("3", "이평선 크로스 (EMA)", "주가가 특정 EMA를 상향돌파 / 하향이탈 시"),
+    ("4", "신고가 돌파 (NEW_HIGH)", "52주 / 사상 신고가 경신 시 (추세추종 강세 진입)"),
+    ("5", "변동성 돌파 (ATR)", "전일 종가 ± (ATR × 배수) 돌파 시"),
+    ("6", "시스템 신호 (SIGNAL)", "수급 전환 / 강매수·매수 상태 진입 · 매수 전용"),
+    ("7", "시간 도달 (TIME)", "지정 시각(HHMM) 이후"),
+    ("8", "복합 조건 (COMPOSITE)", "점수·RSI·지정가·시간 등 여러 조건 동시 충족(AND)"),
+]
+
+
 def _rsv_step_condition_value(cond_choice, order_type, state):
     """조건 종류별 세부 값을 입력받아 dict로 돌려준다. 취소 시 _RSV_BACK/_RSV_QUIT."""
     is_overseas = state['is_overseas']
     base_price = state['base_price']
     base_label = state['base_label']
+    is_buy = (order_type == 'buy')
 
-    condition_map = {"1": "STOP", "2": "BREAKOUT", "3": "TRAILING_BUY", "4": "TRAILING_SELL",
-                     "5": "EMA", "6": "SMART_MONEY", "7": "STATE", "8": "NEW_HIGH", "9": "COMPOSITE"}
-    condition_type = condition_map[cond_choice]
-
-    if condition_type == "EMA":
-        config.console.print("\n[cyan]◆ 발동 목표 이동평균선(EMA) 선택[/cyan]")
-        v = _rsv_ask("이동평균선 (5, 20, 60, 120 중 입력)", choices=["5", "20", "60", "120"], default="20")
-        if v in (_RSV_BACK, _RSV_QUIT): return v
-        updown = _rsv_ask("발동 방향 (1: 상향 돌파 시, 2: 하향 이탈 시)",
-                          choices=["1", "2"], default="1" if order_type == "buy" else "2")
+    # ---------- 1. 지정가 도달 ----------
+    if cond_choice == "1":
+        config.console.print("\n[cyan]◆ 발동 방향 선택[/cyan]")
+        updown = _rsv_ask("1: 목표가 이상으로 상승(돌파), 2: 목표가 이하로 하락(이탈)",
+                          choices=["1", "2"], default="2" if is_buy is False else "1")
         if updown in (_RSV_BACK, _RSV_QUIT): return updown
-        return {'condition_type': "EMA_UP" if updown == "1" else "EMA_DOWN", 'target_price': float(v)}
+        condition_type = "BREAKOUT" if updown == "1" else "STOP"
 
-    if condition_type in ("TRAILING_BUY", "TRAILING_SELL"):
-        is_buy_side = (condition_type == "TRAILING_BUY")
-        config.console.print(f"\n[cyan]◆ {'반등' if is_buy_side else '하락'} 폭 설정[/cyan]")
-        config.console.print(f"[dim]※ '{'최저점' if is_buy_side else '최고점'}'은 본 예약 주문이 등록된 시점 이후부터 "
-                             f"갱신된 가장 {'낮은' if is_buy_side else '높은'} 가격을 의미합니다.[/dim]")
-        v = _rsv_ask(f"예약 후 {'최저점 대비 추격 매수할 반등' if is_buy_side else '최고점 대비 매도할 하락'} 폭(%) 입력 (예: 3.0)")
+        arrow = "이상으로 상승" if condition_type == "BREAKOUT" else "이하로 하락"
+        config.console.print(f"\n[cyan]◆ 목표가 입력 — 현재가가 목표가 {arrow} 시 발동[/cyan]")
+        config.console.print("[dim]  - 절대 가격: 50000 (해당 금액 도달 시 발동)[/dim]")
+        config.console.print(f"[dim]  - 퍼센트(%): +5%, -3% ({base_label} 대비 설정)[/dim]")
+        v = _rsv_ask("목표가 입력")
+        if v in (_RSV_BACK, _RSV_QUIT): return v
+
+        target_price = _rsv_parse_price(v, base_price, is_overseas, base_label)
+        if target_price is None:
+            config.console.print("[red]목표가는 0보다 큰 숫자 또는 '+5%' 형식으로 입력하세요.[/red]")
+            return None
+        if '%' in v:
+            config.console.print(f"[dim] -> {base_label} 기준 계산된 목표가: {_fmt_price(target_price, is_overseas)}[/dim]")
+
+        # [추가] 방향을 반대로 고른 실수는 '등록 즉시 발동'으로 나타난다 — 여기서 한 번 막는다.
+        warn = _rsv_immediate_trigger(condition_type, target_price, state.get('current_price') or 0)
+        if warn:
+            config.console.print(
+                f"\n[bold red]⚠️ {warn}[/bold red] "
+                f"(현재가 {_fmt_price(state.get('current_price'), is_overseas)} / "
+                f"목표가 {_fmt_price(target_price, is_overseas)})")
+            config.console.print("[yellow]이대로 등록하면 다음 감시 주기에 곧바로 주문이 나갑니다. "
+                                 "발동 방향을 반대로 고르지 않았는지 확인하세요.[/yellow]")
+            if Prompt.ask("그래도 이 목표가로 등록하시겠습니까?", choices=["y", "n"], default="n") != "y":
+                return None
+        return {'condition_type': condition_type, 'target_price': target_price}
+
+    # ---------- 2. 트레일링 ----------
+    if cond_choice == "2":
+        condition_type = "TRAILING_BUY" if is_buy else "TRAILING_SELL"
+        config.console.print(f"\n[cyan]◆ {'반등' if is_buy else '하락'} 폭 설정[/cyan]")
+        config.console.print(f"[dim]※ '{'최저점' if is_buy else '최고점'}'은 본 예약 주문이 등록된 시점 이후부터 "
+                             f"갱신된 가장 {'낮은' if is_buy else '높은'} 가격을 의미합니다.[/dim]")
+        v = _rsv_ask(f"예약 후 {'최저점 대비 추격 매수할 반등' if is_buy else '최고점 대비 매도할 하락'} 폭(%) 입력 (예: 3.0)")
         if v in (_RSV_BACK, _RSV_QUIT): return v
         try:
             pct = float(v.replace('%', '').strip())
@@ -1916,28 +1957,70 @@ def _rsv_step_condition_value(cond_choice, order_type, state):
             return None
         return {'condition_type': condition_type, 'target_price': pct}
 
-    if condition_type == "SMART_MONEY":
-        config.console.print("\n[cyan]◆ 수급 턴어라운드 감지[/cyan]")
-        config.console.print("[dim]※ 외국인/기관 수급이 순매수로 전환되는 신호를 포착하면 발동합니다. 별도 입력값이 없습니다.[/dim]")
-        return {'condition_type': "SMART_MONEY", 'target_price': 0.0}
+    # ---------- 3. 이평선 크로스 ----------
+    if cond_choice == "3":
+        config.console.print("\n[cyan]◆ 발동 목표 이동평균선(EMA) 선택[/cyan]")
+        v = _rsv_ask("이동평균선 (5, 20, 60, 120 중 입력)", choices=["5", "20", "60", "120"], default="20")
+        if v in (_RSV_BACK, _RSV_QUIT): return v
+        updown = _rsv_ask("발동 방향 (1: 상향 돌파 시, 2: 하향 이탈 시)",
+                          choices=["1", "2"], default="1" if is_buy else "2")
+        if updown in (_RSV_BACK, _RSV_QUIT): return updown
+        return {'condition_type': "EMA_UP" if updown == "1" else "EMA_DOWN", 'target_price': float(v)}
 
-    if condition_type == "STATE":
-        # [추세추종] 역매수(STATE_MR)는 USE_MEAN_REVERSION OFF 고정으로 분류 자체가 발생하지 않아
-        #  등록 옵션에서 제외한다 (기존 등록분 감시는 monitor가 계속 지원).
-        config.console.print("\n[cyan]◆ 진입을 감지할 시스템 상태 선택[/cyan]")
-        config.console.print("[dim]  - 강매수: 슈퍼모멘텀(신고가 주도주) / 매수: 일반 매수조건[/dim]")
-        st = _rsv_ask("상태 선택 (1: 강매수, 2: 매수)", choices=["1", "2"], default="1")
-        if st in (_RSV_BACK, _RSV_QUIT): return st
-        return {'condition_type': {"1": "STATE_STRONGBUY", "2": "STATE_BUY"}[st], 'target_price': 0.0}
-
-    if condition_type == "NEW_HIGH":
+    # ---------- 4. 신고가 돌파 ----------
+    if cond_choice == "4":
         config.console.print("\n[cyan]◆ 신고가 돌파 기준 선택[/cyan]")
         config.console.print("[dim]  - 직전 구간 최고가를 현재가가 경신하면 발동합니다. (목표가 입력 불필요, 자동 감지)[/dim]")
         nh = _rsv_ask("기준 (1: 52주 신고가, 2: 사상 최고가)", choices=["1", "2"], default="1")
         if nh in (_RSV_BACK, _RSV_QUIT): return nh
         return {'condition_type': "NEW_HIGH", 'target_price': 250.0 if nh == "1" else 0.0}
 
-    if condition_type == "COMPOSITE":
+    # ---------- 5. 변동성 돌파 (ATR) ----------
+    if cond_choice == "5":
+        config.console.print("\n[cyan]◆ 변동성 돌파 배수 설정[/cyan]")
+        config.console.print(f"[dim]  - 전일 종가 {'+' if is_buy else '-'} (ATR × 배수)를 "
+                             f"현재가가 {'상향 돌파' if is_buy else '하향 이탈'}하면 발동합니다.[/dim]")
+        config.console.print("[dim]  - 배수가 작을수록 자주, 클수록 드물게 발동합니다 (통상 0.3 ~ 1.0).[/dim]")
+        v = _rsv_ask("ATR 배수 입력 (예: 0.5)", default="0.5")
+        if v in (_RSV_BACK, _RSV_QUIT): return v
+        try:
+            k = float(v.replace('배', '').strip())
+        except ValueError:
+            config.console.print("[red]배수는 숫자만 입력 가능합니다.[/red]")
+            return None
+        if not (0 < k <= 5):
+            config.console.print("[red]배수는 0 초과 5 이하로 입력하세요.[/red]")
+            return None
+        return {'condition_type': "ATR_BREAKOUT", 'target_price': k}
+
+    # ---------- 6. 시스템 신호 ----------
+    if cond_choice == "6":
+        # [추세추종] 역매수(STATE_MR)는 USE_MEAN_REVERSION OFF 고정으로 분류 자체가 발생하지 않아
+        #  등록 옵션에서 제외한다 (기존 등록분 감시는 monitor가 계속 지원).
+        config.console.print("\n[cyan]◆ 진입을 감지할 시스템 신호 선택[/cyan]")
+        config.console.print("[dim]  - 수급 전환: 외국인/기관이 순매수로 돌아서는 신호[/dim]")
+        config.console.print("[dim]  - 강매수: 슈퍼모멘텀(신고가 주도주) / 매수: 일반 매수조건[/dim]")
+        st = _rsv_ask("신호 선택 (1: 수급 전환, 2: 강매수 진입, 3: 매수 진입)",
+                      choices=["1", "2", "3"], default="1")
+        if st in (_RSV_BACK, _RSV_QUIT): return st
+        return {'condition_type': {"1": "SMART_MONEY", "2": "STATE_STRONGBUY", "3": "STATE_BUY"}[st],
+                'target_price': 0.0}
+
+    # ---------- 7. 시간 도달 ----------
+    if cond_choice == "7":
+        config.console.print("\n[cyan]◆ 발동 기준 시각 입력[/cyan]")
+        config.console.print("[dim]  - HHMM 4자리 (예: 1500 → 15:00 이후 최초 감시 주기에 발동)[/dim]")
+        config.console.print("[dim]  - 시각 조건은 가격과 무관하게 발동합니다. 주문 단가를 시장가로 두는 편이 안전합니다.[/dim]")
+        v = _rsv_ask("발동 시각 (HHMM)")
+        if v in (_RSV_BACK, _RSV_QUIT): return v
+        digits = "".join(filter(str.isdigit, v))
+        if len(digits) != 4 or not ("0000" <= digits <= "2359") or digits[2:] > "59":
+            config.console.print("[red]시각은 HHMM 4자리(0000~2359)로 입력하세요.[/red]")
+            return None
+        return {'condition_type': "TIME", 'target_price': 0.0, 'target_time': digits}
+
+    # ---------- 8. 복합 조건 ----------
+    if cond_choice == "8":
         subs = _build_composite_conditions(base_price, is_overseas)
         if not subs:
             return _RSV_BACK
@@ -1949,35 +2032,154 @@ def _rsv_step_condition_value(cond_choice, order_type, state):
             'composite_labels': [s['_label'] for s in subs],
         }
 
-    # STOP / BREAKOUT — 목표가 입력
-    arrow = "이하로 하락" if condition_type == "STOP" else "이상으로 상승"
-    config.console.print(f"\n[cyan]◆ 발동 조건 가격(목표가) 입력 — 현재가가 목표가 {arrow} 시[/cyan]")
-    config.console.print("[dim]  - 절대 가격: 50000 (해당 금액 도달 시 발동)[/dim]")
-    config.console.print(f"[dim]  - 퍼센트(%): +5%, -3% ({base_label} 대비 설정)[/dim]")
-    v = _rsv_ask("목표가 입력")
-    if v in (_RSV_BACK, _RSV_QUIT): return v
+    return None
 
-    target_price = _rsv_parse_price(v, base_price, is_overseas, base_label)
-    if target_price is None:
-        config.console.print("[red]목표가는 0보다 큰 숫자 또는 '+5%' 형식으로 입력하세요.[/red]")
-        return None
-    if '%' in v:
-        config.console.print(f"[dim] -> {base_label} 기준 계산된 목표가: {_fmt_price(target_price, is_overseas)}[/dim]")
 
-    # [추가] 방향을 반대로 적은 실수는 '등록 즉시 발동'으로 나타난다 — 여기서 한 번 막는다.
-    warn = _rsv_immediate_trigger(condition_type, target_price, state.get('current_price') or 0)
-    if warn:
-        config.console.print(
-            f"\n[bold red]⚠️ {warn}[/bold red] "
-            f"(현재가 {_fmt_price(state.get('current_price'), is_overseas)} / "
-            f"목표가 {_fmt_price(target_price, is_overseas)})")
-        config.console.print("[yellow]이대로 등록하면 다음 감시 주기에 곧바로 주문이 나갑니다. "
-                             "방향(1: 하향이탈 / 2: 상향돌파)을 반대로 고르지 않았는지 확인하세요.[/yellow]")
-        ok = Prompt.ask("그래도 이 목표가로 등록하시겠습니까?", choices=["y", "n"], default="n")
-        if ok != "y":
-            return None
+def _register_oco_orders(cano, acnt, acc_label):
+    """보유 종목에 손절가·익절가를 한 번에 예약한다 (OCO).
 
-    return {'condition_type': condition_type, 'target_price': target_price}
+    [왜 이게 OCO인가] 같은 종목의 예약 하나가 발동하면 나머지가 자동 일괄 취소된다
+    (cancel_other_reserved_orders). 즉 손절 예약과 익절 예약을 함께 걸어 두면
+    한쪽이 나가는 순간 다른 쪽이 사라지는 One-Cancels-Other가 이미 성립한다.
+    이 함수는 그 두 건을 따로 아홉 단계씩 두 번 입력하지 않게 해 주는 단축 경로다.
+
+    반환: True(등록됨) / False(취소, 방향 선택으로 복귀) / 'quit'(메인으로)
+    """
+    res = select_stock_from_balance(cano, acnt)
+    if not res or res[0] in [None, False]:
+        return False
+    code, name, is_overseas, _, stock_info = res
+
+    current_price = api.get_current_price(code, is_overseas)
+    buy_price = float(stock_info.get('buy_price', 0.0) or 0.0)
+    held_qty = int(stock_info.get('qty', 0) or 0)
+    base_price = buy_price if buy_price > 0 else current_price
+    base_label = "매입단가" if buy_price > 0 else "현재가"
+
+    config.console.print(f"\n[bold cyan]{name} ({code})[/bold cyan] "
+                         f"[dim](현재가 {_fmt_price(current_price, is_overseas)}"
+                         + (f" / 매입단가 {_fmt_price(buy_price, is_overseas)}" if buy_price > 0 else "")
+                         + f" / 보유 {held_qty:,}주)[/dim]")
+    config.console.print("[dim]※ 손절과 익절을 각각 한 건씩 등록합니다. 한쪽이 발동하면 다른 쪽은 자동 취소됩니다.[/dim]")
+
+    if current_price <= 0:
+        config.console.print("[red]현재가를 조회하지 못해 OCO를 등록할 수 없습니다. "
+                             "손절가·익절가가 이미 도달했는지 판단할 수 없습니다.[/red]")
+        utils.pause()
+        return False
+
+    # ---------- 손절가 ----------
+    config.console.print(f"\n[cyan]◆ 손절가 (이 가격 이하로 내려가면 매도)[/cyan]")
+    config.console.print(f"[dim]  - 절대 가격 또는 {base_label} 대비 %(예: -7%)[/dim]")
+    v = _rsv_ask("손절가 입력")
+    if v == _RSV_QUIT: return 'quit'
+    if v == _RSV_BACK: return False
+    stop_price = _rsv_parse_price(v, base_price, is_overseas, base_label)
+    if stop_price is None:
+        config.console.print("[red]손절가는 0보다 큰 숫자 또는 '-7%' 형식으로 입력하세요.[/red]")
+        utils.pause()
+        return False
+
+    # ---------- 익절가 ----------
+    config.console.print(f"\n[cyan]◆ 익절가 (이 가격 이상으로 올라가면 매도)[/cyan]")
+    config.console.print(f"[dim]  - 절대 가격 또는 {base_label} 대비 %(예: +15%)[/dim]")
+    v = _rsv_ask("익절가 입력")
+    if v == _RSV_QUIT: return 'quit'
+    if v == _RSV_BACK: return False
+    take_price = _rsv_parse_price(v, base_price, is_overseas, base_label)
+    if take_price is None:
+        config.console.print("[red]익절가는 0보다 큰 숫자 또는 '+15%' 형식으로 입력하세요.[/red]")
+        utils.pause()
+        return False
+
+    # [검증] 손절가 < 현재가 < 익절가가 성립하지 않으면 등록하자마자 한쪽이 발동한다.
+    problems = []
+    if stop_price >= take_price:
+        problems.append("손절가가 익절가보다 높거나 같습니다")
+    if current_price <= stop_price:
+        problems.append("현재가가 이미 손절가 이하입니다 — 등록 즉시 매도됩니다")
+    if current_price >= take_price:
+        problems.append("현재가가 이미 익절가 이상입니다 — 등록 즉시 매도됩니다")
+    if problems:
+        config.console.print()
+        for msg in problems:
+            config.console.print(f"[bold red]⚠️ {msg}[/bold red]")
+        if Prompt.ask("그래도 등록하시겠습니까?", choices=["y", "n"], default="n") != "y":
+            return False
+
+    # ---------- 수량 ----------
+    v = _rsv_ask(f"매도 수량(주) [dim](보유 {held_qty:,}주)[/dim]", default=str(held_qty))
+    if v == _RSV_QUIT: return 'quit'
+    if v == _RSV_BACK: return False
+    try:
+        qty = int(float(v.replace(',', '').replace('주', '').strip()))
+    except ValueError:
+        config.console.print("[red]수량은 숫자만 입력 가능합니다.[/red]")
+        utils.pause()
+        return False
+    if qty <= 0:
+        config.console.print("[red]수량은 1주 이상이어야 합니다.[/red]")
+        utils.pause()
+        return False
+    if held_qty > 0 and qty > held_qty:
+        config.console.print(f"[red]⚠️ 보유 수량({held_qty:,}주)보다 많아 전량으로 조정합니다.[/red]")
+        qty = held_qty
+
+    # ---------- 유효기간 ----------
+    config.console.print(f"\n[cyan]◆ 유효 기간 (만료일) 설정[/cyan]")
+    config.console.print("[dim]  - 1: 당일 / 2: 이번 주 / 3: 이번 달 / 4: 무기한 / YYYYMMDD 직접 입력[/dim]")
+    v = _rsv_ask("유효 기간 선택 또는 입력", default="4")
+    if v == _RSV_QUIT: return 'quit'
+    if v == _RSV_BACK: return False
+    expire_dt = _rsv_resolve_expire(v)
+    if expire_dt is None:
+        config.console.print("[red]유효 기간은 1~4 또는 오늘 이후의 YYYYMMDD 8자리로 입력하세요.[/red]")
+        utils.pause()
+        return False
+    expire_disp = "무기한" if expire_dt == "20991231" else f"{expire_dt[:4]}-{expire_dt[4:6]}-{expire_dt[6:8]}까지"
+
+    # ---------- 확인 ----------
+    stop_gap = (stop_price - current_price) / current_price * 100
+    take_gap = (take_price - current_price) / current_price * 100
+    config.console.print(Panel(
+        f"\n[bold white on yellow] [ 손절 + 익절 동시 예약 (OCO) 최종 확인 ] [/]\n"
+        f" 계좌: {_fmt_account(cano, acnt)} ({acc_label})\n"
+        f" 종목: {name} ({code})\n"
+        f" 현재가: {_fmt_price(current_price, is_overseas)}\n"
+        f" 손절: [blue]{_fmt_price(stop_price, is_overseas)}[/blue] [dim]({stop_gap:+.2f}%)[/dim]\n"
+        f" 익절: [red]{_fmt_price(take_price, is_overseas)}[/red] [dim]({take_gap:+.2f}%)[/dim]\n"
+        f" 수량: {qty:,}주 (각 예약에 동일 적용, 주문은 시장가)\n"
+        f" 유효: {expire_disp}\n"
+        f"\n[dim]한쪽이 발동하면 나머지 한 건은 자동으로 취소됩니다.[/dim]\n",
+        expand=False))
+
+    ans = _rsv_ask("위 내용으로 두 건을 등록하시겠습니까?", choices=["y", "n"], default="n")
+    if ans == _RSV_QUIT: return 'quit'
+    if ans != "y":
+        config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
+        return False
+
+    market = "US" if is_overseas else "KR"
+    for cond_type, target in (("STOP", stop_price), ("BREAKOUT", take_price)):
+        db_manager.db.insert_reserved_order(
+            cano=cano, acnt=acnt, market=market, order_type="sell",
+            code=code, name=name, qty=qty, order_price=0.0,
+            condition_type=cond_type, target_price=target, target_time="",
+            expire_dt=expire_dt, composite_json=None)
+
+    config.console.print()
+    config.console.print("[bold green]손절·익절 예약 2건이 등록되었습니다.[/bold green]")
+    api.send_telegram_message(
+        f"📝 [예약 등록 · OCO] {name}({code})\n"
+        f"손절: {_fmt_price(stop_price, is_overseas)} ({stop_gap:+.2f}%)\n"
+        f"익절: {_fmt_price(take_price, is_overseas)} ({take_gap:+.2f}%)\n"
+        f"수량: {qty}주 · 시장가\n"
+        f"유효: {expire_disp}\n"
+        f"한쪽 발동 시 나머지는 자동 취소됩니다.")
+
+    config.console.print()
+    _print_reserved_orders_table()
+    return True
 
 
 def register_reserved_order():
@@ -1990,12 +2192,20 @@ def register_reserved_order():
     """
     state = {}
     step = 0
-    TOTAL = 9
+
+    # [추가] 단계마다 진입 시점의 경로(Breadcrumb) 길이를 기억해 두고, 그 단계로 되돌아오면
+    #  그 지점까지 잘라낸다. 이렇게 하지 않으면 b로 계좌 선택에 돌아갔을 때 이전 선택이
+    #  경로에 그대로 남아 "[2] 계좌: 자동투자 > [1] 계좌: 한투증권"처럼 두 번 찍힌다.
+    base_len = len(context.USER_ACTION_BREADCRUMB)
+    marks = {0: base_len}
 
     while True:
         if step < 0:
+            context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_len]
             config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
             return None
+
+        context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:marks.get(step, base_len)]
 
         # ---------- 0. 계좌 ----------
         if step == 0:
@@ -2006,19 +2216,36 @@ def register_reserved_order():
                 continue
             state.update(cano=cano, acnt=acnt, acc_label=acc_label)
             step += 1
+            marks[step] = len(context.USER_ACTION_BREADCRUMB)
             continue
 
         # ---------- 1. 방향 ----------
         if step == 1:
             _rsv_header(state)
             config.console.print("[dim](2/9 주문 방향)[/dim]")
-            menu_items = [("1", "예약 매수", "Buy"), ("2", "예약 매도", "Sell")]
+            menu_items = [
+                ("1", "예약 매수", "Buy"),
+                ("2", "예약 매도", "Sell"),
+                ("3", "손절 + 익절 동시 (OCO)", "보유 종목에 손절가·익절가를 한 번에 예약"),
+            ]
             choice = utils.show_menu("주문 방향", menu_items, default_choice="1")
             if choice.lower() == 'q':
                 step = -1
                 continue
             if choice.lower() == 'b':
                 step -= 1
+                continue
+            if choice == "3":
+                # 한쪽이 발동하면 같은 종목의 나머지 예약이 일괄 취소되는 기존 정책이
+                # 그대로 OCO가 된다 — 두 건을 한 번에 거는 단축 경로다.
+                context.USER_ACTION_BREADCRUMB.append("[3] 손절+익절 동시(OCO)")
+                res = _register_oco_orders(state['cano'], state['acnt'], state['acc_label'])
+                context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:marks[1]]
+                if res == 'quit':
+                    step = -1
+                    continue
+                if res is True:
+                    return True
                 continue
             new_type = "buy" if choice == "1" else "sell"
             if state.get('order_type') != new_type:
@@ -2027,7 +2254,11 @@ def register_reserved_order():
                           'buy_price', 'condition_type', 'target_price'):
                     state.pop(k, None)
             state['order_type'] = new_type
+            # [복원] 재작성 과정에서 빠졌던 항목. 경로에 매수/매도가 없으면 계좌 다음이
+            #  바로 종목이라, 지금 무엇을 예약 중인지 상단만 보고는 알 수 없다.
+            context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {'예약 매수' if new_type == 'buy' else '예약 매도'}")
             step += 1
+            marks[step] = len(context.USER_ACTION_BREADCRUMB)
             continue
 
         # ---------- 2. 종목 ----------
@@ -2081,24 +2312,21 @@ def register_reserved_order():
             config.console.print("[bold magenta]⚠️ 안내: 한 종목에 여러 예약 주문을 설정할 수 있으나, 어느 하나라도 체결되면 "
                                  "해당 종목에 설정된 나머지 모든 예약 주문(매수/매도)은 자동으로 일괄 취소됩니다.[/bold magenta]")
             step += 1
+            marks[step] = len(context.USER_ACTION_BREADCRUMB)
             continue
 
         # ---------- 3. 조건 종류 ----------
         if step == 3:
             _rsv_header(state)
             config.console.print("[dim](4/9 발동 조건)[/dim]")
-            cond_items = [
-                ("1", "스탑로스/하향이탈 (STOP)", "현재가가 목표가 이하로 하락 시"),
-                ("2", "돌파/상향이탈 (BREAKOUT)", "현재가가 목표가 이상으로 상승 시"),
-                ("3", "트레일링 매수 (TRAILING_BUY)", "예약 후 최저점 바닥 다지고 N% 반등 시 (매수 전용)"),
-                ("4", "트레일링 매도 (TRAILING_SELL)", "예약 후 최고점 달성 후 N% 하락 시 (매도 전용)"),
-                ("5", "이평선 크로스 (EMA)", "주가가 특정 EMA를 상향돌파/하향이탈 시"),
-                ("6", "수급 턴어라운드 (SMART_MONEY)", "외국인/기관 순매수 전환 시 (매수 전용)"),
-                ("7", "상태 진입 (STATE)", "강매수/매수 상태 진입 시 (매수 전용)"),
-                ("8", "신고가 돌파 (NEW_HIGH)", "52주/사상 신고가 경신 시 (추세추종 강세 진입)"),
-                ("9", "복합 조건 (COMPOSITE)", "점수·RSI·지정가·시간 등 여러 조건 동시 충족(AND) 시 다중조건 결합"),
-            ]
-            cond_choice = utils.show_menu("예약 발동 조건", cond_items)
+            cond_items = RSV_COND_ITEMS
+            # 시스템 신호(수급 전환·상태 진입)는 매수 진입 신호라 매도에서는 잠근다.
+            disabled = set() if state['order_type'] == 'buy' else {'6'}
+            side_note = ("[dim]※ 회색 항목은 이 방향에서 쓸 수 없습니다. "
+                         "매도 신호를 지표로 결합하려면 8번 복합 조건을 쓰세요.[/dim]"
+                         if disabled else None)
+            cond_choice = utils.show_menu("예약 발동 조건", cond_items,
+                                          text_before=side_note, disabled=disabled)
             if cond_choice.lower() == 'q':
                 step = -1
                 continue
@@ -2106,23 +2334,11 @@ def register_reserved_order():
                 step -= 1
                 continue
 
-            order_type = state['order_type']
-            if order_type == 'sell' and cond_choice == '3':
-                config.console.print("[red]트레일링 매수 조건은 '예약 매도'에서는 사용할 수 없습니다.[/red]")
-                utils.pause()
-                continue
-            if order_type == 'buy' and cond_choice == '4':
-                config.console.print("[red]트레일링 매도 조건은 '예약 매수'에서는 사용할 수 없습니다.[/red]")
-                utils.pause()
-                continue
-            if order_type == 'sell' and cond_choice in ('6', '7'):
-                config.console.print("[red]수급 턴어라운드/상태 진입 조건은 '예약 매수'에서만 사용할 수 있습니다.\n"
-                                     "(매도 신호 결합은 9번 복합 조건을 활용하세요.)[/red]")
-                utils.pause()
-                continue
-
             state['cond_choice'] = cond_choice
+            cond_name = dict((k, v) for k, v, _ in cond_items).get(cond_choice, '')
+            context.USER_ACTION_BREADCRUMB.append(f"[{cond_choice}] {cond_name}")
             step += 1
+            marks[step] = len(context.USER_ACTION_BREADCRUMB)
             continue
 
         # ---------- 4. 조건 값 ----------
@@ -2140,8 +2356,10 @@ def register_reserved_order():
                 continue
             state.pop('composite_json', None)
             state.pop('composite_labels', None)
+            state.pop('target_time', None)
             state.update(res)
             step += 1
+            marks[step] = len(context.USER_ACTION_BREADCRUMB)
             continue
 
         # ---------- 5. 주문 단가 ----------
@@ -2199,6 +2417,7 @@ def register_reserved_order():
                 config.console.print(f"[dim] -> 주문 단가: {_fmt_price(op, is_overseas)}"
                                      f"{' (호가단위 보정됨)' if not is_overseas else ''}[/dim]")
             step += 1
+            marks[step] = len(context.USER_ACTION_BREADCRUMB)
             continue
 
         # ---------- 6. 수량 ----------
@@ -2257,6 +2476,7 @@ def register_reserved_order():
 
             state['qty'] = qty
             step += 1
+            marks[step] = len(context.USER_ACTION_BREADCRUMB)
             continue
 
         # ---------- 7. 유효기간 ----------
@@ -2289,13 +2509,14 @@ def register_reserved_order():
                                      "내일 만료 처리됩니다.[/yellow]")
             state['expire_dt'] = expire_dt
             step += 1
+            marks[step] = len(context.USER_ACTION_BREADCRUMB)
             continue
 
         # ---------- 8. 확인 ----------
         if step == 8:
             is_overseas = state['is_overseas']
             cond_str = _condition_text(state['condition_type'], state.get('target_price', 0.0),
-                                       "", state.get('composite_json'),
+                                       state.get('target_time', ''), state.get('composite_json'),
                                        state.get('composite_labels'), is_overseas)
             expire_dt = state['expire_dt']
             expire_disp = "무기한" if expire_dt == "20991231" else f"{expire_dt[:4]}-{expire_dt[4:6]}-{expire_dt[6:8]}까지"
@@ -2344,7 +2565,7 @@ def register_reserved_order():
                 order_type=state['order_type'], code=state['code'], name=state['name'],
                 qty=state['qty'], order_price=state['order_price'],
                 condition_type=state['condition_type'], target_price=state.get('target_price', 0.0),
-                target_time="", expire_dt=expire_dt,
+                target_time=state.get('target_time', ''), expire_dt=expire_dt,
                 composite_json=state.get('composite_json')
             )
             config.console.print()

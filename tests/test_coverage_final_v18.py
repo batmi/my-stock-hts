@@ -56,8 +56,28 @@ def test_session_is_token_recently_issued():
 # ==========================================================
 # 2. utils.py 커버리지 (예외 및 분기 처리)
 # ==========================================================
+@pytest.fixture
+def restore_account_context():
+    """[격리] 이 파일은 config.session과 trade_context를 직접 건드린다.
+
+    use_auto_account(threading.local)와 is_simulation을 되돌리지 않고 끝내면,
+    같은 워커에서 뒤에 도는 테스트의 insert_trade가 자동계좌로 기록된다
+    (db_manager.insert_trade가 이 플래그를 보고 acc_no를 정한다).
+    실제로 test_journal_sync의 멱등키 계좌가 뒤바뀌는 것이 관측됐다.
+    """
+    saved = (getattr(context.trade_context, 'use_auto_account', False),
+             config.session.is_simulation,
+             getattr(config.session, 'auto_cano', ''),
+             getattr(config.session, 'auto_acnt_prdt_cd', ''))
+    yield
+    (context.trade_context.use_auto_account,
+     config.session.is_simulation,
+     config.session.auto_cano,
+     config.session.auto_acnt_prdt_cd) = saved
+
+
 @patch('api.get_current_token', return_value="test_token")
-def test_get_common_headers(mock_token):
+def test_get_common_headers(mock_token, restore_account_context):
     # 1. 실전 & Auto 계좌 사용
     config.session.is_simulation = False
     context.trade_context.use_auto_account = True
@@ -116,7 +136,7 @@ def test_tls_adapter_init_poolmanager():
         adapter.init_poolmanager(10, 10)
         assert hasattr(adapter, 'poolmanager')
 
-def test_get_telegram_footer_auto():
+def test_get_telegram_footer_auto(restore_account_context):
     config.session.is_simulation = False
     context.trade_context.use_auto_account = True
     config.session.auto_cano = "9999"

@@ -157,9 +157,9 @@ def test_back_returns_to_previous_step(mock_ask, mock_menu, mock_insert, reserve
     종전에는 어느 단계든 b/q가 모두 '등록 취소'라, 마지막 유효기간에서 오타를 내면
     계좌 선택부터 아홉 단계를 다시 입력해야 했다.
     """
-    mock_menu.side_effect = ["1", "7"]           # 매수 → 상태 진입(STATE)
-    # 상태 '1' → 단가 '0' → 수량 '10' → 유효기간에서 'b' → 수량 다시 '5' → 유효 '4' → 확인 'y'
-    mock_ask.side_effect = ["1", "0", "10", "b", "5", "4", "y"]
+    mock_menu.side_effect = ["1", "6"]           # 매수 → 시스템 신호(SIGNAL)
+    # 신호 '2'(강매수) → 단가 '0' → 수량 '10' → 유효기간에서 'b' → 수량 다시 '5' → 유효 '4' → 확인 'y'
+    mock_ask.side_effect = ["2", "0", "10", "b", "5", "4", "y"]
 
     trading.register_reserved_order()
 
@@ -175,10 +175,10 @@ def test_immediate_trigger_target_is_challenged(mock_ask, mock_menu, mock_insert
 
     방향을 반대로 적은 실수가 곧바로 시장가 체결로 이어지는 유일한 경로다.
     """
-    mock_menu.side_effect = ["1", "2"]           # 매수 → BREAKOUT
-    # 목표가 70,000(현재가 80,000 아래 → 즉시 발동) → 'n'으로 물러남 → 90,000 재입력
-    # → 단가 엔터(목표가와 동일) → 수량 10 → 유효 4 → 확인 y
-    mock_ask.side_effect = ["70000", "n", "90000", "", "10", "4", "y"]
+    mock_menu.side_effect = ["1", "1"]           # 매수 → 지정가 도달(PRICE)
+    # 방향 '1'(상향 돌파) → 목표가 70,000(현재가 80,000 아래 → 즉시 발동) → 'n'으로 물러남
+    # → 방향 '1' → 90,000 재입력 → 단가 엔터(목표가와 동일) → 수량 10 → 유효 4 → 확인 y
+    mock_ask.side_effect = ["1", "70000", "n", "1", "90000", "", "10", "4", "y"]
 
     trading.register_reserved_order()
 
@@ -194,9 +194,9 @@ def test_bad_expiry_is_not_silently_indefinite(mock_ask, mock_menu, mock_insert,
 
     종전에는 8자리가 아니면 전부 20991231이 됐다 — 실수가 가장 오래 사는 주문이 되는 방향.
     """
-    mock_menu.side_effect = ["1", "7"]
+    mock_menu.side_effect = ["1", "6"]
     # 유효기간에 '1231'(4자리 오타) → 거부 후 재입력 '4'(무기한)
-    mock_ask.side_effect = ["1", "0", "10", "1231", "4", "y"]
+    mock_ask.side_effect = ["2", "0", "10", "1231", "4", "y"]
 
     trading.register_reserved_order()
 
@@ -213,7 +213,7 @@ def test_nonprice_condition_defaults_to_market_price(mock_ask, mock_menu, mock_i
     종전 기본값은 '등록 시점 현재가' 고정이었다. 신고가 돌파처럼 발동 시점에 가격이
     이미 올라 있는 조건에서는 그 지정가에 영원히 안 붙어, 조건은 맞았는데 미체결로 남았다.
     """
-    mock_menu.side_effect = ["1", "8"]           # 매수 → NEW_HIGH
+    mock_menu.side_effect = ["1", "4"]           # 매수 → NEW_HIGH
     # 기준 '1'(52주) → 단가 엔터(기본값이 그대로 쓰임) → 수량 10 → 유효 4 → 확인 y
     mock_ask.side_effect = ["1", "0", "10", "4", "y"]
 
@@ -231,8 +231,8 @@ def test_nonprice_condition_defaults_to_market_price(mock_ask, mock_menu, mock_i
 @patch('modules.trading.Prompt.ask')
 def test_zero_reserved_quantity_is_rejected(mock_ask, mock_menu, mock_insert, reserve_env):
     """0주 예약은 등록되지 않는다."""
-    mock_menu.side_effect = ["1", "7"]
-    mock_ask.side_effect = ["1", "0", "0", "10", "4", "y"]
+    mock_menu.side_effect = ["1", "6"]
+    mock_ask.side_effect = ["2", "0", "0", "10", "4", "y"]
 
     trading.register_reserved_order()
 
@@ -318,3 +318,206 @@ def test_expiry_input_rejects_the_past_and_typos():
     assert trading._rsv_resolve_expire("20200101") is None
     assert trading._rsv_resolve_expire("abcd") is None
     assert trading._rsv_resolve_expire("20991231") == "20991231"
+
+# ==========================================================
+# 4. 예약 등록 화면 — 경로(Breadcrumb)와 조건 목록
+# ==========================================================
+@patch('modules.trading.db_manager.db.insert_reserved_order')
+@patch('modules.trading.utils.show_menu')
+@patch('modules.trading.Prompt.ask')
+def test_breadcrumb_does_not_accumulate_when_going_back(mock_ask, mock_menu, mock_insert, reserve_env):
+    """b로 되돌아가면 앞서 찍힌 경로가 남지 않는다.
+
+    [배경] 계좌 선택으로 돌아갔을 때 이전 선택이 지워지지 않아
+    "[2] 계좌: 자동투자 > [1] 계좌: 한투증권"처럼 두 번 찍혔다. 단계 이동을
+    넣으면서 생긴 문제다.
+    """
+    import context as ctx
+
+    saved = list(ctx.USER_ACTION_BREADCRUMB)
+    ctx.USER_ACTION_BREADCRUMB = ["[8] 종목 주문 관리", "[4] 예약 주문 등록"]
+    try:
+        # 매수 → 조건에서 b(종목으로) → 다시 종목 → 조건 STATE → ... 등록
+        mock_menu.side_effect = ["1", "b", "6"]
+        mock_ask.side_effect = ["2", "0", "10", "4", "y"]
+        trading.register_reserved_order()
+
+        crumbs = ctx.USER_ACTION_BREADCRUMB
+        # 종목 선택 경로가 두 벌 쌓이지 않아야 한다
+        assert crumbs.count("[종목선택] 삼성전자") <= 1, crumbs
+        assert len([c for c in crumbs if "예약 매수" in c]) == 1, crumbs
+    finally:
+        ctx.USER_ACTION_BREADCRUMB = saved
+
+    mock_insert.assert_called_once()
+
+
+@patch('modules.trading.db_manager.db.insert_reserved_order')
+@patch('modules.trading.utils.show_menu')
+@patch('modules.trading.Prompt.ask')
+def test_breadcrumb_records_the_order_side(mock_ask, mock_menu, mock_insert, reserve_env):
+    """경로에 매수/매도가 남는다 (재작성 과정에서 빠졌던 항목)."""
+    import context as ctx
+
+    saved = list(ctx.USER_ACTION_BREADCRUMB)
+    ctx.USER_ACTION_BREADCRUMB = ["[8] 종목 주문 관리", "[4] 예약 주문 등록"]
+    try:
+        mock_menu.side_effect = ["1", "6"]
+        mock_ask.side_effect = ["2", "0", "10", "4", "y"]
+        trading.register_reserved_order()
+        crumbs = ctx.USER_ACTION_BREADCRUMB
+        assert any("예약 매수" in c for c in crumbs), crumbs
+        assert any("시스템 신호" in c for c in crumbs), crumbs
+    finally:
+        ctx.USER_ACTION_BREADCRUMB = saved
+
+
+@patch('modules.trading.db_manager.db.insert_reserved_order')
+@patch('modules.trading.utils.show_menu')
+@patch('modules.trading.Prompt.ask')
+def test_buy_side_has_no_locked_conditions(mock_ask, mock_menu, mock_insert, reserve_env):
+    """매수에서는 잠기는 조건이 없다.
+
+    [배경] 방향은 앞 단계에서 이미 정해지는데 조건이 방향별로 또 쪼개져 있어
+    아홉 개 중 절반이 못 쓰는 항목이었다. 같은 조건을 하나로 합치자 매수에서는
+    잠글 것이 사라졌다.
+    """
+    mock_menu.side_effect = ["1", "6"]
+    mock_ask.side_effect = ["2", "0", "10", "4", "y"]
+
+    trading.register_reserved_order()
+
+    cond_call = [c for c in mock_menu.call_args_list if c[0][0] == "예약 발동 조건"][0]
+    keys = [it[0] for it in cond_call[0][1]]
+    assert keys == ["1", "2", "3", "4", "5", "6", "7", "8"], keys
+    assert cond_call.kwargs['disabled'] == set()
+
+
+@patch('modules.trading.db_manager.db.insert_reserved_order')
+@patch('modules.trading.utils.show_menu')
+@patch('modules.trading.Prompt.ask')
+@patch('modules.trading.select_stock_from_balance')
+def test_sell_side_locks_only_the_entry_signal(mock_bal, mock_ask, mock_menu, mock_insert, reserve_env):
+    """매도에서 잠기는 것은 '시스템 신호'(매수 진입 신호) 하나뿐이다."""
+    mock_bal.return_value = ("005930", "삼성전자", False, "KRX", {'qty': 10, 'buy_price': 70000.0})
+    mock_menu.side_effect = ["2", "3"]          # 매도 → EMA
+    mock_ask.side_effect = ["20", "2", "0", "10", "4", "y"]
+
+    trading.register_reserved_order()
+
+    cond_call = [c for c in mock_menu.call_args_list if c[0][0] == "예약 발동 조건"][0]
+    assert cond_call.kwargs['disabled'] == {"6"}
+
+
+def test_disabled_menu_keys_are_not_selectable():
+    """회색 항목은 입력 자체가 거부된다 (보이기만 하고 고를 수 없다)."""
+    import utils as u
+
+    items = [("1", "가능", ""), ("2", "잠김", ""), ("3", "가능", "")]
+    with patch('utils.clear_screen'), patch('utils.print_breadcrumb'), \
+         patch('config.console.print'), \
+         patch('utils.Prompt.ask', return_value="1") as mock_ask:
+        u.show_menu("테스트", items, disabled={"2"})
+
+    allowed = mock_ask.call_args.kwargs['choices']
+    assert "2" not in allowed, allowed
+    assert "1" in allowed and "3" in allowed
+
+# ==========================================================
+# 5. 신규 발동 조건 (2026-08-10) — ATR 변동성 돌파 · 시간 도달 · OCO
+# ==========================================================
+@patch('modules.trading.db_manager.db.insert_reserved_order')
+@patch('modules.trading.utils.show_menu')
+@patch('modules.trading.Prompt.ask')
+def test_atr_breakout_registration(mock_ask, mock_menu, mock_insert, reserve_env):
+    """변동성 돌파(ATR)는 배수를 target_price에 담는다."""
+    mock_menu.side_effect = ["1", "5"]           # 매수 → 변동성 돌파
+    mock_ask.side_effect = ["0.5", "0", "10", "4", "y"]
+
+    trading.register_reserved_order()
+
+    kwargs = mock_insert.call_args[1]
+    assert kwargs['condition_type'] == "ATR_BREAKOUT"
+    assert kwargs['target_price'] == 0.5
+
+
+@patch('modules.trading.db_manager.db.insert_reserved_order')
+@patch('modules.trading.utils.show_menu')
+@patch('modules.trading.Prompt.ask')
+def test_atr_multiplier_range_is_enforced(mock_ask, mock_menu, mock_insert, reserve_env):
+    """ATR 배수 0은 거부한다 (0이면 전일 종가에 닿기만 해도 발동한다)."""
+    mock_menu.side_effect = ["1", "5"]
+    mock_ask.side_effect = ["0", "0.5", "0", "10", "4", "y"]
+
+    trading.register_reserved_order()
+
+    assert mock_insert.call_args[1]['target_price'] == 0.5
+
+
+@patch('modules.trading.db_manager.db.insert_reserved_order')
+@patch('modules.trading.utils.show_menu')
+@patch('modules.trading.Prompt.ask')
+def test_time_condition_stores_target_time(mock_ask, mock_menu, mock_insert, reserve_env):
+    """시간 도달은 target_time(HHMM)에 저장된다 — 감시기가 읽는 자리다."""
+    mock_menu.side_effect = ["1", "7"]           # 매수 → 시간 도달
+    mock_ask.side_effect = ["1500", "0", "10", "4", "y"]
+
+    trading.register_reserved_order()
+
+    kwargs = mock_insert.call_args[1]
+    assert kwargs['condition_type'] == "TIME"
+    assert kwargs['target_time'] == "1500"
+
+
+@patch('modules.trading.db_manager.db.insert_reserved_order')
+@patch('modules.trading.utils.show_menu')
+@patch('modules.trading.Prompt.ask')
+def test_invalid_time_is_rejected(mock_ask, mock_menu, mock_insert, reserve_env):
+    """HHMM 4자리가 아니면 재입력을 받는다."""
+    mock_menu.side_effect = ["1", "7"]
+    mock_ask.side_effect = ["25:00", "1500", "0", "10", "4", "y"]
+
+    trading.register_reserved_order()
+
+    assert mock_insert.call_args[1]['target_time'] == "1500"
+
+
+@patch('modules.trading.db_manager.db.insert_reserved_order')
+@patch('modules.trading.select_stock_from_balance')
+@patch('modules.trading.utils.show_menu')
+@patch('modules.trading.Prompt.ask')
+def test_oco_registers_two_orders(mock_ask, mock_menu, mock_bal, mock_insert, reserve_env):
+    """손절+익절 동시(OCO)는 STOP·BREAKOUT 두 건을 만든다.
+
+    한쪽이 발동하면 같은 종목의 나머지가 일괄 취소되는 기존 정책이 그대로 OCO가 된다.
+    """
+    mock_bal.return_value = ("005930", "삼성전자", False, "KRX", {'qty': 100, 'buy_price': 75000.0})
+    mock_menu.side_effect = ["3"]                # 손절+익절 동시
+    # 손절 74,000 → 익절 90,000 → 수량 50 → 유효 4 → 확인 y  (현재가 80,000)
+    mock_ask.side_effect = ["74000", "90000", "50", "4", "y"]
+
+    trading.register_reserved_order()
+
+    assert mock_insert.call_count == 2
+    types = {c[1]['condition_type']: c[1] for c in mock_insert.call_args_list}
+    assert set(types) == {"STOP", "BREAKOUT"}
+    assert types["STOP"]['target_price'] == 74000
+    assert types["BREAKOUT"]['target_price'] == 90000
+    assert all(k['order_type'] == "sell" and k['qty'] == 50 and k['order_price'] == 0.0
+               for k in types.values())
+
+
+@patch('modules.trading.db_manager.db.insert_reserved_order')
+@patch('modules.trading.select_stock_from_balance')
+@patch('modules.trading.utils.show_menu')
+@patch('modules.trading.Prompt.ask')
+def test_oco_challenges_an_already_reached_level(mock_ask, mock_menu, mock_bal, mock_insert, reserve_env):
+    """현재가가 이미 손절가 이하면 되묻고, n이면 등록하지 않는다."""
+    mock_bal.return_value = ("005930", "삼성전자", False, "KRX", {'qty': 100, 'buy_price': 75000.0})
+    mock_menu.side_effect = ["3", "q"]
+    # 손절 85,000(현재가 80,000보다 높다) → 익절 90,000 → 경고 → n → 방향 메뉴에서 q
+    mock_ask.side_effect = ["85000", "90000", "n"]
+
+    trading.register_reserved_order()
+
+    mock_insert.assert_not_called()

@@ -172,7 +172,8 @@ class ReservedOrderMonitor:
         chart_required_codes = set()
         for order in pending_orders:
             if order['condition_type'] in ['SCORE_UP', 'SCORE_DOWN', 'RSI_UP', 'RSI_DOWN', 'EMA_UP', 'EMA_DOWN',
-                                           'STATE_STRONGBUY', 'STATE_BUY', 'STATE_MR', 'NEW_HIGH', 'COMPOSITE']:
+                                           'STATE_STRONGBUY', 'STATE_BUY', 'STATE_MR', 'NEW_HIGH', 'COMPOSITE',
+                                           'ATR_BREAKOUT']:
                 code = order['code']
                 now_ts = time.time()
                 # 캐시가 1시간 지났거나 없으면 업데이트
@@ -277,11 +278,13 @@ class ReservedOrderMonitor:
                                 elif condition_type == 'EMA_DOWN' and curr_price <= ema_val:
                                     trigger, reason = True, f"EMA {int(target_price)}선 하향이탈 (현재가: {curr_price:,.2f})"
 
-                elif condition_type in ('SMART_MONEY', 'STATE_STRONGBUY', 'STATE_BUY', 'STATE_MR', 'NEW_HIGH', 'COMPOSITE'):
-                    # [차별화 조건] 우리 시스템 고유 엔진(수급/상태/신고가/복합)을 트리거로 활용
+                elif condition_type in ('SMART_MONEY', 'STATE_STRONGBUY', 'STATE_BUY', 'STATE_MR', 'NEW_HIGH',
+                                        'COMPOSITE', 'ATR_BREAKOUT'):
+                    # [차별화 조건] 우리 시스템 고유 엔진(수급/상태/신고가/변동성/복합)을 트리거로 활용
                     df, ind = self._get_indicators_for(code, curr_price)  # SMART_MONEY는 ind 불필요
                     ctx = {'curr_price': curr_price, 'df': df, 'ind': ind, 'code': code,
-                           'is_overseas': is_overseas, 'now_hhmm': now_time_str_short}
+                           'is_overseas': is_overseas, 'now_hhmm': now_time_str_short,
+                           'order_type': order_type}
 
                     if condition_type == 'SMART_MONEY':
                         if self._eval_atomic('SMART_MONEY', None, ctx):
@@ -294,6 +297,11 @@ class ReservedOrderMonitor:
                         if self._eval_atomic('NEW_HIGH', target_price, ctx):
                             hi_label = "사상 최고가" if target_price == 0 else "52주 신고가"
                             trigger, reason = True, f"{hi_label} 경신 (현재가: {curr_price:,.2f})"
+                    elif condition_type == 'ATR_BREAKOUT':
+                        if self._eval_atomic('ATR_BREAKOUT', target_price, ctx):
+                            side = "상단" if order_type == 'buy' else "하단"
+                            trigger, reason = True, (f"변동성 돌파 {side} (전일 종가 ± ATR×{target_price} 기준, "
+                                                     f"현재가: {curr_price:,.2f})")
                     elif condition_type == 'COMPOSITE':
                         trigger, reason = self._eval_composite(order, ctx)
 
@@ -434,6 +442,25 @@ class ReservedOrderMonitor:
             if ev is None:
                 return False
             return cp >= ev if ctype == 'EMA_UP' else cp <= ev
+        if ctype == 'ATR_BREAKOUT':
+            # 전일 종가 ± (ATR × 배수). df의 마지막 행 종가는 현재가로 덮여 있으므로
+            # 기준은 iloc[-2](직전 확정봉 종가)다.
+            df = ctx.get('df')
+            if df is None or len(df) < 2:
+                return False
+            atr = ind.get('atr') or 0
+            k = float(value or 0)
+            if atr <= 0 or k <= 0:
+                return False
+            try:
+                prev_close = float(df['close'].iloc[-2])
+            except Exception:
+                return False
+            if prev_close <= 0:
+                return False
+            if ctx.get('order_type') == 'sell':
+                return cp <= prev_close - (atr * k)
+            return cp >= prev_close + (atr * k)
         return False
 
     def _atomic_label(self, st, sv):
@@ -447,6 +474,7 @@ class ReservedOrderMonitor:
             'PRICE_UP': f"가격≥{sv}", 'PRICE_DOWN': f"가격≤{sv}",
             'TIME_AFTER': f"시각≥{str(sv)[:2]}:{str(sv)[2:]}" if sv else "시각",
             'NEW_HIGH': "사상최고가경신" if not sv else "52주신고가경신",
+            'ATR_BREAKOUT': f"변동성돌파 ATR×{sv}",
         }.get(st, st)
 
     def _eval_composite(self, order, ctx):

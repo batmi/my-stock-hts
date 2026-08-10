@@ -103,11 +103,11 @@ def test_register_reserved_order_composite(mock_insert, mock_tg, mock_get_price,
 
     # show_menu 호출 순서:
     #  1) 주문 방향: "1"(예약 매수)
-    #  2) 발동 조건: "9"(복합 조건)
+    #  2) 발동 조건: "8"(복합 조건)  [2026-08-10 조건 메뉴 8개로 통합]
     #  3) 복합 서브조건 추가: "1"(SCORE)
     #  4) 복합 서브조건 추가: "4"(SMART_MONEY)
     #  5) 복합 구성 완료: "0"
-    mock_show_menu.side_effect = ["1", "9", "1", "4", "0"]
+    mock_show_menu.side_effect = ["1", "8", "1", "4", "0"]
     mock_select_stock.return_value = ("005930", "삼성전자", False)
     mock_get_price.return_value = 80000.0
 
@@ -139,18 +139,18 @@ def test_register_reserved_order_state(mock_insert, mock_get_price, mock_select_
     """상태 진입(STATE) 조건의 예약 매수 등록 흐름 테스트 (강매수 진입)"""
     mock_select_account.return_value = ("12345678", "01", "실전투자")
 
-    # show_menu: [1] 예약 매수 -> [7] 상태 진입 (STATE)
-    mock_show_menu.side_effect = ["1", "7"]
+    # show_menu: [1] 예약 매수 -> [6] 시스템 신호 (SIGNAL)
+    mock_show_menu.side_effect = ["1", "6"]
     mock_select_stock.return_value = ("005930", "삼성전자", False)
     mock_get_price.return_value = 80000.0
 
     # Prompt 입력값 순서:
-    # 1. 상태 선택: '1' (강매수)
+    # 1. 신호 선택: '2' (강매수 진입)
     # 2. 주문단가: '0' (시장가)
     # 3. 주문수량: '10'
     # 4. 유효기간: '4' (무기한)
     # 5. 최종확인: 'y'
-    mock_ask.side_effect = ["1", "0", "10", "4", "y"]
+    mock_ask.side_effect = ["2", "0", "10", "4", "y"]
 
     with patch('modules.trading.api.send_telegram_message'):
         trading.register_reserved_order()
@@ -223,11 +223,11 @@ def test_manage_reserved_orders_requires_confirmation(mock_update, mock_get_orde
 def test_register_reserved_order_smart_money(mock_insert, mock_get_price, mock_select_stock, mock_select_account, mock_show_menu, mock_ask):
     """수급 턴어라운드(SMART_MONEY) 조건의 예약 매수 등록 흐름 테스트 (별도 입력값 없음)"""
     mock_select_account.return_value = ("12345678", "01", "실전투자")
-    mock_show_menu.side_effect = ["1", "6"] # 1: 예약 매수, 6: 수급 턴어라운드(SMART_MONEY)
+    mock_show_menu.side_effect = ["1", "6"] # 1: 예약 매수, 6: 시스템 신호(SIGNAL)
     mock_select_stock.return_value = ("005930", "삼성전자", False)
     mock_get_price.return_value = 80000.0
-    # Prompt 입력: 주문단가(0:시장가), 주문수량(10), 유효기간(4:무기한), 최종확인(y)
-    mock_ask.side_effect = ["0", "10", "4", "y"]
+    # Prompt 입력: 신호 선택(1:수급 전환), 주문단가(0:시장가), 수량(10), 유효기간(4), 확인(y)
+    mock_ask.side_effect = ["1", "0", "10", "4", "y"]
 
     with patch('modules.trading.api.send_telegram_message'):
         trading.register_reserved_order()
@@ -244,7 +244,7 @@ def test_register_reserved_order_smart_money(mock_insert, mock_get_price, mock_s
 def test_register_reserved_order_new_high(mock_insert, mock_get_price, mock_select_stock, mock_select_account, mock_show_menu, mock_ask):
     """신고가 돌파(NEW_HIGH) 조건의 예약 매수 등록 흐름 테스트 (52주 기준)"""
     mock_select_account.return_value = ("12345678", "01", "실전투자")
-    mock_show_menu.side_effect = ["1", "8"]  # 1: 예약 매수, 8: 신고가 돌파(NEW_HIGH)
+    mock_show_menu.side_effect = ["1", "4"]  # 1: 예약 매수, 4: 신고가 돌파(NEW_HIGH)
     mock_select_stock.return_value = ("005930", "삼성전자", False)
     mock_get_price.return_value = 80000.0
     # Prompt: 신고가 기준 "1"(52주), 주문단가 "0", 수량 "10", 유효기간 "4", 확인 "y"
@@ -267,7 +267,7 @@ def test_register_reserved_order_new_high(mock_insert, mock_get_price, mock_sele
 def test_register_reserved_order_trailing_buy(mock_insert, mock_get_price, mock_select_stock, mock_select_account, mock_show_menu, mock_ask):
     """퍼센트(%) 단가 입력을 포함한 트레일링 매수 등록 흐름 테스트"""
     mock_select_account.return_value = ("12345678", "01", "실전투자")
-    mock_show_menu.side_effect = ["1", "3"] # 1: 예약 매수, 3: 트레일링 매수
+    mock_show_menu.side_effect = ["1", "2"] # 1: 예약 매수, 2: 트레일링(매수=최저점 반등)
     mock_select_stock.return_value = ("005930", "삼성전자", False)
     mock_get_price.return_value = 80000.0
     # Prompt 입력: 반등폭(3.0%), 주문단가(-1%), 주문수량(10), 유효기간(1:당일), 최종확인(y)
@@ -289,10 +289,10 @@ def test_register_reserved_order_trailing_buy(mock_insert, mock_get_price, mock_
 def test_register_reserved_order_cancel_by_user(mock_get_price, mock_select_stock, mock_select_account, mock_show_menu, mock_ask):
     """사용자가 예약 매매 도중 취소(q)를 입력했을 때의 처리 확인"""
     mock_select_account.return_value = ("12345678", "01", "실전투자")
-    mock_show_menu.side_effect = ["1", "3"] # 1: 예약 매수, 3: 지정가 도달
+    mock_show_menu.side_effect = ["1", "1"] # 1: 예약 매수, 1: 지정가 도달
     mock_select_stock.return_value = ("005930", "삼성전자", False)
     mock_get_price.return_value = 80000.0
-    # 목표가 입력 단계에서 'q' 입력
+    # 발동 방향 선택 단계에서 'q' 입력
     mock_ask.side_effect = ["q"]
     
     # 중단 시 None 반환
@@ -310,7 +310,7 @@ def test_register_reserved_order_composite_rsi_ema(mock_insert, mock_get_price, 
     import json
     mock_select_account.return_value = ("12345678", "01", "실전투자")
     # show_menu: 매수 -> 복합(8) -> RSI(2) -> EMA(3) -> 완료(0)
-    mock_show_menu.side_effect = ["1", "9", "2", "3", "0"]
+    mock_show_menu.side_effect = ["1", "8", "2", "3", "0"]
     mock_select_stock.return_value = ("005930", "삼성전자", False)
     mock_get_price.return_value = 80000.0
     # Prompt: RSI 목표"30"+방향"2"(이하), EMA 기간"60"+방향"1"(상회), 주문단가"0", 수량"10", 유효"4", 확인"y"
@@ -335,7 +335,7 @@ def test_register_reserved_order_composite_rsi_ema(mock_insert, mock_get_price, 
 def test_register_reserved_order_ema_up(mock_insert, mock_get_price, mock_select_bal, mock_select_account, mock_show_menu, mock_ask):
     """EMA(EMA_UP) 조건의 예약 매도 등록 흐름 테스트"""
     mock_select_account.return_value = ("12345678", "01", "실전투자")
-    mock_show_menu.side_effect = ["2", "5"] # 2: 예약 매도, 5: EMA
+    mock_show_menu.side_effect = ["2", "3"] # 2: 예약 매도, 3: EMA
     mock_select_bal.return_value = ("005930", "삼성전자", False, None, {"qty": 100, "buy_price": 75000.0})
     mock_get_price.return_value = 80000.0
     # Prompt 입력: 목표EMA(60), 발동방향(1:상향돌파), 주문단가(0:시장가), 주문수량(50), 유효기간(1:당일), 최종확인(y)
@@ -412,6 +412,66 @@ def test_monitor_trigger_price_based(mock_execute, mock_get_price, mock_get_orde
         monitor._check_orders()
         
     assert mock_execute.call_count == 3
+
+@patch('modules.reserved_order_monitor.db_manager.db.get_pending_reserved_orders')
+@patch('modules.reserved_order_monitor.api.get_current_price')
+@patch('modules.reserved_order_monitor.api.get_chart_data')
+@patch('modules.reserved_order_monitor.indicators.calculate_indicators')
+@patch('modules.reserved_order_monitor.ReservedOrderMonitor._execute_order')
+def test_monitor_trigger_atr_breakout(mock_execute, mock_calc, mock_chart, mock_get_price, mock_get_orders):
+    """변동성 돌파(ATR): 전일 종가 ± (ATR × 배수)를 넘어야 발동한다 (2026-08-10 신설).
+
+    df의 마지막 행 종가는 감시기가 현재가로 덮어쓰므로, 기준은 iloc[-2](직전 확정봉)다.
+    """
+    monitor = ReservedOrderMonitor()
+    # [주의] 감시기는 싱글턴이라 chart_cache가 테스트 사이에 살아남는다. 이 테스트는
+    #  df의 iloc[-2](전일 종가)를 직접 쓰므로 앞 테스트의 캐시가 남으면 결과가 뒤집힌다.
+    monitor.chart_cache.clear()
+
+    mock_get_orders.return_value = [
+        # 전일 종가 100,000 + ATR 2,000 × 0.5 = 101,000 → 현재가 101,500 이면 발동
+        {"id": 11, "code": "005930", "name": "삼성전자", "condition_type": "ATR_BREAKOUT",
+         "target_price": 0.5, "order_type": "buy", "market": "KR", "expire_dt": "20991231"},
+        # 같은 기준에 현재가 100,500 → 미달
+        {"id": 12, "code": "000660", "name": "SK하이닉스", "condition_type": "ATR_BREAKOUT",
+         "target_price": 0.5, "order_type": "buy", "market": "KR", "expire_dt": "20991231"},
+    ]
+    mock_get_price.side_effect = lambda code, is_ovs: {"005930": 101500.0, "000660": 100500.0}.get(code, 0.0)
+    mock_chart.return_value = pd.DataFrame({'close': [99000.0, 100000.0, 100000.0]})
+    mock_calc.return_value = {'atr': 2000.0}
+
+    with patch('modules.reserved_order_monitor.datetime') as mock_dt:
+        mock_dt.now.return_value.strftime.side_effect = lambda fmt: "1200" if fmt == "%H%M" else "20240101"
+        monitor._check_orders()
+
+    assert mock_execute.call_count == 1
+    assert mock_execute.call_args[0][0]['id'] == 11
+
+
+@patch('modules.reserved_order_monitor.db_manager.db.get_pending_reserved_orders')
+@patch('modules.reserved_order_monitor.api.get_current_price')
+@patch('modules.reserved_order_monitor.api.get_chart_data')
+@patch('modules.reserved_order_monitor.indicators.calculate_indicators')
+@patch('modules.reserved_order_monitor.ReservedOrderMonitor._execute_order')
+def test_monitor_atr_breakout_needs_a_real_atr(mock_execute, mock_calc, mock_chart, mock_get_price, mock_get_orders):
+    """ATR을 못 구하면 발동하지 않는다 (0으로 읽어 '무조건 돌파'가 되면 안 된다)."""
+    monitor = ReservedOrderMonitor()
+    monitor.chart_cache.clear()
+
+    mock_get_orders.return_value = [
+        {"id": 13, "code": "005930", "name": "삼성전자", "condition_type": "ATR_BREAKOUT",
+         "target_price": 0.5, "order_type": "buy", "market": "KR", "expire_dt": "20991231"},
+    ]
+    mock_get_price.side_effect = lambda code, is_ovs: 200000.0
+    mock_chart.return_value = pd.DataFrame({'close': [99000.0, 100000.0, 100000.0]})
+    mock_calc.return_value = {'atr': 0}       # 지표 계산 실패
+
+    with patch('modules.reserved_order_monitor.datetime') as mock_dt:
+        mock_dt.now.return_value.strftime.side_effect = lambda fmt: "1200" if fmt == "%H%M" else "20240101"
+        monitor._check_orders()
+
+    mock_execute.assert_not_called()
+
 
 @patch('modules.reserved_order_monitor.db_manager.db.get_pending_reserved_orders')
 @patch('modules.reserved_order_monitor.ReservedOrderMonitor._execute_order')

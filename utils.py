@@ -256,11 +256,18 @@ def print_breadcrumb():
             config.console.print(f"\n[dim]경로: {path_str}[/dim]")
             config.console.print()
 
-def show_menu(title, menu_items, default_choice="1", cancel_choice="b", text_before=None, custom_prompt=None):
+def show_menu(title, menu_items, default_choice="1", cancel_choice="b", text_before=None,
+              custom_prompt=None, disabled=None):
     """
     통합 메뉴 출력 및 입력 헬퍼 함수
     menu_items: [("1", "이름", "설명"), ...] 또는 [("1", "이름"), ...]
+    disabled: 회색으로만 보여주고 선택은 막을 키의 집합 {"4", ...}
+
+    [왜 감추지 않고 회색인가] 상황에 따라 못 쓰는 항목을 목록에서 빼면 번호가 비거나
+    화면마다 같은 번호가 다른 뜻이 된다. 자리는 그대로 두고 고를 수만 없게 하면
+    번호는 어디서나 같은 조건을 가리키면서 막다른 길도 사라진다.
     """
+    disabled = {str(k) for k in (disabled or ())}
     clear_screen()
     print_breadcrumb()
     
@@ -282,11 +289,15 @@ def show_menu(title, menu_items, default_choice="1", cancel_choice="b", text_bef
     for item in menu_items:
         if len(item) == 3:
             key, name, desc = item
-            grid.add_row(f"[{key}] {name}", f"({desc})" if desc else "")
         else:
             key, name = item
-            grid.add_row(f"[{key}] {name}", "")
-        valid_choices.append(str(key))
+            desc = ""
+        key = str(key)
+        if key in disabled:
+            grid.add_row(f"[dim][{key}] {name}[/dim]", f"[dim]({desc})[/dim]" if desc else "")
+            continue
+        grid.add_row(f"[{key}] {name}", f"({desc})" if desc else "")
+        valid_choices.append(key)
     
     if cancel_choice:
         valid_choices.append(str(cancel_choice))
