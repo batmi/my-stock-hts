@@ -719,6 +719,30 @@ def resolve_entry_date(entry_date=None, last_buy=None, fallback_buy_date=None):
     return None
 
 
+def holding_profit_rate(item):
+    """잔고 한 줄에서 평가손익률(%)을 구한다. 구할 수 없으면 None. (부수효과 없음)
+
+    [왜 함수로 빼는가] `float(item.get('evlu_pfls_rt') or 0.0)` 은 '없음'을 0%로 바꾼다.
+    0%는 손절선(음수)보다 위라, 손절 이탈 판정이 '아직 괜찮다'로 뒤집힌다. 증권사 어댑터는
+    일부 필드를 0/누락으로 주므로(같은 이유로 pchs_amt 는 이미 수량×평단으로 복원한다)
+    없으면 평단과 현재가로 직접 구하고, 그것도 안 되면 **모른다고 답한다**.
+    """
+    raw = (item or {}).get('evlu_pfls_rt')
+    if raw not in (None, "", "-"):
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            pass
+    try:
+        avg = float((item or {}).get('pchs_avg_pric') or 0)
+        cur = float((item or {}).get('prpr') or 0)
+    except (TypeError, ValueError):
+        return None
+    if avg <= 0 or cur <= 0:
+        return None
+    return (cur - avg) / avg * 100.0
+
+
 def resolve_holding_context(last_buy, fallback_buy_date=None, entry_date=None):
     """(보유일수, 역추세 보유 여부)를 유도한다. (부수효과 없음)
 

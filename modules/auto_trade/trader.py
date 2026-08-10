@@ -4329,7 +4329,17 @@ class AutoTrader:
         재이탈 시 다시 알린다.
         """
         try:
-            profit_rate = float(item.get('evlu_pfls_rt') or 0.0)
+            # [중요] 평가손익률이 없을 때 0으로 두면 안 된다. 0은 손절선(음수) 위라서
+            #  아래 분기가 '회복했다'로 읽고 경보를 건너뛰는 것은 물론 스로틀까지 푼다.
+            #  이 경보는 시스템이 손절해 주지 않는 포지션의 **마지막 안전망**인데, 잔고
+            #  데이터가 부실할수록 조용해지는 구조였다(토스 어댑터는 일부 필드가 0/누락으로
+            #  온다 — 같은 이유로 pchs_amt는 이미 수량×평단으로 복원하고 있다).
+            #  없으면 평단과 현재가로 직접 구하고, 그것도 안 되면 판단을 미룬다.
+            profit_rate = _pkg().holding_profit_rate(item)
+            if profit_rate is None:
+                logger.warning(f"[미관리 경보] {name}({code}) 평가손익률을 구할 수 없어 판정을 보류한다 "
+                               f"— 스로틀은 건드리지 않는다")
+                return
 
             sl_rate = None
             tq, ws = 0, 0.0
