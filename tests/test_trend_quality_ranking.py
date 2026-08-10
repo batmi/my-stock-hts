@@ -141,3 +141,51 @@ def test_analyze_buy_includes_trend_quality(monkeypatch):
     assert result is not None
     assert 'trend_quality' in result
     assert result['trend_quality'] is not None and result['trend_quality'] > 0
+
+
+# ---------------------------------------------------------------------------
+# 로그 문구가 실제 정렬 순서와 맞는가
+# ---------------------------------------------------------------------------
+#
+# 종전 문구는 '동점 후보 간 1순위 정렬 키다' 였다. 두 가지가 잘못됐다.
+#   ① 추세품질이 1순위이고 점수가 그 동점을 가르는 값인데, 점수가 같을 때만 꺼내 쓰는
+#      보조 기준처럼 읽혔다 — 게이트와 랭킹을 일부러 분리한 설계의 정반대다.
+#      후보 순서를 보고 '왜 점수 높은 게 뒤로 갔지?'에서 잘못된 결론으로 간다.
+#   ② '키다'가 동사 켜다로 읽혔다(2026-08-10 운용자 문의).
+#
+# 산식이 바뀌면 설명도 같이 바뀌어야 한다. 코드와 문구가 조용히 갈라지는 것을 막는다.
+
+def _selection_log_source():
+    import inspect
+    from modules.auto_trade import trader
+    src = inspect.getsource(trader.AutoTrader._analyze_candidates)
+    start = src.index("[매수 후보 선정]")
+    return src[start:start + 600]
+
+
+def test_log_names_the_tiebreakers_in_sort_order():
+    """설명 순서가 candidate_priority_key 튜플 순서와 같아야 한다."""
+    text = _selection_log_source()
+    order = ["점수", "52주위치", "체결강도"]
+    positions = [text.index(w) for w in order]
+    assert positions == sorted(positions), f"설명 순서가 정렬 순서와 다르다: {text}"
+
+
+def test_log_says_trend_quality_is_the_primary_key_not_a_tiebreaker():
+    """추세품질은 1순위다. '동점일 때만 쓰는 값'으로 읽히면 안 된다."""
+    text = _selection_log_source()
+    assert "1순위" in text
+    assert "동점 후보 간 1순위" not in text, "순위를 거꾸로 읽히게 하는 종전 표현이 돌아왔다"
+
+
+def test_log_states_it_is_not_a_buy_gate():
+    """게이트와 랭킹의 분리가 이 설계의 핵심이다 — 문구에서 빠지면 안 된다."""
+    assert "게이트 아님" in _selection_log_source()
+
+
+def test_sort_key_still_leads_with_trend_quality():
+    """위 문구들이 참이려면 추세품질이 실제로 첫 원소여야 한다."""
+    high_tq_low_score = {'trend_quality': 90.0, 'score': 7.0, 'w52_pos': 50.0, 'vol_strength': 100.0}
+    low_tq_high_score = {'trend_quality': 10.0, 'score': 9.9, 'w52_pos': 99.0, 'vol_strength': 300.0}
+    ranked = sorted([low_tq_high_score, high_tq_low_score], key=candidate_priority_key)
+    assert ranked[0] is high_tq_low_score, "점수가 추세품질을 이겼다 — 로그 설명이 거짓이 된다"

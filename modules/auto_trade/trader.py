@@ -5565,9 +5565,15 @@ class AutoTrader:
         # [추가] 선정된 후보군 우선순위 로그 출력
         if candidates:
             lookback = config.INDICATOR_PARAMS.get("TREND_QUALITY_LOOKBACK", 90)
+            # [문구] 종전 표현('동점 후보 간 1순위 정렬 키다')은 두 가지가 잘못됐다.
+            #  ① 정렬 순서를 거꾸로 읽히게 했다 — 추세품질이 1순위이고 점수가 그 동점을
+            #     가르는 값인데, 점수가 같을 때만 꺼내 쓰는 보조 기준처럼 보였다.
+            #     게이트(점수 통과)와 랭킹을 일부러 분리한 설계를 정반대로 설명한 셈이다.
+            #  ② '키다'가 동사 켜다로 읽혔다. 로그는 한 번 읽고 이해돼야 한다.
             self.log(f"[매수 후보 선정] 총 {len(candidates)}종목 (우선순위순) "
                      f"— 추세품질 = 최근 {lookback}일 회귀 '연환산 기울기(%) × R²(추세 매끄러움)'. "
-                     f"높을수록 검증된 추세이며 동점 후보 간 1순위 정렬 키다(매수 게이트 아님)")
+                     f"높을수록 검증된 추세다. 매수 여부는 가르지 않고(게이트 아님) 순위만 정한다 "
+                     f"— 1순위 기준이며, 같으면 점수 → 52주위치 → 체결강도 순으로 가른다.")
             for i, c in enumerate(candidates):
                 tq = c.get('trend_quality')
                 tq_disp = f"{tq:.0f} ({indicators.describe_trend_quality(tq)})" if tq is not None else "- (이력부족)"
