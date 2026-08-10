@@ -12,6 +12,7 @@ import api # [추가] 외부 API 차단용
 from modules import db_manager # [추가] DB 매니저 임포트
 from modules import analysis # [추가] 지수 조회 차단용
 from modules.auto_trade import AutoTrader, ConclusionMonitor
+from modules.auto_trade import engine as _atr_engine  # [추가] 지수 변동성 배율 전역 격리
 from modules.telegram_bot import TelegramCommander
 
 @pytest.fixture(scope="session", autouse=True)
@@ -317,6 +318,12 @@ def reset_all_singletons():
     TelegramCommander._instance = None
     # [격리] 시장 국면 TTL 캐시 초기화 (테스트별 모킹 데이터가 캐시로 새지 않도록)
     analysis._MARKET_REGIME_CACHE.clear()
+    # [격리 2026-08-10] 지수 변동성 배율. trader 루프를 태우는 테스트가 합성 지수
+    #  데이터로 이 전역을 갱신하고 되돌리지 않으면, 이후 실행되는 **다른 파일**의
+    #  ATR 손절 캡이 조용히 달라진다(effective_atr_stop_cap이 이 값을 본다).
+    #  실제로 test_failclosed_chaos 가 0.7296을 남겨 test_settings_guardrails 의
+    #  SSOT 검증이 xdist 워커 배치에 따라 간헐 실패했다. 전역이므로 여기서 막는다.
+    _atr_engine.set_vol_regime_ratio(1.0)
 
     yield
 
@@ -324,6 +331,7 @@ def reset_all_singletons():
     ConclusionMonitor._instance = None
     TelegramCommander._instance = None
     analysis._MARKET_REGIME_CACHE.clear()
+    _atr_engine.set_vol_regime_ratio(1.0)
 
 def create_mock_df(trend='up', periods=100, start_price=10000):
     """가상의 주가 데이터프레임 생성 헬퍼 함수"""

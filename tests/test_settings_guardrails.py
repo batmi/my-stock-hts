@@ -248,6 +248,12 @@ def test_atr_stop_formula_has_a_single_source():
     from modules.auto_trade import engine
     from modules import portfolio_backtest as pbt
 
+    # [필수] 캡은 지수 변동성 배율에 따라 움직인다(effective_atr_stop_cap). 여기서
+    #  검증하려는 건 '두 경로가 같은 값을 낸다'는 SSOT 이지 캡의 값 자체가 아니므로,
+    #  배율을 평시(1.0)로 고정해 주변 상태에 기대지 않게 한다. conftest 가 매 테스트
+    #  전후로 되돌리지만, 가정하는 자리에서 한 번 더 못박는다.
+    engine.set_vol_regime_ratio(1.0)
+
     atr, price, mult = 1000.0, 10000.0, 2.0      # 무캡이면 -20%
     for cap in (-15.0, -25.0, -8.0):
         with patch.dict(config.SELL_STRATEGY, {"MAX_ATR_STOP_LOSS_RATE": cap}):
