@@ -86,6 +86,15 @@ class TelegramCommander:
         if not self.bot_token: return
         if not config.ENABLE_TELEGRAM: return # [추가] 텔레그램 비활성화 시 시작 안 함
         if self.is_running: return # [추가] 중복 실행 방지
+
+        # [추가] 명령 수신은 fail-closed 다(_handle_message). 알림 전송은 되지만 명령이
+        #  전부 무시되는 상태를 운용자가 모르면 '봇이 죽었다'로 오해하므로 여기서 알린다.
+        if not config.TELEGRAM_CHAT_ID:
+            config.console.print(
+                "[bold yellow]⚠️ TELEGRAM_CHAT_ID가 설정되지 않아 텔레그램 명령을 "
+                "받지 않습니다.[/bold yellow] [dim]알림 전송은 정상입니다. "
+                "tools/get_telegram_chat_id.py 로 확인해 환경변수에 넣으세요.[/dim]")
+            logger.warning("[Telegram] TELEGRAM_CHAT_ID 미설정 — 모든 수신 명령을 무시합니다(fail-closed).")
         self.is_running = True
         self.thread = threading.Thread(target=self._run_loop, daemon=True, name="TelegramBot")
         self.thread.start()
@@ -143,7 +152,12 @@ class TelegramCommander:
         chat_id = str(message.get('chat', {}).get('id'))
         
         # 설정된 Chat ID와 다르면 무시 (보안)
-        if config.TELEGRAM_CHAT_ID and chat_id != str(config.TELEGRAM_CHAT_ID):
+        # [Fix 2026-08-10] 종전에는 `if config.TELEGRAM_CHAT_ID and ...` 였다. 환경변수가
+        #  비면 앞 항이 거짓이 되어 **검사 자체가 사라졌다** — 봇 토큰만 알면 제3자가
+        #  /stop·/config·/addrestrict 를 보낼 수 있었다. 기본값이 ""(config.py)이므로
+        #  기계를 옮기며 변수 하나를 빠뜨리면 조용히 인증이 꺼진 채 실계좌 봇이 돈다.
+        #  fail-closed 로 뒤집는다 — 수신자를 모르면 아무 명령도 받지 않는다.
+        if not config.TELEGRAM_CHAT_ID or chat_id != str(config.TELEGRAM_CHAT_ID):
             return
 
         # [추가] 하단 고정 메뉴 버튼 텍스트 매핑

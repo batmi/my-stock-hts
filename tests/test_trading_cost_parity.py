@@ -66,7 +66,7 @@ def test_a_thin_gain_becomes_a_loss_after_costs():
     비용을 빼지 않으면 그 왜곡이 그대로 설정 결정으로 넘어간다.
     """
     amt, _ = trading_cost.net_realized_profit(100_000, 100_100, 10)   # 총 +0.1%
-    assert amt < 0, "왕복 비용(약 0.245%)보다 작은 이익이 흑자로 잡혔다"
+    assert amt < 0, "왕복 비용(약 0.235%)보다 작은 이익이 흑자로 잡혔다"
 
 
 def test_break_even_price_is_above_the_buy_price():
@@ -186,3 +186,44 @@ def test_recalc_never_raises_on_bad_input():
     from modules.auto_trade.conclusion import _recalc_realized
     assert _recalc_realized(_origin(buy_price="말도안됨"), "?", None,
                             False, 7, 0.7) == (7, 0.7)
+
+
+# ─────────────────────────────────────────────
+# 5. 요율의 산출 근거 (2026-08-10 실측)
+# ─────────────────────────────────────────────
+#
+# 종전 값(매수 0.015% / 매도 0.23%)은 출처 없이 승계된 어림값이었다. 아래는 요율이
+# **구성 요소의 합**임을 고정한다 — 누가 한 자리를 고치면 근거와 어긋나 바로 깨진다.
+
+KIS_ONLINE_COMMISSION = 0.000140527   # 뱅키스 온라인 위탁수수료 0.0140527%
+KRX_INSTITUTION_COST = 0.000036396    # 유관기관 제비용 0.0036396%
+SECURITIES_TAX_2026 = 0.002           # 증권거래세 0.20% (2026-01-01 시행)
+
+
+def test_domestic_buy_rate_is_commission_plus_institution_cost():
+    """매수에는 세금이 없다 — 수수료 + 유관기관 제비용뿐이다."""
+    assert config.BUY_FEE_RATE == pytest.approx(
+        KIS_ONLINE_COMMISSION + KRX_INSTITUTION_COST, abs=1e-7)
+
+
+def test_domestic_sell_rate_adds_the_transaction_tax():
+    """매도 = 매수와 같은 수수료 + 증권거래세 0.20%."""
+    assert config.SELL_FEE_RATE == pytest.approx(
+        config.BUY_FEE_RATE + SECURITIES_TAX_2026, abs=1e-7)
+
+
+def test_transaction_tax_is_the_2026_rate_not_the_2025_one():
+    """2025년 0.15%로 되돌리지 말 것 — 금투세 폐지로 2026-01-01부터 0.20%로 환원됐다.
+
+    '거래세는 계속 인하 중'이라는 인상이 남아 있어 되돌리기 쉬운 자리다.
+    """
+    implied_tax = config.SELL_FEE_RATE - config.BUY_FEE_RATE
+    assert implied_tax == pytest.approx(0.002, abs=1e-7), \
+        f"매도-매수 차이가 거래세 0.20%가 아니다: {implied_tax:.6%}"
+
+
+def test_overseas_sell_includes_the_sec_fee():
+    """미국 매도분 SEC Fee 0.00206%는 매수에 붙지 않는다."""
+    assert config.OVERSEAS_SELL_FEE_RATE == pytest.approx(
+        config.OVERSEAS_BUY_FEE_RATE + 0.0000206, abs=1e-9)
+    assert config.OVERSEAS_BUY_FEE_RATE == pytest.approx(0.0025)
