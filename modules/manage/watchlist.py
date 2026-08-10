@@ -946,32 +946,40 @@ def manage_stock_memos_by_mode(mode):
             config.console.print(table)
         else:
             config.console.print("[dim]저장된 메모가 없습니다.[/dim]\n")
-            time.sleep(1)
-            return 'back'
+            # [수정] 비었다고 바로 나가면 아래 '작업 선택'까지 같이 사라져 첫 메모를 만들 길이 없어진다.
+            #  삭제 모드는 지울 대상이 없으니 나가는 게 맞지만, 조회 모드에서는 머물러 추가를 받는다.
+            if mode != 'view':
+                time.sleep(1)
+                return 'back'
 
         config.console.print()
         if mode == 'view':
-            prompt_msg = f"{mode_name_map[mode]}할 종목 번호 선택 [dim](추가: a, 삭제: d, 이전: b, 메인: q, 취소: Enter)[/dim]"
-        else:
-            prompt_msg = f"{mode_name_map[mode]}할 종목 번호 선택 [dim](이전: b, 메인: q, 취소: Enter)[/dim]"
-            
-        idx_str = Prompt.ask(prompt_msg)
-        if idx_str.lower() in ['b', 'q']: return 'back'
-        if idx_str == "": return 'back'
-        
-        if mode == 'view':
-            if idx_str.lower() == 'a':
+            # [수정] 9-5(포지션 분석)와 같은 '작업 선택' 방식. 종목 번호를 먼저 묻던 예전 방식은
+            #  목록이 비면 프롬프트 자체가 뜨지 않아 '추가' 경로까지 같이 사라졌다.
+            if grouped_memos:
+                act = Prompt.ask("작업 선택 (0: 조회, 1: 추가, 2: 삭제) [dim](이전: b, 메인: q)[/dim]",
+                                 choices=["0", "1", "2", "b", "q"], default="0")
+            else:
+                act = Prompt.ask("작업 선택 (1: 추가) [dim](이전: b, 메인: q)[/dim]",
+                                 choices=["1", "b", "q"], default="1")
+            if act.lower() in ('b', 'q'): return 'back'
+
+            if act == "1":
                 context.USER_ACTION_BREADCRUMB.append("[메모 추가]")
                 add_new_stock_memo()
                 context.USER_ACTION_BREADCRUMB.pop()
                 continue
-            elif idx_str.lower() == 'd':
+            elif act == "2":
                 context.USER_ACTION_BREADCRUMB.append("[메모 삭제]")
                 res_del = manage_stock_memos_by_mode('delete')
                 context.USER_ACTION_BREADCRUMB.pop()
                 if res_del in ('quit_to_main', 'quit_to_menu'):
                     return res_del
                 continue
+
+        idx_str = Prompt.ask(f"{mode_name_map[mode]}할 종목 번호 선택 [dim](이전: b, 메인: q, 취소: Enter)[/dim]")
+        if idx_str.lower() in ['b', 'q']: return 'back'
+        if idx_str == "": return 'back'
 
         if idx_str.isdigit() and 1 <= int(idx_str) <= len(grouped_memos):
             target = grouped_memos[int(idx_str)-1]
