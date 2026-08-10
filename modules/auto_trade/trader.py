@@ -1338,11 +1338,31 @@ class AutoTrader:
                 f"= 청산 감시 간격 {gap:.0f}초", gap)
 
     @staticmethod
+    def _peak_rss_mb():
+        """프로세스 수명 동안의 최대 상주 메모리(MB). 실패하면 0.
+
+        [왜 피크가 따로 필요한가] 현재 RSS는 '지금 이 순간'의 값이라 한가한 시각에 보면
+        낮게 나온다. OOM은 종목 분석이 몰리는 순간에 나는데 그 순간을 사람이 보고 있을
+        수는 없다. ru_maxrss는 커널이 대신 기억해 준 고점이라 사후에 확인할 수 있다.
+
+        [주의] 프로세스 수명 기준이므로 재기동하면 0부터 다시 쌓인다 — 갓 띄운 직후의
+        피크는 아직 아무것도 말해 주지 않는다. 하루 장을 다 돈 뒤의 값이라야 근거가 된다.
+        """
+        try:
+            import resource
+            usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            # macOS는 바이트, 그 외 POSIX는 KB 단위로 반환한다.
+            is_mac = getattr(os, "uname", None) and os.uname().sysname == "Darwin"
+            return usage / (1024 ** 2) if is_mac else usage / 1024
+        except Exception:
+            return 0.0
+
+    @staticmethod
     def _health_memory():
         """프로세스/시스템 메모리 사용량(MB)을 추가 의존성 없이 조회한다.
 
         운영 환경(라즈베리파이 1GB)에서는 OOM이 자동매매 중단의 주된 원인이라
-        관제 화면에서 상주 메모리와 가용 메모리를 함께 확인할 수 있게 한다.
+        관제 화면에서 상주 메모리·피크·가용 메모리를 함께 확인할 수 있게 한다.
         조회에 실패하면 0을 돌려주고 해당 항목만 표시에서 빠진다.
         """
         rss_mb = 0.0
@@ -1353,14 +1373,10 @@ class AutoTrader:
                 pages = int(fp.read().split()[1])
             rss_mb = pages * os.sysconf("SC_PAGE_SIZE") / (1024 ** 2)
         except Exception:
-            try:
-                import resource
-                usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-                # macOS는 바이트, 그 외 POSIX는 KB 단위로 반환한다.
-                is_mac = getattr(os, "uname", None) and os.uname().sysname == "Darwin"
-                rss_mb = usage / (1024 ** 2) if is_mac else usage / 1024
-            except Exception:
-                rss_mb = 0.0
+            # statm을 못 읽는 환경(비리눅스)에서는 피크값으로 대신한다 — 현재값보다 크지만
+            # 아예 표시하지 못하는 것보다 낫고, OOM 판단에서 과소평가는 위험한 방향이다.
+            rss_mb = AutoTrader._peak_rss_mb()
+        peak_mb = AutoTrader._peak_rss_mb()
         try:
             with open("/proc/meminfo") as fp:
                 for line in fp:
@@ -1369,7 +1385,7 @@ class AutoTrader:
                         break
         except Exception:
             avail_mb = 0.0
-        return rss_mb, avail_mb
+        return rss_mb, avail_mb, peak_mb
 
     def get_health_message(self):
         """외부 API 호출 없이 운영 상태를 요약한 관제 메시지를 만든다.
@@ -1488,10 +1504,15 @@ class AutoTrader:
         else:
             run_text = "미실행"
 
-        rss_mb, avail_mb = self._health_memory()
+        rss_mb, avail_mb, peak_mb = self._health_memory()
         resource_parts = []
         if rss_mb:
-            resource_parts.append(f"프로세스 메모리 {rss_mb:,.0f}MB")
+            # 피크를 함께 보여야 '지금 여유롭다'가 안심의 근거가 되지 않는다 — OOM은
+            #  분석이 몰리는 순간에 나고, 그 순간의 값은 여기 찍히지 않는다.
+            mem_text = f"프로세스 메모리 {rss_mb:,.0f}MB"
+            if peak_mb > rss_mb:
+                mem_text += f" (피크 {peak_mb:,.0f}MB)"
+            resource_parts.append(mem_text)
         if avail_mb:
             resource_parts.append(f"가용 메모리 {avail_mb:,.0f}MB")
             # 1GB 라즈베리파이 기준으로 가용 메모리가 이 아래로 떨어지면 OOM 종료 위험이 커진다.

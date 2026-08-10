@@ -27,7 +27,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
 from modules import trading_cost  # noqa: E402
 
-OK, WARN, BAD, SKIP = "✅", "⚠️ ", "❌", "· "
+# INFO 는 판정이 아니라 맥락(표본 규모 등)이다. SKIP(판정 보류)과 같은 기호를 쓰되
+#  집계에서는 갈라야 한다 — 안 그러면 안내문 한 줄이 "검증 보류 1건"으로 둔갑한다.
+OK, WARN, BAD, SKIP, INFO = "✅", "⚠️ ", "❌", "· ", "·  "
 
 
 class Report:
@@ -40,6 +42,11 @@ class Report:
     def print(self):
         bad = sum(1 for m, _, _ in self.rows if m == BAD)
         warn = sum(1 for m, _, _ in self.rows if m == WARN)
+        ok = sum(1 for m, _, _ in self.rows if m == OK)
+        skip = sum(1 for m, _, _ in self.rows if m == SKIP)
+        # 무엇이 아직 판정되지 않았는지 이름으로 남긴다 — 개수만으로는 다음에 무엇을
+        #  기다려야 하는지 알 수 없다(대개 '매도 체결'이다).
+        pending = [t.split(" — ")[0] for m, t, _ in self.rows if m == SKIP]
         print("\n" + "=" * 96)
         for mark, title, detail in self.rows:
             print(f"{mark} {title}")
@@ -51,8 +58,13 @@ class Report:
             print(f"실패 {bad}건 · 주의 {warn}건 — 위 항목을 확인하기 전에는 실계좌로 넘어가지 말 것.")
         elif warn:
             print(f"실패 0건 · 주의 {warn}건 — 대부분 '표본 부족'이다. 더 돌린 뒤 다시 볼 것.")
+        elif skip:
+            # [중요] 표본이 없는 항목을 '통과'로 묶어 버리면, 아무것도 검증하지 못한 운용이
+            #  검증된 운용처럼 읽힌다 — 이 도구가 가장 경계해야 할 실패다. 보류는 보류로 센다.
+            print(f"판정 {ok}건 통과 · {skip}건 보류(표본 없음) — 아직 검증이 끝나지 않았다.")
+            print("  보류 항목: " + " / ".join(pending))
         else:
-            print("모든 항목 통과.")
+            print(f"판정 {ok}건 모두 통과.")
         return bad
 
 
@@ -296,7 +308,7 @@ def summarize(buys, sells, rep):
     for s in sells:
         r = (s.get("reason") or "기타").split("(")[0].strip()
         reasons[r] += 1
-    rep.add(SKIP, f"표본: 매수 {len(buys)}건 · 매도 {len(sells)}건 · {len(codes)}종목",
+    rep.add(INFO, f"표본: 매수 {len(buys)}건 · 매도 {len(sells)}건 · {len(codes)}종목",
             "청산 사유: " + (", ".join(f"{k} {v}" for k, v in
                                     sorted(reasons.items(), key=lambda x: -x[1])) or "-"))
 

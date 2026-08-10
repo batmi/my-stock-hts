@@ -256,14 +256,16 @@ def show_insider_trades(days=90):
     _apply_real_chg(insiders)
     bulk = _bulk_event_keys(insiders)
 
+    # 이 각주는 특정 표가 아니라 아래 출력 전체에 걸리는 읽는 법이다 — 표 밑에 붙여 두면
+    #  마지막 표(대주주)만의 단서로 읽힌다. 들여쓰기 없이 표보다 먼저 둔다.
+    config.console.print("[dim]※ 증감(+)=취득, (-)=처분 · DART는 변동사유를 제공하지 않아 "
+                         "일괄 지급·재보고를 패턴으로 걸러냅니다 · 원문: dart.fss.or.kr[/dim]\n")
     _render_treasury(treasury)
     _render_free_increase(frees)
     _render_overhang(mezz)
     _render_summary(insiders, bulk=bulk)
     _render_insiders(insiders, bulk=bulk)
     _render_majors(majors)
-    config.console.print("[dim]※ 증감(+)=취득, (-)=처분 · DART는 변동사유를 제공하지 않아 "
-                         "일괄 지급·재보고를 패턴으로 걸러냅니다 · 원문: dart.fss.or.kr[/dim]")
 
 
 def _render_treasury(rows):
@@ -292,7 +294,7 @@ def _render_treasury(rows):
             period, (r.get("note") or "-")[:24],
         )
     config.console.print(table)
-    config.console.print("  [dim]취득·신탁체결=매수 수급(+), 처분=잠재 매도물량(-). 소각 목적 여부는 공시 원문 확인.[/dim]\n")
+    config.console.print("  [dim]※ 취득·신탁체결=매수 수급(+), 처분=잠재 매도물량(-). 소각 목적 여부는 공시 원문 확인.[/dim]\n")
 
 
 def _render_free_increase(rows):
@@ -362,7 +364,7 @@ def _render_overhang(rows, limit=20):
     config.console.print(table)
     if len(rows) > limit:
         config.console.print(f"  [dim]… 외 {len(rows) - limit}건[/dim]")
-    config.console.print("  [dim]현재가 ≥ 전환가면 상승 시 전환·매도 물량(오버행)이 상방 저항이 될 수 있습니다. "
+    config.console.print("  [dim]※ 현재가 ≥ 전환가면 상승 시 전환·매도 물량(오버행)이 상방 저항이 될 수 있습니다. "
                          "전환가는 발행 결정 시점 기준(리픽싱 미반영), 행사공시=최근 90일 전환청구권·신주인수권 행사.[/dim]\n")
 
 

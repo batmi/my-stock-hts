@@ -227,6 +227,37 @@ def test_empty_db_says_there_is_nothing_to_judge(db, capsys):
     assert "표본 없음" in out
 
 
+def test_pending_items_are_not_summarized_as_all_pass(db, capsys):
+    """매수만 있고 매도가 없으면 핵심 3항목이 판정 불가다 — '모두 통과'로 맺으면 안 된다.
+
+    [왜 이 테스트인가] 실제 운용 로그에서 이 결함이 드러났다. 매수 4건·매도 0건인데
+    맨 아래 줄이 '모든 항목 통과'였다. 항목별로는 정직하게 '표본 없음'이라 적어 놓고도
+    마지막 한 줄이 그걸 통과로 덮어 버리면, 아무것도 검증하지 못한 운용을 검증된 것으로
+    읽게 된다 — 이 도구가 가장 경계해야 할 실패다.
+    """
+    conn, path = db()
+    _buy(conn)
+    assert _run(path) == 0          # 실패는 아니다
+    out = capsys.readouterr().out
+    assert "모두 통과" not in out, "판정 보류가 있는데 전체 통과로 맺었다"
+    assert "보류" in out
+    assert "손절 발동 검증" in out and "실현손익 검증" in out
+
+
+def test_all_pass_only_when_everything_was_actually_judged(db, capsys):
+    """반대로, 표본이 다 있으면 '모두 통과'라고 말해야 한다 — 늘 보류면 신호가 죽는다."""
+    conn, path = db()
+    _buy(conn, when="2026-08-10 09:30:00")
+    _sell(conn, price=93000, when="2026-08-10 10:00:00", reason="ATR손절", profit_rate=-7.0)
+    _buy(conn, price=91000, when="2026-08-10 10:10:00")
+    conn.execute("INSERT INTO trailing_stops VALUES ('005930', 100000, '2026-08-10')")
+    conn.commit()
+    _run(path)
+    out = capsys.readouterr().out
+    assert "보류" not in out, out
+    assert "모두 통과" in out
+
+
 def test_manual_and_external_trades_are_not_judged(db, capsys):
     """수동·외부 주문은 시스템이 낸 것이 아니므로 판정 대상이 아니다."""
     conn, path = db()

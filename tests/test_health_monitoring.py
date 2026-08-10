@@ -59,14 +59,44 @@ def test_health_message_reports_runtime_and_resources(monkeypatch):
     monkeypatch.setattr(trader, "is_market_open", lambda: True)
     monkeypatch.setattr(config, "USE_WEBSOCKET", False, raising=False)
     # 라즈베리파이 OOM 감시용 항목 — 가용 메모리가 임계 아래면 주의로 승격된다.
-    monkeypatch.setattr(AutoTrader, "_health_memory", staticmethod(lambda: (180.0, 90.0)))
+    monkeypatch.setattr(AutoTrader, "_health_memory", staticmethod(lambda: (180.0, 90.0, 340.0)))
 
     message = trader.get_health_message()
 
     assert "실행 시간" in message and "(경과 1:30:" in message
     assert "프로세스 메모리 180MB" in message
+    # 피크를 함께 찍어야 한가한 시각의 낮은 현재값이 안심의 근거로 오독되지 않는다.
+    assert "피크 340MB" in message
     assert "가용 메모리 90MB" in message
     assert "가용 메모리 부족" in message
+
+
+def test_health_message_omits_peak_when_it_equals_current(monkeypatch):
+    """피크가 현재값과 같으면(=아직 고점을 안 찍었으면) 굳이 같은 숫자를 두 번 쓰지 않는다."""
+    trader = AutoTrader()
+    trader.is_running = True
+    trader.start_time = datetime.now() - timedelta(minutes=5)
+    monkeypatch.setattr(trader, "is_market_open", lambda: True)
+    monkeypatch.setattr(config, "USE_WEBSOCKET", False, raising=False)
+    monkeypatch.setattr(AutoTrader, "_health_memory", staticmethod(lambda: (180.0, 400.0, 180.0)))
+
+    message = trader.get_health_message()
+    assert "프로세스 메모리 180MB" in message
+    assert "피크" not in message
+
+
+def test_peak_rss_is_a_real_high_water_mark():
+    """ru_maxrss 는 커널이 기억한 고점이라 현재 RSS 이상이어야 한다.
+
+    [왜 이 테스트인가] 단위 환산을 틀리면(KB↔바이트) 값이 1024배 어긋나는데, 그래도
+    숫자는 그럴듯하게 찍혀서 화면만 봐서는 모른다. 현재값과의 대소로 붙잡는다.
+    """
+    peak = AutoTrader._peak_rss_mb()
+    assert peak > 0, "피크 RSS 조회 실패 — OOM 감시가 무력화된다"
+    rss, _avail, reported_peak = AutoTrader._health_memory()
+    assert reported_peak == pytest.approx(peak, rel=0.5)
+    if rss:
+        assert reported_peak >= rss * 0.9, f"피크({reported_peak})가 현재({rss})보다 작다 — 단위 환산 의심"
 
 
 def test_cli_health_rows_escape_markup_and_skip_duplicates():
