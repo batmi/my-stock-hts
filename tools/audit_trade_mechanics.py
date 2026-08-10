@@ -73,6 +73,14 @@ def _rows(conn, sql, params=()):
     return [dict(r) for r in conn.execute(sql, params)]
 
 
+def _f(v):
+    """가격 칸은 문자열로 저장되기도 한다. 못 읽으면 0(=판정 대상 아님)."""
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _is_system(t):
     """시스템 트레이딩이 낸 주문인가. 수동·외부 주문은 판정 대상이 아니다."""
     return "(AUTO)" in (t.get("type") or "")
@@ -293,7 +301,61 @@ def check_no_expensive_reentry(buys, sells, rep):
 
 
 # ─────────────────────────────────────────────
-# 7. 요약
+# 7. 매입가 기준 일치 (수수료 이중 차감 탐지)
+# ─────────────────────────────────────────────
+
+def check_basis_consistency(buys, sells, rep):
+    """매도에 굳는 매입가가 '체결가'인가, '수수료가 얹힌 값'인가.
+
+    [왜 이걸 보는가] 실현손익은 net_realized_profit(buy_price, ...)로 계산하고, 그 함수는
+    매수 수수료를 **다시 뺀다**. 그러니 buy_price 는 수수료가 빠진 순수 체결가여야 한다.
+    그런데 실거래의 buy_price 는 KIS 잔고의 pchs_avg_pric(매입평균가)에서 온다. 여기에
+    수수료가 포함돼 있으면 같은 비용을 두 번 빼게 된다.
+
+    확인할 방법이 코드에는 없다 — KIS 는 pchs_amt 를 실전 잔고에서 0/누락으로 주기 때문에
+    매입평균가가 유일한 소스이고, 문서만으로는 포함 여부가 확정되지 않는다. 다만 **우리가
+    낸 매수 체결가는 우리 DB 에 있으므로**, 실매매가 시작되면 둘을 대조해 답이 나온다.
+
+    가상계좌(paper_broker)는 avg_price 에 체결가를 그대로 넣으므로 항상 일치한다 — 즉
+    이 검사는 실거래에서만 의미가 있고, 가상 검증으로는 절대 드러나지 않는 종류다.
+
+    [주의] 피라미딩·분할 매수로 체결이 여러 건인 종목은 평단이 가중평균이라 단순 비교가
+    성립하지 않는다. 매수가 한 건인 포지션만 본다.
+    """
+    from collections import Counter
+    buy_count = Counter(b["code"] for b in buys)
+    pairs = []
+    for s in sells:
+        code = s["code"]
+        if buy_count.get(code) != 1:
+            continue
+        basis = _f(s.get("buy_price"))
+        b = next((x for x in buys if x["code"] == code), None)
+        fill = _f(b.get("price")) if b else 0.0
+        if basis > 0 and fill > 0:
+            pairs.append((code, s.get("name"), fill, basis, (basis - fill) / fill * 100))
+
+    if not pairs:
+        rep.add(SKIP, "매입가 기준 검증 — 단일 매수 포지션의 청산 표본 없음",
+                "실거래에서만 판별된다(가상계좌는 체결가를 그대로 평단에 넣어 항상 일치).")
+        return
+
+    fee_pct = float(getattr(config, "BUY_FEE_RATE", 0.0)) * 100
+    # 수수료만큼(±30%) 높으면 '이미 포함'으로 본다. 호가 반올림 오차와 구분되는 폭이다.
+    suspects = [p for p in pairs if fee_pct > 0 and 0.7 * fee_pct <= p[4] <= 1.3 * fee_pct]
+    worst = max(pairs, key=lambda p: abs(p[4]))
+    detail = (f"표본 {len(pairs)}건 · 최대 괴리 {worst[4]:+.4f}% ({worst[1]}) · "
+              f"매수 수수료율 {fee_pct:.4f}%")
+    if suspects:
+        rep.add(BAD, f"매입가에 매수 수수료가 포함된 것으로 보인다 ({len(suspects)}/{len(pairs)}건)",
+                detail + "\n실현손익이 매수 수수료를 두 번 빼고 있다 — 승률·손익비가 그만큼 낮게 잡힌다.\n"
+                         "trader가 buy_price로 넘기는 pchs_avg_pric을 우리 체결가로 바꿀 것.")
+    else:
+        rep.add(OK, "매입가 기준 일치 — 매입평균가가 체결가와 같다(수수료 미포함)", detail)
+
+
+# ─────────────────────────────────────────────
+# 8. 요약
 # ─────────────────────────────────────────────
 
 def summarize(buys, sells, rep):
@@ -351,6 +413,7 @@ def main():
         check_trailing(conn, sells, rep)
         check_slot_cap(buys, sells, rep)
         check_no_expensive_reentry(buys, sells, rep)
+        check_basis_consistency(buys, sells, rep)
     finally:
         conn.close()
 

@@ -250,6 +250,11 @@ def test_all_pass_only_when_everything_was_actually_judged(db, capsys):
     _buy(conn, when="2026-08-10 09:30:00")
     _sell(conn, price=93000, when="2026-08-10 10:00:00", reason="ATR손절", profit_rate=-7.0)
     _buy(conn, price=91000, when="2026-08-10 10:10:00")
+    # 매입가 기준 검사는 '매수가 한 건인' 포지션만 본다(평단이 가중평균이면 비교 불가).
+    #  위 종목은 재매수로 두 건이므로, 표본이 되도록 단일 매수 포지션을 하나 더 둔다.
+    _buy(conn, code="000660", name="SK하이닉스", price=200000, when="2026-08-10 09:40:00")
+    _sell(conn, code="000660", name="SK하이닉스", price=220000, buy_price=200000,
+          reason="트레일링스탑", profit_rate=9.7, when="2026-08-10 13:00:00")
     conn.execute("INSERT INTO trailing_stops VALUES ('005930', 100000, '2026-08-10')")
     conn.commit()
     _run(path)
@@ -267,3 +272,59 @@ def test_manual_and_external_trades_are_not_judged(db, capsys):
     conn.commit()
     _run(path)
     assert "체결이 한 건도 없다" in capsys.readouterr().out
+
+
+# ─────────────────────────────────────────────
+# 8. 매입가 기준 일치 (수수료 이중 차감)
+# ─────────────────────────────────────────────
+
+def test_fee_inflated_basis_is_caught(db, capsys):
+    """매도에 굳는 매입가에 매수 수수료가 얹혀 있으면 실현손익이 수수료를 두 번 뺀다.
+
+    실거래의 buy_price 는 KIS 잔고의 pchs_avg_pric 에서 오는데, 여기에 수수료가 포함되는지는
+    코드로 알 수 없다(KIS 가 pchs_amt 를 실전 잔고에서 0/누락으로 줘서 매입평균가가 유일한
+    소스다). 우리가 낸 매수 체결가는 우리 DB 에 있으므로 대조하면 답이 나온다.
+    """
+    import config
+    conn, path = db()
+    fill = 100000
+    inflated = fill * (1 + config.BUY_FEE_RATE)     # 매입평균가에 수수료가 포함된 모양
+    _buy(conn, price=fill, when="2026-08-10 09:30:00")
+    _sell(conn, price=110000, buy_price=inflated, reason="트레일링스탑", profit_rate=9.7,
+          when="2026-08-10 14:00:00")
+    assert _run(path) == 1
+    assert "매수 수수료가 포함된 것으로 보인다" in capsys.readouterr().out
+
+
+def test_matching_basis_passes(db, capsys):
+    """평단이 체결가와 같으면(가상계좌가 늘 그렇다) 정상이다."""
+    conn, path = db()
+    _buy(conn, price=100000, when="2026-08-10 09:30:00")
+    _sell(conn, price=110000, buy_price=100000, reason="트레일링스탑", profit_rate=9.7,
+          when="2026-08-10 14:00:00")
+    _run(path)
+    assert "매수 수수료가 포함된 것으로 보인다" not in capsys.readouterr().out
+
+
+def test_pyramided_position_is_excluded(db, capsys):
+    """매수가 여러 건이면 평단이 가중평균이라 단순 비교가 성립하지 않는다."""
+    import config
+    conn, path = db()
+    _buy(conn, price=100000, when="2026-08-10 09:30:00")
+    _buy(conn, price=120000, when="2026-08-10 10:30:00")
+    _sell(conn, price=130000, buy_price=100000 * (1 + config.BUY_FEE_RATE),
+          reason="트레일링스탑", profit_rate=9.7, when="2026-08-10 14:00:00")
+    _run(path)
+    out = capsys.readouterr().out
+    assert "매수 수수료가 포함된 것으로 보인다" not in out
+    assert "표본 없음" in out
+
+
+def test_tick_rounding_is_not_mistaken_for_fee(db, capsys):
+    """호가 반올림 수준의 차이를 수수료 포함으로 오판하면 안 된다."""
+    conn, path = db()
+    _buy(conn, price=100000, when="2026-08-10 09:30:00")
+    _sell(conn, price=110000, buy_price=100500, reason="트레일링스탑", profit_rate=9.2,
+          when="2026-08-10 14:00:00")   # +0.5% — 수수료(0.0177%)와 자릿수가 다르다
+    _run(path)
+    assert "매수 수수료가 포함된 것으로 보인다" not in capsys.readouterr().out
