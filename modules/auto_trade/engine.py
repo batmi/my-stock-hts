@@ -31,7 +31,7 @@ from modules import chart # [추가] 차트 모듈
 import re # [추가] 정규식 모듈
 import pandas as pd
 
-from modules.auto_trade.common import (OrderStatus, get_mystock_log_tail, register_system_odno)
+from modules.auto_trade.common import (OrderStatus, _norm_odno, get_mystock_log_tail, register_system_odno)
 
 console = config.console
 
@@ -1920,6 +1920,60 @@ class OrderManager:
         self.update_order_status(code, odno, OrderStatus.FILLED)
         return True
 
+    def _order_settled_at_exchange(self, odno):
+        """이 주문이 거래소에서 **종결**됐는지 당일 주문내역으로 확인한다.
+
+        반환: True=종결(잔량 0 — 전량 체결이든 취소든 더 이상 살아 있지 않다)
+              False=아직 살아 있다(잔량 > 0)
+              None=확인 불가(조회 실패·내역에 없음) — 단정하지 않는다
+
+        [왜 이게 필요한가] 고아 pending을 자동으로 풀지 못한 이유는 하나였다.
+        "주문이 실제로 살아 있는데 pending을 풀면 매수를 열어 둔 채 매도가 나가 서로
+        싸운다." 맞는 걱정이지만, 그 전제는 '살아 있는지 알 수 없다'는 것이다.
+        당일 주문내역을 보면 알 수 있다 — 주문 무응답 대사(api._reconcile_unknown_order)가
+        이미 같은 방식을 쓴다. 확인된 것만 풀면 그 위험이 성립하지 않는다.
+        """
+        try:
+            hist = api.get_today_history()
+            rows = (hist or {}).get('output1') or []
+        except Exception as e:
+            logger.debug(f"[고아주문] 당일 주문내역 조회 실패({odno}): {e}")
+            return None
+        if not rows:
+            return None
+        target = _norm_odno(odno)
+        for r in rows:
+            if _norm_odno(r.get('odno')) != target:
+                continue
+            try:
+                # 잔량이 곧 '살아 있는 수량'이다. 체결/취소 어느 쪽이든 0이면 종결이다.
+                return int(float(r.get('rmn_qty') or 0)) <= 0
+            except (TypeError, ValueError):
+                return None
+        return None      # 내역에 없다 — 조회 범위 밖일 수 있으므로 단정하지 않는다
+
+    def _release_settled_orphan(self, code, odno):
+        """거래소에서 종결이 확인된 고아 주문의 로컬 상태만 정리한다. (정리했으면 True)
+
+        체결 기록 자체는 ConclusionMonitor가 당일 체결 내역에서 따로 남긴다 — 여기서
+        체결을 '주장'하지 않는다. 하는 일은 pending 해제뿐이고, 그래야 그 종목이 다음
+        주기부터 다시 손절·트레일링 판정을 받는다.
+        """
+        if self._order_settled_at_exchange(odno) is not True:
+            return False
+        with self._lock:
+            orders = self.pending_orders.get(code) or {}
+            if odno not in orders:
+                return False
+            del orders[odno]
+            if not orders:
+                self.pending_orders.pop(code, None)
+            self.sell_pre_qty.pop(str(odno), None)
+        self.trader.log(f"[고아주문 해제] {code} No.{utils.format_order_no(odno)} — "
+                        f"당일 주문내역에서 잔량 0(종결) 확인 → 대기 해제. "
+                        f"이 종목의 손절·트레일링 판정이 다시 돌아갑니다")
+        return True
+
     def _alert_orphan_pending(self, api_checked_odnos, cancel_seconds, now):
         """API에서 사라졌는데 로컬 폴백도 건드리지 않는 주문을 운영자에게 알린다.
 
@@ -1956,6 +2010,11 @@ class OrderManager:
                     #  방치하면 그 종목이 매수·매도 판정에서 통째로 빠진다 — 2026-08-05 실측:
                     #  손절 체결 후에도 ORDER_SENT가 남아 NAVER가 분석 화면에서 사라졌다.
                     if self._resolve_paper_orphan(code, odno):
+                        continue
+
+                    # [실계좌] 거래소에 물어 '종결'이 확인된 것만 푼다. 확인되지 않으면
+                    #  종전대로 경보만 하고 둔다 — 추측으로 풀지 않는다.
+                    if self._release_settled_orphan(code, odno):
                         continue
 
                     if str(odno) in self.orphan_alerted:

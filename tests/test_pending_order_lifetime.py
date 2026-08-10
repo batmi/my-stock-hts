@@ -161,3 +161,70 @@ def test_fresh_progressed_order_is_not_alerted(trader):
         trader.order_manager.manage_unfilled_orders()
 
     assert not tg.called, "접수 직후의 정상 대기 주문에 경보가 나갔다"
+
+
+# ─────────────── 거래소 대사로 고아를 스스로 푸는가 ───────────────
+#
+# [왜 이걸 넣었나] 자동 정리를 막았던 이유는 하나였다 — "주문이 실제로 살아 있는데
+# pending을 풀면 매수를 열어 둔 채 매도가 나가 서로 싸운다." 맞는 걱정이지만 그 전제는
+# '살아 있는지 알 수 없다'는 것이다. 당일 주문내역을 보면 알 수 있고(주문 무응답 대사가
+# 이미 같은 방식을 쓴다), 확인된 것만 풀면 그 위험이 성립하지 않는다.
+# 방치하면 그 종목의 손절이 세션 내내 멈춘다 — 라즈베리파이는 수 주간 재기동하지 않는다.
+
+def _sweep_real(trader, history_rows):
+    """실계좌 모드에서, 당일 주문내역이 주어진 상태로 미체결 관리를 1회 돌린다."""
+    with patch.object(config.session, 'is_simulation', False), \
+         patch.object(trader, 'is_market_open', return_value=True), \
+         patch('modules.auto_trade.api.get_unfilled_orders', return_value=[]), \
+         patch('modules.auto_trade.api.get_today_history',
+               return_value={'rt_cd': '0', 'output1': history_rows}), \
+         patch('modules.auto_trade.db_manager.db.get_trade_by_odno', return_value=_old_trade()), \
+         patch('modules.auto_trade.db_manager.db.insert_trade'), \
+         patch('modules.auto_trade.api.send_telegram_message'):
+        trader.order_manager.manage_unfilled_orders()
+
+
+@pytest.mark.parametrize("status", [OrderStatus.PARTIAL_FILLED, OrderStatus.ACCEPTED])
+def test_settled_orphan_is_released_in_real_account(trader, status):
+    """잔량 0(종결)이 확인되면 대기를 푼다 — 그래야 손절 판정이 다시 돈다."""
+    _register(trader, status)
+    _sweep_real(trader, [{'odno': ODNO, 'rmn_qty': '0', 'pdno': CODE}])
+    assert not trader.order_manager.is_pending(CODE), \
+        "거래소에서 종결이 확인됐는데도 대기가 풀리지 않았다 — 손절이 계속 멈춘다"
+
+
+@pytest.mark.parametrize("status", [OrderStatus.PARTIAL_FILLED, OrderStatus.ACCEPTED])
+def test_live_order_is_never_released(trader, status):
+    """잔량이 남아 있으면 살아 있는 주문이다 — 풀면 주문끼리 싸운다."""
+    _register(trader, status)
+    _sweep_real(trader, [{'odno': ODNO, 'rmn_qty': '50', 'pdno': CODE}])
+    assert trader.order_manager.is_pending(CODE), "살아 있는 주문의 대기를 풀었다"
+
+
+@pytest.mark.parametrize("rows", [[], [{'odno': '9999999999', 'rmn_qty': '0'}]])
+def test_unconfirmed_orphan_is_left_alone(trader, rows):
+    """내역에 없으면 '종결'이 아니라 '모름'이다 — 추측으로 풀지 않는다."""
+    _register(trader, OrderStatus.ACCEPTED)
+    _sweep_real(trader, rows)
+    assert trader.order_manager.is_pending(CODE)
+
+
+def test_history_failure_leaves_pending(trader):
+    """대사 조회가 실패하면 아무것도 단정하지 않는다."""
+    _register(trader, OrderStatus.ACCEPTED)
+    with patch.object(config.session, 'is_simulation', False), \
+         patch.object(trader, 'is_market_open', return_value=True), \
+         patch('modules.auto_trade.api.get_unfilled_orders', return_value=[]), \
+         patch('modules.auto_trade.api.get_today_history', side_effect=RuntimeError("down")), \
+         patch('modules.auto_trade.db_manager.db.get_trade_by_odno', return_value=_old_trade()), \
+         patch('modules.auto_trade.db_manager.db.insert_trade'), \
+         patch('modules.auto_trade.api.send_telegram_message'):
+        trader.order_manager.manage_unfilled_orders()
+    assert trader.order_manager.is_pending(CODE)
+
+
+def test_odno_zero_padding_is_matched(trader):
+    """발주 응답과 내역의 주문번호는 앞자리 0 패딩이 다를 수 있다."""
+    _register(trader, OrderStatus.ACCEPTED)
+    _sweep_real(trader, [{'odno': ODNO.lstrip('0'), 'rmn_qty': '0', 'pdno': CODE}])
+    assert not trader.order_manager.is_pending(CODE), "0 패딩 차이로 같은 주문을 놓쳤다"
