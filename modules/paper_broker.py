@@ -23,15 +23,18 @@ import threading
 from datetime import datetime
 
 import config
+from modules import trading_cost
 
 logger = logging.getLogger(__name__)
 
 _lock = threading.RLock()
 
-# 체결 비용. 매수는 위탁수수료만, 매도는 수수료 + 증권거래세.
-# (포트폴리오 백테스트 simulate와 동일 기준: 매도 0.23%)
-BUY_FEE_RATE = 0.00015
-SELL_FEE_RATE = 0.0023
+# 체결 비용·슬리피지는 config가 단일 소스다(modules/trading_cost 참조).
+# 종전에는 이 파일이 요율을 따로 들고 있었고 슬리피지는 아예 없어서, 같은 전략이라도
+# 백테스트와 관찰모드의 성과를 직접 비교할 수 없었다(2026-08-10 정합화).
+# 아래 두 이름은 기존 호출부·테스트 호환을 위한 별칭이다.
+BUY_FEE_RATE = config.BUY_FEE_RATE
+SELL_FEE_RATE = config.SELL_FEE_RATE
 
 
 def is_active():
@@ -225,9 +228,13 @@ def place_order(action, code, qty, price, name=None):
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         odno = f"P{datetime.now().strftime('%y%m%d%H%M%S')}{code[-2:]}"
 
+        # [체결가] 실제로는 호가를 넘겨 잡아야 체결되므로 불리한 방향으로 슬리피지를 얹는다.
+        #  이것이 없으면 관찰모드만 '지정가 그대로 체결'이라 백테스트보다 구조적으로 유리했다.
+        price = trading_cost.apply_slippage(price, action)
+
         if action.lower() == 'buy':
             amount = price * qty
-            fee = amount * BUY_FEE_RATE
+            fee = trading_cost.buy_fee(amount)
             cash = get_cash()
             if cash < amount + fee:
                 return _fail(f"가상 예수금 부족 (필요 {int(amount+fee):,} / 보유 {int(cash):,})")
@@ -249,10 +256,11 @@ def place_order(action, code, qty, price, name=None):
             if not pos or int(pos[1]) < qty:
                 return _fail(f"가상 보유수량 부족 (요청 {qty} / 보유 {int(pos[1]) if pos else 0})")
             amount = price * qty
-            fee = amount * SELL_FEE_RATE
+            fee = trading_cost.sell_fee(amount)
             avg = float(pos[2])
-            profit_amt = (price - avg) * qty - fee
-            profit_rate = (profit_amt / (avg * qty) * 100) if avg else 0.0
+            # 보고 손익은 왕복 비용을 모두 뺀다(매수 수수료는 진입 시 현금에서 이미 나갔지만,
+            # '이 거래로 얼마를 벌었나'는 양쪽을 다 뺀 값이어야 한다 — trading_cost 주석 참조).
+            profit_amt, profit_rate = trading_cost.net_realized_profit(avg, price, qty)
             _set_state('cash', get_cash() + amount - fee)
             remain = int(pos[1]) - qty
             if remain > 0:

@@ -20,11 +20,20 @@ import pytest
 
 import api
 import config
-from modules import db_manager, paper_broker
+from modules import db_manager, paper_broker, trading_cost
 
 CODE = "005930"
 BUY_PRICE = 70000
-CRASH_PRICE = 56000  # 실제로는 -20%
+CRASH_PRICE = 56000  # 지정가 기준 -20%
+
+
+def _crash_rate():
+    """체결가 기준 하락률. 매수 체결가에는 슬리피지가 붙으므로(2026-08-10) 평단이
+    지정가보다 조금 높고, 같은 현재가에서도 하락률이 -20.00%보다 약간 깊어진다.
+    이 파일의 관심사는 '조회 실패 시 하락분이 장부에서 사라지는가'이지 특정 소수점이
+    아니므로, 기대값을 실제 체결가에서 도출한다."""
+    fill = trading_cost.apply_slippage(BUY_PRICE, 'buy')
+    return (CRASH_PRICE - fill) / fill * 100
 
 
 @pytest.fixture
@@ -64,7 +73,7 @@ def test_live_price_is_reflected(paper):
     _buy()
     row = _balance_row(lambda *a, **k: CRASH_PRICE)
     assert int(row['prpr']) == CRASH_PRICE
-    assert float(row['evlu_pfls_rt']) == pytest.approx(-20.0, abs=0.01)
+    assert float(row['evlu_pfls_rt']) == pytest.approx(_crash_rate(), abs=0.01)
     assert not row.get('_price_stale')
 
 
@@ -112,7 +121,7 @@ def test_falls_back_to_last_known_price_not_cost(paper):
     row = _balance_row(Exception("Toss 401"))
     assert int(row['prpr']) == CRASH_PRICE, (
         f"조회 실패 시 평단({BUY_PRICE})으로 되돌아갔다 — 하락분이 자산곡선에서 사라진다")
-    assert float(row['evlu_pfls_rt']) == pytest.approx(-20.0, abs=0.01)
+    assert float(row['evlu_pfls_rt']) == pytest.approx(_crash_rate(), abs=0.01)
 
 
 def test_cost_fallback_only_when_no_known_price(paper):
@@ -122,7 +131,8 @@ def test_cost_fallback_only_when_no_known_price(paper):
     """
     _buy()
     row = _balance_row(Exception("Toss 401"))
-    assert int(row['prpr']) == BUY_PRICE
+    # 폴백값은 '평단'이다. 평단은 지정가가 아니라 슬리피지가 붙은 체결가다(2026-08-10).
+    assert int(row['prpr']) == int(trading_cost.apply_slippage(BUY_PRICE, 'buy'))
     assert row.get('_price_stale') is True
 
 

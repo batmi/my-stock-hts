@@ -12,7 +12,7 @@ import pytest
 
 import api
 import config
-from modules import db_manager, paper_broker
+from modules import db_manager, paper_broker, trading_cost
 
 
 @pytest.fixture
@@ -42,29 +42,52 @@ def test_seed_and_initial_state(paper):
 
 
 def test_buy_sell_roundtrip_updates_cash_and_positions(paper):
-    """매수→매도 왕복에서 현금·포지션·손익이 일관되게 갱신된다."""
+    """매수→매도 왕복에서 현금·포지션·손익이 일관되게 갱신된다.
+
+    [2026-08-10] 체결가에 슬리피지가 붙는다. 종전에는 관찰모드만 '지정가 그대로 체결'이라
+    백테스트보다 구조적으로 유리했고, 두 성과를 직접 비교할 수 없었다.
+    """
+    buy_fill = trading_cost.apply_slippage(70000, 'buy')
     res = api.place_order("domestic", "buy", "005930", 10, 70000, "00")
     assert res['rt_cd'] == '0' and res['output']['ODNO']
-    assert paper.get_cash() == pytest.approx(5_000_000 - 700_000 * (1 + paper.BUY_FEE_RATE))
+    assert paper.get_cash() == pytest.approx(
+        5_000_000 - buy_fill * 10 - trading_cost.buy_fee(buy_fill * 10))
     pos = paper.get_positions()
-    assert len(pos) == 1 and pos[0]['qty'] == 10 and pos[0]['avg_price'] == 70000
+    assert len(pos) == 1 and pos[0]['qty'] == 10 and pos[0]['avg_price'] == pytest.approx(buy_fill)
 
+    sell_fill = trading_cost.apply_slippage(77000, 'sell')
     res = api.place_order("domestic", "sell", "005930", 10, 77000, "00")
     assert res['rt_cd'] == '0'
     assert paper.get_positions() == []
     fill = paper.get_fills()[-1]
     assert fill['type'] == '매도'
-    # 손익 = (77000-70000)*10 - 매도수수료
-    assert fill['profit_amt'] == pytest.approx(70_000 - 770_000 * paper.SELL_FEE_RATE)
+    # 손익 = 총손익 − 왕복 비용(매수 수수료 + 매도 수수료·세)
+    expected, _ = trading_cost.net_realized_profit(buy_fill, sell_fill, 10)
+    assert fill['profit_amt'] == pytest.approx(expected)
+
+
+def test_reported_profit_nets_out_both_legs(paper):
+    """보고 손익에서 매수 수수료도 빠져야 한다 — 한쪽만 빼면 근소한 손실이 '승'이 된다."""
+    api.place_order("domestic", "buy", "005930", 10, 70000, "00")
+    api.place_order("domestic", "sell", "005930", 10, 77000, "00")
+    fill = paper.get_fills()[-1]
+
+    buy_fill = trading_cost.apply_slippage(70000, 'buy')
+    sell_fill = trading_cost.apply_slippage(77000, 'sell')
+    gross = (sell_fill - buy_fill) * 10
+    sell_only = gross - trading_cost.sell_fee(sell_fill * 10)
+    assert fill['profit_amt'] < sell_only, "매수 수수료가 빠지지 않았다"
 
 
 def test_pyramiding_updates_average_price(paper):
     """추가 매수 시 평단이 수량가중으로 갱신된다(피라미딩 경로)."""
     api.place_order("domestic", "buy", "005930", 10, 70000, "00")
     api.place_order("domestic", "buy", "005930", 5, 76000, "00")
+    b1 = trading_cost.apply_slippage(70000, 'buy')
+    b2 = trading_cost.apply_slippage(76000, 'buy')
     pos = paper.get_positions()[0]
     assert pos['qty'] == 15
-    assert pos['avg_price'] == pytest.approx((70000 * 10 + 76000 * 5) / 15)
+    assert pos['avg_price'] == pytest.approx((b1 * 10 + b2 * 5) / 15)
 
 
 def test_rejects_insufficient_cash_and_qty(paper):

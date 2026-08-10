@@ -27,6 +27,7 @@ import config
 import context
 import utils
 from modules import backtest
+from modules import trading_cost
 
 
 # ==========================================================
@@ -381,8 +382,10 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             if sell:
                 sell_price = utils.adjust_to_tick(price * (1 - slippage), False) or price
                 amount = pos["qty"] * sell_price
-                amount -= int(amount * 0.0023)
-                profit = amount - pos["qty"] * pos["avg"]
+                amount -= trading_cost.sell_fee(amount)
+                # 보고 손익은 왕복(매수+매도) 비용을 모두 뺀다. 현금(cash)에는 매수 수수료가
+                # 진입 시점에 이미 빠져 있으므로 이 값을 잔고에 더하지 않는다.
+                profit, _ = trading_cost.net_realized_profit(pos["avg"], sell_price, pos["qty"])
                 cash += amount
                 trades.append({
                     "code": code, "date": day, "reason": reason, "profit_amt": profit,
@@ -444,7 +447,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                     continue
 
                 cost = add_qty * add_price
-                cash -= cost
+                cash -= cost + trading_cost.buy_fee(cost)
                 if heat_budget is not None:
                     heat_budget -= cost * (abs(add_sl) / 100.0)
                 pos["avg"] = (pos["qty"] * pos["avg"] + cost) / (pos["qty"] + add_qty)
@@ -518,7 +521,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                     if buy_risk > risk_per_trade_cap:
                         risk_cap_breaches += 1
 
-                cash -= qty * buy_price
+                cash -= qty * buy_price + trading_cost.buy_fee(qty * buy_price)
                 if heat_budget is not None:
                     heat_budget -= qty * buy_price * (abs(sl_rate) / 100.0)
                 positions[code] = {"qty": qty, "avg": buy_price, "lots": [{"qty": qty, "sl": sl_rate}],

@@ -27,6 +27,7 @@ import indicators
 from modules import analysis, account # [수정] account 모듈 재사용
 import math # [추가] math 모듈
 from modules import db_manager # [추가] DB 매니저
+from modules import trading_cost # [추가] 거래비용 단일 계산
 from modules import chart # [추가] 차트 모듈
 import re # [추가] 정규식 모듈
 import pandas as pd
@@ -36,6 +37,37 @@ from modules.auto_trade.common import (OrderStatus, _current_account_type, _enri
 console = config.console
 
 logger = logging.getLogger(__name__)
+
+
+def _recalc_realized(origin_trade, fill_price, fill_qty, is_overseas, fallback_amt, fallback_rate):
+    """주문 시점 추정 손익을 '실제 체결가 + 왕복 비용' 기준으로 다시 계산한다.
+
+    [왜] 종전에는 매도 발주 시점의 평가손익(KIS evlu_pfls_amt)이 그대로 실현손익으로
+      굳었다. 체결 확인 단계에서 실제 체결가를 이미 알고 있으면서도 손익만 추정치로
+      남겨, 승률·손익비·거래 평가가 모두 체계적으로 낙관 방향이었다. 특히 총이익이
+      매도비용 부근인 거래는 실제로는 손실인데 '승'으로 집계됐다.
+
+    매수 주문이거나 매입가를 모르면(구버전 기록 등) 기존 값을 그대로 둔다 — 없는
+    정보를 추측해 덮어쓰면 조용히 틀린 숫자가 된다.
+    """
+    try:
+        if not origin_trade:
+            return fallback_amt, fallback_rate
+        type_str = str(origin_trade.get('type') or '')
+        if 'sell' not in type_str.lower() and '매도' not in type_str:
+            return fallback_amt, fallback_rate
+
+        buy_price = float(origin_trade.get('buy_price') or 0)
+        fill_price = float(fill_price or 0)
+        fill_qty = int(fill_qty or 0)
+        if buy_price <= 0 or fill_price <= 0 or fill_qty <= 0:
+            return fallback_amt, fallback_rate
+
+        amt, rate = trading_cost.net_realized_profit(buy_price, fill_price, fill_qty, is_overseas)
+        return int(amt), rate
+    except Exception as e:
+        logger.debug(f"[비용] 실현손익 재계산 실패 — 주문 시점 값 유지: {e}")
+        return fallback_amt, fallback_rate
 
 
 def _pkg():
@@ -458,6 +490,10 @@ class ConclusionMonitor:
                                         db_type_name = origin_trade['type']
                                         profit_amt = origin_trade.get('profit_amt', 0)
                                         profit_rate = origin_trade.get('profit_rate', 0.0)
+                                        # [비용] 주문 시점 추정 손익을 '실제 체결가' 기준으로 다시 계산한다.
+                                        profit_amt, profit_rate = _recalc_realized(
+                                            origin_trade, avg_price, tot_ccld_qty,
+                                            is_overseas_trade, profit_amt, profit_rate)
                                         score = origin_trade.get('strategy_score', 0)
                                         stop_loss_rate = float(origin_trade.get('stop_loss_rate', 0.0))
                                         orig_reason = origin_trade.get('reason', '')
@@ -925,6 +961,10 @@ class ConclusionMonitor:
             except Exception: profit_amt = 0
             try: profit_rate = float(trade.get('profit_rate') or 0.0)
             except Exception: profit_rate = 0.0
+            # [비용] price 는 위에서 실제 체결가(WS 체결통보)로 갱신됐다. 손익만 주문 시점
+            #  추정치로 남겨두면 체결가와 어긋난 값이 실현손익으로 굳는다.
+            profit_amt, profit_rate = _recalc_realized(
+                trade, price, qty, is_overseas, profit_amt, profit_rate)
             
             # [추가] snapshot 데이터 타입 안전 처리
             snapshot_data = trade.get('snapshot')

@@ -17,7 +17,7 @@ import pytest
 import api
 import config
 import modules.auto_trade as auto_trade
-from modules import db_manager, paper_broker
+from modules import db_manager, paper_broker, trading_cost
 from modules.auto_trade.common import OrderStatus
 
 
@@ -114,7 +114,9 @@ def test_paper_fill_uses_ledger_price(paper, monitor, monkeypatch):
 
     monitor._check_conclusions()
 
-    assert inserted[0][0][4] == 70000.0  # insert_trade(type, code, name, qty, price, ...)
+    # insert_trade(type, code, name, qty, price, ...) — 체결가에는 슬리피지가 붙는다(2026-08-10).
+    # 요점은 '원장에 적힌 체결가를 그대로 쓴다'이지 주문가와 같다는 것이 아니다.
+    assert inserted[0][0][4] == pytest.approx(trading_cost.apply_slippage(70000, 'buy'))
 
 
 def test_paper_pending_without_ledger_stays_open(paper, monitor, monkeypatch):
@@ -253,6 +255,7 @@ def test_get_fill_by_odno(paper):
     res = api.place_order("domestic", "buy", "005930", 3, 70000, "00")
     odno = res['output']['ODNO']
     fill = paper.get_fill_by_odno(odno)
-    assert fill and fill['qty'] == 3 and fill['price'] == 70000 and fill['odno'] == odno
+    assert fill and fill['qty'] == 3 and fill['odno'] == odno
+    assert fill['price'] == pytest.approx(trading_cost.apply_slippage(70000, 'buy'))
     assert paper.get_fill_by_odno("P_UNKNOWN") is None
     assert paper.get_fill_by_odno(None) is None

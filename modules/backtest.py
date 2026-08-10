@@ -15,6 +15,7 @@ import api
 import utils
 import indicators
 from modules import analysis
+from modules import trading_cost
 from modules import chart
 import logging
 from modules import market # [추가] 통합 지수 리스트 참조용
@@ -765,12 +766,12 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 # [수정] 포지션 기반으로 수량 및 수익 계산
                 sell_qty = max(1, int(position['qty'] * sell_ratio)) if sell_ratio < 1.0 else position['qty']
                 sell_amt = sell_qty * sell_price
-                fee = sell_amt * 0.0023
-                if not is_overseas: fee = int(fee)
-                sell_amt -= fee
+                sell_amt -= trading_cost.sell_fee(sell_amt, is_overseas)
 
-                profit = sell_amt - (sell_qty * position['avg_price'])
-                profit_rate = (profit / (sell_qty * position['avg_price'])) * 100 if (sell_qty * position['avg_price']) != 0 else 0
+                # [비용] 보고 손익은 왕복(매수+매도) 비용을 모두 뺀 값이다. 현금(balance)에는
+                #  매수 수수료가 진입 시점에 이미 빠져 있으므로 이 값을 잔고에 더하지 않는다.
+                profit, profit_rate = trading_cost.net_realized_profit(
+                    position['avg_price'], sell_price, sell_qty, is_overseas)
                 
                 if profit > 0: 
                     win_trades += 1
@@ -914,11 +915,13 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                     vol_based_amt = min(int(balance * scale), balance)
                     invest_amt = min(invest_amt, vol_based_amt)
 
-            buy_qty = int(invest_amt / buy_price)
+            # [비용] 매수 수수료까지 감당할 수 있는 수량으로 잡는다. 수수료를 빼지 않고
+            #  수량을 정하면 balance가 음수로 내려가 복리 계산이 어긋난다.
+            buy_qty = int(invest_amt / (buy_price * (1 + config.BUY_FEE_RATE)))
             
             if buy_qty > 0:
                 cost = buy_qty * buy_price
-                balance -= cost
+                balance -= cost + trading_cost.buy_fee(cost, is_overseas)
                 
                 # [Fix: Point 4] 포지션 정보 업데이트
                 if position['qty'] == 0: # 신규 진입

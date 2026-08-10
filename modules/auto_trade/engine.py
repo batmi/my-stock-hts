@@ -1462,7 +1462,7 @@ class OrderManager:
             self.order_fail_alerted[key] = now
         return True
 
-    def send_order(self, code, qty, type_str, name=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, price=0, rule=None, stop_loss_rate=0.0):
+    def send_order(self, code, qty, type_str, name=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, price=0, rule=None, stop_loss_rate=0.0, buy_price=0.0):
         """주문 전송 및 상태 등록"""
         ord_dvsn = "00" if price > 0 else "01"
         
@@ -1541,7 +1541,7 @@ class OrderManager:
                 
                 if config.FILE_DEBUG_LEVEL == "DEBUG":
                     logger.debug(f"[AutoTrade] 주문 접수 DB 저장 시도: {odno}")
-                db_manager.db.insert_trade(f"{type_str}(AUTO)", code, name, qty, str(price), odno, snapshot=snapshot, profit_amt=profit_amt, profit_rate=profit_rate, reason=reason, score=score, stop_loss_rate=stop_loss_rate)
+                db_manager.db.insert_trade(f"{type_str}(AUTO)", code, name, qty, str(price), odno, snapshot=snapshot, profit_amt=profit_amt, profit_rate=profit_rate, reason=reason, score=score, stop_loss_rate=stop_loss_rate, buy_price=buy_price)
                 
                 # [추가] DB 큐 처리 시간을 확보하여 체결 감시 모니터가 원주문을 정상 조회할 수 있도록 대기
                 time.sleep(0.5)

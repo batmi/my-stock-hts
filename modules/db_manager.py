@@ -376,7 +376,10 @@ class DBManager:
                     "reason": "TEXT",
                     "strategy_score": "REAL DEFAULT 0",
                     "order_status": "TEXT DEFAULT '접수'",
-                    "stop_loss_rate": "REAL DEFAULT 0.0"
+                    "stop_loss_rate": "REAL DEFAULT 0.0",
+                    # [비용] 매도 시점의 매입평균가. 체결 확인 단계에서 '실제 체결가' 기준으로
+                    #  실현손익을 다시 계산하려면 매입가가 있어야 한다(주문 시점 추정치가 아니라).
+                    "buy_price": "REAL DEFAULT 0.0",
                 }
                 
                 for col, dtype in new_columns.items():
@@ -498,7 +501,7 @@ class DBManager:
             # 조용히 넘기면 나중에 누락 원인을 못 찾으므로 반드시 남긴다.
             logger.warning(f"[Journal] 전송 대기열 적재 실패 (거래 기록은 정상 저장됨): {e}")
 
-    def insert_trade(self, type_str, code, name, qty, price, odno, org_odno=None, snapshot=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, order_status="접수", custom_time=None, stop_loss_rate=0.0):
+    def insert_trade(self, type_str, code, name, qty, price, odno, org_odno=None, snapshot=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, order_status="접수", custom_time=None, stop_loss_rate=0.0, buy_price=0.0):
         """거래 내역 및 스냅샷 저장"""
         # 쓰기 작업은 락으로 보호하여 순차 처리 (SQLite 특성상 안전)
         with self.lock:
@@ -520,9 +523,9 @@ class DBManager:
                     snapshot_json = json.dumps(snapshot, ensure_ascii=False) if snapshot else "{}"
                     
                     cursor.execute('''
-                        INSERT INTO trades (time, type, code, name, qty, price, odno, org_odno, account, is_sim, snapshot, profit_amt, profit_rate, reason, strategy_score, order_status, stop_loss_rate)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (now_str, type_str, code, name, str(qty), str(price), odno, org_odno, acc_no, is_sim, snapshot_json, profit_amt, profit_rate, reason, score, order_status, stop_loss_rate))
+                        INSERT INTO trades (time, type, code, name, qty, price, odno, org_odno, account, is_sim, snapshot, profit_amt, profit_rate, reason, strategy_score, order_status, stop_loss_rate, buy_price)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (now_str, type_str, code, name, str(qty), str(price), odno, org_odno, acc_no, is_sim, snapshot_json, profit_amt, profit_rate, reason, score, order_status, stop_loss_rate, buy_price))
 
                     # [추가] 매매일지 웹서버 전송 대기열 적재.
                     #  거래 기록과 같은 트랜잭션에서 처리해야 '기록은 남았는데 전송 큐엔 없는'
@@ -533,7 +536,7 @@ class DBManager:
                         'account': acc_no, 'is_sim': is_sim, 'profit_amt': profit_amt,
                         'profit_rate': profit_rate, 'reason': reason,
                         'strategy_score': score, 'order_status': order_status,
-                        'stop_loss_rate': stop_loss_rate,
+                        'stop_loss_rate': stop_loss_rate, 'buy_price': buy_price,
                     })
 
                     conn.commit()

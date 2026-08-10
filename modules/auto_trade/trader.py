@@ -27,6 +27,7 @@ import indicators
 from modules import analysis, account # [수정] account 모듈 재사용
 import math # [추가] math 모듈
 from modules import db_manager # [추가] DB 매니저
+from modules import trading_cost # [추가] 거래비용 단일 계산
 from modules import chart # [추가] 차트 모듈
 from modules import instance_lock # [추가] 자동매매 단일 실행 보장
 from modules import telegram_notify # [추가] 알림 발신 상태 조회
@@ -4665,7 +4666,23 @@ class AutoTrader:
                     self.no_sellable_streak.pop(code, None)
 
                 self.log(f"매도 실행: {name} - {reason}")
-                odno = self.order_manager.send_order(code, target_sell_qty, "sell", name=name, profit_amt=int(item['evlu_pfls_amt']), profit_rate=profit_rate, reason=reason, score=score, price=order_price, rule=rule)
+                # [비용] 종전에는 KIS 잔고의 '평가손익'(evlu_pfls_amt)을 그대로 실현손익으로
+                #  적었다. 그것은 매도 판단 시점의 미실현 손익이라 매도 수수료·거래세도,
+                #  체결가와 판단가의 차이도 빠져 있다. 여기서는 왕복 비용을 뺀 값으로 적고,
+                #  매입가를 함께 남겨 체결 확인 단계에서 실제 체결가로 다시 계산하게 한다.
+                try:
+                    sell_buy_price = float(item.get('pchs_avg_pric') or 0)
+                except (TypeError, ValueError):
+                    sell_buy_price = 0.0
+                try:
+                    ref_price = float(order_price) or float(item.get('prpr') or 0)
+                except (TypeError, ValueError):
+                    ref_price = 0.0
+                est_profit, est_rate = trading_cost.net_realized_profit(
+                    sell_buy_price, ref_price, target_sell_qty)
+                if sell_buy_price <= 0:      # 매입가를 못 구하면 종전 값으로 폴백
+                    est_profit, est_rate = int(item['evlu_pfls_amt']), profit_rate
+                odno = self.order_manager.send_order(code, target_sell_qty, "sell", name=name, profit_amt=int(est_profit), profit_rate=est_rate, reason=reason, score=score, price=order_price, rule=rule, buy_price=sell_buy_price)
                 if odno:
                     record = {
                         "type": "sell", "code": code, "name": name, "qty": target_sell_qty,
