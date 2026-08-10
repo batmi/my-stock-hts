@@ -28,6 +28,46 @@ def test_evaluate_market_indicator_branches():
     
     assert "에너지 쇼크" in theme_analysis.evaluate_market_indicator("가솔린 RBOB", 5.0)
     assert "시스템 위기" in theme_analysis.evaluate_market_indicator("가솔린 RBOB", 1.0)
+
+
+def test_diesel_ulsd_bands():
+    """디젤 ULSD 밴드 (2026-08-10 추가).
+
+    [밴드 근거] 임의 숫자가 아니라 가솔린 RBOB 밴드가 놓인 **백분위**를 ULSD 분포에
+    옮긴 값이다(15년 3,771봉, 2011-08~2026-08):
+        RBOB 4.00(99.7%)→4.40 / 3.20(95.4%)→3.70 / 2.60(69.8%)→2.85
+             2.10(49.5%)→2.25 / 1.60(21.3%)→1.70
+    두 상품은 가격대가 달라(ULSD/RBOB 중앙 비율 1.055) 가솔린 숫자를 그대로 쓰면
+    색이 거짓 신호를 낸다 — 실제로 현재가(ULSD 3.97 / RBOB 3.01)는 가솔린 기준으로는
+    같은 '주황'이지만, 백분위로 보면 98% 대 91%로 다른 국면이다.
+    """
+    from modules import theme_analysis as ta
+    assert "쇼크" in ta.evaluate_market_indicator("디젤 ULSD", 4.5)
+    assert "임계점" in ta.evaluate_market_indicator("디젤 ULSD", 4.0)
+    assert "골디락스" in ta.evaluate_market_indicator("디젤 ULSD", 2.5)
+    assert "급랭" in ta.evaluate_market_indicator("디젤 ULSD", 1.5)
+
+
+def test_diesel_is_wired_everywhere_gasoline_is():
+    """가솔린이 등록된 자리마다 디젤도 있어야 한다.
+
+    한 곳이라도 빠지면 조회는 되는데 표에 안 나오거나, 표에는 나오는데 선물 표기가
+    빠지는 식으로 조용히 어긋난다.
+    """
+    import config
+    from modules import market
+    assert market.INDICES_MAP.get("디젤 ULSD") == "HO=F"
+    assert "디젤 ULSD" in config.INDICES_GROUPS["6"]["indices"]
+
+    # 함수 안의 지역 리스트(us_futures·is_futures)는 런타임으로 못 잡으므로 소스로 본다.
+    #  이름 목록 줄은 '가솔린 RBOB'와 '천연가스'가 한 줄에 같이 있다 —
+    #  티커 매핑 줄(("가솔린 RBOB", "RB=F"))에는 천연가스가 없어 이걸로 구분한다.
+    import inspect
+    lists = [ln for ln in inspect.getsource(market).splitlines()
+             if "가솔린 RBOB" in ln and "천연가스" in ln]
+    assert len(lists) >= 2, f"검사 대상 목록을 찾지 못했다({len(lists)}개) — 구조가 바뀌었다"
+    for ln in lists:
+        assert "디젤 ULSD" in ln, f"이 목록에 디젤이 빠졌다: {ln.strip()[:90]}"
     
     assert "물가 비상" in theme_analysis.evaluate_market_indicator("천연가스", 5.0)
     assert "수급 타이트" in theme_analysis.evaluate_market_indicator("천연가스", 3.5)

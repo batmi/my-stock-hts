@@ -157,7 +157,9 @@ def view_system_config(group=None):
         title += f" — {group}. {group_names[group]}"
 
     # [PRESET_RETIRED] 전략 프리셋 폐지로 '*'(프리셋 연동) 범례도 제거한다.
-    caption = "그룹 번호(n-m)는 시스템 설정 메뉴의 편집 경로와 동일 (예: 5-5 → 메뉴 5 → 5)"
+    # 좌측 2칸 들여쓰기 — caption_justify="left"라 표 왼쪽 끝에 붙는데, 표 테두리와
+    #  붙어 보여 읽기 어렵다. 앞의 '※'로 본문이 아닌 범례임을 구분한다.
+    caption = "  ※ 그룹 번호(n-m)는 시스템 설정 메뉴의 편집 경로와 동일 (예: 5-5 → 메뉴 5 → 5)"
 
     console.print()
     table = Table(

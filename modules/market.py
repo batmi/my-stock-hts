@@ -115,7 +115,7 @@ def is_market_open_for_index(name):
 
     us_futures = [
         "나스닥 선물", "S&P500 선물", "다우존스 선물", "러셀2000 선물",
-        "금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "천연가스", "밀",
+        "금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "디젤 ULSD", "천연가스", "밀",
         "미국채 2년물 금리", "미국채 5년물 금리", "미국채 10년물 금리", "미국채 30년물 금리",
         "달러인덱스", "달러환율"
     ]
@@ -169,6 +169,11 @@ ALL_INDICES = [
     # 6. 원자재
     ("금", "GC=F"), ("은", "SI=F"), ("구리", "HG=F"),
     ("브랜트유", "BZ=F"), ("WTI 원유", "CL=F"), ("가솔린 RBOB", "RB=F"),
+    # [추가 2026-08-10] NYMEX ULSD(초저유황 경유). 과거 명칭이 Heating Oil 이라 티커가 HO 지만
+    #  2013년 이후 규격이 ULSD 로 바뀌어 실질적으로 디젤 벤치마크다. 가솔린과 짝을 이룬다 —
+    #  가솔린은 소비(운전), 디젤은 산업·물류·화물을 반영해 두 값의 격차가 경기 신호가 된다.
+    #  (유럽 벤치마크인 ICE Gasoil 은 yfinance 에서 조회되지 않는다: G=F/GAS=F/QS=F 모두 404)
+    ("디젤 ULSD", "HO=F"),
     ("천연가스", "NG=F"), ("밀", "ZW=F"),
     # 7. 암호화폐
     ("비트코인", "BTC-USD"), ("이더리움", "ETH-USD"), ("솔라나", "SOL-USD"), ("리플", "XRP-USD")
@@ -402,7 +407,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         high_52 = high_52_daily
         
         is_crypto = name in ["비트코인", "이더리움", "솔라나", "리플"]
-        is_futures = name in ["나스닥 선물", "S&P500 선물", "다우존스 선물", "러셀2000 선물", "금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "천연가스", "밀"]
+        is_futures = name in ["나스닥 선물", "S&P500 선물", "다우존스 선물", "러셀2000 선물", "금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "디젤 ULSD", "천연가스", "밀"]
         is_proxy_yield = False # [추가] 금리 추정 여부 플래그
         chart_calc_price = None # [추가] 지표 계산용 원본 가격 보존
         
@@ -921,6 +926,19 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             elif 2.10 <= current < 2.60: display_name = f"[green]{name}[/]"
             elif 1.60 <= current < 2.10: display_name = f"[yellow]{name}[/]"
             elif current < 1.60: display_name = f"[blue]{name}[/]"
+        elif name == "디젤 ULSD":
+            # [밴드 근거 2026-08-10] 임의 숫자가 아니라 가솔린 RBOB 밴드가 놓인 **백분위**를
+            #  ULSD 분포에 그대로 옮긴 값이다(15년 3,771봉, 2011-08~2026-08).
+            #    RBOB 4.00(99.7%)→4.40 / 3.20(95.4%)→3.70 / 2.60(69.8%)→2.85
+            #         2.10(49.5%)→2.25 / 1.60(21.3%)→1.70
+            #  두 상품은 가격대가 달라(ULSD/RBOB 중앙 비율 1.055) 같은 숫자를 쓰면 색이 거짓
+            #  신호를 낸다. 백분위를 맞추면 '같은 희소성'이 같은 색으로 나온다.
+            if current >= 4.40: display_name = f"[magenta]{name}[/]"
+            elif 3.70 <= current < 4.40: display_name = f"[red]{name}[/]"
+            elif 2.85 <= current < 3.70: display_name = f"[orange3]{name}[/]"
+            elif 2.25 <= current < 2.85: display_name = f"[green]{name}[/]"
+            elif 1.70 <= current < 2.25: display_name = f"[yellow]{name}[/]"
+            elif current < 1.70: display_name = f"[blue]{name}[/]"
         elif name == "천연가스":
             if current >= 6.0: display_name = f"[magenta]{name}[/]"
             elif 4.0 <= current < 6.0: display_name = f"[red]{name}[/]"

@@ -279,6 +279,15 @@ def evaluate_market_indicator(name, price, yh_rate=None):
         elif 2.1 <= price < 2.6: status_desc = "골디락스"
         elif 1.6 <= price < 2.1: status_desc = "수요 둔화"
         elif price < 1.6: status_desc = "시스템 위기"
+    elif name == "디젤 ULSD":
+        # 가솔린이 소비(운전)를 비추는 반면 디젤은 산업·물류·화물을 비춘다.
+        #  같은 '고가'라도 읽는 뜻이 다르므로 문구를 따로 둔다.
+        if price >= 4.40: status_desc = "산업·물류 비용 쇼크"
+        elif 3.70 <= price < 4.40: status_desc = "임계점/원가 전가"
+        elif 2.85 <= price < 3.70: status_desc = "물류비 인플레"
+        elif 2.25 <= price < 2.85: status_desc = "골디락스"
+        elif 1.70 <= price < 2.25: status_desc = "산업 수요 둔화"
+        elif price < 1.70: status_desc = "실물 경기 급랭"
     elif name == "천연가스":
         if price >= 6.0: status_desc = "에너지 쇼크/이상 기후"
         elif 4.0 <= price < 6.0: status_desc = "물가 비상/인플레 자극"

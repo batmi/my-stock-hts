@@ -1280,7 +1280,7 @@ INDICES_GROUPS = {
     "3": {"name": "섹터 및 지표 (Sectors & Indicators)", "indices": ["London - Samsung GDR", "SOX (반도체)", "DRG (제약)", "NBI (바이오)", "BKX (은행)", "DJT (운송)", "DJU (유틸/전력)", "XAL (항공)", "XOI (에너지)", "HUI (금광)", "VIX (변동성)", "HY OAS (신용위험)", "MSCI 전세계", "MSCI 선진국", "MSCI 신흥국"]},
     "4": {"name": "금리 및 환율 (Rates & FX)", "indices": ["달러인덱스", "달러환율", "미국채 2년물 금리", "미국채 5년물 금리", "미국채 10년물 금리", "미국채 30년물 금리"]},
     "5": {"name": "글로벌 지수 (Global Indices)", "indices": ["Japan - 닛케이", "Taiwan - 대만가권", "Hong Kong - 항셍", "China - 상해종합", "UK - FTSE 100", "France - CAC 40", "Germany - DAX 40", "Europe - STOXX 50"]},
-    "6": {"name": "원자재 (Commodities)", "indices": ["금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "천연가스", "밀"]},
+    "6": {"name": "원자재 (Commodities)", "indices": ["금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "디젤 ULSD", "천연가스", "밀"]},
     "7": {"name": "암호화폐 (Cryptocurrency)", "indices": ["비트코인", "이더리움", "솔라나", "리플"]}
 }
 # ==========================================================
