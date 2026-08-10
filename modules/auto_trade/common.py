@@ -139,10 +139,15 @@ def format_holdings_block(valid_holdings, title="보유 종목 현황", name_dec
                 mfe = res.get('max_profit_rate') or 0.0
                 mfe_str = f"\n   최고가: {round(highest):,} ({mfe:+.1f}%)"
 
+        # [표기] 한 줄에 두 항목을 '|'로 묶지 않는다. 모바일 폭에서 임의로 접히면
+        #  묶인 두 값의 경계가 흐려지고, 아래 상태·최고가·ATR·TS 줄과 들여쓰기가 어긋나
+        #  세로로 훑어 읽을 수 없다. 한 줄에 한 항목으로 통일한다.
         msg += (
             f"\n\n• {name_display} ({qty}주)"
-            f"\n   현재: {cur_price:,}원 | 평단: {buy_price:,.0f}원"
-            f"\n   평가: {eval_amt:,}원 | 손익: {profit:+,}원 ({rate:+.2f}%)"
+            f"\n   현재: {cur_price:,}원"
+            f"\n   평단: {buy_price:,.0f}원"
+            f"\n   평가: {eval_amt:,}원"
+            f"\n   손익: {profit:+,}원 ({rate:+.2f}%)"
             f"{state_str}{mfe_str}{atr_str}{ts_str}"
         )
     return msg
