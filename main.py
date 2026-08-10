@@ -1113,6 +1113,18 @@ def main():
         except Exception as _ws_e:
             logging.getLogger("hts").debug(f"[WS] 실시간 피드 시작 실패(REST 폴백): {_ws_e}")
 
+    # [안전장치] 실계좌만 — 가상 검증용으로 껐던 설정이 그대로 넘어오지 않았는지 알린다.
+    #  dynamic_config.json은 모드별로 나뉘지 않아 mode 4에서 끈 시장 필터가 mode 2에도 그대로
+    #  적용된다. 시작을 막거나 값을 되돌리지는 않는다 — 의도적으로 끄는 경우도 있으므로
+    #  판단은 사용자에게 두고, '모르는 채로 시작하는' 경우만 없앤다.
+    if not (getattr(config.session, 'is_paper', False)
+            or config.session.is_toss or config.session.is_simulation):
+        try:
+            from modules import settings as _settings
+            _settings.warn_if_safety_switches_off()
+        except Exception as _sw_e:
+            logging.getLogger("hts").warning(f"[안전장치] 점검 실패(무시): {_sw_e}")
+
     # [추가] 자동 시작 모드 처리
     if args.auto:
         config.console.print("\n[bold magenta]━━━ 자동 시작 모드 (Auto Start) ━━━[/]")

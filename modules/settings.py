@@ -17,6 +17,7 @@ def _ts_act_label():
 import utils # [추가]
 import context # [추가]
 
+logger = logging.getLogger(__name__)
 console = config.console
 
 def _save_dynamic_config():
@@ -83,6 +84,76 @@ def _save_dynamic_config():
         console.print(f"[dim]저장 경로: {path}[/dim]")
     else:
         console.print("\n[bold red]설정 저장 실패 (상세는 로그 참조)[/bold red]")
+
+# ==========================================================
+# 실계좌 안전장치 점검
+#  [왜 필요한가] 가상계좌 검증 중에는 매매를 강제로 발생시키려고 시장 필터를 끄는 일이
+#  실제로 있다. 그런데 dynamic_config.json은 모드별로 분리되지 않은 단일 파일이라, 그
+#  설정이 실전(mode 2)으로 그대로 넘어간다. 감사 도구 주석에 '끝나면 다시 켤 것'이라고
+#  적어 둔들 주석은 가드가 아니다 — 잊는 쪽에 걸린 설계였다.
+#
+#  값은 되돌리지 않는다. 의도적으로 끄는 경우도 있으므로 판단은 사용자 몫으로 두고,
+#  '모르는 채로 시작하는' 경우만 없앤다.
+# ==========================================================
+SAFETY_SWITCHES = (
+    ("USE_MARKET_FILTER", "시장 필터", "하락장에서도 신규 매수가 나갑니다"),
+    ("USE_VOLATILITY_TARGETING", "변동성 타겟팅",
+     "자본 대비 변동성 한도가 사라집니다 (백테스트상 MDD -20%→-30%)"),
+    ("USE_CORRELATION_FILTER", "상관관계 필터", "같이 무너지는 종목으로 슬롯이 채워집니다"),
+)
+
+# 0이 '미사용' 센티널인 한도값. 스위치와 달리 값 자체가 기능을 끈다.
+SAFETY_LIMITS = (
+    ("SYSTEM_RISK_PER_TRADE", "1회 매매 리스크 한도", "손실 한도 기반 사이징이 꺼집니다"),
+    ("SYSTEM_MAX_PORTFOLIO_RISK", "포트폴리오 히트 한도", "동시 손절 시 총손실에 상한이 없습니다"),
+    ("SYSTEM_DAILY_LOSS_LIMIT", "일일 손실 한도", "계좌 차단기가 동작하지 않습니다"),
+)
+
+
+def safety_switch_warnings():
+    """지금 꺼져 있는 안전장치 목록. [(항목명, 결과 설명), ...] — 정상이면 빈 리스트."""
+    off = []
+    for key, label, impact in SAFETY_SWITCHES:
+        if not getattr(config.settings, key, True):
+            off.append((label, impact))
+    for key, label, impact in SAFETY_LIMITS:
+        try:
+            if float(getattr(config.settings, key, 0) or 0) <= 0:
+                off.append((label, impact))
+        except (TypeError, ValueError):
+            pass
+    return off
+
+
+def warn_if_safety_switches_off(console=None, notify=True):
+    """실계좌 시작 시 꺼진 안전장치를 화면·텔레그램으로 알린다.
+
+    경고만 한다 — 시작을 막지도, 값을 되돌리지도 않는다.
+    반환값은 꺼져 있는 항목 수(0이면 아무것도 출력하지 않음).
+    """
+    off = safety_switch_warnings()
+    if not off:
+        return 0
+
+    console = console or config.console
+    console.print("\n[bold yellow]⚠️  실계좌를 안전장치가 꺼진 상태로 시작합니다[/bold yellow]")
+    for label, impact in off:
+        console.print(f"  [yellow]• {label} OFF[/yellow] — {impact}")
+    console.print("  [dim]가상 검증용으로 끈 설정이 남아 있지 않은지 확인하세요 "
+                  "(메뉴 0 → 6 커스텀 설정 조회).[/dim]\n")
+
+    if notify:
+        try:
+            import api
+            body = "\n".join(f"• {label} OFF — {impact}" for label, impact in off)
+            api.send_telegram_message(
+                f"⚠️ [실계좌 시작] 안전장치가 꺼져 있습니다\n{body}\n\n"
+                f"가상 검증용 설정이 남아 있지 않은지 확인하세요."
+            )
+        except Exception as e:
+            logger.debug(f"[안전장치 경고] 텔레그램 발송 실패: {e}")
+    return len(off)
+
 
 def _get_custom_settings_summary():
     """커스텀 프리셋 전환 시 텔레그램 알림에 포함할 변경 내역 요약 문자열 생성"""
