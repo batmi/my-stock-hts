@@ -177,14 +177,42 @@ def test_manage_reserved_orders(mock_update, mock_get_orders, mock_ask):
         ],
         []
     ]
-    # 취소할 ID 입력, 두 번째 루프에서는 빈 리스트를 반환하여 종료됨
-    mock_ask.side_effect = ["1", "q"]
-    
-    with patch('modules.trading.api.send_telegram_message') as mock_tg:
+    # [변경 2026-08-10] 작업 선택(2: 취소) → ID → 확인(y).
+    #  종전에는 ID를 넣는 즉시 취소돼 되묻는 단계가 없었다.
+    mock_ask.side_effect = ["2", "1", "y"]
+
+    with patch('modules.trading.api.send_telegram_message') as mock_tg, \
+         patch('modules.trading.api.get_current_price', return_value=0), \
+         patch('modules.trading.time.sleep'), \
+         patch('modules.trading.utils.clear_screen'):
         trading.manage_reserved_orders()
         mock_update.assert_called_once_with(1, 'CANCELED')
         mock_tg.assert_called_once()
         assert "ID: 1" in mock_tg.call_args[0][0]
+
+
+@patch('modules.trading.Prompt.ask')
+@patch('modules.trading.db_manager.db.get_pending_reserved_orders')
+@patch('modules.trading.db_manager.db.update_reserved_order_status')
+def test_manage_reserved_orders_requires_confirmation(mock_update, mock_get_orders, mock_ask):
+    """확인에서 n을 고르면 아무것도 취소되지 않는다 (오타 한 번에 전량이 날아가지 않는다)."""
+    order = {
+        "id": 1, "cano": "12345678", "acnt": "01", "market": "KR",
+        "order_type": "buy", "code": "005930", "name": "삼성전자",
+        "qty": 10, "order_price": 79000.0, "condition_type": "LIMIT",
+        "target_price": 79000.0, "target_time": "", "expire_dt": "20991231"
+    }
+    mock_get_orders.return_value = [order]
+    # 취소(2) → 전체(0) → 확인에서 n → 다시 목록 → 나가기(b)
+    mock_ask.side_effect = ["2", "0", "n", "b"]
+
+    with patch('modules.trading.api.send_telegram_message'), \
+         patch('modules.trading.api.get_current_price', return_value=0), \
+         patch('modules.trading.time.sleep'), \
+         patch('modules.trading.utils.clear_screen'):
+        trading.manage_reserved_orders()
+
+    mock_update.assert_not_called()
 
 @patch('modules.trading.Prompt.ask')
 @patch('modules.trading.utils.show_menu')

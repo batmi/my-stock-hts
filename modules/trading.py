@@ -932,11 +932,20 @@ def send_order(order_type):
         context.USER_ACTION_BREADCRUMB.append(f"[수량] {qty}")
         
         qty = qty.replace(',', '').replace('주', '').strip()
+        # [수정] 종전 검증은 float()이었는데 이후 코드는 int(qty)를 쓴다. '1.5'를 넣으면
+        #  검증을 통과해 주문이 나간 뒤 int()에서 터져, 텔레그램 알림·트레일링 정리·
+        #  예약 일괄취소가 통째로 건너뛰고 "통신/시스템 에러"만 뜬다. 여기서 정수로 확정한다.
         try:
-            float(qty)
+            qty_int = int(float(qty))
         except ValueError:
             config.console.print("[red]수량은 숫자만 입력 가능합니다.[/red]")
             return False
+        if qty_int <= 0:
+            config.console.print("[red]수량은 1주 이상이어야 합니다.[/red]")
+            return False
+        if float(qty) != qty_int:
+            config.console.print(f"[yellow]소수점 수량은 지원하지 않아 {qty_int}주로 처리합니다.[/yellow]")
+        qty = str(qty_int)
 
         unit = "달러" if is_overseas else "원"
         price_prompt = f"[{title_color}]{title_text} 단가({unit})[/] [dim]0 입력 시 시장가(현재가), 이전: b, 메인: q[/dim]"
@@ -1041,8 +1050,15 @@ def send_order(order_type):
                 calc_price = curr_price
             else:
                 ord_dvsn = "00"
-                calc_price = int(price)
-                display_price = f"{int(price):,}원"
+                # [수정] 종전에는 int(price)가 그대로 예외를 던져(예: '50000.5') 메뉴 밖으로 튕겼다.
+                #  또한 호가단위 보정이 없어 50,001원 같은 값은 거래소가 거부한다.
+                #  utils.adjust_to_tick은 예약 발동 경로만 쓰고 수동 주문 경로는 안 쓰고 있었다.
+                raw_price = float(price)
+                calc_price = int(utils.adjust_to_tick(raw_price, is_overseas=False))
+                if calc_price != raw_price:
+                    config.console.print(f"[yellow]호가단위에 맞춰 {int(raw_price):,}원 → {calc_price:,}원으로 보정했습니다.[/yellow]")
+                price = str(calc_price)
+                display_price = f"{calc_price:,}원"
 
         # 7. 예상 금액 계산 및 확인 메시지
         total_amt = float(qty) * calc_price
@@ -1178,6 +1194,12 @@ def send_order(order_type):
                             profit_rate = ((calc_price - buy_price) / buy_price) * 100
                     except Exception: pass
                 
+                # [수정] 종전엔 int(qty) >= int(max_qty)를 두 곳에서 그때그때 계산했다.
+                #  매도가능수량 조회가 실패해 max_qty가 0이면 이 비교는 **항상 참**이라,
+                #  부분 매도인데도 전량으로 보고 트레일링 앵커를 지우고 예약 매도를 일괄 취소했다.
+                #  '수량을 모른다'와 '전량이다'는 다르다 — 모르면 전량으로 단정하지 않는다.
+                is_full_sell = (order_type == 'sell' and max_qty > 0 and int(qty) >= int(max_qty))
+
                 t_type = "매수" if order_type == 'buy' else "매도"
                 snapshot = analysis.get_snapshot(stock_code, is_overseas=is_overseas)
                 
@@ -1204,7 +1226,7 @@ def send_order(order_type):
                 if order_type == 'sell':
                     msg += f"\n손익: {int(profit_amt):+,}원 ({float(profit_rate):+.2f}%)"
                     
-                    if int(qty) >= int(max_qty):
+                    if is_full_sell:
                         canceled_cnt = db_manager.db.cancel_reserved_sell_orders(target_cano, target_acnt, stock_code)
                         if canceled_cnt > 0:
                             config.console.print(f"\n[bold magenta]💡 안내: 잔고 전량 매도로 인해 대기 중이던 매도 예약 주문 {canceled_cnt}건이 자동 취소되었습니다.[/bold magenta]")
@@ -1243,7 +1265,7 @@ def send_order(order_type):
                 # 매도 시 트레일링 스탑 초기화
                 # [Fix] '전량' 매도일 때만 초기화 — 부분 매도 시 앵커를 지우면 잔여 물량의
                 #  샹들리에 TS가 현재가부터 다시 시작해 감시가 느슨해지므로 앵커를 보존한다
-                if order_type == 'sell' and int(qty) >= int(max_qty):
+                if is_full_sell:
                     db_manager.db.delete_trailing_stop(stock_code)
                     with trader._lock:
                         trader.trailing_stop_cache.pop(stock_code, None)
@@ -1710,431 +1732,1047 @@ def _composite_summary(raw):
         }.get(t, str(t)))
     return " AND ".join(labels)
 
-def register_reserved_order():
-    """예약 주문 등록 메뉴"""
-    config.console.print("\n[bold yellow]예약 주문 등록 (Reserve Order)[/bold yellow]")
-    
-    target_cano, target_acnt, acc_label = select_account()
-    if not target_cano:
-        config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-        return None
-    
-    menu_items = [("1", "예약 매수", "Buy"), ("2", "예약 매도", "Sell")]
-    choice = utils.show_menu("주문 방향", menu_items, default_choice="1")
-    if choice.lower() in ['b', 'q']:
-        config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-        return None
-    
-    menu_map_dict = dict((k, v) for k, v, _ in menu_items)
-    context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map_dict.get(choice, '')}")
+# ==========================================================
+# 예약 주문 공용 헬퍼
+#  조건 표기는 등록 확인·대기 목록·텔레그램 요약 세 곳에서 쓰인다. 종전엔 같은
+#  분기가 세 번 복사돼 있어 조건을 하나 추가할 때마다 한 곳이 빠졌다.
+# ==========================================================
+_RSV_BACK = "__RSV_BACK__"
+_RSV_QUIT = "__RSV_QUIT__"
 
-    order_type = "buy" if choice == "1" else "sell"
-    
-    stock_info = {}
-    if order_type == "sell":
-        res = select_stock_from_balance(target_cano, target_acnt)
-        if not res or res[0] in [None, False]:
-            config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return None
-        stock_code, stock_name, is_overseas, _, stock_info = res
-    else:
-        stock_code, stock_name, is_overseas = utils.select_target_stock()
-        if not stock_code:
-            config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return None
 
-    market = "US" if is_overseas else "KR"
-    
-    # [추가] 현재가 및 매입단가(보유 시) 조회 (퍼센트 기준 계산용)
-    current_price = api.get_current_price(stock_code, is_overseas)
-    buy_price = 0.0
-    if order_type == "sell":
-        buy_price = float(stock_info.get('buy_price', 0.0))
-                        
-    price_info = f"현재가: ${current_price:,.2f}" if is_overseas else f"현재가: {int(current_price):,}원"
-    if buy_price > 0:
-        b_fmt = f"${buy_price:,.2f}" if is_overseas else f"{int(buy_price):,}원"
-        price_info += f" / 매입단가: {b_fmt}"
-        
-    config.console.print(f"\n선택 종목: [bold cyan]{stock_name} ({stock_code})[/bold cyan] [dim]({price_info})[/dim]")
-    
-    base_price = buy_price if buy_price > 0 else current_price
-    base_label = "매입단가" if buy_price > 0 else "현재가"
-    
-    analysis.print_table("", [(stock_name, stock_code)], is_overseas=is_overseas)
-    config.console.print()
-    
-    # [추가] 예약 매매 일괄 취소 정책 안내
-    config.console.print("[bold magenta]⚠️ 안내: 한 종목에 여러 예약 주문을 설정할 수 있으나, 어느 하나라도 체결되면 해당 종목에 설정된 나머지 모든 예약 주문(매수/매도)은 자동으로 일괄 취소됩니다.[/bold magenta]")
-    config.console.print()
-    
-    # [정리] 단순 조건(지정가/특정시간/퀀트점수/RSI)은 단독 슬롯에서 제외하고 복합 조건(AND) 안으로 편입.
-    #        단독 메뉴는 '가격 추세형'과 '시스템 고유/복합'만 노출하여 차별화 강화.
-    cond_items = [
-        ("1", "스탑로스/하향이탈 (STOP)", "현재가가 목표가 이하로 하락 시"),
-        ("2", "돌파/상향이탈 (BREAKOUT)", "현재가가 목표가 이상으로 상승 시"),
-        ("3", "트레일링 매수 (TRAILING_BUY)", "예약 후 최저점 바닥 다지고 N% 반등 시 (매수 전용)"),
-        ("4", "트레일링 매도 (TRAILING_SELL)", "예약 후 최고점 달성 후 N% 하락 시 (매도 전용)"),
-        ("5", "이평선 크로스 (EMA)", "주가가 특정 EMA를 상향돌파/하향이탈 시"),
-        ("6", "수급 턴어라운드 (SMART_MONEY)", "외국인/기관 순매수 전환 시 (매수 전용)"),
-        ("7", "상태 진입 (STATE)", "강매수/매수 상태 진입 시 (매수 전용)"),
-        ("8", "신고가 돌파 (NEW_HIGH)", "52주/사상 신고가 경신 시 (추세추종 강세 진입)"),
-        ("9", "복합 조건 (COMPOSITE)", "점수·RSI·지정가·시간 등 여러 조건 동시 충족(AND) 시 다중조건 결합")
-    ]
-    cond_choice = utils.show_menu("예약 발동 조건", cond_items)
-    if cond_choice.lower() in ['b', 'q']:
-        config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-        return None
+def _condition_text(condition_type, target_price=0.0, target_time="",
+                    composite_json=None, composite_labels=None, is_overseas=False):
+    """예약 발동 조건을 사람이 읽는 한 줄로 변환한다 (등록·목록·텔레그램 공용)."""
+    ct = condition_type or ""
+    tp = target_price or 0.0
 
-    if order_type == 'sell' and cond_choice == '3':
-        config.console.print("[red]트레일링 매수 조건은 '예약 매도'에서는 사용할 수 없습니다.[/red]")
-        return None
+    if ct == 'TIME':
+        tt = target_time or ""
+        if len(tt) >= 12: return f"{tt[:4]}-{tt[4:6]}-{tt[6:8]} {tt[8:10]}:{tt[10:12]} 도달"
+        if len(tt) == 4: return f"{tt[:2]}:{tt[2:4]} 도달"
+        return tt or "시각"
+    if 'SCORE' in ct:
+        return f"점수 {tp}점 {'이상' if 'UP' in ct else '이하'}"
+    if 'RSI' in ct:
+        return f"RSI {tp} {'이상' if 'UP' in ct else '이하'}"
+    if 'EMA' in ct:
+        return f"EMA {int(tp)}일선 {'상향돌파' if 'UP' in ct else '하향이탈'}"
+    if ct == 'TRAILING_BUY':
+        return f"바닥 대비 {tp}% 반등"
+    if ct == 'TRAILING_SELL':
+        return f"고점 대비 {tp}% 하락"
+    if ct == 'SMART_MONEY':
+        return "외국인/기관 순매수 전환"
+    if ct == 'NEW_HIGH':
+        return "사상 최고가 경신" if tp == 0 else "52주 신고가 경신"
+    if ct.startswith('STATE_'):
+        return {'STATE_STRONGBUY': '강매수 진입', 'STATE_BUY': '매수 진입',
+                'STATE_MR': '역매수 진입'}.get(ct, ct)
+    if ct == 'COMPOSITE':
+        if composite_labels:
+            return " AND ".join(composite_labels)
+        return _composite_summary(composite_json)
+    return f"${tp:,.2f}" if is_overseas else f"{int(tp):,}원"
 
-    if order_type == 'buy' and cond_choice == '4':
-        config.console.print("[red]트레일링 매도 조건은 '예약 매수'에서는 사용할 수 없습니다.[/red]")
-        return None
 
-    if order_type == 'sell' and cond_choice in ('6', '7'):
-        config.console.print("[red]수급 턴어라운드/상태 진입 조건은 '예약 매수'에서만 사용할 수 있습니다.\n(매도 신호 결합은 9번 복합 조건을 활용하세요.)[/red]")
-        return None
+def _fmt_price(price, is_overseas):
+    """가격 표기 통일 (해외 $, 국내 원)."""
+    if price is None:
+        return "-"
+    return f"${price:,.2f}" if is_overseas else f"{int(price):,}원"
 
-    condition_map = {"1": "STOP", "2": "BREAKOUT", "3": "TRAILING_BUY", "4": "TRAILING_SELL", "5": "EMA", "6": "SMART_MONEY", "7": "STATE", "8": "NEW_HIGH", "9": "COMPOSITE"}
-    condition_type = condition_map[cond_choice]
 
-    target_price = 0.0
-    target_time = ""
-    composite_json = None  # [추가] 복합 조건용
-    
-    # ※ 단순 조건(특정시간 TIME / 퀀트점수 SCORE / RSI / 지정가 LIMIT)은 단독 슬롯에서 제외되어
-    #    복합 조건(COMPOSITE) 안의 서브 조건으로 편입되었습니다. (감시기는 레거시 단독 주문도 계속 지원)
-    if condition_type == "EMA":
-        config.console.print(f"\n[cyan]◆ 발동 목표 이동평균선(EMA) 선택[/cyan]")
-        target_price_str = Prompt.ask("이동평균선 (5, 20, 60, 120 중 입력)", choices=["5", "20", "60", "120"], default="20")
-        if not target_price_str or target_price_str.lower() in ['b', 'q']:
-            config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return None
-        target_price = float(target_price_str)
-        updown = Prompt.ask("발동 방향 (1: 상향 돌파 시, 2: 하향 이탈 시) [dim](이전: b, 메인: q)[/dim]", choices=["1", "2", "b", "q"], default="1" if order_type == "buy" else "2")
-        if updown.lower() in ['b', 'q']:
-            config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return None
-        condition_type = "EMA_UP" if updown == "1" else "EMA_DOWN"
-        
-    elif condition_type == "TRAILING_BUY":
-        config.console.print(f"\n[cyan]◆ 반등 폭 설정 (트레일링 매수)[/cyan]")
-        config.console.print("[dim]※ '최저점'은 본 예약 주문이 등록된 시점 이후부터 갱신된 가장 낮은 가격을 의미합니다.[/dim]")
-        target_price_str = Prompt.ask("예약 후 최저점 대비 추격 매수할 반등 폭(%) 입력 (예: 3.0)")
-        if not target_price_str or target_price_str.lower() in ['b', 'q']:
-            config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return None
-        try:
-            target_price = float(target_price_str.replace('%', '').strip())
-        except ValueError:
-            config.console.print("\n[red]반등 폭은 숫자만 입력 가능합니다.[/red]")
-            return None
-    elif condition_type == "TRAILING_SELL":
-        config.console.print(f"\n[cyan]◆ 하락 폭 설정 (트레일링 매도)[/cyan]")
-        config.console.print("[dim]※ '최고점'은 본 예약 주문이 등록된 시점 이후부터 갱신된 가장 높은 가격을 의미합니다.[/dim]")
-        target_price_str = Prompt.ask("예약 후 최고점 대비 하락 시 매도할 폭(%) 입력 (예: 3.0)")
-        if not target_price_str or target_price_str.lower() in ['b', 'q']:
-            config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return None
-        try:
-            target_price = float(target_price_str.replace('%', '').strip())
-        except ValueError:
-            config.console.print("\n[red]하락 폭은 숫자만 입력 가능합니다.[/red]")
-            return None
-    elif condition_type == "SMART_MONEY":
-        config.console.print(f"\n[cyan]◆ 수급 턴어라운드 감지[/cyan]")
-        config.console.print("[dim]※ 외국인/기관 수급이 순매수로 전환되는 신호를 포착하면 발동합니다. 별도 입력값이 없습니다.[/dim]")
-        target_price = 0.0
-    elif condition_type == "STATE":
-        # [추세추종] 역매수(STATE_MR) 옵션 제거 — USE_MEAN_REVERSION OFF 고정으로 역매수 상태가
-        #  분류되지 않아 영원히 발동하지 않는 죽은 조건이 됨 (기존 등록분 감시는 monitor가 계속 지원)
-        config.console.print(f"\n[cyan]◆ 진입을 감지할 시스템 상태 선택[/cyan]")
-        config.console.print("[dim]  - 강매수: 슈퍼모멘텀(신고가 주도주) / 매수: 일반 매수조건[/dim]")
-        st = Prompt.ask("상태 선택 (1: 강매수, 2: 매수)", choices=["1", "2", "b", "q"], default="1")
-        if st.lower() in ['b', 'q']:
-            config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return None
-        condition_type = {"1": "STATE_STRONGBUY", "2": "STATE_BUY"}[st]
-        target_price = 0.0
-    elif condition_type == "NEW_HIGH":
-        config.console.print(f"\n[cyan]◆ 신고가 돌파 기준 선택[/cyan]")
-        config.console.print("[dim]  - 직전 구간 최고가를 현재가가 경신하면 발동합니다. (목표가 입력 불필요, 자동 감지)[/dim]")
-        nh = Prompt.ask("기준 (1: 52주 신고가, 2: 사상 최고가)", choices=["1", "2", "b", "q"], default="1")
-        if nh.lower() in ['b', 'q']:
-            config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return None
-        target_price = 250.0 if nh == "1" else 0.0  # 0=전체기간(사상), 그 외=거래일 룩백
-    elif condition_type == "COMPOSITE":
-        composite_subs = _build_composite_conditions(base_price, is_overseas)
-        if not composite_subs:
-            config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return None
-        composite_json = json.dumps([{"type": s["type"], "value": s.get("value")} for s in composite_subs], ensure_ascii=False)
-        target_price = 0.0
-    else:
-        config.console.print(f"\n[cyan]◆ 발동 조건 가격(목표가) 입력[/cyan]")
-        config.console.print(f"[dim]  - 절대 가격: 50000 (해당 금액 도달 시 발동)[/dim]")
-        config.console.print(f"[dim]  - 퍼센트(%): +5%, -3% ({base_label} 대비 설정)[/dim]")
-        target_price_str = Prompt.ask("목표가 입력")
-        if not target_price_str or target_price_str.lower() in ['b', 'q']:
-            config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-            return None
-        if '%' in target_price_str:
-            try:
-                pct = float(target_price_str.replace('%', '').strip())
-                target_price = base_price * (1 + (pct / 100.0))
-                if not is_overseas: target_price = int(target_price)
-                t_fmt = f"${target_price:,.2f}" if is_overseas else f"{int(target_price):,}원"
-                config.console.print(f"[dim] -> {base_label} 기준 {pct:+.2f}% 계산된 목표가: {t_fmt}[/dim]")
-            except ValueError:
-                config.console.print("\n[red]퍼센트는 숫자만 입력 가능합니다.[/red]")
-                return None
+def _rsv_ask(prompt, **kwargs):
+    """예약 등록 공용 입력. b는 '직전 단계', q는 '메인'으로 정규화한다.
+
+    [왜] 종전에는 b도 q도 전부 '등록 취소'였다. 9단계짜리 흐름에서 오타 하나에
+    계좌 선택부터 다시 시작해야 했던 것이 이 화면의 가장 큰 불편이었다.
+    """
+    choices = kwargs.get('choices')
+    if choices:
+        kwargs['choices'] = list(choices) + [c for c in ('b', 'q') if c not in choices]
+    v = Prompt.ask(prompt, **kwargs)
+    if v is None:
+        return _RSV_BACK
+    sv = str(v).strip()
+    if sv.lower() == 'b': return _RSV_BACK
+    if sv.lower() == 'q': return _RSV_QUIT
+    return sv
+
+
+def _rsv_header(state):
+    """단계마다 상단에 고정으로 뿌리는 진행 요약 (지금 무엇을 예약 중인지)."""
+    parts = []
+    if state.get('acc_label'):
+        parts.append(f"{_fmt_account(state['cano'], state['acnt'])} ({state['acc_label']})")
+    if state.get('order_type'):
+        parts.append("[red]매수[/red]" if state['order_type'] == 'buy' else "[blue]매도[/blue]")
+    if state.get('name'):
+        cur = state.get('current_price') or 0
+        px = f" 현재가 {_fmt_price(cur, state.get('is_overseas'))}" if cur > 0 else ""
+        parts.append(f"[bold cyan]{state['name']}({state['code']})[/bold cyan]{px}")
+    if parts:
+        config.console.print(f"\n[dim]예약 등록 ▸[/dim] " + " [dim]·[/dim] ".join(parts))
+
+
+def _rsv_parse_price(raw, base_price, is_overseas, label="기준가"):
+    """목표가/주문단가 입력 문자열을 숫자로 변환한다. 실패 시 None.
+
+    절대가와 '기준가 대비 %' 두 형식을 함께 받는다. 국내는 호가단위로 보정한다 —
+    보정하지 않으면 50,001원 같은 값이 발동 시점에 거래소에서 거부된다.
+    """
+    txt = str(raw).strip()
+    try:
+        if '%' in txt:
+            pct = float(txt.replace('%', '').strip())
+            val = base_price * (1 + pct / 100.0)
         else:
-            try:
-                target_price = float(target_price_str.replace(',', '').replace('$', '').replace('원', '').strip())
-            except ValueError:
-                config.console.print("\n[red]목표가는 숫자만 입력 가능합니다.[/red]")
-                return None
-        
-    config.console.print(f"\n[cyan]◆ 주문 실행 단가 입력 (지정가 / 시장가)[/cyan]")
-    is_price_target = condition_type in ["STOP", "BREAKOUT", "LIMIT"]
-    
-    config.console.print(f"[dim]  - 절대 가격: 49900 (해당 가격으로 주문)[/dim]")
-    config.console.print(f"[dim]  - 퍼센트(%): -1% ({base_label} 대비 가격으로 주문)[/dim]")
-    config.console.print(f"[dim]  - 0: 시장가 주문 (발동 시점의 시장가 또는 슬리피지가 반영된 현재가 지정가)[/dim]")
-    if is_price_target:
-        config.console.print(f"[dim]  - 엔터(빈 값): [bold yellow]발동 조건(목표가)과 완전히 동일한 가격[/bold yellow]으로 자동 설정[/dim]")
-    else:
-        config.console.print(f"[dim]  - 엔터(빈 값): [bold yellow]기준가격({base_label})과 완전히 동일한 가격[/bold yellow]으로 자동 설정[/dim]")
-        
-    order_price_str = Prompt.ask("주문 단가 입력", default="")
-    if order_price_str.lower() in ['b', 'q']:
-        config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
+            val = float(txt.replace(',', '').replace('$', '').replace('원', '').strip())
+    except ValueError:
         return None
-    
-    if order_price_str.lower() == 'm':
-        order_price_str = "0"
-        
-    if order_price_str == "0":
-        order_price = 0.0
-        config.console.print(f"[dim] -> 발동 시점의 시장가로 자동 설정[/dim]")
-    elif not order_price_str:
-        if is_price_target:
-            order_price = target_price
-            op_fmt = f"${order_price:,.2f}" if is_overseas else f"{int(order_price):,}원"
-            config.console.print(f"[dim] -> 발동 조건(목표가)과 동일하게 자동 설정: {op_fmt}[/dim]")
-        else:
-            order_price = base_price
-            op_fmt = f"${order_price:,.2f}" if is_overseas else f"{int(order_price):,}원"
-            config.console.print(f"[dim] -> {base_label}와 동일하게 자동 설정: {op_fmt}[/dim]")
-    elif '%' in order_price_str:
-        try:
-            pct = float(order_price_str.replace('%', '').strip())
-            order_price = base_price * (1 + (pct / 100.0))
-            if not is_overseas: order_price = int(order_price)
-            op_fmt = f"${order_price:,.2f}" if is_overseas else f"{int(order_price):,}원"
-            config.console.print(f"[dim] -> {base_label} 기준 {pct:+.2f}% 계산된 주문 단가: {op_fmt}[/dim]")
-        except ValueError:
-            config.console.print("\n[red]퍼센트는 숫자만 입력 가능합니다.[/red]")
-            return None
-    else:
-        try:
-            order_price = float(order_price_str.replace(',', '').replace('$', '').replace('원', '').strip())
-        except ValueError:
-            config.console.print("\n[red]주문 단가는 숫자만 입력 가능합니다.[/red]")
-            return None
-    
-    if order_type == "sell":
-        max_qty = int(stock_info.get('qty', 0))
-        qty_str = Prompt.ask(f"주문 수량(주) [dim](보유 잔고: {max_qty:,}주)[/dim]", default=str(max_qty))
-    else:
-        qty_str = Prompt.ask("주문 수량(주)")
-        
-    if not qty_str or qty_str.lower() in ['b', 'q']:
-        config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
+    if val <= 0:
+        return None
+    if not is_overseas:
+        val = float(utils.adjust_to_tick(val, is_overseas=False))
+    return val
+
+
+def _rsv_immediate_trigger(condition_type, target_price, current_price):
+    """등록하자마자 발동할 조건이면 사유를 돌려준다 (아니면 None).
+
+    [왜] BREAKOUT(상향 돌파)에 현재가보다 낮은 목표가를 넣으면 감시 첫 주기에
+    바로 시장가 주문이 나간다. 방향을 반대로 적은 실수가 즉시 체결로 이어지는
+    유일한 경로라, 확인 화면 앞에서 한 번 되묻는다.
+    """
+    if current_price <= 0 or target_price <= 0:
+        return None
+    if condition_type == 'BREAKOUT' and current_price >= target_price:
+        return "현재가가 이미 목표가 이상입니다"
+    if condition_type == 'STOP' and current_price <= target_price:
+        return "현재가가 이미 목표가 이하입니다"
+    return None
+
+
+def _rsv_resolve_expire(choice):
+    """유효기간 선택/직접입력을 YYYYMMDD로 해석한다. 잘못된 입력은 None.
+
+    [왜 None인가] 종전에는 8자리가 아니면 무기한("20991231")으로 떨어뜨렸다.
+    '1231' 같은 오타가 가장 오래 사는 주문이 되는 방향이라, 실패는 재입력으로 돌린다.
+    """
+    today_dt = datetime.now()
+    if choice == "1": return today_dt.strftime("%Y%m%d")
+    if choice == "2": return (today_dt + timedelta(days=7)).strftime("%Y%m%d")
+    if choice == "3": return (today_dt + timedelta(days=30)).strftime("%Y%m%d")
+    if choice == "4": return "20991231"
+
+    digits = "".join(filter(str.isdigit, choice))
+    if len(digits) != 8:
         return None
     try:
-        qty = int(qty_str.replace(',', '').replace('주', '').strip())
+        dt = datetime.strptime(digits, "%Y%m%d")
     except ValueError:
-        config.console.print("\n[red]수량은 숫자만 입력 가능합니다.[/red]")
         return None
-    
-    if order_type == "sell" and qty > max_qty:
-        config.console.print(f"[red]⚠️ 입력하신 수량({qty:,}주)이 보유 수량({max_qty:,}주)보다 많습니다. 잔고 전량으로 자동 조정합니다.[/red]")
-        qty = max_qty
-    
-    config.console.print(f"\n[cyan]◆ 유효 기간 (만료일) 설정[/cyan]")
-    config.console.print(f"[dim]  - 1: 당일 (오늘 장 마감 전까지)[/dim]")
-    config.console.print(f"[dim]  - 2: 이번 주 (7일 후까지)[/dim]")
-    config.console.print(f"[dim]  - 3: 이번 달 (30일 후까지)[/dim]")
-    config.console.print(f"[dim]  - 4: 무기한 (취소할 때까지 유지)[/dim]")
-    config.console.print(f"[dim]  - 직접 입력: YYYYMMDD (예: 20261231)[/dim]")
-    expire_choice = Prompt.ask("유효 기간 선택 또는 입력", default="1")
-    if expire_choice.lower() in ['b', 'q']:
-        config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
+    if dt.date() < today_dt.date():
         return None
-    
-    today_dt = datetime.now()
-    if expire_choice == "1": expire_dt = today_dt.strftime("%Y%m%d")
-    elif expire_choice == "2": expire_dt = (today_dt + timedelta(days=7)).strftime("%Y%m%d")
-    elif expire_choice == "3": expire_dt = (today_dt + timedelta(days=30)).strftime("%Y%m%d")
-    elif expire_choice == "4": expire_dt = "20991231"
-    else: expire_dt = "".join(filter(str.isdigit, expire_choice))
-    if not expire_dt or len(expire_dt) < 8: expire_dt = "20991231"
-    
-    t_type_str = "[red]매수[/red]" if order_type == "buy" else "[blue]매도[/blue]"
-    
-    if condition_type == "TIME":
-        if len(target_time) >= 12: tt_disp = f"{target_time[:4]}-{target_time[4:6]}-{target_time[6:8]} {target_time[8:10]}:{target_time[10:12]}"
-        elif len(target_time) == 4: tt_disp = f"{target_time[:2]}:{target_time[2:4]}"
-        else: tt_disp = target_time
-        cond_str = f"시간 {tt_disp}"
-    elif 'SCORE' in condition_type:
-        cond_str = f"점수 {target_price}점 {'이상' if 'UP' in condition_type else '이하'}"
-    elif 'RSI' in condition_type:
-        cond_str = f"RSI {target_price} {'이상' if 'UP' in condition_type else '이하'}"
-    elif 'EMA' in condition_type:
-        cond_str = f"EMA {int(target_price)}일선 {'상향돌파' if 'UP' in condition_type else '하향이탈'}"
-    elif condition_type == 'TRAILING_BUY':
-        cond_str = f"최저점 대비 {target_price}% 반등 시"
-    elif condition_type == 'TRAILING_SELL':
-        cond_str = f"최고점 대비 {target_price}% 하락 시"
-    elif condition_type == 'SMART_MONEY':
-        cond_str = "수급 턴어라운드(외국인/기관 순매수 전환)"
-    elif condition_type == 'NEW_HIGH':
-        cond_str = ("사상 최고가 경신 시" if target_price == 0 else f"{int(target_price)}거래일(52주) 신고가 경신 시")
-    elif condition_type.startswith('STATE_'):
-        sv = {'STATE_STRONGBUY': '강매수', 'STATE_BUY': '매수', 'STATE_MR': '역매수'}.get(condition_type, condition_type)
-        cond_str = f"시스템 상태 '{sv}' 진입"
-    elif condition_type == 'COMPOSITE':
-        cond_str = "복합(AND): " + " AND ".join(s['_label'] for s in composite_subs)
-    else:
-        if is_overseas:
-            cond_str = f"목표가 ${target_price:,.2f}"
-        else:
-            cond_str = f"목표가 {int(target_price):,}원"
-    
-    expire_disp = "무기한" if expire_dt == "20991231" else f"{expire_dt[:4]}-{expire_dt[4:6]}-{expire_dt[6:8]}까지"
-    
-    if order_price == 0:
-        op_disp = "시장가"
-    else:
-        op_disp = f"${order_price:,.2f}" if is_overseas else f"{int(order_price):,}원"
+    return digits
 
-    confirm_msg = (
-        f"\n[bold white on yellow] [ 예약 {t_type_str.replace('[/red]', '').replace('[/blue]', '').replace('[red]', '').replace('[blue]', '')} 주문 최종 확인 ] [/]\n"
-        f" 종목: {stock_name} ({stock_code})\n"
-        f" 조건: [bold]{condition_type}[/bold] ({cond_str})\n"
-        f" 주문: {t_type_str} {qty}주 @ {op_disp} (지정가)\n"
-        f" 유효: {expire_disp}\n"
-    )
-    config.console.print(Panel(confirm_msg, expand=False))
-    
-    ans = Prompt.ask("위 내용으로 예약 주문을 시스템에 등록하시겠습니까? [dim](이전: b, 메인: q)[/dim]", choices=["y", "n", "b", "q"], default="n")
-    if ans.lower() in ['b', 'q', 'n']:
-        config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
-        return None
-        
-    if ans == "y":
-        db_manager.db.insert_reserved_order(
-            cano=target_cano, acnt=target_acnt, market=market,
-            order_type=order_type, code=stock_code, name=stock_name,
-            qty=qty, order_price=order_price,
-            condition_type=condition_type, target_price=target_price, target_time=target_time, expire_dt=expire_dt,
-            composite_json=composite_json
-        )
-        config.console.print()
-        config.console.print("[bold green]예약 주문이 성공적으로 등록되었습니다.[/bold green]")
-        
-        # [추가] 예약 주문 등록 시 텔레그램 알림 전송
-        clean_type_str = t_type_str.replace('[/red]', '').replace('[/blue]', '').replace('[red]', '').replace('[blue]', '')
-        api.send_telegram_message(f"📝 [예약 등록] {stock_name}({stock_code})\n구분: {clean_type_str}\n조건: {condition_type} ({cond_str})\n수량: {qty}주\n지정가: {op_disp}\n유효: {expire_disp}")
-        
-        config.console.print()
-        _print_reserved_orders_table()
 
-def _print_reserved_orders_table():
-    """예약 주문 대기 목록을 테이블 형태로 출력하고 주문 목록을 반환합니다."""
+def _rsv_step_condition_value(cond_choice, order_type, state):
+    """조건 종류별 세부 값을 입력받아 dict로 돌려준다. 취소 시 _RSV_BACK/_RSV_QUIT."""
+    is_overseas = state['is_overseas']
+    base_price = state['base_price']
+    base_label = state['base_label']
+
+    condition_map = {"1": "STOP", "2": "BREAKOUT", "3": "TRAILING_BUY", "4": "TRAILING_SELL",
+                     "5": "EMA", "6": "SMART_MONEY", "7": "STATE", "8": "NEW_HIGH", "9": "COMPOSITE"}
+    condition_type = condition_map[cond_choice]
+
+    if condition_type == "EMA":
+        config.console.print("\n[cyan]◆ 발동 목표 이동평균선(EMA) 선택[/cyan]")
+        v = _rsv_ask("이동평균선 (5, 20, 60, 120 중 입력)", choices=["5", "20", "60", "120"], default="20")
+        if v in (_RSV_BACK, _RSV_QUIT): return v
+        updown = _rsv_ask("발동 방향 (1: 상향 돌파 시, 2: 하향 이탈 시)",
+                          choices=["1", "2"], default="1" if order_type == "buy" else "2")
+        if updown in (_RSV_BACK, _RSV_QUIT): return updown
+        return {'condition_type': "EMA_UP" if updown == "1" else "EMA_DOWN", 'target_price': float(v)}
+
+    if condition_type in ("TRAILING_BUY", "TRAILING_SELL"):
+        is_buy_side = (condition_type == "TRAILING_BUY")
+        config.console.print(f"\n[cyan]◆ {'반등' if is_buy_side else '하락'} 폭 설정[/cyan]")
+        config.console.print(f"[dim]※ '{'최저점' if is_buy_side else '최고점'}'은 본 예약 주문이 등록된 시점 이후부터 "
+                             f"갱신된 가장 {'낮은' if is_buy_side else '높은'} 가격을 의미합니다.[/dim]")
+        v = _rsv_ask(f"예약 후 {'최저점 대비 추격 매수할 반등' if is_buy_side else '최고점 대비 매도할 하락'} 폭(%) 입력 (예: 3.0)")
+        if v in (_RSV_BACK, _RSV_QUIT): return v
+        try:
+            pct = float(v.replace('%', '').strip())
+        except ValueError:
+            config.console.print("[red]폭은 숫자만 입력 가능합니다.[/red]")
+            return None
+        # [추가] 0 이하는 등록 즉시 발동하고, 지나치게 큰 값은 영원히 발동하지 않는다.
+        if not (0 < pct <= 50):
+            config.console.print("[red]폭은 0 초과 50 이하로 입력하세요. "
+                                 "(0 이하는 등록 즉시 발동, 과도한 값은 사실상 미발동)[/red]")
+            return None
+        return {'condition_type': condition_type, 'target_price': pct}
+
+    if condition_type == "SMART_MONEY":
+        config.console.print("\n[cyan]◆ 수급 턴어라운드 감지[/cyan]")
+        config.console.print("[dim]※ 외국인/기관 수급이 순매수로 전환되는 신호를 포착하면 발동합니다. 별도 입력값이 없습니다.[/dim]")
+        return {'condition_type': "SMART_MONEY", 'target_price': 0.0}
+
+    if condition_type == "STATE":
+        # [추세추종] 역매수(STATE_MR)는 USE_MEAN_REVERSION OFF 고정으로 분류 자체가 발생하지 않아
+        #  등록 옵션에서 제외한다 (기존 등록분 감시는 monitor가 계속 지원).
+        config.console.print("\n[cyan]◆ 진입을 감지할 시스템 상태 선택[/cyan]")
+        config.console.print("[dim]  - 강매수: 슈퍼모멘텀(신고가 주도주) / 매수: 일반 매수조건[/dim]")
+        st = _rsv_ask("상태 선택 (1: 강매수, 2: 매수)", choices=["1", "2"], default="1")
+        if st in (_RSV_BACK, _RSV_QUIT): return st
+        return {'condition_type': {"1": "STATE_STRONGBUY", "2": "STATE_BUY"}[st], 'target_price': 0.0}
+
+    if condition_type == "NEW_HIGH":
+        config.console.print("\n[cyan]◆ 신고가 돌파 기준 선택[/cyan]")
+        config.console.print("[dim]  - 직전 구간 최고가를 현재가가 경신하면 발동합니다. (목표가 입력 불필요, 자동 감지)[/dim]")
+        nh = _rsv_ask("기준 (1: 52주 신고가, 2: 사상 최고가)", choices=["1", "2"], default="1")
+        if nh in (_RSV_BACK, _RSV_QUIT): return nh
+        return {'condition_type': "NEW_HIGH", 'target_price': 250.0 if nh == "1" else 0.0}
+
+    if condition_type == "COMPOSITE":
+        subs = _build_composite_conditions(base_price, is_overseas)
+        if not subs:
+            return _RSV_BACK
+        return {
+            'condition_type': "COMPOSITE",
+            'target_price': 0.0,
+            'composite_json': json.dumps([{"type": s["type"], "value": s.get("value")} for s in subs],
+                                         ensure_ascii=False),
+            'composite_labels': [s['_label'] for s in subs],
+        }
+
+    # STOP / BREAKOUT — 목표가 입력
+    arrow = "이하로 하락" if condition_type == "STOP" else "이상으로 상승"
+    config.console.print(f"\n[cyan]◆ 발동 조건 가격(목표가) 입력 — 현재가가 목표가 {arrow} 시[/cyan]")
+    config.console.print("[dim]  - 절대 가격: 50000 (해당 금액 도달 시 발동)[/dim]")
+    config.console.print(f"[dim]  - 퍼센트(%): +5%, -3% ({base_label} 대비 설정)[/dim]")
+    v = _rsv_ask("목표가 입력")
+    if v in (_RSV_BACK, _RSV_QUIT): return v
+
+    target_price = _rsv_parse_price(v, base_price, is_overseas, base_label)
+    if target_price is None:
+        config.console.print("[red]목표가는 0보다 큰 숫자 또는 '+5%' 형식으로 입력하세요.[/red]")
+        return None
+    if '%' in v:
+        config.console.print(f"[dim] -> {base_label} 기준 계산된 목표가: {_fmt_price(target_price, is_overseas)}[/dim]")
+
+    # [추가] 방향을 반대로 적은 실수는 '등록 즉시 발동'으로 나타난다 — 여기서 한 번 막는다.
+    warn = _rsv_immediate_trigger(condition_type, target_price, state.get('current_price') or 0)
+    if warn:
+        config.console.print(
+            f"\n[bold red]⚠️ {warn}[/bold red] "
+            f"(현재가 {_fmt_price(state.get('current_price'), is_overseas)} / "
+            f"목표가 {_fmt_price(target_price, is_overseas)})")
+        config.console.print("[yellow]이대로 등록하면 다음 감시 주기에 곧바로 주문이 나갑니다. "
+                             "방향(1: 하향이탈 / 2: 상향돌파)을 반대로 고르지 않았는지 확인하세요.[/yellow]")
+        ok = Prompt.ask("그래도 이 목표가로 등록하시겠습니까?", choices=["y", "n"], default="n")
+        if ok != "y":
+            return None
+
+    return {'condition_type': condition_type, 'target_price': target_price}
+
+
+def register_reserved_order():
+    """예약 주문 등록 메뉴 (단계별 뒤로가기 지원).
+
+    [설계] 계좌→방향→종목→조건→조건값→주문단가→수량→유효기간→확인의 9단계를
+    인덱스로 돌린다. 각 단계에서 b는 직전 단계, q는 메인이다. 종전에는 어느 단계든
+    b/q가 모두 '등록 취소'라, 마지막 유효기간에서 오타를 내면 계좌 선택부터
+    아홉 단계를 다시 입력해야 했다.
+    """
+    state = {}
+    step = 0
+    TOTAL = 9
+
+    while True:
+        if step < 0:
+            config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
+            return None
+
+        # ---------- 0. 계좌 ----------
+        if step == 0:
+            config.console.print("\n[bold yellow]예약 주문 등록 (Reserve Order)[/bold yellow] [dim](1/9 계좌)[/dim]")
+            cano, acnt, acc_label = select_account()
+            if not cano:
+                step = -1
+                continue
+            state.update(cano=cano, acnt=acnt, acc_label=acc_label)
+            step += 1
+            continue
+
+        # ---------- 1. 방향 ----------
+        if step == 1:
+            _rsv_header(state)
+            config.console.print("[dim](2/9 주문 방향)[/dim]")
+            menu_items = [("1", "예약 매수", "Buy"), ("2", "예약 매도", "Sell")]
+            choice = utils.show_menu("주문 방향", menu_items, default_choice="1")
+            if choice.lower() == 'q':
+                step = -1
+                continue
+            if choice.lower() == 'b':
+                step -= 1
+                continue
+            new_type = "buy" if choice == "1" else "sell"
+            if state.get('order_type') != new_type:
+                # 방향이 바뀌면 종목 선택 근거(잔고/검색)가 달라진다 — 이후 상태를 비운다.
+                for k in ('code', 'name', 'is_overseas', 'stock_info', 'current_price',
+                          'buy_price', 'condition_type', 'target_price'):
+                    state.pop(k, None)
+            state['order_type'] = new_type
+            step += 1
+            continue
+
+        # ---------- 2. 종목 ----------
+        if step == 2:
+            _rsv_header(state)
+            config.console.print("[dim](3/9 종목 선택)[/dim]")
+            if state['order_type'] == "sell":
+                res = select_stock_from_balance(state['cano'], state['acnt'])
+                if not res or res[0] in [None, False]:
+                    step -= 1
+                    continue
+                code, name, is_overseas, _, stock_info = res
+            else:
+                code, name, is_overseas = utils.select_target_stock()
+                if not code:
+                    step -= 1
+                    continue
+                stock_info = {}
+
+            state.update(code=code, name=name, is_overseas=is_overseas, stock_info=stock_info)
+
+            current_price = api.get_current_price(code, is_overseas)
+            buy_price = float(stock_info.get('buy_price', 0.0)) if state['order_type'] == "sell" else 0.0
+            state['current_price'] = current_price
+            state['buy_price'] = buy_price
+            state['base_price'] = buy_price if buy_price > 0 else current_price
+            state['base_label'] = "매입단가" if buy_price > 0 else "현재가"
+
+            price_info = f"현재가: {_fmt_price(current_price, is_overseas)}"
+            if buy_price > 0:
+                price_info += f" / 매입단가: {_fmt_price(buy_price, is_overseas)}"
+            config.console.print(f"\n선택 종목: [bold cyan]{name} ({code})[/bold cyan] [dim]({price_info})[/dim]")
+
+            # [추가] 같은 종목에 이미 걸린 예약이 있으면 먼저 보여준다 — 하나가 발동하면
+            #  나머지가 일괄 취소되므로, 모르고 겹쳐 걸면 의도치 않게 기존 예약이 사라진다.
+            try:
+                existing = [o for o in db_manager.db.get_pending_reserved_orders()
+                            if o['code'] == code and o.get('cano') == state['cano']]
+            except Exception:
+                existing = []
+            if existing:
+                config.console.print(f"\n[bold magenta]※ 이 종목에 이미 대기 중인 예약이 {len(existing)}건 있습니다.[/bold magenta]")
+                for o in existing[:5]:
+                    ot = "매수" if o['order_type'] == 'buy' else "매도"
+                    config.console.print(
+                        f"[dim]   · ID {o['id']} {ot} {o['qty']}주 — "
+                        f"{_condition_text(o['condition_type'], o.get('target_price', 0), o.get('target_time', ''), o.get('composite_json'), is_overseas=is_overseas)}[/dim]")
+
+            analysis.print_table("", [(name, code)], is_overseas=is_overseas)
+            config.console.print()
+            config.console.print("[bold magenta]⚠️ 안내: 한 종목에 여러 예약 주문을 설정할 수 있으나, 어느 하나라도 체결되면 "
+                                 "해당 종목에 설정된 나머지 모든 예약 주문(매수/매도)은 자동으로 일괄 취소됩니다.[/bold magenta]")
+            step += 1
+            continue
+
+        # ---------- 3. 조건 종류 ----------
+        if step == 3:
+            _rsv_header(state)
+            config.console.print("[dim](4/9 발동 조건)[/dim]")
+            cond_items = [
+                ("1", "스탑로스/하향이탈 (STOP)", "현재가가 목표가 이하로 하락 시"),
+                ("2", "돌파/상향이탈 (BREAKOUT)", "현재가가 목표가 이상으로 상승 시"),
+                ("3", "트레일링 매수 (TRAILING_BUY)", "예약 후 최저점 바닥 다지고 N% 반등 시 (매수 전용)"),
+                ("4", "트레일링 매도 (TRAILING_SELL)", "예약 후 최고점 달성 후 N% 하락 시 (매도 전용)"),
+                ("5", "이평선 크로스 (EMA)", "주가가 특정 EMA를 상향돌파/하향이탈 시"),
+                ("6", "수급 턴어라운드 (SMART_MONEY)", "외국인/기관 순매수 전환 시 (매수 전용)"),
+                ("7", "상태 진입 (STATE)", "강매수/매수 상태 진입 시 (매수 전용)"),
+                ("8", "신고가 돌파 (NEW_HIGH)", "52주/사상 신고가 경신 시 (추세추종 강세 진입)"),
+                ("9", "복합 조건 (COMPOSITE)", "점수·RSI·지정가·시간 등 여러 조건 동시 충족(AND) 시 다중조건 결합"),
+            ]
+            cond_choice = utils.show_menu("예약 발동 조건", cond_items)
+            if cond_choice.lower() == 'q':
+                step = -1
+                continue
+            if cond_choice.lower() == 'b':
+                step -= 1
+                continue
+
+            order_type = state['order_type']
+            if order_type == 'sell' and cond_choice == '3':
+                config.console.print("[red]트레일링 매수 조건은 '예약 매도'에서는 사용할 수 없습니다.[/red]")
+                utils.pause()
+                continue
+            if order_type == 'buy' and cond_choice == '4':
+                config.console.print("[red]트레일링 매도 조건은 '예약 매수'에서는 사용할 수 없습니다.[/red]")
+                utils.pause()
+                continue
+            if order_type == 'sell' and cond_choice in ('6', '7'):
+                config.console.print("[red]수급 턴어라운드/상태 진입 조건은 '예약 매수'에서만 사용할 수 있습니다.\n"
+                                     "(매도 신호 결합은 9번 복합 조건을 활용하세요.)[/red]")
+                utils.pause()
+                continue
+
+            state['cond_choice'] = cond_choice
+            step += 1
+            continue
+
+        # ---------- 4. 조건 값 ----------
+        if step == 4:
+            _rsv_header(state)
+            res = _rsv_step_condition_value(state['cond_choice'], state['order_type'], state)
+            if res == _RSV_QUIT:
+                step = -1
+                continue
+            if res == _RSV_BACK:
+                step -= 1
+                continue
+            if res is None:
+                utils.pause()
+                continue
+            state.pop('composite_json', None)
+            state.pop('composite_labels', None)
+            state.update(res)
+            step += 1
+            continue
+
+        # ---------- 5. 주문 단가 ----------
+        if step == 5:
+            _rsv_header(state)
+            config.console.print("[dim](6/9 주문 실행 단가)[/dim]")
+            is_overseas = state['is_overseas']
+            condition_type = state['condition_type']
+            base_label = state['base_label']
+            base_price = state['base_price']
+            # 목표가 자체가 주문가로 의미 있는 조건과, 그렇지 않은 조건을 나눈다.
+            is_price_target = condition_type in ("STOP", "BREAKOUT", "LIMIT")
+
+            config.console.print("\n[cyan]◆ 주문 실행 단가 입력 (지정가 / 시장가)[/cyan]")
+            config.console.print("[dim]  - 절대 가격: 49900 (해당 가격으로 주문)[/dim]")
+            config.console.print(f"[dim]  - 퍼센트(%): -1% ({base_label} 대비 가격으로 주문)[/dim]")
+            config.console.print("[dim]  - 0 (또는 m): 시장가 — 발동 시점의 현재가에 슬리피지를 반영해 주문[/dim]")
+            if is_price_target:
+                config.console.print("[dim]  - 엔터(빈 값): [bold yellow]발동 조건(목표가)과 동일한 가격[/bold yellow]으로 자동 설정[/dim]")
+                default_hint = ""
+            else:
+                # [수정] 종전 기본값은 '등록 시점 현재가' 고정이었다. 신고가 돌파·트레일링 매수처럼
+                #  발동 시점에 가격이 이미 올라 있는 조건에서는 그 지정가에 영원히 안 붙는다.
+                #  조건은 맞았는데 체결이 안 되는 가장 흔한 경로라 기본을 시장가로 바꾼다.
+                config.console.print("[dim]  - 엔터(빈 값): [bold yellow]시장가[/bold yellow] "
+                                     "— 이 조건은 발동 시점 가격을 미리 알 수 없어 지정가를 고정하면 미체결로 남기 쉽습니다[/dim]")
+                default_hint = "0"
+
+            v = _rsv_ask("주문 단가 입력", default=default_hint)
+            if v == _RSV_QUIT:
+                step = -1
+                continue
+            if v == _RSV_BACK:
+                step -= 1
+                continue
+
+            if v.lower() == 'm':
+                v = "0"
+
+            if v == "0":
+                state['order_price'] = 0.0
+                config.console.print("[dim] -> 발동 시점의 시장가로 자동 설정[/dim]")
+            elif not v:
+                # is_price_target 인 경우에만 빈 값이 올 수 있다 (그 외는 기본값 "0")
+                state['order_price'] = state['target_price']
+                config.console.print(f"[dim] -> 발동 조건(목표가)과 동일하게 자동 설정: "
+                                     f"{_fmt_price(state['order_price'], is_overseas)}[/dim]")
+            else:
+                op = _rsv_parse_price(v, base_price, is_overseas, base_label)
+                if op is None:
+                    config.console.print("[red]주문 단가는 0보다 큰 숫자 또는 '-1%' 형식으로 입력하세요.[/red]")
+                    utils.pause()
+                    continue
+                state['order_price'] = op
+                config.console.print(f"[dim] -> 주문 단가: {_fmt_price(op, is_overseas)}"
+                                     f"{' (호가단위 보정됨)' if not is_overseas else ''}[/dim]")
+            step += 1
+            continue
+
+        # ---------- 6. 수량 ----------
+        if step == 6:
+            _rsv_header(state)
+            config.console.print("[dim](7/9 수량)[/dim]")
+            is_overseas = state['is_overseas']
+            max_qty = 0
+            if state['order_type'] == "sell":
+                max_qty = int(state['stock_info'].get('qty', 0))
+                v = _rsv_ask(f"주문 수량(주) [dim](보유 잔고: {max_qty:,}주)[/dim]", default=str(max_qty))
+            else:
+                # [추가] 매수는 상한 안내가 아예 없었다. 발동 시점 예수금이 모자라면
+                #  주문이 FAILED로 끝나므로, 등록 단계에서 현재 기준 최대 수량을 알려준다.
+                est_px = state['order_price'] or state.get('current_price') or 0
+                hint = ""
+                if est_px > 0:
+                    try:
+                        with utils.AccountContext(state['cano']):
+                            dep = api.get_deposit_balance(state['cano'], state['acnt'], skip_balance_check=True)
+                        cash = 0
+                        if dep:
+                            cash = dep.get('order_possible', 0) or dep.get('d2_deposit', 0)
+                        if cash > 0 and not is_overseas:
+                            max_qty = int((cash * 0.998) / est_px)
+                            hint = f" [dim](현 예수금 기준 최대 {max_qty:,}주)[/dim]"
+                    except Exception:
+                        hint = ""
+                v = _rsv_ask(f"주문 수량(주){hint}")
+
+            if v == _RSV_QUIT:
+                step = -1
+                continue
+            if v == _RSV_BACK:
+                step -= 1
+                continue
+
+            try:
+                qty = int(float(v.replace(',', '').replace('주', '').strip()))
+            except ValueError:
+                config.console.print("[red]수량은 숫자만 입력 가능합니다.[/red]")
+                utils.pause()
+                continue
+            if qty <= 0:
+                config.console.print("[red]수량은 1주 이상이어야 합니다.[/red]")
+                utils.pause()
+                continue
+
+            if state['order_type'] == "sell" and qty > max_qty:
+                config.console.print(f"[red]⚠️ 입력하신 수량({qty:,}주)이 보유 수량({max_qty:,}주)보다 많습니다. "
+                                     f"잔고 전량으로 자동 조정합니다.[/red]")
+                qty = max_qty
+            elif state['order_type'] == "buy" and max_qty > 0 and qty > max_qty:
+                config.console.print(f"[yellow]⚠️ 현재 예수금 기준 최대 {max_qty:,}주입니다. "
+                                     f"발동 시점에 자금이 부족하면 주문이 실패로 기록됩니다.[/yellow]")
+
+            state['qty'] = qty
+            step += 1
+            continue
+
+        # ---------- 7. 유효기간 ----------
+        if step == 7:
+            _rsv_header(state)
+            config.console.print("[dim](8/9 유효 기간)[/dim]")
+            config.console.print("\n[cyan]◆ 유효 기간 (만료일) 설정[/cyan]")
+            config.console.print("[dim]  - 1: 당일 (오늘 장 마감 전까지)[/dim]")
+            config.console.print("[dim]  - 2: 이번 주 (7일 후까지)[/dim]")
+            config.console.print("[dim]  - 3: 이번 달 (30일 후까지)[/dim]")
+            config.console.print("[dim]  - 4: 무기한 (취소할 때까지 유지)[/dim]")
+            config.console.print("[dim]  - 직접 입력: YYYYMMDD (예: 20261231)[/dim]")
+            v = _rsv_ask("유효 기간 선택 또는 입력", default="1")
+            if v == _RSV_QUIT:
+                step = -1
+                continue
+            if v == _RSV_BACK:
+                step -= 1
+                continue
+
+            expire_dt = _rsv_resolve_expire(v)
+            if expire_dt is None:
+                config.console.print("[red]유효 기간은 1~4 또는 오늘 이후의 YYYYMMDD 8자리로 입력하세요.[/red]")
+                utils.pause()
+                continue
+
+            # [추가] 장 마감 후에 '당일'을 고르면 사실상 감시 시간이 남지 않는다.
+            if v == "1" and datetime.now().strftime("%H%M") >= "1530" and not state['is_overseas']:
+                config.console.print("[yellow]⚠️ 이미 정규장이 끝난 시각입니다. '당일'은 오늘 안에 발동하지 않으면 "
+                                     "내일 만료 처리됩니다.[/yellow]")
+            state['expire_dt'] = expire_dt
+            step += 1
+            continue
+
+        # ---------- 8. 확인 ----------
+        if step == 8:
+            is_overseas = state['is_overseas']
+            cond_str = _condition_text(state['condition_type'], state.get('target_price', 0.0),
+                                       "", state.get('composite_json'),
+                                       state.get('composite_labels'), is_overseas)
+            expire_dt = state['expire_dt']
+            expire_disp = "무기한" if expire_dt == "20991231" else f"{expire_dt[:4]}-{expire_dt[4:6]}-{expire_dt[6:8]}까지"
+            op_disp = "시장가 (발동 시점 현재가 기준)" if state['order_price'] == 0 else \
+                f"{_fmt_price(state['order_price'], is_overseas)} (지정가)"
+            t_type_str = "[red]매수[/red]" if state['order_type'] == "buy" else "[blue]매도[/blue]"
+            t_type_plain = "매수" if state['order_type'] == "buy" else "매도"
+
+            cur = state.get('current_price') or 0
+            cur_line = f" 현재가: {_fmt_price(cur, is_overseas)}"
+            # [추가] 목표가까지의 거리 — 확인 화면에 현재가조차 없어 방향 실수를 눈으로도 못 잡았다.
+            tp = state.get('target_price') or 0
+            if state['condition_type'] in ("STOP", "BREAKOUT") and cur > 0 and tp > 0:
+                gap = (tp - cur) / cur * 100
+                cur_line += f"  [dim]→ 목표가까지 {gap:+.2f}%[/dim]"
+
+            est_amt = state['qty'] * (state['order_price'] or cur)
+            amt_line = f" 예상 금액: {_fmt_price(est_amt, is_overseas)}" + (" (시장가 추정)" if state['order_price'] == 0 else "")
+
+            confirm_msg = (
+                f"\n[bold white on yellow] [ 예약 {t_type_plain} 주문 최종 확인 ] [/]\n"
+                f" 계좌: {_fmt_account(state['cano'], state['acnt'])} ({state['acc_label']})\n"
+                f" 종목: {state['name']} ({state['code']})\n"
+                f"{cur_line}\n"
+                f" 조건: [bold]{state['condition_type']}[/bold] — {cond_str}\n"
+                f" 주문: {t_type_str} {state['qty']}주 @ {op_disp}\n"
+                f"{amt_line}\n"
+                f" 유효: {expire_disp}\n"
+            )
+            config.console.print(Panel(confirm_msg, expand=False))
+
+            ans = _rsv_ask("위 내용으로 예약 주문을 시스템에 등록하시겠습니까?", choices=["y", "n"], default="n")
+            if ans == _RSV_QUIT:
+                step = -1
+                continue
+            if ans == _RSV_BACK or ans == "n":
+                if ans == "n":
+                    config.console.print("\n[yellow]예약 주문 등록이 취소되었습니다.[/yellow]")
+                    return None
+                step -= 1
+                continue
+
+            db_manager.db.insert_reserved_order(
+                cano=state['cano'], acnt=state['acnt'],
+                market=("US" if is_overseas else "KR"),
+                order_type=state['order_type'], code=state['code'], name=state['name'],
+                qty=state['qty'], order_price=state['order_price'],
+                condition_type=state['condition_type'], target_price=state.get('target_price', 0.0),
+                target_time="", expire_dt=expire_dt,
+                composite_json=state.get('composite_json')
+            )
+            config.console.print()
+            config.console.print("[bold green]예약 주문이 성공적으로 등록되었습니다.[/bold green]")
+
+            api.send_telegram_message(
+                f"📝 [예약 등록] {state['name']}({state['code']})\n"
+                f"구분: {t_type_plain}\n"
+                f"조건: {state['condition_type']} ({cond_str})\n"
+                f"수량: {state['qty']}주\n"
+                f"단가: {'시장가' if state['order_price'] == 0 else _fmt_price(state['order_price'], is_overseas)}\n"
+                f"유효: {expire_disp}")
+
+            config.console.print()
+            _print_reserved_orders_table()
+            return True
+
+
+def _reserved_account_label(order):
+    """예약 주문이 걸린 계좌를 '실전/모의/자동/기타'로 표기한다."""
+    cano, acnt = order.get('cano', ''), order.get('acnt', '')
+    if cano == config.session.cano and acnt == config.session.acnt_prdt_cd:
+        return "모의" if config.session.is_simulation else "실전"
+    if (not config.session.is_simulation and config.session.auto_cano
+            and cano == config.session.auto_cano and acnt == config.session.auto_acnt_prdt_cd):
+        return "자동"
+    return "기타"
+
+
+def _reserved_distance(order, curr_price):
+    """발동까지 남은 거리를 (정렬키, 표시문자열)로 돌려준다.
+
+    [왜 필요한가] 예약 목록을 보는 이유는 '언제 발동하나, 지금 얼마나 가까운가'인데
+    종전 표에는 현재가도 거리도 없었다. 계산할 수 없는 조건(수급·상태·복합)은
+    정렬에서 뒤로 보낸다 — 없는 정보를 0으로 두면 가장 임박한 것처럼 위에 뜬다.
+    """
+    ct = order['condition_type']
+    tp = float(order.get('target_price') or 0)
+    if curr_price is None or curr_price <= 0:
+        return (10 ** 9, "-")
+
+    if ct in ('STOP', 'BREAKOUT', 'LIMIT') and tp > 0:
+        gap = (tp - curr_price) / curr_price * 100
+        return (abs(gap), f"{gap:+.2f}%")
+
+    if ct == 'TRAILING_BUY':
+        low = float(order.get('lowest_price') or 0)
+        if low > 0:
+            trigger = low * (1 + tp / 100.0)
+            gap = (trigger - curr_price) / curr_price * 100
+            return (abs(gap), f"{gap:+.2f}%")
+        return (10 ** 9, "바닥 대기")
+
+    if ct == 'TRAILING_SELL':
+        high = float(order.get('highest_price') or 0)
+        if high > 0:
+            trigger = high * (1 - tp / 100.0)
+            gap = (trigger - curr_price) / curr_price * 100
+            return (abs(gap), f"{gap:+.2f}%")
+        return (10 ** 9, "고점 대기")
+
+    return (10 ** 9, "-")
+
+
+def _load_reserved_orders_with_context(fetch_price=True):
+    """대기 예약 주문에 현재가·거리·만료 정보를 붙이고 임박한 순으로 정렬한다."""
     orders = db_manager.db.get_pending_reserved_orders()
+    if not orders:
+        return orders
+
+    prices = {}
+    if fetch_price:
+        for o in orders:
+            key = (o['code'], o.get('market') == 'US')
+            if key not in prices:
+                try:
+                    prices[key] = api.get_current_price(o['code'], key[1])
+                except Exception:
+                    prices[key] = 0
+
+    today_str = datetime.now().strftime("%Y%m%d")
+    for o in orders:
+        curr = prices.get((o['code'], o.get('market') == 'US'), 0)
+        o['_curr_price'] = curr
+        o['_sort_key'], o['_gap_str'] = _reserved_distance(o, curr)
+        exp = o.get('expire_dt') or "20991231"
+        o['_expire_soon'] = (exp != "20991231" and exp <= today_str)
+
+    orders.sort(key=lambda x: (not x['_expire_soon'], x['_sort_key'], x['id']))
+    return orders
+
+
+def _print_reserved_orders_table(orders=None, fetch_price=True):
+    """예약 주문 대기 목록을 출력하고 주문 목록을 반환합니다.
+
+    발동까지의 거리를 함께 보여주고 임박한 순으로 정렬한다. 계좌 컬럼은 여러
+    계좌에 예약이 걸려 있을 때만 띄운다 — 한 계좌만 쓰는 화면에서 계좌번호와
+    계좌구분이 늘 두 칸을 먹으면 좁은 터미널에서 줄이 접힌다.
+    """
+    if orders is None:
+        orders = _load_reserved_orders_with_context(fetch_price=fetch_price)
     if not orders:
         config.console.print("[yellow]현재 대기 중인 예약 주문이 없습니다.[/yellow]")
         return orders
-        
-    table = Table(title="예약 주문 대기 목록", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+
+    multi_account = len({(o.get('cano'), o.get('acnt')) for o in orders}) > 1
+
+    table = Table(title=f"예약 주문 대기 목록 ({len(orders)}건)", box=box.HORIZONTALS,
+                  header_style="dim", border_style="dim")
     table.add_column("ID", justify="center", style="cyan")
-    table.add_column("계좌번호", justify="center", style="dim")
-    table.add_column("계좌구분", justify="center")
-    table.add_column("종목명", justify="left")
-    table.add_column("코드", justify="center", style="dim")
+    table.add_column("종목", justify="left")
     table.add_column("구분", justify="center")
-    table.add_column("조건", justify="center")
-    table.add_column("주문(수량@지정가)", justify="right")
-    table.add_column("등록일시", justify="center", style="dim")
-    table.add_column("유효기간", justify="center")
-    
+    table.add_column("발동 조건", justify="left")
+    table.add_column("현재가", justify="right")
+    table.add_column("거리", justify="right")
+    table.add_column("주문", justify="right")
+    table.add_column("유효", justify="center")
+    if multi_account:
+        table.add_column("계좌", justify="center", style="dim")
+
     for o in orders:
         is_ovs = (o.get('market') == 'US')
-        
-        cano = o.get('cano', '')
-        acnt = o.get('acnt', '')
-        
-        acc_label = "기타"
-        if config.session.is_simulation:
-            if cano == config.session.cano and acnt == config.session.acnt_prdt_cd:
-                acc_label = "[bold yellow]모의[/bold yellow]"
-        else:
-            if cano == config.session.cano and acnt == config.session.acnt_prdt_cd:
-                acc_label = "[bold yellow]실전[/bold yellow]"
-            elif config.session.auto_cano and cano == config.session.auto_cano and acnt == config.session.auto_acnt_prdt_cd:
-                acc_label = "[bold orange3]자동[/bold orange3]"
-                
-        if o['condition_type'] == 'TIME':
-            tt = o['target_time']
-            if len(tt) >= 12: t_str = f"{tt[:4]}-{tt[4:6]}-{tt[6:8]} {tt[8:10]}:{tt[10:12]}"
-            elif len(tt) == 4: t_str = f"{tt[:2]}:{tt[2:4]}"
-            else: t_str = tt
-        else:
-            if 'SCORE' in o['condition_type']:
-                t_str = f"{o['target_price']}점 {'이상' if 'UP' in o['condition_type'] else '이하'}"
-            elif 'RSI' in o['condition_type']:
-                t_str = f"RSI {o['target_price']} {'이상' if 'UP' in o['condition_type'] else '이하'}"
-            elif 'EMA' in o['condition_type']:
-                t_str = f"EMA {int(o['target_price'])} {'돌파' if 'UP' in o['condition_type'] else '이탈'}"
-            elif o['condition_type'] == 'TRAILING_BUY':
-                t_str = f"바닥 대비 {o['target_price']}% 반등"
-            elif o['condition_type'] == 'TRAILING_SELL':
-                t_str = f"고점 대비 {o['target_price']}% 하락"
-            elif o['condition_type'] == 'SMART_MONEY':
-                t_str = "외국인/기관 순매수 전환"
-            elif o['condition_type'] == 'NEW_HIGH':
-                t_str = "사상 최고가 경신" if o['target_price'] == 0 else "52주 신고가 경신"
-            elif o['condition_type'].startswith('STATE_'):
-                t_str = {'STATE_STRONGBUY': '강매수 진입', 'STATE_BUY': '매수 진입', 'STATE_MR': '역매수 진입'}.get(o['condition_type'], o['condition_type'])
-            elif o['condition_type'] == 'COMPOSITE':
-                t_str = _composite_summary(o.get('composite_json'))
-            else:
-                if is_ovs:
-                    t_str = f"${o['target_price']:,.2f}"
-                else:
-                    t_str = f"{int(o['target_price']):,}원"
-                
-        cond_str = f"{o['condition_type'].replace('_UP','').replace('_DOWN','')} ({t_str})"
-        
-        if o['order_price'] == 0:
-            op_disp = "시장가"
-        else:
-            op_disp = f"${o['order_price']:,.2f}" if is_ovs else f"{int(o['order_price']):,}원"
-            
-        ord_str = f"{o['qty']}주 @ {op_disp}"
+        cond_str = _condition_text(o['condition_type'], o.get('target_price', 0),
+                                   o.get('target_time', ''), o.get('composite_json'),
+                                   is_overseas=is_ovs)
+        op_disp = "시장가" if o['order_price'] == 0 else _fmt_price(o['order_price'], is_ovs)
         t_type = "[red]매수[/]" if o['order_type'] == 'buy' else "[blue]매도[/]"
-        acc_str = f"{cano}-{acnt}"
-        
+
+        curr = o.get('_curr_price') or 0
+        curr_str = _fmt_price(curr, is_ovs) if curr > 0 else "[dim]-[/dim]"
+
+        gap = o.get('_gap_str', '-')
+        if gap not in ('-',) and gap.endswith('%'):
+            try:
+                gap_col = "bold yellow" if abs(float(gap.rstrip('%'))) <= 2.0 else "dim"
+            except ValueError:
+                gap_col = "dim"
+            gap_str = f"[{gap_col}]{gap}[/{gap_col}]"
+        else:
+            gap_str = f"[dim]{gap}[/dim]"
+
+        exp = o.get('expire_dt') or "20991231"
+        if exp == "20991231":
+            exp_str = "[dim]무기한[/dim]"
+        elif o.get('_expire_soon'):
+            exp_str = f"[bold red]{exp[4:6]}-{exp[6:8]} ⚠[/bold red]"
+        else:
+            exp_str = f"{exp[4:6]}-{exp[6:8]}"
+
+        row = [str(o['id']), f"{o['name']}\n[dim]{o['code']}[/dim]", t_type,
+               f"{o['condition_type'].replace('_UP', '').replace('_DOWN', '')}\n[dim]{cond_str}[/dim]",
+               curr_str, gap_str, f"{o['qty']}주\n[dim]@{op_disp}[/dim]", exp_str]
+        if multi_account:
+            row.append(f"{_reserved_account_label(o)}\n[dim]{o.get('cano', '')}[/dim]")
+        table.add_row(*row)
+
+    config.console.print(table)
+    config.console.print("[dim]※ 거리 = 현재가에서 발동까지 남은 폭 · ⚠ = 오늘 만료 · "
+                         "계산 불가 조건(수급·상태·복합)은 '-'[/dim]")
+    return orders
+
+
+def _cancel_reserved_orders(orders, cancel_ids):
+    """지정한 ID들의 예약 주문을 취소하고 취소된 ID 목록을 반환한다."""
+    canceled = []
+    for cid in cancel_ids:
+        target = next((o for o in orders if str(o['id']) == str(cid)), None)
+        if not target:
+            continue
+        db_manager.db.update_reserved_order_status(int(cid), 'CANCELED')
+        canceled.append(str(cid))
+
+        t_type = "매수" if target['order_type'] == 'buy' else "매도"
+        cond_str = target['condition_type']
+        api.send_telegram_message(
+            f"🗑️ [예약 수동 취소] {target['name']}({target['code']})\n"
+            f"사용자에 의해 대기 중이던 예약 {t_type} 주문(ID: {cid})이 취소되었습니다.\n조건: {cond_str}")
+        db_manager.db.insert_trade(
+            f"{t_type}취소(예약)", target['code'], target['name'], target['qty'],
+            target.get('order_price', 0), f"RES_CAN_{cid}",
+            order_status="취소", reason=f"수동 취소 (조건: {cond_str})")
+    return canceled
+
+
+def _prompt_reserved_ids(orders, action_label):
+    """작업 대상 예약 주문 ID를 입력받아 리스트로 돌려준다 (취소 시 None)."""
+    valid = {str(o['id']) for o in orders}
+    raw = Prompt.ask(f"{action_label}할 예약 주문 ID [dim](다중: 1,3 / 전체: 0 / 취소: Enter)[/dim]",
+                     default="")
+    if not raw or raw.lower() in ('b', 'q'):
+        return None
+    if raw.strip() == "0":
+        return [str(o['id']) for o in orders]
+
+    picked, unknown = [], []
+    for token in raw.split(','):
+        t = token.strip()
+        if not t:
+            continue
+        if t in valid:
+            if t not in picked:
+                picked.append(t)
+        else:
+            unknown.append(t)
+    # [추가] 종전에는 없는 ID를 조용히 버렸다. 3건을 지우려다 1건만 지워진 것을 모른 채 나갔다.
+    if unknown:
+        config.console.print(f"[yellow]목록에 없는 ID는 무시했습니다: {', '.join(unknown)}[/yellow]")
+    return picked or None
+
+
+def _edit_reserved_order(order):
+    """대기 중인 예약 주문의 수량·주문단가·목표가·유효기간을 수정한다.
+
+    조건 종류와 종목은 바꾸지 않는다 — 트레일링 최저/최고가 같은 누적 상태가
+    그대로 남아 등록한 적 없는 기준으로 발동하기 때문. 그 경우는 취소 후 재등록이 맞다.
+    """
+    is_ovs = (order.get('market') == 'US')
+    curr = order.get('_curr_price') or api.get_current_price(order['code'], is_ovs)
+    base = curr if curr > 0 else float(order.get('order_price') or 0)
+
+    ct = order['condition_type']
+    editable_target = ct in ('STOP', 'BREAKOUT', 'LIMIT')
+
+    while True:
+        config.console.print()
+        config.console.print(Panel(
+            f"[bold]ID {order['id']} · {order['name']}({order['code']})[/bold]\n"
+            f"조건: {ct} — {_condition_text(ct, order.get('target_price', 0), order.get('target_time', ''), order.get('composite_json'), is_overseas=is_ovs)}\n"
+            f"주문: {'매수' if order['order_type'] == 'buy' else '매도'} {order['qty']}주 @ "
+            f"{'시장가' if order['order_price'] == 0 else _fmt_price(order['order_price'], is_ovs)}\n"
+            f"현재가: {_fmt_price(curr, is_ovs) if curr > 0 else '-'}\n"
+            f"유효: {'무기한' if (order.get('expire_dt') or '20991231') == '20991231' else order['expire_dt']}",
+            title="예약 주문 수정", border_style="cyan", expand=False))
+
+        items = [("1", "수량 변경", "Quantity")]
+        if editable_target:
+            items.append(("2", "발동 목표가 변경", "Target Price"))
+        items.append(("3", "주문 단가 변경", "Order Price"))
+        items.append(("4", "유효 기간 변경", "Expiry"))
+        if not editable_target:
+            config.console.print("[dim]※ 이 조건은 목표가가 없어 수량·단가·유효기간만 바꿀 수 있습니다. "
+                                 "조건 자체를 바꾸려면 취소 후 다시 등록하세요.[/dim]")
+
+        choice = utils.show_menu(f"수정할 항목 (ID {order['id']})", items, default_choice="1")
+        if choice.lower() in ('b', 'q'):
+            return False
+
+        if choice == "1":
+            v = Prompt.ask("새 수량(주)", default=str(order['qty']))
+            try:
+                qty = int(float(v.replace(',', '').replace('주', '').strip()))
+            except ValueError:
+                config.console.print("[red]수량은 숫자만 입력 가능합니다.[/red]"); continue
+            if qty <= 0:
+                config.console.print("[red]수량은 1주 이상이어야 합니다.[/red]"); continue
+            if db_manager.db.update_reserved_order_fields(order['id'], qty=qty):
+                order['qty'] = qty
+                config.console.print(f"[green]✓ 수량을 {qty:,}주로 변경했습니다.[/green]")
+            else:
+                config.console.print("[red]변경에 실패했습니다 (이미 발동·취소되었을 수 있습니다).[/red]")
+                return True
+
+        elif choice == "2" and editable_target:
+            v = Prompt.ask(f"새 목표가 [dim](절대가 또는 현재가 대비 %)[/dim]",
+                           default=str(int(order['target_price']) if not is_ovs else order['target_price']))
+            tp = _rsv_parse_price(v, base, is_ovs)
+            if tp is None:
+                config.console.print("[red]목표가는 0보다 큰 숫자 또는 '+5%' 형식으로 입력하세요.[/red]"); continue
+            warn = _rsv_immediate_trigger(ct, tp, curr)
+            if warn:
+                config.console.print(f"[bold red]⚠️ {warn} — 저장 즉시 발동합니다.[/bold red]")
+                if Prompt.ask("그래도 저장하시겠습니까?", choices=["y", "n"], default="n") != "y":
+                    continue
+            if db_manager.db.update_reserved_order_fields(order['id'], target_price=tp):
+                order['target_price'] = tp
+                config.console.print(f"[green]✓ 목표가를 {_fmt_price(tp, is_ovs)}로 변경했습니다.[/green]")
+            else:
+                config.console.print("[red]변경에 실패했습니다.[/red]")
+                return True
+
+        elif choice == "3":
+            v = Prompt.ask("새 주문 단가 [dim](0: 시장가 / 절대가 / 현재가 대비 %)[/dim]",
+                           default="0" if order['order_price'] == 0 else str(order['order_price']))
+            if v.strip() in ("0", "m", "M"):
+                op = 0.0
+            else:
+                op = _rsv_parse_price(v, base, is_ovs)
+                if op is None:
+                    config.console.print("[red]단가는 0(시장가) 또는 0보다 큰 숫자로 입력하세요.[/red]"); continue
+            if db_manager.db.update_reserved_order_fields(order['id'], order_price=op):
+                order['order_price'] = op
+                config.console.print(f"[green]✓ 주문 단가를 "
+                                     f"{'시장가' if op == 0 else _fmt_price(op, is_ovs)}로 변경했습니다.[/green]")
+            else:
+                config.console.print("[red]변경에 실패했습니다.[/red]")
+                return True
+
+        elif choice == "4":
+            config.console.print("[dim]  1: 당일 / 2: 이번 주 / 3: 이번 달 / 4: 무기한 / YYYYMMDD 직접 입력[/dim]")
+            v = Prompt.ask("새 유효 기간", default="4")
+            exp = _rsv_resolve_expire(v.strip())
+            if exp is None:
+                config.console.print("[red]1~4 또는 오늘 이후의 YYYYMMDD 8자리로 입력하세요.[/red]"); continue
+            if db_manager.db.update_reserved_order_fields(order['id'], expire_dt=exp):
+                order['expire_dt'] = exp
+                config.console.print(f"[green]✓ 유효 기간을 "
+                                     f"{'무기한' if exp == '20991231' else exp}으로 변경했습니다.[/green]")
+            else:
+                config.console.print("[red]변경에 실패했습니다.[/red]")
+                return True
+
+
+def manage_reserved_orders():
+    """예약 주문 관리 메뉴 (상세·수정·취소).
+
+    [변경] 종전에는 ID를 입력하면 확인 없이 곧바로 취소됐고, '0'(전체 취소)마저
+    되묻지 않았다. 이 시스템의 다른 파괴적 동작(주문 전송·메모 삭제·9-5 삭제)에는
+    모두 확인이 있다. 또한 '관리'라는 이름과 달리 수정 수단이 없어 값 하나를
+    바꾸려면 아홉 단계를 다시 입력해야 했다.
+    """
+    while True:
+        utils.clear_screen()
+        config.console.print()
+        utils.print_breadcrumb()
+        config.console.print("[bold green]예약 주문 관리[/bold green]")
+        config.console.print()
+
+        orders = _load_reserved_orders_with_context()
+        if not orders:
+            config.console.print("[yellow]현재 대기 중인 예약 주문이 없습니다.[/yellow]")
+            config.console.print("[dim]새 예약은 [8]-4 예약 주문 등록에서 만들 수 있습니다.[/dim]")
+            time.sleep(1.2)
+            return None
+        _print_reserved_orders_table(orders)
+
+        config.console.print()
+        act = Prompt.ask("작업 선택 (0: 상세, 1: 수정, 2: 취소) [dim](이전: b, 메인: q)[/dim]",
+                         choices=["0", "1", "2", "b", "q"], default="0")
+        if act.lower() in ('b', 'q'):
+            return False
+
+        if act == "0":
+            ids = _prompt_reserved_ids(orders, "상세를 볼")
+            if not ids:
+                continue
+            for cid in ids:
+                o = next((x for x in orders if str(x['id']) == cid), None)
+                if not o:
+                    continue
+                is_ovs = (o.get('market') == 'US')
+                config.console.print(Panel(
+                    f"[bold]{o['name']} ({o['code']})[/bold]  "
+                    f"{'[red]매수[/red]' if o['order_type'] == 'buy' else '[blue]매도[/blue]'}\n"
+                    f"계좌: {o.get('cano', '')}-{o.get('acnt', '')} ({_reserved_account_label(o)})\n"
+                    f"조건: {o['condition_type']} — "
+                    f"{_condition_text(o['condition_type'], o.get('target_price', 0), o.get('target_time', ''), o.get('composite_json'), is_overseas=is_ovs)}\n"
+                    f"현재가: {_fmt_price(o.get('_curr_price'), is_ovs) if (o.get('_curr_price') or 0) > 0 else '-'}"
+                    f"  (거리 {o.get('_gap_str', '-')})\n"
+                    f"주문: {o['qty']}주 @ "
+                    f"{'시장가' if o['order_price'] == 0 else _fmt_price(o['order_price'], is_ovs)}\n"
+                    f"추적: 최저 {_fmt_price(o.get('lowest_price') or 0, is_ovs)} / "
+                    f"최고 {_fmt_price(o.get('highest_price') or 0, is_ovs)}\n"
+                    f"등록: {o.get('created_at', '-')} (UTC)\n"
+                    f"유효: {'무기한' if (o.get('expire_dt') or '20991231') == '20991231' else o['expire_dt']}",
+                    title=f"예약 주문 ID {o['id']}", border_style="green", expand=False))
+            utils.pause()
+            continue
+
+        if act == "1":
+            ids = _prompt_reserved_ids(orders, "수정할")
+            if not ids:
+                continue
+            if len(ids) > 1:
+                config.console.print("[yellow]수정은 한 번에 한 건만 가능합니다. 첫 번째 ID로 진행합니다.[/yellow]")
+            target = next((x for x in orders if str(x['id']) == ids[0]), None)
+            if target:
+                _edit_reserved_order(target)
+                utils.pause()
+            continue
+
+        # act == "2" — 취소
+        ids = _prompt_reserved_ids(orders, "취소할")
+        if not ids:
+            continue
+
+        targets = [o for o in orders if str(o['id']) in ids]
+        config.console.print()
+        config.console.print(f"[bold]다음 {len(targets)}건을 취소합니다.[/bold]")
+        for o in targets:
+            is_ovs = (o.get('market') == 'US')
+            config.console.print(
+                f"  · ID {o['id']} {o['name']}({o['code']}) "
+                f"{'매수' if o['order_type'] == 'buy' else '매도'} {o['qty']}주 — "
+                f"{_condition_text(o['condition_type'], o.get('target_price', 0), o.get('target_time', ''), o.get('composite_json'), is_overseas=is_ovs)}")
+        config.console.print()
+        if Prompt.ask("정말 취소하시겠습니까?", choices=["y", "n"], default="n") != "y":
+            config.console.print("[yellow]취소하지 않았습니다.[/yellow]")
+            time.sleep(1)
+            continue
+
+        canceled = _cancel_reserved_orders(orders, ids)
+        config.console.print()
+        if canceled:
+            config.console.print(f"[bold green]예약 주문(ID: {', '.join(canceled)})이 취소되었습니다.[/bold green]")
+        else:
+            config.console.print("[yellow]취소할 수 있는 유효한 예약 주문 ID가 없습니다.[/yellow]")
+        time.sleep(1.2)
+
+
+def get_reserved_orders_summary():
+    """텔레그램 전송용 예약 주문 현황 요약 문자열 생성"""
+    orders = db_manager.db.get_pending_reserved_orders()
+    if not orders:
+        return "📭 현재 대기 중인 예약 주문이 없습니다."
+
+    msg = f"⏳ [대기 중인 예약 주문 현황] (총 {len(orders)}건)\n\n"
+    for o in orders:
+        is_ovs = (o.get('market') == 'US')
+        acc_label = _reserved_account_label(o)
+        cond_str = (f"{o['condition_type'].replace('_UP', '').replace('_DOWN', '')} "
+                    f"({_condition_text(o['condition_type'], o.get('target_price', 0), o.get('target_time', ''), o.get('composite_json'), is_overseas=is_ovs)})")
+        op_disp = "시장가" if o['order_price'] == 0 else _fmt_price(o['order_price'], is_ovs)
+        ord_str = f"{o['qty']}주 @ {op_disp}"
+        t_type = "🔴 매수" if o['order_type'] == 'buy' else "🔵 매도"
+
         exp = o.get('expire_dt', '20991231')
         exp_str = "무기한" if not exp or exp == "20991231" else f"{exp[:4]}-{exp[4:6]}-{exp[6:8]}"
-        
+
         created_at = o.get('created_at', '')
         created_str = "-"
         if created_at:
@@ -2144,140 +2782,14 @@ def _print_reserved_orders_table():
                 created_str = dt.strftime("%m-%d %H:%M")
             except Exception:
                 created_str = created_at[5:16] if len(created_at) >= 16 else "-"
-        table.add_row(str(o['id']), acc_str, acc_label, o['name'], o['code'], t_type, cond_str, ord_str, created_str, exp_str)
-        
-    config.console.print(table)
-    return orders
-            
-def manage_reserved_orders():
-    """예약 주문 관리 메뉴"""
-    while True:
-        config.console.print("\n[bold green]예약 주문 관리 내역[/bold green]")
-        config.console.print()
-        orders = _print_reserved_orders_table()
-        if not orders:
-            return None
-            
-        config.console.print()
-        cancel_input = Prompt.ask("취소할 예약 주문 ID 선택 [dim](다중: 1,3 / 전체: 0 / 이전: b, 메인: q, 취소: Enter)[/dim]", default="")
-        if not cancel_input or cancel_input.lower() in ['b', 'q']:
-            if cancel_input and cancel_input.lower() in ['b', 'q']:
-                config.console.print("\n[yellow]입력이 취소되었습니다.[/yellow]")
-                return None
-            return False
-        
-        if cancel_input.strip() == "0":
-            cancel_ids = [str(o['id']) for o in orders]
-        else:
-            cancel_ids = [cid.strip() for cid in cancel_input.split(',') if cid.strip().isdigit()]
-        
-        if cancel_ids:
-            canceled_list = []
-            for cid in cancel_ids:
-                target_order = next((o for o in orders if str(o['id']) == cid), None)
-                
-                if target_order:
-                    db_manager.db.update_reserved_order_status(int(cid), 'CANCELED')
-                    canceled_list.append(cid)
-            
-                    t_type = "매수" if target_order['order_type'] == 'buy' else "매도"
-                    cond_str = target_order['condition_type']
-                    api.send_telegram_message(f"🗑️ [예약 수동 취소] {target_order['name']}({target_order['code']})\n사용자에 의해 대기 중이던 예약 {t_type} 주문(ID: {cid})이 취소되었습니다.\n조건: {cond_str}")
-                    
-                    # [추가] 수동 취소 내역 거래내역에 기록
-                    db_manager.db.insert_trade(
-                        f"{t_type}취소(예약)", target_order['code'], target_order['name'], target_order['qty'], 
-                        target_order.get('order_price', 0), f"RES_CAN_{cid}", 
-                        order_status="취소", reason=f"수동 취소 (조건: {cond_str})"
-                    )
-                    
-            config.console.print()
-            if canceled_list:
-                config.console.print(f"[bold green]예약 주문(ID: {', '.join(canceled_list)})이 취소되었습니다.[/bold green]")
-            else:
-                config.console.print("[yellow]취소할 수 있는 유효한 예약 주문 ID가 없습니다.[/yellow]")
 
-def get_reserved_orders_summary():
-    """텔레그램 전송용 예약 주문 현황 요약 문자열 생성"""
-    orders = db_manager.db.get_pending_reserved_orders()
-    if not orders:
-        return "📭 현재 대기 중인 예약 주문이 없습니다."
-        
-    msg = f"⏳ [대기 중인 예약 주문 현황] (총 {len(orders)}건)\n\n"
-    for o in orders:
-        is_ovs = (o.get('market') == 'US')
-        
-        cano = o.get('cano', '')
-        acnt = o.get('acnt', '')
-        
-        acc_label = "기타"
-        if config.session.is_simulation:
-            if cano == config.session.cano and acnt == config.session.acnt_prdt_cd:
-                acc_label = "모의"
-        else:
-            if cano == config.session.cano and acnt == config.session.acnt_prdt_cd:
-                acc_label = "실전"
-            elif config.session.auto_cano and cano == config.session.auto_cano and acnt == config.session.auto_acnt_prdt_cd:
-                acc_label = "자동"
-                
-        if o['condition_type'] == 'TIME':
-            tt = o['target_time']
-            if len(tt) >= 12: t_str = f"{tt[:4]}-{tt[4:6]}-{tt[6:8]} {tt[8:10]}:{tt[10:12]}"
-            elif len(tt) == 4: t_str = f"{tt[:2]}:{tt[2:4]}"
-            else: t_str = tt
-        else:
-            if 'SCORE' in o['condition_type']:
-                t_str = f"{o['target_price']}점 {'이상' if 'UP' in o['condition_type'] else '이하'}"
-            elif 'RSI' in o['condition_type']:
-                t_str = f"RSI {o['target_price']} {'이상' if 'UP' in o['condition_type'] else '이하'}"
-            elif 'EMA' in o['condition_type']:
-                t_str = f"EMA {int(o['target_price'])} {'돌파' if 'UP' in o['condition_type'] else '이탈'}"
-            elif o['condition_type'] == 'TRAILING_BUY':
-                t_str = f"바닥 대비 {o['target_price']}% 반등"
-            elif o['condition_type'] == 'TRAILING_SELL':
-                t_str = f"고점 대비 {o['target_price']}% 하락"
-            elif o['condition_type'] == 'SMART_MONEY':
-                t_str = "외국인/기관 순매수 전환"
-            elif o['condition_type'] == 'NEW_HIGH':
-                t_str = "사상 최고가 경신" if o['target_price'] == 0 else "52주 신고가 경신"
-            elif o['condition_type'].startswith('STATE_'):
-                t_str = {'STATE_STRONGBUY': '강매수 진입', 'STATE_BUY': '매수 진입', 'STATE_MR': '역매수 진입'}.get(o['condition_type'], o['condition_type'])
-            elif o['condition_type'] == 'COMPOSITE':
-                t_str = _composite_summary(o.get('composite_json'))
-            else:
-                if is_ovs:
-                    t_str = f"${o['target_price']:,.2f}"
-                else:
-                    t_str = f"{int(o['target_price']):,}원"
-            
-        cond_str = f"{o['condition_type'].replace('_UP','').replace('_DOWN','')} ({t_str})"
-        
-        if o['order_price'] == 0:
-            op_disp = "시장가"
-        else:
-            op_disp = f"${o['order_price']:,.2f}" if is_ovs else f"{int(o['order_price']):,}원"
-            
-        ord_str = f"{o['qty']}주 @ {op_disp}"
-        t_type = "🔴 매수" if o['order_type'] == 'buy' else "🔵 매도"
-        
-        exp = o.get('expire_dt', '20991231')
-        exp_str = "무기한" if not exp or exp == "20991231" else f"{exp[:4]}-{exp[4:6]}-{exp[6:8]}"
-        
-        created_at = o.get('created_at', '')
-        created_str = "-"
-        if created_at:
-            try:
-                dt = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S") + timedelta(hours=9)
-                created_str = dt.strftime("%m-%d %H:%M")
-            except Exception:
-                created_str = created_at[5:16] if len(created_at) >= 16 else "-"
-        
         msg += f"{o['name']}({o['code']}) [{acc_label}]\n"
         msg += f"  {t_type} | {ord_str}\n"
         msg += f"  조건: {cond_str}\n"
         msg += f"  등록: {created_str} | 유효: {exp_str} (ID: {o['id']})\n\n"
-        
+
     return msg.strip()
+
 
 def order_menu():
     """매수/매도 주문 선택 메뉴"""

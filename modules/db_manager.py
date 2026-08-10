@@ -1422,6 +1422,32 @@ class DBManager:
             else: cursor.execute("UPDATE reserved_orders SET status=? WHERE id=?", (status, order_id))
             conn.commit()
             
+    def update_reserved_order_fields(self, order_id, **fields):
+        """대기 중인 예약 주문의 편집 가능한 항목만 갱신한다 (PENDING 한정).
+
+        [왜 화이트리스트인가] 조건 종류(condition_type)나 종목을 여기서 바꾸면
+        누적 상태(lowest_price/highest_price)의 의미가 달라진다 — 트레일링 최저점을
+        그대로 둔 채 조건만 바꾸면 등록한 적 없는 기준으로 발동한다.
+        조건 자체를 바꾸려면 취소 후 재등록하는 것이 맞다.
+        """
+        allowed = {'qty', 'order_price', 'target_price', 'expire_dt'}
+        sets, vals = [], []
+        for k, v in fields.items():
+            if k in allowed:
+                sets.append(f"{k}=?")
+                vals.append(v)
+        if not sets:
+            return False
+        vals.append(order_id)
+        with self.lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                f"UPDATE reserved_orders SET {', '.join(sets)} WHERE id=? AND status='PENDING'",
+                tuple(vals))
+            conn.commit()
+            return cursor.rowcount > 0
+
     def update_reserved_order_lowest(self, order_id, price):
         """트레일링 매수용 최저점 추적 업데이트"""
         with self.lock:
