@@ -16,13 +16,33 @@ def trader():
     return AutoTrader()
 
 @pytest.fixture
-def nxt_hours(monkeypatch):
+def nxt_hours():
     """자동매매 운용시간을 NXT 연장까지 넓힌 설정(0800~2000).
 
     기본값은 KRX 정규장(0900~1530)이므로, NXT 시간대 동작을 검증하려면 명시적으로 넓혀야 한다.
+
+    [왜 monkeypatch 를 쓰지 않는가] monkeypatch.setattr(config.settings, ...) 은 **설정 당시의
+    객체**를 기억했다가 그 객체에 되돌린다. 그런데 config.reset_all_settings() 는 settings 를
+    새 객체로 **교체**하므로(참조 오염 방지가 목적), 그 사이 교체가 일어나면 복원 대상과 실제
+    참조 대상이 갈린다 — 0800 이 아무도 안 보는 옛 객체로 되돌아가고 현재 객체에는 남는다.
+    그러면 기본값(0900)을 검사하는 다른 테스트가 깨진다.
+
+    teardown 시점에 config.settings 를 **다시 읽어** 되돌리면 교체 여부와 무관하게 안전하다.
+
+    [관측 2026-08-10] 전체 스위트 5회 중 1회, test_market_open_krx_default 와
+    test_after_hours_krx_close::test_auto_trade_window_defaults_to_krx_session 이 함께 실패했다
+    (둘 다 기본 운용시간을 검사한다). 재현에는 실패했고 위 경로가 유일하게 성립하는 설명이라
+    원인 확정 없이 이 부류를 없애는 쪽을 택했다. 같은 패턴을 쓰는 픽스처가 더 있다
+    (test_journal_sync·test_market_filter_regime_gate 등) — 같은 증상이 보이면 여기부터 의심할 것.
     """
-    monkeypatch.setattr(config.settings, 'SYSTEM_TRADING_START_TIME', "0800")
-    monkeypatch.setattr(config.settings, 'SYSTEM_TRADING_END_TIME', "2000")
+    saved = (config.settings.SYSTEM_TRADING_START_TIME,
+             config.settings.SYSTEM_TRADING_END_TIME)
+    config.settings.SYSTEM_TRADING_START_TIME = "0800"
+    config.settings.SYSTEM_TRADING_END_TIME = "2000"
+    yield
+    # settings 객체가 교체됐더라도 '지금' 객체에 되돌린다.
+    (config.settings.SYSTEM_TRADING_START_TIME,
+     config.settings.SYSTEM_TRADING_END_TIME) = saved
 
 
 def test_market_open_krx_default(trader, monkeypatch):
