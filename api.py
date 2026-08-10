@@ -2237,7 +2237,8 @@ class ThrottledSession(requests.Session):
                     time.sleep(wait_time)
 
             if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"] and (is_sim_server or is_real_server):
-                config.console.print(f"[dim cyan][TRACE] REQ ({server_type}) TPS:{current_tps:.1f} | {method} {url}[/dim cyan]")
+                # [보안] 화면 출력도 마스킹한다. 파일 로그만 가리면 SSH·화면 공유로 샌다.
+                config.console.print(f"[dim cyan][TRACE] REQ ({server_type}) TPS:{current_tps:.1f} | {method} {config.mask_sensitive(url)}[/dim cyan]")
                 if config.SCREEN_DEBUG_LEVEL == "DEBUG":
                     if kwargs.get('params'): config.console.print(f"[dim cyan]  > Params: {kwargs['params']}[/dim cyan]")
                     if kwargs.get('data'): config.console.print(f"[dim cyan]  > Body Data: {kwargs['data']}[/dim cyan]")
@@ -2265,7 +2266,7 @@ class ThrottledSession(requests.Session):
                         logger.debug(f"API response logging json parse error: {e}")
                     
                     url_tail = url.split('/')[-1].split('?')[0]
-                    config.console.print(f"[dim magenta][TRACE] RES ({server_type}) Status:{response.status_code} RT_CD:{rt_cd} MSG_CD:{msg_cd} ({desc}) | {url_tail}[/dim magenta]")
+                    config.console.print(f"[dim magenta][TRACE] RES ({server_type}) Status:{response.status_code} RT_CD:{rt_cd} MSG_CD:{msg_cd} ({desc}) | {config.mask_sensitive(url_tail)}[/dim magenta]")
                     
                     if config.SCREEN_DEBUG_LEVEL == "DEBUG" and res_data:
                         config.console.print(f"[dim magenta]  > Response Data: {json.dumps(res_data, ensure_ascii=False, indent=2)}[/dim magenta]")

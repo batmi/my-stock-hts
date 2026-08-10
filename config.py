@@ -1672,6 +1672,72 @@ def _log_namer(name):
         return name
 
 # [추가] 커스텀 로그 핸들러 클래스 (커스텀 Namer 사용 시 자동 삭제 버그 수정)
+# ==========================================================
+# [보안] 로그에 남는 민감정보 마스킹
+# ==========================================================
+#  [왜 필요한가] 예외 메시지는 URL·요청 본문을 통째로 물고 온다. requests 의
+#   ConnectionError/Timeout 문자열이 대표적이다. 디버그 출력 쪽에는 이미 헤더 마스킹이
+#   있었지만(call_api), 그 경로를 지나지 않는 예외 문자열은 그대로 파일에 남았다.
+#
+#  [실측 2026-08-10 / 30일치 로그] KIS 앱키·시크릿·토큰은 0건(마스킹이 동작 중).
+#   반면 DART 인증키 4건, 계좌번호 11건이 평문이었다 — DART 는 인증키를 쿼리스트링에
+#   싣고, KIS 조회 URL 은 CANO 를 쿼리로 보내기 때문이다.
+#   로그를 다른 기계로 옮기거나 진단용으로 공유하면 그대로 따라 나간다.
+#
+#  [설계] 로깅 계층(Filter)에 둔다. 호출부마다 가리면 새 호출부가 생길 때마다 빠진다 —
+#   실제로 마스킹이 있었는데도 예외 경로에서 새어나온 것이 그 증거다.
+#   계좌번호는 뒤 4자리를 남긴다. 어느 계좌인지 구분하지 못하면 사후 추적이 안 된다.
+
+_SENSITIVE_PATTERNS = [
+    # 쿼리스트링 — 인증키·비밀키는 통째로 가린다
+    (re.compile(r'((?:crtfc_key|appkey|appsecret|app_key|app_secret|secret|api_key|token)=)[^&\s"\')]+',
+                re.IGNORECASE), r'\1***MASKED***'),
+    # Authorization 헤더 값
+    (re.compile(r'(Bearer\s+)[A-Za-z0-9._\-]+'), r'\1***MASKED***'),
+    # 계좌번호 — 쿼리스트링 형태. 뒤 4자리만 남긴다
+    (re.compile(r'(CANO=)\d+(\d{4})', re.IGNORECASE), r'\1****\2'),
+    # 계좌번호 — JSON 본문 형태
+    (re.compile(r'("CANO"\s*:\s*")\d+(\d{4})"'), r'\1****\2"'),
+]
+
+# 정규식을 돌리기 전 값싼 사전 검사. 라즈베리파이에서 DEBUG 로그를 켜면 이 필터가
+#  모든 레코드를 지나므로, 대다수인 '민감정보 없는 줄'을 문자열 검색으로 먼저 걷어낸다.
+_SENSITIVE_HINTS = ("crtfc_key", "CANO", "cano=", "Bearer ", "appkey", "appsecret",
+                    "app_key", "app_secret", "api_key", "token=", "secret=")
+
+
+def mask_sensitive(text):
+    """로그 문자열에서 인증키·계좌번호를 가린다. 실패해도 원문을 돌려준다."""
+    if not text:
+        return text
+    try:
+        if not any(h in text for h in _SENSITIVE_HINTS):
+            return text
+        for pattern, repl in _SENSITIVE_PATTERNS:
+            text = pattern.sub(repl, text)
+    except Exception:
+        pass
+    return text
+
+
+class SensitiveDataFilter(logging.Filter):
+    """모든 로그 레코드에서 민감정보를 가린다(핸들러가 아니라 레코드를 고친다).
+
+    포맷 이후가 아니라 레코드 단계에서 고쳐야 파일·콘솔 어느 핸들러로 가든 함께 가려진다.
+    """
+
+    def filter(self, record):
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return True
+        masked = mask_sensitive(msg)
+        if masked != msg:
+            record.msg = masked
+            record.args = ()
+        return True
+
+
 class CustomTimedRotatingFileHandler(TimedRotatingFileHandler):
     """커스텀 namer(_log_namer)를 사용할 때 내장 getFilesToDelete가 파일을 인식하지 못해 삭제되지 않는 문제를 해결한 클래스"""
     def getFilesToDelete(self):
@@ -1825,6 +1891,9 @@ def setup_logging():
             return True
 
     file_handler.addFilter(_DemoteExpectedLibErrors())
+    # [보안] 인증키·계좌번호 마스킹. 예외 메시지가 URL·본문을 통째로 물고 오므로
+    #  호출부가 아니라 로깅 계층에서 가린다.
+    file_handler.addFilter(SensitiveDataFilter())
         
     logging.info(f"=== 로깅 시스템 설정 갱신 (현재 파일 로그 레벨: {level_name}) ===")
 
@@ -1878,7 +1947,8 @@ def get_autotrade_logger():
     
     # 메시지만 출력 (타임스탬프는 AutoTrader가 메시지에 포함해서 보냄)
     handler.setFormatter(logging.Formatter('%(message)s'))
-    
+    handler.addFilter(SensitiveDataFilter())   # [보안] 인증키·계좌번호 마스킹
+
     logger.addHandler(handler)
     return logger
 
