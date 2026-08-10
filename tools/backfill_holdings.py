@@ -46,6 +46,11 @@ def main():
     config.session.initialize(args.mode)
     config.session.load_stock_config()
 
+    if not hb.supports_broker_history():
+        console.print("[yellow]이 모드는 증권사 체결 이력이 없어 복원할 수 없습니다.[/yellow] "
+                      "[dim](가상투자는 paper DB에 자체 원장이 있고, 토스는 KIS 체결조회 TR이 없습니다)[/dim]")
+        return 0
+
     cano, acnt = _account(args.account)
     console.print(f"\n[bold]보유분 거래내역 복원[/bold] — 계좌 {cano}-{acnt} · 최근 {args.months}개월")
 

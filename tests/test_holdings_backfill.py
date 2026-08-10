@@ -267,3 +267,45 @@ def test_sync_swallows_failures(monkeypatch):
 def test_sync_with_no_holdings_does_nothing(monkeypatch):
     monkeypatch.setattr(hb, 'plan', lambda *a, **k: [])
     assert hb.sync_account(holdings=[])['written'] == 0
+
+
+# ─────────────────────────────────────────────
+# 5. 복원 대상이 아닌 모드
+# ─────────────────────────────────────────────
+
+def test_paper_mode_has_nothing_to_restore(monkeypatch):
+    """가상투자는 증권사에 체결 이력이 없다 — 원장은 paper DB에 따로 있다.
+
+    [관측 2026-08-10] 가드가 없을 때 조회가 빈 값을 돌려주는 것을 '진입이 조회 구간보다
+    과거'로 오해해, 보유 4종목이 전부 '부분 복원'으로 표시되고 복원 0건이 나왔다.
+    복원할 것도 복원할 곳도 없는 모드에서는 제안 자체를 하지 않아야 한다.
+    """
+    monkeypatch.setattr(hb.config.session, 'is_paper', True, raising=False)
+    assert hb.supports_broker_history() is False
+
+    called = []
+    monkeypatch.setattr(hb, 'plan', lambda *a, **k: called.append(1) or [])
+    res = hb.sync_account(holdings=[_holding()])
+    assert res == {'written': 0, 'skipped': 0, 'restricted': [], 'partial': [], 'error': None}
+    assert not called, "가상투자에서 증권사 체결 조회를 시도했다"
+
+
+def test_toss_mode_has_nothing_to_restore(monkeypatch):
+    """토스는 KIS 체결조회 TR 자체가 없다."""
+    monkeypatch.setattr(hb.config.session, 'is_toss', True, raising=False)
+    assert hb.supports_broker_history() is False
+
+
+def test_real_and_simulation_modes_are_restorable(monkeypatch):
+    monkeypatch.setattr(hb.config.session, 'is_paper', False, raising=False)
+    monkeypatch.setattr(hb.config.session, 'is_toss', False, raising=False)
+    assert hb.supports_broker_history() is True
+
+
+def test_trade_history_screen_skips_the_offer_in_paper_mode(monkeypatch):
+    """메뉴 9-3에서도 제안이 뜨면 안 된다(잔고 조회조차 하지 않는다)."""
+    from modules import account
+    monkeypatch.setattr(hb.config.session, 'is_paper', True, raising=False)
+    monkeypatch.setattr(account, 'fetch_domestic_balance',
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("잔고를 조회했다")))
+    account.offer_holdings_backfill()      # 예외 없이 조용히 반환해야 한다

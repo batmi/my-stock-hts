@@ -31,6 +31,20 @@ logger = logging.getLogger(__name__)
 BACKFILL_REASON = "보유분 복원(증권사 체결내역)"
 
 
+def supports_broker_history():
+    """증권사 체결 이력으로 복원할 수 있는 모드인가.
+
+    가상투자(mode 4)는 KIS 실전 시세를 쓰지만 체결은 가상이라 증권사에 이력이 없다.
+    체결 원장은 paper DB(paper_fills)에 따로 있으므로 복원할 것도, 복원할 곳도 없다.
+    토스는 KIS 체결조회 TR 자체가 없다.
+
+    [주의] 이 가드가 없으면 조회가 빈 값을 돌려주는 것을 '진입이 조회 구간보다 과거'로
+      오해해 전 종목이 '부분 복원'으로 표시된다(2026-08-10 관측).
+    """
+    return not (getattr(config.session, 'is_paper', False)
+                or getattr(config.session, 'is_toss', False))
+
+
 def select_explaining_executions(executions, current_qty):
     """현재 보유수량을 설명하는 체결만 고른다(시간 오름차순 반환).
 
@@ -183,6 +197,8 @@ def sync_account(cano=None, acnt_prdt_cd=None, months=12, register_restrictions=
       (ConclusionMonitor)는 이미 같은 처리를 하는데, 기동 경로에만 이 방어가 없었다.
     """
     summary = {'written': 0, 'skipped': 0, 'restricted': [], 'partial': [], 'error': None}
+    if not supports_broker_history():
+        return summary
     try:
         if holdings is None:
             holdings, _ = api.get_domestic_balance(cano, acnt_prdt_cd)

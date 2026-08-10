@@ -1657,6 +1657,10 @@ def offer_holdings_backfill():
     """
     from modules import holdings_backfill as hb
 
+    # 가상투자·토스는 증권사 체결 이력이 없다. 제안 자체를 띄우지 않는다.
+    if not hb.supports_broker_history():
+        return
+
     cano, acnt = config.session.cano, config.session.acnt_prdt_cd
     holdings, _ = fetch_domestic_balance(cano, acnt)
     if not holdings:
