@@ -53,6 +53,13 @@ DISK_FREE_WARN_MB = 200.0
 #  같은 DB 쓰기 실패를 다시 알리기까지의 간격(초). 디스크가 차면 매 주기 실패하므로
 #  억제하지 않으면 알림이 도배되어 정작 중요한 경보가 묻힌다.
 DB_WRITE_FAIL_ALERT_COOLDOWN = 1800.0
+# [입출금 자동 조정 상한] 기준 자산은 계좌 차단기의 분모이자 사이징의 기준이라, 오탐 한 번이
+#  두 장치를 동시에 틀어 놓는다. 추정 금액이 기준 자산의 이 비율(또는 아래 절대 하한)을 넘으면
+#  자동 반영하지 않고 사람에게 넘긴다 — 반영하지 않으면 기준이 옛 값(더 작은 쪽)으로 남아
+#  차단기가 더 일찍 걸리므로, '안 고치는 쪽'이 안전한 방향이다.
+AUTO_TRANSFER_MAX_RATIO = 0.30
+AUTO_TRANSFER_MIN_LIMIT = 1_000_000   # 소액 계좌에서 상한이 지나치게 좁아지지 않도록
+
 #  계좌 차단기(일일 손실 한도) 점검이 이만큼 연속 실패하면 알린다. 한 번은 일시적
 #  데이터 결손일 수 있지만, 연속 실패는 '차단기가 꺼져 있다'는 뜻이다.
 CIRCUIT_BREAKER_ALERT_FAILS = 3
@@ -3961,6 +3968,12 @@ class AutoTrader:
                         profit_rate = (total_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
                         
                         realized_profit = 0
+                        # [중요] 실현손익을 못 구했는데 0으로 두면 그만큼이 그대로 '입출금'으로
+                        #  둔갑한다. 오늘 -50만 실현했는데 조회가 실패하면 원금이 50만 커 보이고,
+                        #  같은 조회가 매 주기 똑같이 실패하므로 아래 '3회 연속' 규칙이 방어가
+                        #  아니라 오탐 확정 장치가 된다(이 파일의 기존 주석이 우려한 그 경로다).
+                        #  0인 것과 못 구한 것을 갈라, 못 구했으면 감지 자체를 하지 않는다.
+                        realized_ok = True
                         try:
                             today_str = datetime.now().strftime("%Y-%m-%d")
                             
@@ -3986,8 +3999,9 @@ class AutoTrader:
                             today_trades_refined = self._refine_trade_records(today_trades_parsed)
                             sell_trades = [x for x in today_trades_refined if x['type'] == 'sell']
                             realized_profit = sum(int(t.get('profit_amt') or 0) for t in sell_trades)
-                        except Exception:
-                            pass
+                        except Exception as _rp_e:
+                            realized_ok = False
+                            logger.warning(f"[입출금감지] 당일 실현손익 조회 실패 — 감지를 보류한다: {_rp_e}")
                             
                         # [수정] 오프라인(프로그램 종료) 상태에서의 입출금까지 완벽히 감지하도록 수학적 불변 원리 적용
                         # 매매 손익이 아닌 외부 현금 입출금을 스스로 포착하여 일일 손실 제한(Loss Cut) 오작동을 방지합니다.
@@ -4018,7 +4032,7 @@ class AutoTrader:
                         if is_first_init or self.baseline_principal <= 0:
                             self.baseline_principal = current_principal
 
-                        if not is_first_init and toss_cash_reliable:
+                        if not is_first_init and toss_cash_reliable and realized_ok:
                             transfer_amt = current_principal - self.baseline_principal
 
                             # [Fix] 5만원 이상 원금 변동 발생 시 입출금으로 간주하되, 주문 체결 중 API 데이터 불일치(Lag)로 인한
@@ -4037,24 +4051,46 @@ class AutoTrader:
                                     
                                 if self._pending_transfer_count >= 3:
                                     action_str = "입금" if transfer_amt > 0 else "출금"
-                                    self.log(f"💰 외부 예수금 {action_str} 자동 감지: {transfer_amt:+,}원")
-                                    self.log(f"-> 시스템 오작동 방지를 위해 기준 자산을 동기화합니다. ({self.initial_asset:,} -> {self.initial_asset + int(transfer_amt):,})")
 
-                                    self.initial_asset += int(transfer_amt)
-                                    self.baseline_principal += int(transfer_amt)  # [추가] 입금 감지 기준 원금도 함께 이동
+                                    # [안전장치] 자동 조정에 상한을 둔다. 이 값은 계좌 차단기의
+                                    #  분모이자 사이징의 기준 자산이라, 오탐 한 번이 두 장치를
+                                    #  동시에 틀어 놓는다. 반영하지 않으면 기준이 옛 값(=더 작은
+                                    #  쪽)으로 남아 차단기가 더 일찍 걸리므로 보수적이다 —
+                                    #  즉 '안 고치는 쪽'이 안전한 방향이다. 큰 변동은 사람이 본다.
+                                    limit = max(int(self.initial_asset * AUTO_TRANSFER_MAX_RATIO),
+                                                AUTO_TRANSFER_MIN_LIMIT)
+                                    if abs(transfer_amt) > limit:
+                                        self.log(f"⚠️ 외부 {action_str} 추정 {transfer_amt:+,}원이 자동 조정 "
+                                                 f"상한({limit:,}원)을 넘어 반영하지 않습니다.")
+                                        api.send_telegram_message(
+                                            f"⚠️ [{action_str} 자동 조정 보류]\n"
+                                            f"추정 금액 {transfer_amt:+,}원이 자동 조정 상한 {limit:,}원을 넘습니다.\n"
+                                            f"실제 {action_str}이면 기준 자산을 직접 맞춰 주시고, 아니면 "
+                                            f"잔고 조회 이상을 확인해 주세요.\n"
+                                            f"(현재 기준 자산 {self.initial_asset:,}원 — 변경하지 않았습니다)")
+                                        self._pending_transfer_count = 0
+                                        self._pending_transfer_amt = 0
+                                        transfer_amt = 0     # 반영하지 않는다
 
-                                    account_key = f"{target_cano}-{acnt_cd}"
-                                    save_daily_initial_asset(account_key, self.initial_asset)
-                                    try:
-                                        today_str = datetime.now().strftime("%Y-%m-%d")
-                                        db_manager.db.save_daily_asset(today_str, account_key, self.initial_asset)
-                                    except Exception: pass
-                                    
-                                    api.send_telegram_message(f"💰 [예수금 {action_str} 자동 감지]\n백그라운드 감시 결과, 계좌에 약 {abs(int(transfer_amt)):,}원의 {action_str}이 발생한 것을 확인했습니다.\n\n안전한 수익률 계산을 위해 시스템 기준 자산을 {self.initial_asset:,}원으로 스스로 자동 동기화했습니다.")
-                                    
-                                    # 처리 후 초기화
-                                    self._pending_transfer_count = 0
-                                    self._pending_transfer_amt = 0
+                                    if transfer_amt:
+                                        self.log(f"💰 외부 예수금 {action_str} 자동 감지: {transfer_amt:+,}원")
+                                        self.log(f"-> 시스템 오작동 방지를 위해 기준 자산을 동기화합니다. ({self.initial_asset:,} -> {self.initial_asset + int(transfer_amt):,})")
+
+                                        self.initial_asset += int(transfer_amt)
+                                        self.baseline_principal += int(transfer_amt)  # [추가] 입금 감지 기준 원금도 함께 이동
+
+                                        account_key = f"{target_cano}-{acnt_cd}"
+                                        save_daily_initial_asset(account_key, self.initial_asset)
+                                        try:
+                                            today_str = datetime.now().strftime("%Y-%m-%d")
+                                            db_manager.db.save_daily_asset(today_str, account_key, self.initial_asset)
+                                        except Exception: pass
+
+                                        api.send_telegram_message(f"💰 [예수금 {action_str} 자동 감지]\n백그라운드 감시 결과, 계좌에 약 {abs(int(transfer_amt)):,}원의 {action_str}이 발생한 것을 확인했습니다.\n\n안전한 수익률 계산을 위해 시스템 기준 자산을 {self.initial_asset:,}원으로 스스로 자동 동기화했습니다.")
+
+                                        # 처리 후 초기화
+                                        self._pending_transfer_count = 0
+                                        self._pending_transfer_amt = 0
                             else:
                                 if hasattr(self, '_pending_transfer_count'):
                                     self._pending_transfer_count = 0
