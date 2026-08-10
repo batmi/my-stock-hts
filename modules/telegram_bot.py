@@ -566,8 +566,19 @@ class TelegramCommander:
         if not self.trader.is_running:
             return "⚠️ 실행 중인 시스템 트레이딩이 없습니다."
         else:
+            # 한 단어로 멈출 수 있는 만큼, 무엇이 함께 꺼지는지 응답에서 바로 밝힌다.
+            #  (상세한 보유 목록은 stop()이 보내는 종료 알림에 담긴다)
+            held = 0
+            try:
+                held = len(getattr(self.trader, 'trailing_stop_cache', {}) or {})
+            except Exception:
+                held = 0
             self.trader.stop(use_status=False)
-            return "🛑 시스템 트레이딩 중단 요청을 처리했습니다."
+            reply = "🛑 시스템 트레이딩 중단 요청을 처리했습니다."
+            if held:
+                reply += (f"\n\n⛔ 보유 {held}종목의 손절·트레일링 감시도 함께 멈춥니다. "
+                          f"청산은 되지 않았습니다.")
+            return reply
 
     def _cmd_restart(self, args):
         msg = []

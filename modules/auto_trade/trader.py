@@ -849,9 +849,12 @@ class AutoTrader:
                     
                     tot_profit = 0
                     tot_pchs = 0
+                    unmanaged = []          # 정지로 감시가 끊기는 포지션
 
                     if holdings:
                         valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
+                        unmanaged = [(h.get('prdt_name') or h.get('pdno'), h.get('pdno'))
+                                     for h in valid_holdings]
                         stock_eval = sum(int(h['evlu_amt']) for h in valid_holdings)
                         tot_profit = sum(int(h['evlu_pfls_amt']) for h in valid_holdings)
                         tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in valid_holdings)
@@ -872,6 +875,19 @@ class AutoTrader:
                         msg += f"\n금일 최종 손익: {profit:+,}원 ({profit_rate:+.2f}%)"
                     else:
                         msg += "\n(⚠️ 종료 시 자산 정보 조회 실패 - 서버 응답 없음)"
+
+                    # [안전장치] 정지는 매도 감시 루프까지 함께 끈다. 이 코드베이스는 같은
+                    #  이유로 일일 손실 한도 초과와 Kill Switch를 '정지'에서 '방어 모드'로
+                    #  바꿨다(engine.check_loss_limit 주석: "정지는 포지션을 청산하지 않고
+                    #  매도 감시 루프까지 함께 끄기 때문에 무방비 상태가 된다").
+                    #  명시적 정지까지 막을 일은 아니다 — 다만 무엇을 껐는지는 알려야 한다.
+                    #  종전 종료 알림은 자산만 보고하고 이 사실을 말하지 않았다.
+                    if unmanaged:
+                        msg += (f"\n\n⛔ 보유 {len(unmanaged)}종목의 "
+                                f"손절·트레일링 감시가 함께 멈춥니다.\n· "
+                                + "\n· ".join(f"{n}({c})" for n, c in unmanaged[:10])
+                                + (f"\n· 외 {len(unmanaged) - 10}종목" if len(unmanaged) > 10 else "")
+                                + "\n\n청산은 되지 않았습니다. 재시작하거나 직접 관리해 주세요.")
 
                     # [추가] 금일 매매 요약 집계
                     buy_cnt = 0
@@ -3292,8 +3308,17 @@ class AutoTrader:
 
         msg = f"🔄 [기동 동기화] 정지 중 발생한 외부 체결 {res['written']}건을 기록했습니다."
         if res['restricted']:
+            # [판정 근거를 밝힌다] '외부 매수' 판정은 '우리 DB에 주문 기록이 없다'가 근거다.
+            #  시스템이 낸 주문은 접수 응답 즉시 기록되므로 보통 맞지만, 주문 응답이 유실되고
+            #  대사까지 실패하면(그때 '주문 결과 불명' 알림이 나간다) 기록 없이 체결만 남는다.
+            #  그 포지션이 여기서 제한으로 잡히면 시스템이 손절해 주지 않는다 — 운용자가
+            #  뒤집을 수 있도록 근거와 해제 경로를 함께 적는다.
             msg += ("\n\n⛔ 아래 종목은 운용자가 직접 매수한 것으로 보고 "
                     "시스템 매매에서 제외했습니다.\n· " + "\n· ".join(res['restricted']))
+            msg += ("\n\n판정 근거는 '이 계좌의 매수인데 시스템 주문 기록이 없다'입니다. "
+                    "직전에 '주문 결과 불명(응답 유실)' 알림을 받으셨다면 시스템이 낸 주문일 수 "
+                    "있습니다 — 그 경우 제한을 풀어야 손절·트레일링이 다시 돕니다 "
+                    "(자동매매 메뉴의 제한 종목 관리).")
         if res['partial']:
             msg += ("\n\n⚠️ 조회 구간보다 과거에 진입해 일부만 복원된 종목:\n· "
                     + "\n· ".join(f"{n}({c}) {m}주" for c, n, m in res['partial']))
