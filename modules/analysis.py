@@ -1804,9 +1804,11 @@ def _get_master_stock_list(market_type):
     if market_type == 'KOSPI':
         url = "https://new.real.download.dws.co.kr/common/master/kospi_code.mst.zip"
         filename = "kospi_code.mst"
+        _MST_GRP_OFFSET = 227    # 개행 제거 후 뒤에서 227바이트 지점이 증권그룹구분코드(아래 주석)
     else:
         url = "https://new.real.download.dws.co.kr/common/master/kosdaq_code.mst.zip"
         filename = "kosdaq_code.mst"
+        _MST_GRP_OFFSET = 221
 
     zip_path = os.path.join(base_dir, f"{filename}.zip")
     extract_path = os.path.join(base_dir, filename)
@@ -1872,10 +1874,23 @@ def _get_master_stock_list(market_type):
                     try:
                         code = line[0:9].decode('cp949').strip()
                         name = line[21:61].decode('cp949').strip()
-                        
+
+                        # [추가 2026-08-11] 증권그룹구분코드(ST=주권, EF=ETF, RT=리츠, IF=인프라 …).
+                        #  종목명 브랜드 접두어로 ETF를 거르던 방식이 신규 운용사를 못 잡아
+                        #  ('DS 코스닥액티브' 0220B0), 마스터가 이미 들고 있는 정본 필드로 바꾼다.
+                        #  마스터 앞단(코드+표준코드+한글명)은 가변폭이라 앞에서 못 세고, 뒷단은
+                        #  고정폭이라 뒤에서 센다. 개행을 먼저 떼야 한 칸씩 밀리지 않는다
+                        #  (오프셋은 실측 확정 — KOSPI 227 / KOSDAQ 221에서 전 레코드 유효:
+                        #   코스피 2,559건·코스닥 1,820건 모두 정상 코드로 파싱된다).
+                        try:
+                            body = line.rstrip(b'\r\n')
+                            grp = body[-_MST_GRP_OFFSET:][0:2].decode('cp949', 'ignore').strip()
+                        except Exception:
+                            grp = ""
+
                         # [수정] 영문이 포함된 최신 ETF(예: 0080G0)를 지원하기 위해 숫자로 시작하는 6자리 영문/숫자 코드로 완화
                         if len(code) == 6 and code[0].isdigit() and code.isalnum():
-                            stock_list.append({'code': code, 'name': name})
+                            stock_list.append({'code': code, 'name': name, 'grp': grp})
                     except Exception:
                         continue
     except Exception as e:
@@ -3562,19 +3577,28 @@ def analyze_market_stocks(market_type):
         else:
             include_etf_choice = 'n'
         
+        # [재설계 2026-08-11] 비주권(ETF/ETN/리츠/인프라펀드) 제외를 '종목명 브랜드 접두어'에서
+        #  마스터의 증권그룹구분코드로 바꾼다.
+        #
+        #  [왜] 브랜드 목록은 운용사가 새로 생길 때마다 손으로 늘려야 하는 구조라 반드시 샌다.
+        #   실제로 'DS 코스닥액티브'(0220B0)가 통과해 "지표 계산용 데이터 부족(신규상장 등)"으로
+        #   실패 로그를 남겼다. 또 리츠 키워드가 후행 공백을 요구해("리츠 ") '롯데리츠'·
+        #   '이리츠코크렙' 같은 실제 이름과 한 건도 매칭되지 않았다 — 필터가 사실상 무동작이었다.
+        #   2026-08-11 마스터 기준 코스피에서 이 방식이 놓치던 비주권은 29건(EF 1 + RT 23 + IF 2 +
+        #   MF 1 + PF 2)이고, 그 29건이 전체 분석 대상 944개에 그대로 섞여 있었다.
+        #
+        #  [스팩] 코스닥 71건은 증권그룹이 ST(주권)라 그룹코드로는 걸리지 않는다. 이름에 '스팩'이
+        #   들어가는 것이 유일한 식별자이고(기존 키워드 "스팩 "도 후행 공백 탓에 0건 매칭),
+        #   공모가 2,000원에 고정된 껍데기라 추세추종 후보가 될 수 없으므로 시장과 무관하게 뺀다.
+        original_len = len(stock_list)
         if include_etf_choice == 'n' and market_type == "KOSPI":
-            etf_keywords = [
-                "KODEX ", "TIGER ", "KBSTAR ", "RISE ", "ACE ", "ARIRANG ", "PLUS ", 
-                "KOSEF ", "HANARO ", "SOL ", "TIMEFOLIO ", "히어로즈 ", "마이티 ", "TREX ", 
-                "TRUSTON ", "FOCUS ", "UNTACT ", "WOORI ", "WON ", "BNK ", "KINDEX ", 
-                "네비게이터 ", "TIME ", "KIWOOM ", "HK ", "1Q ", "KoAct ", "ITF ", 
-                "VITA ", "UNICORN ", "더제이 ", "파워 ", "MIDAS ", "에셋플러스 ", 
-                "KCGI ", "DAISHIN343 ", "아이엠에셋 ", "대신 ", "유진 ", "IBK ",
-                "ETN ", "스팩 ", "SPAC ", "리츠 ", "REIT "
-            ]
-            original_len = len(stock_list)
-            stock_list = [s for s in stock_list if not any(kw in s['name'] for kw in etf_keywords)]
-            config.console.print(f"[dim]이름 기반 ETF/ETN 등 1차 제외 완료: {original_len}개 -> {len(stock_list)}개[/dim]\n")
+            # grp가 빈 값이면(마스터 포맷 변경 등) 거르지 않는다 — 판정 실패로 전 종목이
+            # 사라지는 것보다 섞여 들어오는 편이 낫다(분석 단계에서 걸러진다).
+            stock_list = [s for s in stock_list if s.get('grp', '') in ('', 'ST')]
+        stock_list = [s for s in stock_list if '스팩' not in s['name']]
+        if len(stock_list) != original_len:
+            config.console.print(
+                f"[dim]비주권(ETF/ETN/리츠/스팩 등) 제외: {original_len}개 -> {len(stock_list)}개[/dim]\n")
             
         # [수정] 매수 체결강도 사용 여부 확인 프롬프트 간결화 및 기본값(n) 변경
         # [추가] 토스증권은 체결강도(수급)를 제공하지 않으므로 프롬프트 없이 무조건 미사용 처리
