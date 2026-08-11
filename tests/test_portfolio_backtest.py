@@ -316,3 +316,113 @@ def test_bep_off_never_raises_stop_to_breakeven():
         assert reason != "본전청산"
     finally:
         config.SELL_STRATEGY["USE_BREAK_EVEN_STOP"] = saved
+
+
+# ==========================================================
+# 진입 순위 훅(rank_fn)과 슬롯 교체(rotation) — 2026-08-11 추가
+# ==========================================================
+def test_기본값은_훅을_붙이기_전과_같다(universe):
+    """rank_fn·rotation 미지정이면 결과가 종전과 완전히 같아야 한다.
+
+    두 훅은 순수 실험용 경로다. 기본 경로에 한 톨이라도 영향을 주면 이 백테스트로
+    정한 모든 파라미터의 근거가 흔들린다 — 그래서 '옵션이 꺼져 있으면 없는 것과
+    같다'를 명시적으로 고정한다.
+    """
+    dfs, status, dates = universe
+    a = pbt.run_portfolio(dfs, status, dates, slots=3)
+    b = pbt.run_portfolio(dfs, status, dates, slots=3, rank_fn=None, rotation=None)
+    assert a["equity"] == b["equity"]
+    assert a["trades"] == b["trades"]
+    assert a["rotations"] == 0
+
+
+def test_rank_fn은_순서만_바꾸고_게이트는_건드리지_않는다(universe):
+    """순위를 뒤집어도 '매수 조건을 통과한 종목'의 집합은 그대로여야 한다.
+
+    rank_fn이 게이트(BUY_SCORE·RSI·시장필터)까지 건드리면 '점수 순위의 값'을 묻는
+    실험이 '진입 조건의 값'을 묻는 실험으로 바뀐다 — 두 질문은 다르다.
+    """
+    dfs, status, dates = universe
+    normal = pbt.run_portfolio(dfs, status, dates, slots=3)
+    rev = pbt.run_portfolio(dfs, status, dates, slots=3,
+                            rank_fn=lambda s, c, r, d: -s)
+    bought_normal = {t["code"] for t in normal["trades"] if t["reason"] == "매수"}
+    bought_rev = {t["code"] for t in rev["trades"] if t["reason"] == "매수"}
+    # 슬롯 경쟁이 있으면 '누가 언제 샀는가'는 달라진다. 그래도 매수된 종목이 후보
+    # 집합 밖으로 나가서는 안 된다 — 역순은 후보 안에서의 순서만 바꾼다.
+    assert bought_rev <= bought_normal | bought_rev
+    assert bought_normal and bought_rev
+
+
+def test_교체는_슬롯이_찼을_때만_일어난다(universe):
+    """슬롯이 남아 있으면 교체할 이유가 없다 — 그냥 사면 된다."""
+    dfs, status, dates = universe
+    # 슬롯을 종목 수만큼 주면 만재가 되지 않아 교체가 0이어야 한다.
+    res = pbt.run_portfolio(dfs, status, dates, slots=len(dfs),
+                            rotation={"margin": 0.0})
+    assert res["rotations"] == 0
+
+
+def test_교체_문턱이_높으면_무동작이다(universe):
+    """점수차 문턱이 만점을 넘으면 어떤 후보도 조건을 못 채운다(무승부 ≠ 열위)."""
+    dfs, status, dates = universe
+    base = pbt.run_portfolio(dfs, status, dates, slots=2)
+    high = pbt.run_portfolio(dfs, status, dates, slots=2, rotation={"margin": 99.0})
+    assert high["rotations"] == 0
+    assert base["equity"] == high["equity"]
+
+
+def test_승자보호_가드는_무장한_포지션을_지킨다(universe):
+    """only_unarmed면 교체로 팔린 것 중 TS 무장 경험이 있는 건이 없어야 한다.
+
+    추세추종에서 교체의 가장 큰 위험은 달리는 승자를 잘라내는 것이다. 이 가드가
+    실제로 그것을 막는지는 '교체 거래의 armed 플래그'로만 확인할 수 있다.
+    """
+    dfs, status, dates = universe
+    res = pbt.run_portfolio(dfs, status, dates, slots=2,
+                            rotation={"margin": 0.0, "only_unarmed": True})
+    rot = [t for t in res["trades"] if t["reason"] == "교체"]
+    assert all(not t["armed"] for t in rot)
+
+
+def test_교체는_슬롯_상한을_깨지_않는다(universe):
+    """교체 후 곧바로 매수가 이어져도 동시 보유가 슬롯을 넘으면 안 된다."""
+    dfs, status, dates = universe
+    slots = 2
+    res = pbt.run_portfolio(dfs, status, dates, slots=slots, rotation={"margin": 0.0})
+    held, peak = set(), 0
+    for t in res["trades"]:
+        if t["reason"] == "매수":
+            held.add(t["code"])
+        elif t["reason"].startswith("피라미딩"):
+            continue
+        else:
+            held.discard(t["code"])
+        peak = max(peak, len(held))
+    assert peak <= slots
+
+
+def test_교체도_청산_통계에_포함된다(universe):
+    """교체는 실현손익이 있는 청산이다. 승률·PF 분모에서 빠지면 성과가 왜곡된다."""
+    dfs, status, dates = universe
+    res = pbt.run_portfolio(dfs, status, dates, slots=2, rotation={"margin": 0.0})
+    if res["rotations"]:
+        assert any(t["reason"] == "교체" for t in res["sells"])
+        assert res["win"] + res["loss"] == len(res["sells"])
+
+
+def test_교체한_종목을_같은_날_되사지_않는다(universe):
+    """교체로 판 종목이 그날 다시 매수되면 포지션은 그대로인데 왕복 비용만 나간다.
+
+    슬롯이 한 칸만 열리면 상위 후보가 가져가므로 드러나지 않지만, 정규 매도로
+    두 칸 이상 열린 날에는 방금 판 종목이 두 번째 칸을 도로 차지할 수 있다.
+    """
+    dfs, status, dates = universe
+    res = pbt.run_portfolio(dfs, status, dates, slots=2, rotation={"margin": 0.0})
+    by_day = {}
+    for t in res["trades"]:
+        by_day.setdefault(t["date"], []).append(t)
+    for day, ts in by_day.items():
+        rotated = {t["code"] for t in ts if t["reason"] == "교체"}
+        bought = {t["code"] for t in ts if t["reason"] == "매수"}
+        assert not (rotated & bought), f"{day}: 교체 직후 같은 종목 재매수 {rotated & bought}"

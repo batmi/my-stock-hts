@@ -192,7 +192,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                   atr_mult=None, market_filter_dates=None, reserved_cash=0.0,
                   risk_scale_by_date=None, oversize_limit=None,
                   ts_act_fn=None, pyr_trigger_fn=None, sl_rate_fn=None,
-                  profit_lock_dates=None):
+                  profit_lock_dates=None, rank_fn=None, rotation=None):
     """N슬롯 포트폴리오 시뮬레이션.
 
     Args:
@@ -217,6 +217,22 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
         profit_lock_dates: 이익보호선(PROFIT_LOCK)을 켤 거래일 집합. **실험용 경로**로,
             '국면 조건부로만 의미가 있을 수 있다'는 기록(config.PROFIT_LOCK_USE 주석)을
             재기 위한 훅이다(tools/audit_slot_cost.py). None이면 config의 전역 ON/OFF를 쓴다.
+
+        rotation: 슬롯 교체 규칙. None(기본)이면 교체 없음 — 종전 동작 그대로다.
+            dict로 주면 슬롯이 찬 날 '가장 약한 보유'와 '최상위 후보'를 견줘 교체한다.
+              margin: 후보점수 - 보유점수가 이 값 이상일 때만 (기본 2.0)
+              min_days: 최소 보유일 미만은 교체 대상에서 제외 (churn 방지)
+              only_unarmed: TS 무장 경험이 없는 보유만 대상 — 추세를 만든 승자를
+                  잘라내지 않기 위한 가드. 추세추종에서 가장 중요한 안전장치다.
+              only_losing: 평가손실 중인 보유만 대상
+            보유 점수는 sell_check(매도 상태면 0)를 쓴다 — 매도 판정과 같은 잣대다.
+            (tools/audit_slot_rotation.py)
+
+        rank_fn: fn(score, code, row, day) -> 정렬키. 후보가 슬롯보다 많을 때 **무엇이
+            슬롯을 차지하는가**를 바꾸는 훅이다(tools/audit_scoring_weights.py). None이면
+            종전대로 점수 내림차순. 가중치를 바꾸는 것만으로는 '점수라는 잣대 자체가
+            값을 하는가'를 물을 수 없어서 둔다 — 무작위 순위를 대조군으로 세워야
+            비교 대상이 생긴다. 게이트(BUY_SCORE 통과)는 건드리지 않고 순서만 정한다.
 
         ts_act_fn / pyr_trigger_fn: fn(atr, price) -> 발동 기준(%). **실험용 경로**로,
             TS 감시 시작·피라미딩 증액의 고정 임계(+10%)를 종목 변동성에 맞춰 동적으로
@@ -288,6 +304,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     ts_gated_days = 0
     # 배분액을 넘겨(1주 강제) 집행한 매수 — 사이징 상한이 깨진 횟수.
     oversized_buys = 0
+    # 슬롯 교체로 비운 포지션 수(rotation=None이면 항상 0).
+    rotations = 0
 
     def _equity(day):
         return cash + reserved_cash + sum(
@@ -484,10 +502,24 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
         #  전체 평균 현금은 슬롯이 덜 찬 기간이 섞여 과대평가되므로 따로 잰다.
         if len(positions) >= slots and equity_curve[-1] > 0:
             full_slot_cash.append(cash / equity_curve[-1] * 100)
-        if len(positions) < slots:
-            candidates = []
+
+        rotated_out_today = None
+
+        def _candidates_for(day):
+            """그날 매수 조건을 통과한 후보를 순위대로 돌려준다.
+
+            [SSOT] 종전에는 이 블록이 매수 경로 안에만 있었다. 교체(rotation) 판정도
+            같은 후보 집합을 봐야 하므로 함수로 뺀다 — 두 벌이 되면 '교체는 사는데
+            매수는 안 사는' 유령 조합이 생긴다.
+            """
+            out = []
             for code, stock_rows in rows.items():
                 if code in positions:
+                    continue
+                # [되사기 금지] 교체로 방금 비운 종목은 그날 후보에서 뺀다. 없으면 같은 날
+                #  같은 종가에 팔고 되사는 일이 생긴다 — 포지션은 그대로인데 왕복 비용만
+                #  나가는 순손실이다(정규 매도로 슬롯이 2칸 이상 열린 날에 발생한다).
+                if code == rotated_out_today:
                     continue
                 row = stock_rows.get(day)
                 if row is None:
@@ -500,8 +532,71 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                     continue
                 if market_filter_dates and day in market_filter_dates.get(code, ()):
                     continue
-                candidates.append((raw_score, code, row))
-            candidates.sort(reverse=True, key=lambda item: item[0])
+                out.append((raw_score, code, row))
+            if rank_fn is None:
+                out.sort(reverse=True, key=lambda item: item[0])
+            else:
+                # 동점 처리까지 종전과 같게 두려면 정렬 자체를 갈아끼운다(점수는 그대로 전달).
+                out.sort(reverse=True,
+                         key=lambda item: rank_fn(item[0], item[1], item[2], day))
+            return out
+
+        # ---------- 3-a) 슬롯 교체 (선택) ----------
+        # [무엇] 슬롯이 다 찬 상태에서 '보유 중 가장 약한 것'보다 뚜렷하게 강한 후보가
+        #  있으면 약한 쪽을 비우고 자리를 내준다. 청산 룰이 걸려야만 슬롯이 풀리는
+        #  현행에는 이 경로가 없다 — 후보가 아무리 강해도 4칸이 차 있으면 그냥 못 산다.
+        # [위험] 추세추종에서 교체는 양날이다. 달리는 승자를 잘라내면 fat-tail이 죽고,
+        #  왕복 비용(매수+매도)을 매번 문다. 그래서 가드를 함께 잰다(아래 rotation 키).
+        # 하루에 한 건만 교체한다. 여러 칸을 한꺼번에 갈아치우면 그날 하루의 점수
+        #  스냅숏에 포트폴리오 전체를 거는 셈이 되고, 왕복 비용도 배로 문다.
+        if rotation and len(positions) >= slots:
+            margin = float(rotation.get("margin", 2.0))
+            min_days = int(rotation.get("min_days", 0))
+            only_unarmed = bool(rotation.get("only_unarmed", False))
+            only_losing = bool(rotation.get("only_losing", False))
+            cands = _candidates_for(day)
+            if cands:
+                best_score = cands[0][0]
+                weakest, weak_score = None, None
+                for code, pos in positions.items():
+                    row = rows[code].get(day)
+                    if row is None:
+                        continue
+                    held_days = (parsed[day] - pos["buy_dt"]).days
+                    if held_days < min_days:
+                        continue
+                    if only_unarmed and pos.get("ts_armed_ever"):
+                        continue
+                    price = row["close"]
+                    if only_losing and price > pos["avg"]:
+                        continue
+                    _raw, chk, _cb, _st, _rs = status[code][day]
+                    if weak_score is None or chk < weak_score:
+                        weakest, weak_score = code, chk
+                if weakest is not None and best_score - weak_score >= margin:
+                    pos = positions[weakest]
+                    row = rows[weakest][day]
+                    price = row["close"]
+                    sell_price = utils.adjust_to_tick(price * (1 - slippage), False) or price
+                    amount = pos["qty"] * sell_price
+                    amount -= trading_cost.sell_fee(amount)
+                    profit, _ = trading_cost.net_realized_profit(pos["avg"], sell_price, pos["qty"])
+                    cash += amount
+                    _sl, _atr_ap, _bep = _effective_sl(pos)
+                    trades.append({
+                        "code": weakest, "date": day, "reason": "교체",
+                        "profit_amt": profit,
+                        "profit": profit / (pos["qty"] * pos["avg"]) * 100,
+                        "days": (parsed[day] - pos["buy_dt"]).days,
+                        "mfe": (pos["high"] - pos["avg"]) / pos["avg"] * 100,
+                        "armed": bool(pos.get("ts_armed_ever")), "bep": bool(_bep),
+                    })
+                    del positions[weakest]
+                    rotated_out_today = weakest
+                    rotations += 1
+
+        if len(positions) < slots:
+            candidates = _candidates_for(day)
 
             for _score, code, row in candidates:
                 if len(positions) >= slots:
@@ -550,8 +645,11 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                                "profit_amt": 0, "profit": 0, "days": 0})
 
     final_asset = _equity(dates[-1]) if dates else initial_capital
+    # '교체'도 실현손익이 있는 청산이다. profit_amt != 0 조건에 대부분 걸리지만,
+    # 손익이 정확히 0인 교체가 빠져 승률·PF 분모가 흔들리지 않게 명시한다.
     sells = [t for t in trades if t["reason"] in
-             ("ATR손절", "손절", "본전청산", "시간청산", "트레일링스탑", "점수하락") or t["profit_amt"] != 0]
+             ("ATR손절", "손절", "본전청산", "시간청산", "트레일링스탑", "점수하락", "교체")
+             or t["profit_amt"] != 0]
     gross_profit = sum(t["profit_amt"] for t in sells if t["profit_amt"] > 0)
     gross_loss = abs(sum(t["profit_amt"] for t in sells if t["profit_amt"] < 0))
     return {
@@ -573,6 +671,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
         "pyramid_blocked_qty0": pyramid_blocked_qty0,    # 보유 수량이 적어 불발된 증액 기회
         "ts_gated_days": ts_gated_days,                  # TS 발동 기준이 청산을 막은 일수
         "oversized_buys": oversized_buys,                # 배분액을 넘겨 집행한 매수(1주 강제)
+        "rotations": rotations,                          # 슬롯 교체로 비운 포지션 수
         "max_pos_weight": max_pos_weight,                # 한 종목의 최대 계좌 비중(%, 피라미딩 포함)
         "max_buy_weight": max_buy_weight,                # 진입 순간의 최대 비중(%)
         "max_buy_risk": max_buy_risk,                    # 진입 1회의 최대 리스크(계좌 대비 %)
