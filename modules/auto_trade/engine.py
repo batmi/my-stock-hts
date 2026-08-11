@@ -231,7 +231,13 @@ def compute_trailing_stop(highest_price, buy_price, current_price, ind=None, thr
     if ts_callback is None:
         ts_callback = t.get("ts_callback", ss.get("TRAILING_STOP_CALLBACK_RATE", 5.0))
     if ts_atr_mult is None:
-        ts_atr_mult = t.get("TRAILING_ATR_MULTIPLIER", ss.get("TRAILING_ATR_MULTIPLIER", 3.0))
+        # [개별 룰 오버라이드 금지 · 2026-08-11] 예전에는 thresholds(개별 종목 룰)가 이 배수를
+        #  덮어쓸 수 있었다. 그런데 발동선은 전역 ts_activation_atr_mult()가 정하므로, 룰로
+        #  이 값만 낮추면 **'발동선은 그대로 · 콜백만 축소'** 가 된다 — 실측에서 15전 1승 14패로
+        #  가장 나쁜 조합이다(config.TRAILING_ATR_MULTIPLIER 주석의 그룹 E·G). 메뉴에서 닿는
+        #  경로가 최악 설정을 만들면 안 되므로 전역값만 쓴다. 배수를 바꾸려면 두 축을 함께
+        #  움직여야 하고, 그건 전역 설정의 일이다. (함수 인자로 넘기는 백테스트·감사 경로는 유지)
+        ts_atr_mult = ss.get("TRAILING_ATR_MULTIPLIER", 3.5)
 
     max_profit_rate = ((highest_price - buy_price) / buy_price) * 100
     drop_rate = ((highest_price - current_price) / highest_price) * 100
@@ -1155,7 +1161,9 @@ class DefaultStrategy:
         ts_activation = thresholds.get("ts_activation", config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)) if thresholds else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
         ts_callback = thresholds.get("ts_callback", config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)) if thresholds else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
         # [샹들리에 엑시트] TS 동적 콜백 전용 ATR 배수 (손절용 ATR_STOP_MULTIPLIER와 분리)
-        ts_atr_mult = thresholds.get("TRAILING_ATR_MULTIPLIER", config.SELL_STRATEGY.get("TRAILING_ATR_MULTIPLIER", 3.0)) if thresholds else config.SELL_STRATEGY.get("TRAILING_ATR_MULTIPLIER", 3.0)
+        # [개별 룰 오버라이드 금지] 위 compute_trailing_stop과 같은 이유 — 콜백만 좁히는 조합을
+        #  룰로 만들 수 있으면 안 된다. 폴백 리터럴도 config 정본(3.5)과 맞춘다.
+        ts_atr_mult = config.SELL_STRATEGY.get("TRAILING_ATR_MULTIPLIER", 3.5)
         
         bep_activation = thresholds.get("BREAK_EVEN_PROFIT_RATE", config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 5.0)) if thresholds else config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 5.0)
         bep_stop = thresholds.get("BREAK_EVEN_STOP_RATE", config.SELL_STRATEGY.get("BREAK_EVEN_STOP_RATE", 0.5)) if thresholds else config.SELL_STRATEGY.get("BREAK_EVEN_STOP_RATE", 0.5)
