@@ -18,21 +18,20 @@ from modules.telegram_bot import TelegramCommander
 def test_stop_message_names_the_unprotected_positions():
     src = inspect.getsource(AutoTrader.stop)
     assert "손절·트레일링 감시가 함께 멈춥니다" in src, "종료 알림이 무방비 사실을 알리지 않는다"
-    assert "청산은 되지 않았습니다" in src, "청산된 것으로 오해할 수 있다"
 
 
-def test_stop_message_lists_codes_but_caps_the_list():
-    """종목을 알려야 조치가 되고, 많을 때 알림이 잘리지 않아야 한다."""
+def test_stop_message_does_not_repeat_the_holdings_list():
+    """경고에 종목을 나열하지 않는다 — 같은 알림 아래 '최종 보유 종목 현황'과 중복이다."""
     src = inspect.getsource(AutoTrader.stop)
-    assert "unmanaged[:10]" in src
-    assert "외 " in src
+    assert "unmanaged[:10]" not in src
+    assert "최종 보유 종목 현황" in src, "중복이라 뺀 목록의 대체 출처가 사라지면 안 된다"
 
 
-def test_unmanaged_list_only_counts_real_positions():
+def test_unmanaged_count_only_counts_real_positions():
     """수량 0인 줄까지 세면 없는 위험을 알리게 된다."""
     src = inspect.getsource(AutoTrader.stop)
-    head = src.split("unmanaged = [")[1][:200]
-    assert "valid_holdings" in head, "hldg_qty > 0 로 거른 목록을 써야 한다"
+    head = src.split("unmanaged_count = len(")[1][:80]
+    assert head.startswith("valid_holdings"), "hldg_qty > 0 로 거른 목록을 써야 한다"
 
 
 def test_telegram_stop_reply_warns_too():

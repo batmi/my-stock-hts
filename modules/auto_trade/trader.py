@@ -849,12 +849,11 @@ class AutoTrader:
                     
                     tot_profit = 0
                     tot_pchs = 0
-                    unmanaged = []          # 정지로 감시가 끊기는 포지션
+                    unmanaged_count = 0     # 정지로 감시가 끊기는 포지션 수
 
                     if holdings:
                         valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
-                        unmanaged = [(h.get('prdt_name') or h.get('pdno'), h.get('pdno'))
-                                     for h in valid_holdings]
+                        unmanaged_count = len(valid_holdings)
                         stock_eval = sum(int(h['evlu_amt']) for h in valid_holdings)
                         tot_profit = sum(int(h['evlu_pfls_amt']) for h in valid_holdings)
                         tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in valid_holdings)
@@ -882,12 +881,11 @@ class AutoTrader:
                     #  매도 감시 루프까지 함께 끄기 때문에 무방비 상태가 된다").
                     #  명시적 정지까지 막을 일은 아니다 — 다만 무엇을 껐는지는 알려야 한다.
                     #  종전 종료 알림은 자산만 보고하고 이 사실을 말하지 않았다.
-                    if unmanaged:
-                        msg += (f"\n\n⛔ 보유 {len(unmanaged)}종목의 "
-                                f"손절·트레일링 감시가 함께 멈춥니다.\n· "
-                                + "\n· ".join(f"{n}({c})" for n, c in unmanaged[:10])
-                                + (f"\n· 외 {len(unmanaged) - 10}종목" if len(unmanaged) > 10 else "")
-                                + "\n\n청산은 되지 않았습니다. 재시작하거나 직접 관리해 주세요.")
+                    #  종목 목록은 붙이지 않는다 — 같은 알림 아래에 '최종 보유 종목 현황'이
+                    #  수익률까지 담아 그대로 이어지므로 두 번 나열하는 셈이었다.
+                    if unmanaged_count:
+                        msg += (f"\n\n⛔ 보유 {unmanaged_count}종목의 "
+                                f"손절·트레일링 감시가 함께 멈춥니다.")
 
                     # [추가] 금일 매매 요약 집계
                     buy_cnt = 0

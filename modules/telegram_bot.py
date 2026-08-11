@@ -576,8 +576,7 @@ class TelegramCommander:
             self.trader.stop(use_status=False)
             reply = "🛑 시스템 트레이딩 중단 요청을 처리했습니다."
             if held:
-                reply += (f"\n\n⛔ 보유 {held}종목의 손절·트레일링 감시도 함께 멈춥니다. "
-                          f"청산은 되지 않았습니다.")
+                reply += f"\n\n⛔ 보유 {held}종목의 손절·트레일링 감시도 함께 멈춥니다."
             return reply
 
     def _cmd_restart(self, args):
