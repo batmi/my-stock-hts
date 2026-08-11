@@ -36,6 +36,7 @@ from modules import portfolio_backtest as pb  # noqa: E402
 
 INITIAL_CAPITAL = 10_000_000  # 실거래 시드와 같게 둔다(seed-slot-sizing)
 SL_KEY = "ATR_STOP_MULTIPLIER"
+CAP_KEY = "MAX_ATR_STOP_LOSS_RATE"
 TS_KEY = "TRAILING_ATR_MULTIPLIER"
 SELL_REASONS = ("ATR손절", "손절", "본전청산", "시간청산", "트레일링스탑", "점수하락", "이익보호")
 
@@ -50,6 +51,14 @@ def dial_sets():
         ("B. TS ATR 배수", "3.0",            {TS_KEY: 3.0}),
         ("B. TS ATR 배수", "3.5 (현행)",     {TS_KEY: 3.5}),
         ("B. TS ATR 배수", "4.0 (넓힘)",     {TS_KEY: 4.0}),
+        # [C] 손절 캡. 2026-08-09에 '10년 중 8년치에서 무영향'으로 -15% 유지를 확정했으나,
+        #  그때는 TS 발동이 콜백 배수(3.5)에 묶여 있던 시절이다. 발동을 3.0으로 분리해
+        #  무장이 빨라진 지금은 손절선과 TS 청산선의 경합 구간이 달라졌으므로 다시 잰다.
+        ("C. ATR 손절 캡", "해제(0)",       {CAP_KEY: 0.0}),
+        ("C. ATR 손절 캡", "-25%",          {CAP_KEY: -25.0}),
+        ("C. ATR 손절 캡", "-20%",          {CAP_KEY: -20.0}),
+        ("C. ATR 손절 캡", "-15% (현행)",   {CAP_KEY: -15.0}),
+        ("C. ATR 손절 캡", "-12%",          {CAP_KEY: -12.0}),
     ]
 
 

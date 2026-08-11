@@ -21,6 +21,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
 from modules.auto_trade.engine import (breakeven_activation_rate, compute_trailing_stop,
+                                       ts_activation_atr_mult,
                                        ts_activation_label)
 
 
@@ -34,6 +35,9 @@ _TS_ENV = {
     "TRAILING_STOP_ACTIVATION_RATE": 10.0,
     "USE_ATR_STOP": True,
     "TS_MAX_GIVEBACK_RATIO": 0.0,
+    # 2026-08-11 분리: 발동선은 이 배수를, 콜백은 위 TRAILING_ATR_MULTIPLIER를 쓴다.
+    "TS_ACTIVATION_ATR_MULTIPLIER": 3.0,
+    "TS_ACTIVATION_MAX_RATE": 25.0,
 }
 
 
@@ -60,6 +64,15 @@ def breakeven_mode():
 
 
 @pytest.fixture
+def no_act_cap():
+    """발동선 상한 캡을 끈 상태. 캡에 가려지는 산식 성질을 검증할 때 쓴다."""
+    saved = config.SELL_STRATEGY.get("TS_ACTIVATION_MAX_RATE")
+    config.SELL_STRATEGY["TS_ACTIVATION_MAX_RATE"] = 0.0
+    yield
+    config.SELL_STRATEGY["TS_ACTIVATION_MAX_RATE"] = saved
+
+
+@pytest.fixture
 def fixed_mode():
     saved = _pin("fixed")
     yield
@@ -80,26 +93,63 @@ def _pin_for_pure_functions(request):
 
 # ------------------------------------------------------------------ 발동선 산식
 
-def test_발동선은_변동성이_클수록_높다():
-    """같은 규칙이 저변동주는 일찍·고변동주는 늦게 무장시킨다."""
+def test_발동선은_변동성이_클수록_높다(no_act_cap):
+    """같은 규칙이 저변동주는 일찍·고변동주는 늦게 무장시킨다.
+
+    상한 캡은 이 성질을 가리므로(고변동이 캡에 붙어 평평해진다) 여기서는 꺼두고 잰다 —
+    캡 자체는 아래 test_발동선_상한_캡이 따로 검증한다.
+    """
     buy = 100_000
+    mult = ts_activation_atr_mult()
     low = breakeven_activation_rate(2.39 / 100 * buy, buy)     # KT급
     mid = breakeven_activation_rate(4.56 / 100 * buy, buy)     # 중앙값
     high = breakeven_activation_rate(7.08 / 100 * buy, buy)    # 현대오토에버급
     assert low < mid < high
-    assert 8.5 < low < 10.0        # ≈ +9.1%
-    assert 18.0 < mid < 20.0       # ≈ +19.0%
-    assert 31.0 < high < 34.0      # ≈ +32.9%
+    # 값 자체는 발동 전용 배수에 비례한다 — 배수를 바꾸면 같이 움직여야 정상이다.
+    for atr_pct, got in ((2.39, low), (4.56, mid), (7.08, high)):
+        cb = atr_pct / 100 * mult
+        assert got == pytest.approx(cb / (1 - cb) * 100, rel=1e-9)
 
 
-def test_발동선은_되돌림_한_번을_맞고도_본전인_지점이다():
-    """정의 그대로: 고점 × (1 - 콜백) ≥ 매수가 가 되는 최소 MFE."""
+def test_발동선은_되돌림_한_번을_맞고도_본전인_지점이다(no_act_cap):
+    """정의 그대로: 고점 × (1 - 콜백) ≥ 매수가 가 되는 최소 MFE.
+
+    [주의] 여기서 쓰는 '콜백'은 청산선 폭(TRAILING_ATR_MULTIPLIER)이 아니라 **발동 전용
+    배수**다. 2026-08-11에 두 축을 분리했다 — 발동만 앞당기고 청산선 폭은 유지하기 위해서다.
+    """
     buy, atr = 100_000, 4_560.0
-    mult = config.SELL_STRATEGY.get("TRAILING_ATR_MULTIPLIER", 3.5)
-    cb = atr * mult / buy                      # 매수가 기준 되돌림 폭
+    cb = atr * ts_activation_atr_mult() / buy   # 매수가 기준 되돌림 폭
     act = breakeven_activation_rate(atr, buy)
     high = buy * (1 + act / 100)
     assert high * (1 - cb) == pytest.approx(buy, rel=1e-9)
+
+
+def test_발동선_상한_캡(monkeypatch):
+    """캡은 고ATR 종목만 자르고 평시 종목은 건드리지 않는다."""
+    buy = 100_000
+    monkeypatch.setitem(config.SELL_STRATEGY, "TS_ACTIVATION_MAX_RATE", 25.0)
+    assert breakeven_activation_rate(9.52 / 100 * buy, buy) == pytest.approx(25.0)
+    low = breakeven_activation_rate(2.39 / 100 * buy, buy)
+    assert low < 25.0                       # 저변동 종목은 캡에 닿지 않는다
+    monkeypatch.setitem(config.SELL_STRATEGY, "TS_ACTIVATION_MAX_RATE", 0.0)
+    assert breakeven_activation_rate(2.39 / 100 * buy, buy) == pytest.approx(low)  # 해제 시 불변
+
+
+def test_발동_배수는_콜백_배수와_분리된다(monkeypatch):
+    """[회귀 방지] 콜백 배수를 움직여도 발동선은 따라가지 않아야 한다.
+
+    둘이 한 키로 묶여 있던 시절에는 '발동을 앞당기자'가 곧 '청산선을 좁히자'가 되어
+    fat-tail이 무너졌다(수익승 0/15). 분리가 풀리면 그 실패로 되돌아간다.
+    """
+    buy, atr = 100_000, 4_560.0
+    monkeypatch.setitem(config.SELL_STRATEGY, "TS_ACTIVATION_MAX_RATE", 0.0)
+    monkeypatch.setitem(config.SELL_STRATEGY, "TS_ACTIVATION_ATR_MULTIPLIER", 3.0)
+    base = breakeven_activation_rate(atr, buy)
+    monkeypatch.setitem(config.SELL_STRATEGY, "TRAILING_ATR_MULTIPLIER", 5.0)
+    assert breakeven_activation_rate(atr, buy) == pytest.approx(base)
+    # 미설정(0)이면 종전처럼 콜백 배수를 따른다(되돌리기 경로)
+    monkeypatch.setitem(config.SELL_STRATEGY, "TS_ACTIVATION_ATR_MULTIPLIER", 0.0)
+    assert breakeven_activation_rate(atr, buy) > base
 
 
 def test_발동선은_고점이_올라도_움직이지_않는다():

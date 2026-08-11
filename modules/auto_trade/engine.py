@@ -263,8 +263,9 @@ def compute_trailing_stop(highest_price, buy_price, current_price, ind=None, thr
     #   고정되고, 검증된 결과가 재현된다.
     stop_price = highest_price * (1 - actual_callback / 100)
     if str(ss.get("TS_ACTIVATION_MODE", "fixed")).lower() == "breakeven":
-        ts_activation = breakeven_activation_rate(atr_val, buy_price, ts_callback, ts_atr_mult,
-                                                  use_atr_stop)
+        # [분리] 발동선은 콜백 배수(ts_atr_mult)가 아니라 발동 전용 배수로 계산한다.
+        ts_activation = breakeven_activation_rate(atr_val, buy_price, ts_callback,
+                                                  ts_activation_atr_mult(), use_atr_stop)
         armed = max_profit_rate >= ts_activation
     else:
         armed = max_profit_rate >= ts_activation
@@ -277,6 +278,26 @@ def compute_trailing_stop(highest_price, buy_price, current_price, ind=None, thr
         'max_profit_rate': max_profit_rate,
         'activation': ts_activation,
     }
+
+
+def ts_activation_atr_mult():
+    """발동선 계산에 쓰는 ATR 배수. 콜백 배수(TRAILING_ATR_MULTIPLIER)와 **분리**돼 있다.
+
+    [왜 분리했나 · 2026-08-11] 한 키가 두 일을 겸하고 있었다 — 발동선(언제 무장하나)과
+    콜백(얼마나 넓게 따라가나). 그래서 '발동을 앞당기자'고 배수를 낮추면 청산선까지 좁아져
+    추세를 조기에 끊었고, 실측에서 수익승 0/15로 완패했다(config.TRAILING_ATR_MULTIPLIER 주석).
+    콜백을 3.5로 고정한 채 발동선만 낮추는 반사실을 재보니 **fat-tail이 무손상**이었다
+    (상위10% 40.0 → 36.1, 최대 163.4 → 165.2, >30% 9건 동일). 두 축은 별개였던 것이다.
+    미설정(0 이하)이면 종전처럼 콜백 배수를 그대로 쓴다.
+    """
+    ss = config.SELL_STRATEGY
+    try:
+        m = float(ss.get("TS_ACTIVATION_ATR_MULTIPLIER", 0) or 0)
+    except (TypeError, ValueError):
+        m = 0.0
+    if m > 0:
+        return m
+    return ss.get("TRAILING_ATR_MULTIPLIER", 3.5)
 
 
 def breakeven_activation_rate(atr, buy_price, ts_callback=None, ts_atr_mult=None, use_atr=True):
@@ -293,7 +314,7 @@ def breakeven_activation_rate(atr, buy_price, ts_callback=None, ts_atr_mult=None
     if ts_callback is None:
         ts_callback = ss.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
     if ts_atr_mult is None:
-        ts_atr_mult = ss.get("TRAILING_ATR_MULTIPLIER", 3.5)
+        ts_atr_mult = ts_activation_atr_mult()
     try:
         buy_price = float(buy_price or 0)
         atr = float(atr or 0)
@@ -306,7 +327,11 @@ def breakeven_activation_rate(atr, buy_price, ts_callback=None, ts_atr_mult=None
     if use_atr and atr > 0:
         cb = max(cb, atr * ts_atr_mult / buy_price * 100)
     cb = min(cb, 60.0)          # 초고변동 종목에서 문턱이 발산하지 않게 상한을 둔다
-    return cb / (100 - cb) * 100
+    act = cb / (100 - cb) * 100
+    # [발동선 상한] 산식은 그대로 두고 결과에만 뚜껑을 씌운다. 고ATR 종목에서만 구속하므로
+    #  평시 종목의 발동선은 손대지 않는다(0 이하 = 캡 해제).
+    cap = ss.get("TS_ACTIVATION_MAX_RATE", 0) or 0
+    return min(act, float(cap)) if cap > 0 else act
 
 
 def ts_activation_label(ts_activation=None):

@@ -386,8 +386,12 @@ def _fmt_ts_stop(res, is_overseas=False, buy_price=0):
                      cb * highest / arm_price)
             # 두 가격이 다 들어가야 하므로 %는 정수로 줄인다. 여기서 행동을 정하는 값은
             #  '얼마에 켜지나'(가격)이고 %는 맥락일 뿐이다.
+            # 콜백(-N%)까지 붙이는 이유: 이 줄의 두 가격만으로는 '얼마나 밀려야 잘리나'를
+            #  화면에서 알 수 없어 매번 역산해야 했다(1 - 청산선/발동가). 무장 후 행은 이미
+            #  콜백을 찍고 있으므로, 병기해야 무장 전후가 같은 정보를 말한다.
             return (f"[dim]TS:[/dim]{_p(arm_price)}[dim]↑{act:.0f}%→[/dim]"
-                    f"[bold magenta not dim]{_p(arm_price * (1 - cb / 100))}[/]")
+                    f"[bold magenta not dim]{_p(arm_price * (1 - cb / 100))}[/]"
+                    f"[dim](-{cb:.0f}%)[/dim]")
         return f"[dim]TS:[/dim]{_p(arm_price)}[dim]↑({act:+.1f}%)[/dim]"
 
     # 청산선은 이 칸에서 유일하게 '실제로 포지션을 끝내는' 가격이다. ATR 손절선(파랑)과

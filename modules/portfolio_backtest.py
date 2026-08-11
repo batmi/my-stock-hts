@@ -81,6 +81,10 @@ def decide_sell(*, price, high, avg, sl_rate, atr_applied, is_bep, holding_days,
     use_atr = c.get("use_atr", True)
     use_time_stop = c.get("use_time_stop", True)
     time_stop_days = c.get("time_stop_days", 20)
+    # [패리티] 실매매(engine.analyze_sell)는 TIME_STOP_MIN_PROFIT_RATE 를 문턱으로 쓰는데
+    #  여기는 0(손실일 때만)이 하드코딩돼 있어 그 다이얼을 백테스트로 잴 수 없었다.
+    #  config 기본값이 0.0이라 기본 동작은 종전과 같다.
+    time_stop_min = c.get("time_stop_min", 0.0)
     ts_act = c.get("ts_act", 10.0)
     ts_callback = c.get("ts_callback", 5.0)
     ts_atr_mult = c.get("ts_atr_mult", 3.0)
@@ -107,7 +111,7 @@ def decide_sell(*, price, high, avg, sl_rate, atr_applied, is_bep, holding_days,
             reason = "이익보호"
         else:
             reason = "본전청산" if is_bep else ("ATR손절" if (use_atr and atr_applied) else "손절")
-    elif use_time_stop and holding_days >= time_stop_days and loss_rate < 0:
+    elif use_time_stop and holding_days >= time_stop_days and loss_rate < time_stop_min:
         # 시간청산 유예: 매수 계열 상태 유지 + 상방 모멘텀(최근 5일 고점 ≥ 10일 고점)
         grace = state in ("매수", "강매수", "역매수", "상승", "대기") and \
             roll_high_5 >= roll_high_10
@@ -134,9 +138,10 @@ def decide_sell(*, price, high, avg, sl_rate, atr_applied, is_bep, holding_days,
         #  [SSOT] 발동선 산식은 engine.breakeven_activation_rate가 단독 보유한다 —
         #  백테스트가 실매매와 다른 식을 쓰면 튜닝 결과가 무의미해진다(콜백 캡과 같은 규약).
         if ts_breakeven:
-            from modules.auto_trade.engine import breakeven_activation_rate
+            from modules.auto_trade.engine import (breakeven_activation_rate,
+                                                   ts_activation_atr_mult)
             armed = max_profit >= breakeven_activation_rate(atr, avg, ts_callback,
-                                                            ts_atr_mult, use_atr)
+                                                            ts_activation_atr_mult(), use_atr)
         else:
             armed = max_profit >= ts_act
         if armed and drop >= callback:
@@ -191,7 +196,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                   pyramiding_max=None, heat_cap_pct=None, invest_ratio=None,
                   atr_mult=None, market_filter_dates=None, reserved_cash=0.0,
                   risk_scale_by_date=None, oversize_limit=None,
-                  ts_act_fn=None, pyr_trigger_fn=None, sl_rate_fn=None):
+                  ts_act_fn=None, pyr_trigger_fn=None, sl_rate_fn=None,
+                  profit_lock_dates=None):
     """N슬롯 포트폴리오 시뮬레이션.
 
     Args:
@@ -213,6 +219,10 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             (MAX_ATR_STOP_LOSS_RATE)을 고정값이 아니라 종목·시점에 따라 바꿨을 때의 효과를
             재기 위한 훅이다(tools/audit_atr_damping.py). None이면 종전과 같이
             engine.atr_stop_rate(=config의 고정 캡)를 쓴다.
+        profit_lock_dates: 이익보호선(PROFIT_LOCK)을 켤 거래일 집합. **실험용 경로**로,
+            '국면 조건부로만 의미가 있을 수 있다'는 기록(config.PROFIT_LOCK_USE 주석)을
+            재기 위한 훅이다(tools/audit_slot_cost.py). None이면 config의 전역 ON/OFF를 쓴다.
+
         ts_act_fn / pyr_trigger_fn: fn(atr, price) -> 발동 기준(%). **실험용 경로**로,
             TS 감시 시작·피라미딩 증액의 고정 임계(+10%)를 종목 변동성에 맞춰 동적으로
             바꿨을 때의 효과를 재기 위한 훅이다(tools/audit_trigger_dials.py).
@@ -241,6 +251,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     pyr_require_healthy = (getattr(config, "USE_MARKET_FILTER", True)
                            and thr.get("PYRAMIDING_REQUIRE_HEALTHY_MARKET", True))
 
+    time_stop_min = sell_cfg.get("TIME_STOP_MIN_PROFIT_RATE", 0.0)
     use_atr = sell_cfg.get("USE_ATR_STOP", True)
     default_sl = sell_cfg["STOP_LOSS_RATE"]
     sell_score_limit = sell_cfg["SELL_SCORE"]
@@ -333,9 +344,11 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             if ts_act_fn is not None:
                 ts_act_eff = float(ts_act_fn(row.get("ATR", 0), pos["avg"]))
             elif ts_breakeven:
-                from modules.auto_trade.engine import breakeven_activation_rate
+                from modules.auto_trade.engine import (breakeven_activation_rate,
+                                                       ts_activation_atr_mult)
                 ts_act_eff = breakeven_activation_rate(row.get("ATR", 0), pos["avg"],
-                                                       ts_callback, ts_atr_mult, use_atr)
+                                                       ts_callback, ts_activation_atr_mult(),
+                                                       use_atr)
 
             # [무장 래치 — 기각됨. 켜지 말 것] 발동선은 매일 '현재 봉' ATR로 다시 계산되므로
             #  변동성이 오르면 문턱이 올라가 이미 무장된 TS가 풀린다(실측 2026-08-09:
@@ -347,6 +360,11 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             #  무장 해제는 버그가 아니라 적응 장치다 — 변동성이 커질 때 트레일링 보호를
             #  풀어 포지션에 숨 쉴 공간을 준다. 래치를 걸면 고변동 구간에서 조기 발동해
             #  승자를 잘라내고 fat-tail이 먼저 무너진다. 재검증용으로만 남긴다.
+            # [진단] 보유 중 한 번이라도 무장선을 넘었는가. 판정에는 쓰지 않는다
+            #  (래치가 아니다 — 아래 TS_ARM_LATCH와 무관하게 기록만 한다).
+            if max_profit >= ts_act_eff:
+                pos["ts_armed_ever"] = True
+
             ts_breakeven_eff = ts_breakeven and ts_act_fn is None
             if config.SELL_STRATEGY.get("TS_ARM_LATCH", False):
                 if pos.get("ts_armed") or max_profit >= ts_act_eff:
@@ -364,10 +382,13 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 roll_high_5=row.get("roll_high_5", 0), roll_high_10=row.get("roll_high_10", 0),
                 cfg={"use_atr": use_atr, "use_time_stop": use_time_stop,
                      "time_stop_days": time_stop_days, "ts_act": ts_act_eff,
+                     "time_stop_min": time_stop_min,
                      "ts_callback": ts_callback, "ts_atr_mult": ts_atr_mult,
                      "ts_breakeven": ts_breakeven_eff,
                      "sell_score_limit": sell_score_limit,
-                     "profit_lock_use": lock_use, "profit_lock_min_mfe": lock_min_mfe,
+                     "profit_lock_use": (day in profit_lock_dates
+                                         if profit_lock_dates is not None else lock_use),
+                     "profit_lock_min_mfe": lock_min_mfe,
                      "profit_lock_giveback": lock_giveback})
 
             # [진단] 발동 기준만 없었다면 TS로 팔렸을 날 (기준이 실제로 구속하는가)
@@ -390,6 +411,10 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 trades.append({
                     "code": code, "date": day, "reason": reason, "profit_amt": profit,
                     "profit": profit / (pos["qty"] * pos["avg"]) * 100, "days": holding_days,
+                    # [진단] 슬롯 점유·수익 반납을 재려면 실현손익만으로는 부족하다.
+                    #  mfe = 보유 중 최대 평가수익률, armed = TS 무장 경험, bep = 청산 시
+                    #  손절선이 본전선까지 올라와 있었는가.
+                    "mfe": max_profit, "armed": bool(pos.get("ts_armed_ever")), "bep": bool(is_bep),
                 })
                 del positions[code]
 

@@ -310,9 +310,15 @@ def view_system_config(group=None):
         #  산식을 그대로 띄운다.
         _ts_breakeven = str(sell.get('TS_ACTIVATION_MODE', 'breakeven')).lower() == "breakeven"
         if _ts_breakeven:
+            # [분리 · 2026-08-11] 발동선은 콜백 배수가 아니라 발동 전용 배수를 쓴다.
+            #  화면이 콜백 배수를 적으면 실제 무장 시점과 어긋난다.
+            from modules.auto_trade.engine import ts_activation_atr_mult
+            _act_cap = sell.get('TS_ACTIVATION_MAX_RATE', 0) or 0
             _ts_rule = (f"발동선 = cb/(1-cb), cb = max({sell.get('TRAILING_STOP_CALLBACK_RATE')}%, "
-                        f"ATR×{sell.get('TRAILING_ATR_MULTIPLIER', 3.5)}/매수가)\n"
-                        f"    종목 변동성이 시점을 정한다 (통상 +5~+90%, 중앙값 약 +19%)")
+                        f"ATR×{ts_activation_atr_mult()}/매수가)"
+                        + (f", 상한 {_act_cap:g}%" if _act_cap > 0 else "") + "\n"
+                        f"    종목 변동성이 시점을 정한다 (콜백 배수 "
+                        f"{sell.get('TRAILING_ATR_MULTIPLIER', 3.5)}와 분리된 값)")
         else:
             _ts_rule = (f"발동선 = 고정 {sell.get('TRAILING_STOP_ACTIVATION_RATE')}% "
                         f"(전 종목 공통)")
@@ -789,6 +795,12 @@ ANTI_TREND_HIDDEN_KEYS = {
     #  BREAK_EVEN_PROFIT_RATE: ATR 손절 사용 시(기본값) 발동 기준이 손절폭(1R)으로 덮어써져
     #   이 값 자체는 쓰이지 않는다(backtest.py bep_activation / trader.py thresholds 주입).
     #   화면에 5.0%가 보이면 실제 동작(1R)과 달라 오해를 부르므로 숨기고 읽기 전용으로 안내한다.
+    #  TS_ACTIVATION_ATR_MULTIPLIER / TS_ACTIVATION_MAX_RATE: 2026-08-11에 콜백과 분리해
+    #   실측으로 정한 발동선 다이얼(3.0 · 상한 25%). 낮출수록 무장은 빨라지지만 10년 누적
+    #   수익이 단조적으로 깎인다(3.0 → 402% / 2.5 → 343% / 2.0 → 315%, 기준 454%).
+    #   되돌리려면 배수를 0으로 두면 종전 동작(콜백 배수와 동일)으로 복귀한다.
+    "TS_ACTIVATION_ATR_MULTIPLIER",
+    "TS_ACTIVATION_MAX_RATE",
     "TIME_STOP_MIN_PROFIT_RATE",
     "TIME_STOP_DAYS",
     "SELL_SCORE",
