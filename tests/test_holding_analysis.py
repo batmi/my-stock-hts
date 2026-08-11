@@ -730,10 +730,12 @@ def test_mfe_cell_and_ts_line():
 
 
 def test_pending_ts_cell_shows_stop_line_that_would_appear():
-    """미무장 행은 '어디서 켜지나'(↑)와 '그때 어디서 잘리나'(→)를 함께 준다.
+    """미무장 행은 '어디서 켜지나'(↑)와 '그때 어디서 잘리나'(→), 그 콜백(-N%)을 함께 준다.
 
-    발동가 기준 청산선은 매수가보다 낮을 수 없다 — 손익분기 연동의 정의가
-    '되돌림 한 번을 맞아도 본전 이상'이기 때문이다. 이게 깨지면 산식이 틀린 것이다.
+    [주의 · 2026-08-11 이후] '발동가 기준 청산선은 매수가보다 낮을 수 없다'는 더 이상
+    일반 명제가 아니다. 발동선이 콜백과 분리되면서(TS_ACTIVATION_ATR_MULTIPLIER=3.0 vs
+    콜백 3.5) ATR/가격이 4.76% 미만인 저변동 종목은 본전 도달선보다 먼저 무장한다.
+    아래 값은 고ATR 케이스(콜백 26.8%)라 여전히 본전 위이고, 그 성질을 여기서 지킨다.
     """
     buy, highest = 41936.0, 54558.0
     res = {"highest_price": highest,
@@ -742,8 +744,14 @@ def test_pending_ts_cell_shows_stop_line_that_would_appear():
 
     assert "64,372" in cell and "↑54%" in cell and "→" in cell
     import re
-    stop = int(re.sub(r"\[[^\]]*\]|,", "", cell.rsplit("→", 1)[1]))
+    tail = re.sub(r"\[[^\]]*\]|,", "", cell.rsplit("→", 1)[1])
+    # 청산선 뒤에 콜백 (-N%)이 붙으므로 맨 앞 숫자만 떼어 읽는다.
+    stop = int(re.match(r"\d+", tail).group())
     assert stop >= buy, f"발동 시 청산선({stop})이 매수가({buy}) 아래다"
+    # 콜백 병기 — 두 가격만으로는 '얼마나 밀려야 잘리나'를 알 수 없다.
+    cb = re.search(r"\(-(\d+)%\)", tail)
+    assert cb, f"미무장 행에 콜백이 없다: {cell}"
+    assert stop == pytest.approx(64372 * (1 - int(cb.group(1)) / 100), rel=0.02)
 
     # 최고가·콜백을 모르면 발동 조건만 (있는 정보로만 그린다)
     plain = account._fmt_ts_stop({"ts": {"armed": False, "stop_price": 0,
