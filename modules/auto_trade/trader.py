@@ -5141,8 +5141,14 @@ class AutoTrader:
         max_holdings = config.settings.SYSTEM_MAX_HOLDINGS
 
         can_buy = True
+        # [추가] 스킵 사유를 문자열로 들고 간다. 종전에는 여기서만 로그로 흘리고 버려서,
+        #  뒤에서 후보를 못 산 이유가 '조건 미달'이라는 뭉뚱그린 문구로만 남았다.
+        #  두 로그는 시각이 벌어져(분석 한 바퀴) 붙여 읽기도 어렵다.
+        buy_skip_reason = ""
 
         if len(holding_codes) >= max_holdings:
+            buy_skip_reason = (f"보유 슬롯 가득 참 — {len(holding_codes)}/{max_holdings}종목 "
+                               f"(투자비중 {config.format_invest_ratio()})")
             if self.consecutive_errors == 0: # 로그 도배 방지
                 self.log(f"매수 스킵: 최대 보유 종목 수({max_holdings}개) 도달 (투자비중 {config.format_invest_ratio()} 기준) - 종목분석은 계속 진행합니다.")
             can_buy = False
@@ -5160,6 +5166,7 @@ class AutoTrader:
         # [수정] 최소 주문 가능 금액 하향 조정 (50,000 -> 1,000) 및 로그 추가
         min_cash = 1000
         if can_buy and avail_cash < min_cash:
+            buy_skip_reason = f"예수금 부족 — {avail_cash:,}원 (최소 {min_cash:,}원)"
             if self.consecutive_errors == 0: # 로그 도배 방지
                  self.log(f"매수 스킵: 예수금 부족 ({avail_cash:,}원 < {min_cash:,}원) - 종목분석은 계속 진행합니다.")
             can_buy = False
@@ -5221,9 +5228,15 @@ class AutoTrader:
                 return
 
             if not can_buy:
-                self.log(f"[매수스킵] 매수 후보 감지 (매수 스킵 상태 - 조건 미달): {len(candidates)}종목")
+                # [수정] '조건 미달'은 사실과 반대였다 — 이 종목들은 매수 조건을 통과한
+                #  후보이고, 막은 것은 계좌 상태(슬롯·예수금)다. 무엇을 풀어야 살 수 있는지
+                #  이 줄만 보고 알 수 있어야 한다.
+                self.log(f"[매수스킵] 매수 조건 충족 {len(candidates)}종목 — 주문 미전송 "
+                         f"({buy_skip_reason or '매수 불가 상태'})")
                 for cand in candidates:
                      self.log(f"   - {cand['name']} ({cand['score']}점)")
+                if buy_skip_reason.startswith("보유 슬롯"):
+                    self.log("   └ 보유 종목이 청산되어 슬롯이 비면 다음 주기에 재평가됩니다.")
                 return
 
             self._execute_buy_orders(candidates, avail_cash, invest_ratio, len(holding_codes), max_holdings)

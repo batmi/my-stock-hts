@@ -163,3 +163,54 @@ def test_db_get_original_order_type():
     
     res_none = db.get_original_order_type("UNKNOWN")
     assert res_none is None
+
+def test_buy_skip_log_names_the_blocking_reason():
+    """매수 스킵 로그는 '무엇이 막았는지'를 그 줄에서 밝힌다.
+
+    [배경] 종전 문구는 '매수 스킵 상태 - 조건 미달'이었다. 사실과 반대다 — 나열된
+    종목들은 매수 조건을 통과한 후보이고, 막은 것은 계좌 상태(슬롯·예수금)다.
+    사유는 위쪽 다른 로그에만 남아 시각이 벌어진 채 흩어져 있었다.
+    """
+    trader = auto_trade.AutoTrader()
+    trader.is_running = True
+    trader.consecutive_errors = 0
+    config.session.stock_data = {"stocks_kr": [{"code": "005930", "name": "Samsung"}]}
+    config.settings.SYSTEM_MAX_HOLDINGS = 4
+    config.SYSTEM_MAX_HOLDINGS = 4
+    holdings = [{'pdno': str(i), 'prdt_name': f'Stock{i}', 'hldg_qty': '10'} for i in range(4)]
+    cand = [{'code': '005930', 'name': 'SK이노베이션', 'price': 50000, 'score': 8.5,
+             'rsi': 50.0, 'adx': 25.0, 'cci': 100.0, 'vol_strength': 150.0, 'atr': 500}]
+
+    with patch.object(trader, '_analyze_candidates', return_value=cand):
+        with patch.object(trader, 'log') as mock_log:
+            trader._check_buy_conditions(holdings, {'d2_deposit': 1000000})
+
+    lines = [str(c) for c in mock_log.call_args_list]
+    skip_line = [l for l in lines if "매수 조건 충족" in l]
+    assert skip_line, lines
+    assert "보유 슬롯 가득 참" in skip_line[0]
+    assert "4/4종목" in skip_line[0]
+    assert "조건 미달" not in skip_line[0]
+    # 무엇을 풀어야 사는지도 함께 남는다
+    assert any("슬롯이 비면" in l for l in lines), lines
+
+
+def test_buy_skip_log_reports_cash_shortage():
+    """예수금 부족으로 막혔을 때도 같은 줄에 금액이 남는다."""
+    trader = auto_trade.AutoTrader()
+    trader.is_running = True
+    trader.consecutive_errors = 0
+    config.session.stock_data = {"stocks_kr": [{"code": "005930", "name": "Samsung"}]}
+    config.settings.SYSTEM_MAX_HOLDINGS = 4
+    config.SYSTEM_MAX_HOLDINGS = 4
+    cand = [{'code': '005930', 'name': '카카오', 'price': 50000, 'score': 8.5,
+             'rsi': 50.0, 'adx': 25.0, 'cci': 100.0, 'vol_strength': 150.0, 'atr': 500}]
+
+    with patch.object(trader, '_analyze_candidates', return_value=cand):
+        with patch.object(trader, 'log') as mock_log:
+            trader._check_buy_conditions([], {'d2_deposit': 500})
+
+    skip_line = [str(c) for c in mock_log.call_args_list if "매수 조건 충족" in str(c)]
+    assert skip_line, [str(c) for c in mock_log.call_args_list]
+    assert "예수금 부족" in skip_line[0]
+    assert "500원" in skip_line[0]
