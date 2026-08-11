@@ -715,16 +715,11 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                     atr_val = row.get('ATR', 0)
                     if use_atr_stop and atr_val > 0:
                         dynamic_callback = (atr_val * ts_atr_mult / ts_highest_price) * 100
-                        # [SSOT] 트레일링 스탑 하/상한선 방어 로직은 engine.giveback_callback_cap이
+                        # [SSOT] 하한·상한을 포함한 실효 콜백 산식은 engine.effective_callback이
                         #  단독 보유한다. 백테스트가 실거래와 다른 식을 쓰면 튜닝 결과가 무의미해진다.
-                        from modules.auto_trade.engine import giveback_callback_cap
-                        giveback_ratio = config.SELL_STRATEGY.get("TS_MAX_GIVEBACK_RATIO", 0.0)
-                        if giveback_ratio > 0:
-                            actual_ts_callback = min(
-                                max(ts_callback, dynamic_callback),
-                                max(ts_callback, giveback_callback_cap(max_profit_rate, giveback_ratio)))
-                        else:
-                            actual_ts_callback = max(ts_callback, dynamic_callback)
+                        from modules.auto_trade.engine import effective_callback
+                        actual_ts_callback = effective_callback(
+                            ts_callback, dynamic_callback, max_profit_rate)
 
                     if drop_rate >= actual_ts_callback: sell_signal = True; reason = "트레일링스탑"
                     

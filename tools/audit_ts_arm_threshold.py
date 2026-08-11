@@ -120,6 +120,14 @@ def dial_sets():
          {"TRAILING_ATR_MULTIPLIER": 2.5}),
         ("H. 본전 하한(발동 3.0·캡없음)", "없음 (현행)", act_fn(mult=3.0), {}),
         ("H. 본전 하한(발동 3.0·캡없음)", "본전 하한 ON", act_fn(mult=3.0, be_floor=True), {}),
+        # [I] 콜백 절대 상한. 콜백 배수를 낮추는 것(그룹 E·G)은 전 종목을 일률적으로 조여
+        #  참사였지만, 상한은 고ATR 종목에서만 구속한다 — 발동선 캡과 같은 모양의 레버다.
+        #  기준선은 현행(발동 3.0 · 캡 해제 · 콜백 3.5).
+        ("I. 콜백 절대 상한", "해제 (현행)", None, {}),
+        ("I. 콜백 절대 상한", "25%", None, {"TRAILING_STOP_CALLBACK_MAX": 25.0}),
+        ("I. 콜백 절대 상한", "20%", None, {"TRAILING_STOP_CALLBACK_MAX": 20.0}),
+        ("I. 콜백 절대 상한", "15%", None, {"TRAILING_STOP_CALLBACK_MAX": 15.0}),
+        ("I. 콜백 절대 상한", "12%", None, {"TRAILING_STOP_CALLBACK_MAX": 12.0}),
     ]
 
 

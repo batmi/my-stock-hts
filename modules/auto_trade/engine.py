@@ -240,17 +240,7 @@ def compute_trailing_stop(highest_price, buy_price, current_price, ind=None, thr
     atr_val = (ind.get('atr') if ind else None) or 0
     if use_atr_stop and atr_val > 0:
         dynamic_callback = (atr_val * ts_atr_mult / highest_price) * 100
-
-        # [리스크 관리 방어 로직]
-        # 1. 하한선: 너무 작은 변동성으로 인한 조기 털림 방지 (기본 ts_callback 보장)
-        # 2. 상한선: ATR이 너무 커서 도달한 최대 수익의 일정 비율 이상을 반납하는 것 방지.
-        #    TS_MAX_GIVEBACK_RATIO ≤ 0 이면 상한 캡 해제(순수 샹들리에).
-        giveback_ratio = ss.get("TS_MAX_GIVEBACK_RATIO", 0.0)
-        if giveback_ratio > 0:
-            actual_callback = min(max(ts_callback, dynamic_callback),
-                                  max(ts_callback, giveback_callback_cap(max_profit_rate, giveback_ratio)))
-        else:
-            actual_callback = max(ts_callback, dynamic_callback)
+        actual_callback = effective_callback(ts_callback, dynamic_callback, max_profit_rate)
 
     # [발동] breakeven 모드 = '한 번의 정상 되돌림(3.5 ATR)을 맞아도 본전 이상'인 지점부터 무장.
     #  손실 구간에서 트레일링으로 털리는 것을 막고, 무장 시점을 종목 변동성이 자동으로 정한다
@@ -278,6 +268,35 @@ def compute_trailing_stop(highest_price, buy_price, current_price, ind=None, thr
         'max_profit_rate': max_profit_rate,
         'activation': ts_activation,
     }
+
+
+def effective_callback(ts_callback, dynamic_callback, max_profit_rate):
+    """실효 콜백(%) — 하한·상한을 한 곳에서 적용한다. (순수 함수)
+
+    [SSOT] 같은 식이 실매매·단일종목 백테스트·포트폴리오 백테스트 세 곳에 복붙돼 있었다.
+    콜백은 주청산 수단이라 세 경로가 어긋나면 튜닝 결과를 실매매에 옮길 수 없다.
+
+      하한  : ts_callback (TRAILING_STOP_CALLBACK_RATE) — 저변동에서 조기 털림 방지
+      상한1 : TS_MAX_GIVEBACK_RATIO — 최고 수익의 이 비율 이상은 반납하지 않는다(MFE 비례).
+              2026-08-04 실측으로 0(해제)이 기본이다.
+      상한2 : TRAILING_STOP_CALLBACK_MAX — 콜백 자체의 절대 상한(%). 0이면 해제.
+              MFE와 무관하게 고ATR 종목에서만 구속한다는 점이 상한1과 다르다.
+
+    두 상한 모두 하한 아래로는 내려가지 않는다 — 상한이 하한을 이기면 '조기 털림 방지'라는
+    하한의 존재 이유가 사라진다.
+    """
+    ss = config.SELL_STRATEGY
+    cb = max(ts_callback, dynamic_callback)
+    giveback_ratio = ss.get("TS_MAX_GIVEBACK_RATIO", 0.0)
+    if giveback_ratio > 0:
+        cb = min(cb, max(ts_callback, giveback_callback_cap(max_profit_rate, giveback_ratio)))
+    try:
+        hard_cap = float(ss.get("TRAILING_STOP_CALLBACK_MAX", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        hard_cap = 0.0
+    if hard_cap > 0:
+        cb = min(cb, max(ts_callback, hard_cap))
+    return cb
 
 
 def ts_activation_atr_mult():

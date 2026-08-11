@@ -127,13 +127,8 @@ def decide_sell(*, price, high, avg, sl_rate, atr_applied, is_bep, holding_days,
             #  포트폴리오 백테스트만 순수 샹들리에로 돌고 있었다. 캡이 없으면 콜백이 더 커져
             #  청산이 늦고, 그만큼 백테스트가 실매매보다 낙관적으로 나온다
             #  (실측 2026-08-04: 청산 판정 불일치의 96%가 이 한 가지 · 3년 수익 +82.8%p 과대).
-            from modules.auto_trade.engine import giveback_callback_cap
-            giveback_ratio = config.SELL_STRATEGY.get("TS_MAX_GIVEBACK_RATIO", 0.0)
-            if giveback_ratio > 0:
-                callback = min(max(ts_callback, dynamic),
-                               max(ts_callback, giveback_callback_cap(max_profit, giveback_ratio)))
-            else:
-                callback = max(ts_callback, dynamic)
+            from modules.auto_trade.engine import effective_callback
+            callback = effective_callback(ts_callback, dynamic, max_profit)
         # [손익분기 연동] 되돌림 한 번(3.5 ATR)을 맞고도 본전 이상인 지점부터 무장한다.
         #  [SSOT] 발동선 산식은 engine.breakeven_activation_rate가 단독 보유한다 —
         #  백테스트가 실매매와 다른 식을 쓰면 튜닝 결과가 무의미해진다(콜백 캡과 같은 규약).
