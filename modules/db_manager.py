@@ -1626,8 +1626,13 @@ class DBManager:
                 except Exception: break
             return 0
 
-    def cancel_other_reserved_orders(self, triggered_id, cano, acnt, code):
-        """특정 예약 주문이 발동되었을 때, 동일 계좌/종목의 나머지 대기 중인 예약 주문을 일괄 취소"""
+    def cancel_other_reserved_orders(self, triggered_id, cano, acnt, code,
+                                     reason='동일 종목의 다른 예약 매매 발동으로 인한 자동 취소'):
+        """특정 예약 주문이 발동되었을 때, 동일 계좌/종목의 나머지 대기 중인 예약 주문을 일괄 취소
+
+        reason: 취소 사유. 발동 외의 일괄 취소(보유 소멸 등)에서 사유가 '다른 예약 발동'으로
+                잘못 남으면 나중에 이력만 보고는 왜 취소됐는지 알 수 없다.
+        """
         with self.lock:
             for attempt in range(5):
                 try:
@@ -1642,9 +1647,9 @@ class DBManager:
                     if targets:
                         cursor.execute('''
                             UPDATE reserved_orders 
-                            SET status='CANCELED', fail_reason='동일 종목의 다른 예약 매매 발동으로 인한 자동 취소' 
+                            SET status='CANCELED', fail_reason=? 
                             WHERE cano=? AND acnt=? AND code=? AND id != ? AND status='PENDING'
-                        ''', (cano, acnt, code, triggered_id))
+                        ''', (reason, cano, acnt, code, triggered_id))
                         conn.commit()
                     return targets
                 except sqlite3.OperationalError as e:

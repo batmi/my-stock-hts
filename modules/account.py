@@ -189,6 +189,7 @@ def sync_today_trades():
                                                 elif c_type == 'TRAILING_SELL': res_reason += f" (고점하락 {tp_val}%)"
                                                 elif c_type == 'SMART_MONEY': res_reason += " (수급 턴어라운드)"
                                                 elif c_type.startswith('STATE_'): res_reason += f" (상태진입: { {'STATE_STRONGBUY': '강매수', 'STATE_BUY': '매수', 'STATE_MR': '역매수'}.get(c_type, c_type)})"
+                                                elif c_type == 'HOLDING_EXIT': res_reason += " (보유분석 청산)"
                                                 elif c_type == 'COMPOSITE': res_reason += " (복합조건)"
                                                 else: res_reason += f" (목표가 {tp_val})"
                                                 reason_to_save = f"체결 확인 ({res_reason})"
@@ -1837,6 +1838,7 @@ def view_trade_history():
                 elif c_type == 'TRAILING_SELL': reason += f" (고점 하락: {r['target_price']}%)"
                 elif c_type == 'SMART_MONEY': reason += " (수급 턴어라운드)"
                 elif c_type.startswith('STATE_'): reason += f" (상태진입: { {'STATE_STRONGBUY': '강매수', 'STATE_BUY': '매수', 'STATE_MR': '역매수'}.get(c_type, c_type)})"
+                elif c_type == 'HOLDING_EXIT': reason += " (보유분석 청산)"
                 elif c_type == 'COMPOSITE': reason += " (복합조건)"
                 else: reason += f" ({r['target_price']})"
                     

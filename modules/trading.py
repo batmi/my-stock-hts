@@ -1768,6 +1768,8 @@ def _condition_text(condition_type, target_price=0.0, target_time="",
         return "사상 최고가 경신" if tp == 0 else "52주 신고가 경신"
     if ct == 'ATR_BREAKOUT':
         return f"전일 종가 ± (ATR × {tp}) 돌파"
+    if ct == 'HOLDING_EXIT':
+        return "보유분석 청산 신호"
     if ct.startswith('STATE_'):
         return {'STATE_STRONGBUY': '강매수 진입', 'STATE_BUY': '매수 진입',
                 'STATE_MR': '역매수 진입'}.get(ct, ct)
@@ -1889,10 +1891,38 @@ RSV_COND_ITEMS = [
     ("3", "이평선 크로스 (EMA)", "주가가 특정 EMA를 상향돌파 / 하향이탈 시"),
     ("4", "신고가 돌파 (NEW_HIGH)", "52주 / 사상 신고가 경신 시 (추세추종 강세 진입)"),
     ("5", "변동성 돌파 (ATR)", "전일 종가 ± (ATR × 배수) 돌파 시"),
-    ("6", "시스템 신호 (SIGNAL)", "수급 전환 / 강매수·매수 상태 진입 · 매수 전용"),
+    ("6", "시스템 신호 (SIGNAL)", "매수=종목분석 진입 신호(수급·강매수·매수) / 매도=보유분석 청산 신호"),
     ("7", "시간 도달 (TIME)", "지정 시각(HHMM) 이후"),
     ("8", "복합 조건 (COMPOSITE)", "점수·RSI·지정가·시간 등 여러 조건 동시 충족(AND)"),
 ]
+
+
+def _warn_if_auto_managed(state):
+    """자동매매가 이미 같은 판정으로 청산하는 종목이면 중복 발주 위험을 알린다.
+
+    [왜 막지 않고 알리기만 하나] 자동매매를 껐다 켜는 운용에서는 이 예약이 유일한
+    보호막이 된다. 등록을 거부하면 그 운용이 통째로 막히므로, 판단에 필요한 사실만
+    보여 주고 선택은 운용자에게 남긴다.
+    """
+    try:
+        from modules import auto_trade
+        restricted = set(auto_trade.get_restricted_stocks(state.get('cano'), state.get('acnt')) or {})
+        unmanaged = auto_trade.get_unmanaged_reason(
+            state['code'], state.get('name', ''), state.get('is_overseas', False),
+            restricted_codes=restricted)
+    except Exception as e:
+        logger.debug(f"자동매매 관리 여부 확인 실패: {e}")
+        return
+
+    if unmanaged:
+        config.console.print(f"[dim]  · 이 종목은 자동 매도 대상이 아닙니다 ({unmanaged}) — "
+                             f"예약이 유일한 청산 경로가 됩니다.[/dim]")
+        return
+
+    config.console.print("\n[bold yellow]⚠️ 이 종목은 자동매매의 청산 대상입니다.[/bold yellow]")
+    config.console.print("[yellow]  자동매매가 켜져 있으면 같은 신호에 시스템도 매도를 냅니다 — "
+                         "같은 주기에 겹치면 주문이 두 번 나갈 수 있습니다.[/yellow]")
+    config.console.print("[dim]  (자동매매를 끄고 운용하거나, 이 종목을 제한종목으로 두는 경우에만 권합니다.)[/dim]")
 
 
 def _rsv_step_condition_value(cond_choice, order_type, state):
@@ -1997,6 +2027,23 @@ def _rsv_step_condition_value(cond_choice, order_type, state):
     if cond_choice == "6":
         # [추세추종] 역매수(STATE_MR)는 USE_MEAN_REVERSION OFF 고정으로 분류 자체가 발생하지 않아
         #  등록 옵션에서 제외한다 (기존 등록분 감시는 monitor가 계속 지원).
+        if not is_buy:
+            # [보유분석 청산] 파는 대상은 차트가 아니라 '내 포지션'이다. 매수는 포지션이 없어
+            #  종목분석(classify_stock_state)밖에 볼 것이 없지만, 매도는 수익률·보유일수·최고가·
+            #  반익절 이력·진입 시 ATR 손절률이 전부 있다. 자동매매가 실제 청산에 쓰는
+            #  analyze_sell을 그대로 트리거로 삼는다 — 종목분석의 '매도' 상태는 이 판정이
+            #  이미 품고 있는 부분집합이라 따로 두지 않는다.
+            config.console.print("\n[cyan]◆ 보유분석 청산 신호 발생 시 발동[/cyan]")
+            config.console.print("[dim]  - 익절 / 손절 / 본전청산(BEP) / 시간청산 / 샹들리에 트레일링 스톱 /[/dim]")
+            config.console.print("[dim]    RSI 과열 / 추세이탈(점수 하락+60일선 이탈) / 매도 상태 진입[/dim]")
+            config.console.print("[dim]  - 잔고 화면 [9]-2의 '상태' 컬럼에 뜨는 청산 신호와 같은 판정입니다.[/dim]")
+            config.console.print("[yellow]  ※ 반익절 신호에는 발동하지 않습니다 — 예약 수량은 등록 시점에 고정이라 "
+                                 "'절반만 판다'를 표현할 수 없습니다.[/yellow]")
+            _warn_if_auto_managed(state)
+            st = _rsv_ask("1: 이 신호로 등록", choices=["1"], default="1")
+            if st in (_RSV_BACK, _RSV_QUIT): return st
+            return {'condition_type': "HOLDING_EXIT", 'target_price': 0.0}
+
         config.console.print("\n[cyan]◆ 진입을 감지할 시스템 신호 선택[/cyan]")
         config.console.print("[dim]  - 수급 전환: 외국인/기관이 순매수로 돌아서는 신호[/dim]")
         config.console.print("[dim]  - 강매수: 슈퍼모멘텀(신고가 주도주) / 매수: 일반 매수조건[/dim]")
@@ -2320,13 +2367,14 @@ def register_reserved_order():
             _rsv_header(state)
             config.console.print("[dim](4/9 발동 조건)[/dim]")
             cond_items = RSV_COND_ITEMS
-            # 시스템 신호(수급 전환·상태 진입)는 매수 진입 신호라 매도에서는 잠근다.
-            disabled = set() if state['order_type'] == 'buy' else {'6'}
-            side_note = ("[dim]※ 회색 항목은 이 방향에서 쓸 수 없습니다. "
-                         "매도 신호를 지표로 결합하려면 8번 복합 조건을 쓰세요.[/dim]"
-                         if disabled else None)
+            # [수정] 6번은 방향에 따라 보는 판정기가 다르다 — 매수는 포지션이 없으므로 종목분석,
+            #  매도는 포지션이 있으므로 보유분석(자동매매가 실제 청산에 쓰는 analyze_sell).
+            #  종전에는 진입 신호만 있어 매도에서 통째로 잠겼다.
+            side_note = None if state['order_type'] == 'buy' else (
+                "[dim]※ 6번 매도 신호는 잔고 화면의 '상태'와 같은 보유분석 청산 판정입니다 "
+                "(익절·손절·시간청산·트레일링스탑·추세이탈).[/dim]")
             cond_choice = utils.show_menu("예약 발동 조건", cond_items,
-                                          text_before=side_note, disabled=disabled)
+                                          text_before=side_note)
             if cond_choice.lower() == 'q':
                 step = -1
                 continue
@@ -2426,6 +2474,18 @@ def register_reserved_order():
             config.console.print("[dim](7/9 수량)[/dim]")
             is_overseas = state['is_overseas']
             max_qty = 0
+            # [보유분석 청산] '전량 청산' 신호이므로 수량을 묻지 않는다. 부분 수량을 받으면
+            #  신호의 뜻과 어긋나고, 등록 후 추가 매수한 몫이 무방비로 남는다. 발주 직전에
+            #  실제 매도가능수량으로 다시 맞추므로 여기 값은 표시용 기준선이다.
+            if state['condition_type'] == 'HOLDING_EXIT':
+                state['qty'] = int(state['stock_info'].get('qty', 0))
+                config.console.print(f"\n[cyan]◆ 수량: 전량 청산[/cyan] "
+                                     f"[dim](현재 보유 {state['qty']:,}주 — 발동 시점의 보유 전량을 매도합니다)[/dim]")
+                utils.pause()
+                step += 1
+                marks[step] = len(context.USER_ACTION_BREADCRUMB)
+                continue
+
             if state['order_type'] == "sell":
                 max_qty = int(state['stock_info'].get('qty', 0))
                 v = _rsv_ask(f"주문 수량(주) [dim](보유 잔고: {max_qty:,}주)[/dim]", default=str(max_qty))
@@ -2723,7 +2783,7 @@ def _print_reserved_orders_table(orders=None, fetch_price=True):
         table.add_row(*row)
 
     config.console.print(table)
-    config.console.print("[dim]※ 거리 = 현재가에서 발동까지 남은 폭 · ⚠ = 오늘 만료 · "
+    config.console.print("[dim]  ※ 거리 = 현재가에서 발동까지 남은 폭 · ⚠ = 오늘 만료 · "
                          "계산 불가 조건(수급·상태·복합)은 '-'[/dim]")
     return orders
 

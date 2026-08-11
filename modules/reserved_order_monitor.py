@@ -29,6 +29,10 @@ class ReservedOrderMonitor:
             cls._instance.is_running = False
             cls._instance.monitor_thread = None
             cls._instance.chart_cache = {} # {code: {'df': df, 'time': timestamp}}
+            # [보유분석 캐시] {(cano, acnt): {'res': {code: analyze_sell 결과}, 'time': ts}}
+            #  보유분석 1회는 잔고 조회 + DB 다중 조회 + 종목별 차트다. 10초 주기로 그대로
+            #  돌리면 감시기 혼자 API와 CPU를 잡아먹는다(운영기는 라즈베리파이).
+            cls._instance.holding_cache = {}
             # [권리 조정 감시] 종목별 마지막 점검 시각 {code: timestamp}
             cls._instance.corp_checked_at = {}
         return cls._instance
@@ -54,6 +58,10 @@ class ReservedOrderMonitor:
     # 종목별 권리 조정 점검 주기(초). 조정은 하루 한 번 있을까 말까 한 사건이라
     #  자주 볼 이유가 없고, 점검마다 일봉 조회가 한 번 나간다.
     CORP_ACTION_CHECK_INTERVAL = 3600.0
+
+    # 보유분석 재사용 주기(초). 청산 신호는 일봉 지표와 수익률로 판정하므로 10초마다
+    #  다시 계산할 이유가 없다. 손절·TS는 가격 급변에 반응해야 하니 지나치게 길면 안 된다.
+    HOLDING_ANALYSIS_INTERVAL = 60.0
 
     @staticmethod
     def _daily_source_tag():
@@ -172,8 +180,8 @@ class ReservedOrderMonitor:
         chart_required_codes = set()
         for order in pending_orders:
             if order['condition_type'] in ['SCORE_UP', 'SCORE_DOWN', 'RSI_UP', 'RSI_DOWN', 'EMA_UP', 'EMA_DOWN',
-                                           'STATE_STRONGBUY', 'STATE_BUY', 'STATE_MR', 'NEW_HIGH', 'COMPOSITE',
-                                           'ATR_BREAKOUT']:
+                                           'STATE_STRONGBUY', 'STATE_BUY', 'STATE_MR', 'NEW_HIGH',
+                                           'COMPOSITE', 'ATR_BREAKOUT']:
                 code = order['code']
                 now_ts = time.time()
                 # 캐시가 1시간 지났거나 없으면 업데이트
@@ -277,6 +285,18 @@ class ReservedOrderMonitor:
                                     trigger, reason = True, f"EMA {int(target_price)}선 상향돌파 (현재가: {curr_price:,.2f})"
                                 elif condition_type == 'EMA_DOWN' and curr_price <= ema_val:
                                     trigger, reason = True, f"EMA {int(target_price)}선 하향이탈 (현재가: {curr_price:,.2f})"
+
+                elif condition_type == 'HOLDING_EXIT':
+                    # [보유분석 청산] 자동매매가 실제 청산에 쓰는 판정(analyze_sell)을 그대로 쓴다.
+                    #  반익절(sell_ratio<1)은 발동시키지 않는다 — 예약 수량은 등록 시점에 고정이라
+                    #  '절반만 팔고 추세를 계속 탄다'는 반익절의 의도를 예약 수량으로 표현할 수 없다.
+                    res = self._holding_exit_result(order)
+                    if res and res.get('action') == 'sell':
+                        if float(res.get('sell_ratio', 1.0) or 1.0) >= 1.0:
+                            trigger, reason = True, f"보유분석 청산: {res.get('reason', '')}"
+                        else:
+                            logger.debug(f"[Reserve] {code} 반익절 신호는 예약 매도 대상이 아님 "
+                                         f"({res.get('reason', '')})")
 
                 elif condition_type in ('SMART_MONEY', 'STATE_STRONGBUY', 'STATE_BUY', 'STATE_MR', 'NEW_HIGH',
                                         'COMPOSITE', 'ATR_BREAKOUT'):
@@ -394,6 +414,46 @@ class ReservedOrderMonitor:
         )
         return state
 
+    def _holding_exit_result(self, order):
+        """예약 매도가 걸린 종목의 보유분석(analyze_sell) 결과를 돌려준다. 판정 불가면 None.
+
+        [왜 종목분석이 아니라 보유분석인가] 파는 대상은 '차트'가 아니라 '내 포지션'이다.
+        수익률·보유일수·최고가(트레일링)·반익절 이력·진입 시 ATR 손절률까지 반영해야
+        익절·손절·시간청산·샹들리에 TS가 모두 살아난다. 종목분석의 '매도' 상태는
+        analyze_sell이 이미 청산 사유 중 하나로 포함하는 부분집합이다.
+
+        [fail-closed] 잔고·분석을 못 구하면 None을 돌려 발동시키지 않는다. 모르는 것을
+        '신호 없음'이 아니라 '판정 불가'로 두어야 조용한 오발주가 생기지 않는다.
+        """
+        cano, acnt = order.get('cano'), order.get('acnt')
+        key = (cano, acnt)
+        now_ts = time.time()
+        cached = self.holding_cache.get(key)
+        if cached is None or (now_ts - cached['time']) > self.HOLDING_ANALYSIS_INTERVAL:
+            try:
+                from modules import account as account_mod
+                # [계좌 라우팅] 분석까지 통째로 감싼다. analyze_holdings는 내부에서 진입일
+                #  복원을 위해 증권사 체결 내역(get_period_entry_dates)을 계좌 인자 없이
+                #  조회하는데, 그 계좌는 thread_local(use_auto_account)로 정해진다. 감시기는
+                #  전용 스레드라 이 값을 상속받지 않아, 밖에 두면 다른 계좌의 체결 이력으로
+                #  진입일이 잡힌다 → 보유일수(시간청산)와 TS 앵커(진입일 이후 최고가)가 함께
+                #  틀어진다. 잔고만 감싸면 조용히 어긋나므로 범위를 분석까지 넓힌다.
+                with utils.AccountContext(cano):
+                    raw_dom, _ = api.get_domestic_balance(cano, acnt)
+                    raw_ovs = api.get_overseas_balance(cano, acnt)
+                    if raw_dom is None and raw_ovs is None:
+                        return None  # 조회 실패 — 캐시에 남기지 않는다(다음 주기 재시도)
+                    dom = [i for i in (raw_dom or []) if api.safe_int(i.get('hldg_qty', 0)) > 0]
+                    ovs = [i for i in (raw_ovs or [])
+                           if float(i.get('ovrs_cblc_qty', 0) or i.get('ord_psbl_qty', 0) or 0) > 0]
+                    res = account_mod.run_holding_analysis(dom, ovs)
+            except Exception as e:
+                logger.warning(f"[Reserve] 보유분석 실패({cano}): {e}")
+                return None
+            cached = {'res': res or {}, 'time': now_ts}
+            self.holding_cache[key] = cached
+        return cached['res'].get(order['code'])
+
     def _eval_atomic(self, ctype, value, ctx):
         """원자 조건 1개 평가 → bool. 신규 단일조건과 복합(COMPOSITE) 서브조건이 공유한다."""
         cp = ctx['curr_price']
@@ -497,7 +557,90 @@ class ReservedOrderMonitor:
             labels.append(self._atomic_label(st, sv))
         return True, "복합조건 충족: " + " AND ".join(labels)
 
+    def _reconcile_sell_qty(self, order):
+        """발주 직전 실제 매도가능수량과 예약 수량을 대사한다. (수량, 안내문) 또는 None.
+
+        [왜 필요한가] 예약 수량은 등록 시점에 굳는데, 그 사이 HTS·MTS로 직접 팔거나 더
+        사면 수량이 어긋난다. 초과분은 증권사가 거부해 청산이 통째로 실패하고, 부족분은
+        일부만 팔려 나머지가 무방비로 남는다. 수동 계좌에서는 이 어긋남이 예외가 아니라
+        일상이다.
+
+        [왜 취소가 아니라 축소인가] 권리 조정은 목표가라는 '기준' 자체가 무의미해져
+        올바른 주문이 존재하지 않으므로 취소한다. 외부 매매는 다르다 — 가격·신호 조건은
+        그대로 유효하고 어긋난 것은 수량 하나뿐이다. 전량 취소하면 남은 수량의 손절이
+        조용히 사라진다. 팔 것이 하나도 없을 때만 취소한다.
+
+        [조회 실패는 그대로 진행] fetch_sellable_quantity는 실패를 None으로 돌려 '모름'과
+        '0주'를 가른다. 모름을 0으로 읽으면 일시적 조회 실패가 손절을 거른다.
+
+        반환: (주문 수량, 축소 안내문) / None = 팔 것이 없어 취소 처리됨
+        """
+        qty = api.safe_int(order.get('qty'))
+        # 해외는 이 조회(국내 TR)가 없다. 대사 없이 등록 수량 그대로 낸다.
+        if order.get('market') != 'KR':
+            return qty, ""
+
+        with utils.AccountContext(order.get('cano')):
+            sellable = api.fetch_sellable_quantity(order['code'])
+
+        if sellable is None:
+            logger.debug(f"[Reserve] {order['code']} 매도가능수량 조회 실패 — 등록 수량으로 진행")
+            return qty, ""
+
+        if sellable <= 0:
+            self._cancel_on_position_gone(order)
+            return None
+
+        if order['condition_type'] == 'HOLDING_EXIT':
+            # 전량 청산 신호다. 등록 후 추가 매수한 몫까지 함께 정리한다.
+            if sellable != qty:
+                return sellable, f"보유 변동으로 {qty:,}주 → {sellable:,}주 조정(전량 청산)"
+            return sellable, ""
+
+        if sellable < qty:
+            return sellable, f"외부 매매로 보유가 줄어 {qty:,}주 → {sellable:,}주 축소"
+        return qty, ""
+
+    def _cancel_on_position_gone(self, order):
+        """보유가 0이 된 종목의 대기 예약을 모두 취소하고 알린다.
+
+        조건이 남아 있어도 팔 것이 없으면 발동은 실패로만 쌓인다. 같은 종목의 다른 예약도
+        같은 전제 위에 서 있으므로 함께 정리한다(체결 시 일괄 취소와 같은 규칙).
+        """
+        code = order['code']
+        name = order.get('name') or code
+        try:
+            canceled = db_manager.db.cancel_other_reserved_orders(
+                order['id'], order.get('cano'), order.get('acnt'), code,
+                reason="보유 수량 없음(외부 매도 추정)으로 자동 취소")
+        except Exception as e:
+            logger.warning(f"[Reserve] 보유 소멸 일괄 취소 실패({code}): {e}")
+            canceled = []
+        db_manager.db.update_reserved_order_status(
+            order['id'], 'CANCELED', fail_reason="보유 수량 없음(외부 매도 추정)")
+
+        logger.warning(f"[Reserve] {code} 보유 0 — 예약 {len(canceled) + 1}건 취소")
+        try:
+            api.send_telegram_message(
+                f"🗑 [예약 취소] {name}({code})\n"
+                f"사유: 보유 수량이 없습니다 (HTS 등 외부 매도 추정)\n"
+                f"조건: {order.get('condition_type')}\n"
+                f"→ 같은 종목의 대기 예약 {len(canceled) + 1}건을 함께 취소했습니다.")
+        except Exception:
+            pass
+
     def _execute_order(self, order, reason):
+        # [수량 대사] 매도는 발주 직전에 실제 매도가능수량과 맞춘다. 등록 시점과 발동 시점
+        #  사이에 외부(HTS·MTS) 매매가 끼어들 수 있고, 수동 계좌에서는 그것이 일상이다.
+        order_qty, qty_note = api.safe_int(order.get('qty')), ""
+        if order['order_type'] == 'sell':
+            reconciled = self._reconcile_sell_qty(order)
+            if reconciled is None:
+                return           # 보유 0 — 취소 처리됨(_cancel_on_position_gone)
+            order_qty, qty_note = reconciled
+            if qty_note:
+                reason = f"{reason} · {qty_note}"
+
         db_manager.db.update_reserved_order_status(order['id'], 'PROCESSING')
         market_str = "domestic" if order['market'] == 'KR' else "overseas"
         
@@ -537,12 +680,15 @@ class ReservedOrderMonitor:
         #  상속되지 않는다 — 명시하지 않으면 자동매매 계좌에 걸어 둔 예약이 수동 계좌에서
         #  발주된다.
         with utils.AccountContext(order.get('cano')):
-            res = api.place_order(market_str, order['order_type'], order['code'], order['qty'], price_str, ord_dvsn)
+            res = api.place_order(market_str, order['order_type'], order['code'], order_qty, price_str, ord_dvsn)
         if res.get('rt_cd') == '0':
             odno = res.get('output', {}).get('ODNO') or res.get('output', {}).get('KRX_FWDG_ORD_ORGNO')
             db_manager.db.update_reserved_order_status(order['id'], 'TRIGGERED', odno)
             display_price = "시장가" if order_price == 0 else (f"{int(order_price):,}원" if order['market'] == 'KR' else f"${order_price:,.2f}")
-            api.send_telegram_message(f"🔔 [예약 {'매수' if order['order_type']=='buy' else '매도'} 실행]\n종목: {order['name']}({order['code']})\n단가: {display_price}\n조건: {reason}\n주문번호: {odno}")
+            api.send_telegram_message(f"🔔 [예약 {'매수' if order['order_type']=='buy' else '매도'} 실행]\n"
+                                      f"종목: {order['name']}({order['code']})\n"
+                                      f"수량: {order_qty:,}주\n단가: {display_price}\n"
+                                      f"조건: {reason}\n주문번호: {odno}")
             
             # [추가] 예약 발동 내역을 거래 내역(trades)에 기록 (접수 상태)
             t_type = f"{'매수' if order['order_type'] == 'buy' else '매도'}(예약)"

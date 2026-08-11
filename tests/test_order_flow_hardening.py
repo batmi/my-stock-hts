@@ -390,15 +390,19 @@ def test_buy_side_has_no_locked_conditions(mock_ask, mock_menu, mock_insert, res
     cond_call = [c for c in mock_menu.call_args_list if c[0][0] == "예약 발동 조건"][0]
     keys = [it[0] for it in cond_call[0][1]]
     assert keys == ["1", "2", "3", "4", "5", "6", "7", "8"], keys
-    assert cond_call.kwargs['disabled'] == set()
+    assert not cond_call.kwargs.get('disabled')
 
 
 @patch('modules.trading.db_manager.db.insert_reserved_order')
 @patch('modules.trading.utils.show_menu')
 @patch('modules.trading.Prompt.ask')
 @patch('modules.trading.select_stock_from_balance')
-def test_sell_side_locks_only_the_entry_signal(mock_bal, mock_ask, mock_menu, mock_insert, reserve_env):
-    """매도에서 잠기는 것은 '시스템 신호'(매수 진입 신호) 하나뿐이다."""
+def test_sell_side_has_no_locked_conditions(mock_bal, mock_ask, mock_menu, mock_insert, reserve_env):
+    """매도에서도 잠기는 조건은 없다 — 6번은 방향에 맞는 신호로 바뀐다.
+
+    [배경] 종전에는 6번이 진입 신호(수급·강매수·매수)만 담고 있어 매도에서 통째로
+    잠겼다. 매도는 포지션이 있으므로 보유분석(analyze_sell) 청산 판정을 트리거로 연다.
+    """
     mock_bal.return_value = ("005930", "삼성전자", False, "KRX", {'qty': 10, 'buy_price': 70000.0})
     mock_menu.side_effect = ["2", "3"]          # 매도 → EMA
     mock_ask.side_effect = ["20", "2", "0", "10", "4", "y"]
@@ -406,7 +410,29 @@ def test_sell_side_locks_only_the_entry_signal(mock_bal, mock_ask, mock_menu, mo
     trading.register_reserved_order()
 
     cond_call = [c for c in mock_menu.call_args_list if c[0][0] == "예약 발동 조건"][0]
-    assert cond_call.kwargs['disabled'] == {"6"}
+    assert not cond_call.kwargs.get('disabled')
+
+
+@patch('modules.trading.db_manager.db.insert_reserved_order')
+@patch('modules.trading.utils.show_menu')
+@patch('modules.trading.Prompt.ask')
+@patch('modules.trading.select_stock_from_balance')
+def test_sell_signal_registers_holding_exit(mock_bal, mock_ask, mock_menu, mock_insert, reserve_env):
+    """매도 방향의 6번은 보유분석 청산(HOLDING_EXIT)으로 등록된다.
+
+    종목분석의 '매도' 상태는 analyze_sell이 이미 청산 사유로 품고 있는 부분집합이라
+    따로 두지 않는다 (engine.analyze_sell: `state == "매도" or ...`).
+    """
+    mock_bal.return_value = ("005930", "삼성전자", False, "KRX", {'qty': 10, 'buy_price': 70000.0})
+    mock_menu.side_effect = ["2", "6"]          # 매도 → 시스템 신호
+    mock_ask.side_effect = ["1", "0", "10", "4", "y"]
+
+    trading.register_reserved_order()
+
+    mock_insert.assert_called_once()
+    kwargs = mock_insert.call_args[1]
+    assert kwargs['order_type'] == "sell"
+    assert kwargs['condition_type'] == "HOLDING_EXIT"
 
 
 def test_disabled_menu_keys_are_not_selectable():

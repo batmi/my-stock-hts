@@ -619,3 +619,188 @@ def test_telegram_cmd_reserves_delete_no_args():
     result = commander._cmd_reserves(["d"])
     assert "사용법:" in result
     assert "예약주문ID" in result
+
+def _holding_exit_order(oid, code, name):
+    return {"id": oid, "cano": "12345678", "acnt": "01", "code": code, "name": name,
+            "condition_type": "HOLDING_EXIT", "target_price": 0.0,
+            "order_type": "sell", "market": "KR", "expire_dt": "20991231"}
+
+
+@patch('modules.reserved_order_monitor.db_manager.db.get_pending_reserved_orders')
+@patch('modules.reserved_order_monitor.api.get_current_price')
+@patch('modules.reserved_order_monitor.ReservedOrderMonitor._holding_exit_result')
+@patch('modules.reserved_order_monitor.ReservedOrderMonitor._execute_order')
+def test_monitor_trigger_holding_exit(mock_execute, mock_holding, mock_get_price, mock_get_orders):
+    """HOLDING_EXIT: 보유분석이 청산(action='sell')을 내면 예약 매도가 발동한다.
+
+    파는 대상은 차트가 아니라 포지션이므로, 종목분석 상태가 아니라 자동매매가 실제
+    청산에 쓰는 analyze_sell 결과를 그대로 트리거로 쓴다.
+    """
+    monitor = ReservedOrderMonitor()
+    mock_get_orders.return_value = [
+        _holding_exit_order(31, "005930", "삼성전자"),
+        _holding_exit_order(32, "000660", "SK하이닉스"),
+    ]
+    mock_get_price.side_effect = lambda code, is_ovs: 50000.0
+    mock_holding.side_effect = lambda order: {
+        "005930": {'action': 'sell', 'reason': '손절(-8.0%)', 'sell_ratio': 1.0},
+        "000660": {'action': 'hold', 'reason': '', 'sell_ratio': 1.0},
+    }.get(order['code'])
+
+    with patch('modules.reserved_order_monitor.datetime') as mock_dt:
+        mock_dt.now.return_value.strftime.side_effect = lambda fmt: "1200" if fmt == "%H%M" else "20240101"
+        monitor._check_orders()
+
+    assert mock_execute.call_count == 1
+    assert mock_execute.call_args[0][0]['id'] == 31
+    assert "손절" in mock_execute.call_args[0][1]
+
+
+@patch('modules.reserved_order_monitor.db_manager.db.get_pending_reserved_orders')
+@patch('modules.reserved_order_monitor.api.get_current_price')
+@patch('modules.reserved_order_monitor.ReservedOrderMonitor._holding_exit_result')
+@patch('modules.reserved_order_monitor.ReservedOrderMonitor._execute_order')
+def test_monitor_holding_exit_ignores_half_take_profit(mock_execute, mock_holding, mock_get_price, mock_get_orders):
+    """반익절(sell_ratio<1)에는 발동하지 않는다.
+
+    예약 수량은 등록 시점에 고정이라 '절반만 팔고 추세를 계속 탄다'는 반익절의 의도를
+    표현할 수 없다. 전량이 나가면 의도와 정반대가 되므로 전량 청산 신호만 받는다.
+    """
+    monitor = ReservedOrderMonitor()
+    mock_get_orders.return_value = [_holding_exit_order(33, "005930", "삼성전자")]
+    mock_get_price.side_effect = lambda code, is_ovs: 50000.0
+    mock_holding.return_value = {'action': 'sell', 'reason': '반익절(+10.0%)', 'sell_ratio': 0.5}
+
+    with patch('modules.reserved_order_monitor.datetime') as mock_dt:
+        mock_dt.now.return_value.strftime.side_effect = lambda fmt: "1200" if fmt == "%H%M" else "20240101"
+        monitor._check_orders()
+
+    mock_execute.assert_not_called()
+
+
+@patch('modules.reserved_order_monitor.db_manager.db.get_pending_reserved_orders')
+@patch('modules.reserved_order_monitor.api.get_current_price')
+@patch('modules.reserved_order_monitor.api.get_overseas_balance')
+@patch('modules.reserved_order_monitor.api.get_domestic_balance')
+@patch('modules.reserved_order_monitor.ReservedOrderMonitor._execute_order')
+def test_monitor_holding_exit_fails_closed_on_balance_error(mock_execute, mock_dom, mock_ovs,
+                                                            mock_get_price, mock_get_orders):
+    """잔고를 못 구하면 발동하지 않는다 (fail-closed).
+
+    모르는 것을 '신호 없음'으로 두면 조용히 보호가 사라지고, '청산 신호'로 두면
+    근거 없는 매도가 나간다. 판정 불가는 발동 보류다.
+    """
+    monitor = ReservedOrderMonitor()
+    monitor.holding_cache.clear()
+    mock_get_orders.return_value = [_holding_exit_order(34, "005930", "삼성전자")]
+    mock_get_price.side_effect = lambda code, is_ovs: 50000.0
+    mock_dom.return_value = (None, None)
+    mock_ovs.return_value = None
+
+    with patch('modules.reserved_order_monitor.datetime') as mock_dt:
+        mock_dt.now.return_value.strftime.side_effect = lambda fmt: "1200" if fmt == "%H%M" else "20240101"
+        monitor._check_orders()
+
+    assert mock_dom.called                # 판정 경로를 실제로 지났는지 확인
+    mock_execute.assert_not_called()
+    assert not monitor.holding_cache      # 실패는 캐시에 남기지 않는다 (다음 주기 재시도)
+
+
+# -------------------------------------------------------------------
+# 5. 발주 직전 매도 수량 대사 (외부 HTS 매매 대응)
+# -------------------------------------------------------------------
+def _sell_order(condition_type="STOP", qty=100):
+    return {"id": 41, "cano": "12345678", "acnt": "01", "market": "KR",
+            "order_type": "sell", "code": "005930", "name": "삼성전자",
+            "qty": qty, "order_price": 70000.0, "condition_type": condition_type}
+
+
+@patch('modules.reserved_order_monitor.api.send_telegram_message')
+@patch('modules.reserved_order_monitor.db_manager.db.update_reserved_order_status')
+@patch('modules.reserved_order_monitor.api.fetch_sellable_quantity')
+@patch('modules.reserved_order_monitor.api.place_order')
+def test_execute_sell_shrinks_to_actual_qty(mock_place, mock_sellable, mock_update, mock_tg):
+    """외부에서 일부를 팔았으면 예약을 취소하지 않고 실제 수량으로 축소해 주문한다.
+
+    전량 취소하면 남은 수량의 손절이 조용히 사라진다. 어긋난 것은 수량뿐이고
+    가격·신호 조건은 그대로 유효하므로 정정이 맞다.
+    """
+    m = ReservedOrderMonitor()
+    mock_sellable.return_value = 40          # 100주 예약 → 실제 40주만 남음
+    mock_place.return_value = {'rt_cd': '0', 'output': {'ODNO': '999'}}
+
+    m._execute_order(_sell_order(), "손절 도달")
+
+    assert mock_place.call_args[0][3] == 40
+    assert "40" in mock_tg.call_args[0][0]    # 축소 사실이 알림에 남는다
+
+
+@patch('modules.reserved_order_monitor.api.send_telegram_message')
+@patch('modules.reserved_order_monitor.db_manager.db.cancel_other_reserved_orders')
+@patch('modules.reserved_order_monitor.db_manager.db.update_reserved_order_status')
+@patch('modules.reserved_order_monitor.api.fetch_sellable_quantity')
+@patch('modules.reserved_order_monitor.api.place_order')
+def test_execute_sell_cancels_when_position_gone(mock_place, mock_sellable, mock_update,
+                                                 mock_cancel_others, mock_tg):
+    """보유가 0이면 주문하지 않고 같은 종목의 예약을 모두 취소하고 알린다."""
+    m = ReservedOrderMonitor()
+    mock_sellable.return_value = 0
+    mock_cancel_others.return_value = [{"id": 42}]
+
+    m._execute_order(_sell_order(), "손절 도달")
+
+    mock_place.assert_not_called()
+    mock_cancel_others.assert_called_once()
+    mock_update.assert_any_call(41, 'CANCELED', fail_reason="보유 수량 없음(외부 매도 추정)")
+    assert "외부 매도" in mock_tg.call_args[0][0]
+
+
+@patch('modules.reserved_order_monitor.api.send_telegram_message')
+@patch('modules.reserved_order_monitor.db_manager.db.update_reserved_order_status')
+@patch('modules.reserved_order_monitor.api.fetch_sellable_quantity')
+@patch('modules.reserved_order_monitor.api.place_order')
+def test_execute_sell_proceeds_when_lookup_fails(mock_place, mock_sellable, mock_update, mock_tg):
+    """매도가능수량 조회 실패(None)는 등록 수량 그대로 진행한다.
+
+    '모름'을 '0주'로 읽으면 일시적 조회 실패가 손절을 거른다. 추세추종에서 못 파는
+    쪽이 훨씬 비싸므로 실패는 진행 방향으로 넘긴다.
+    """
+    m = ReservedOrderMonitor()
+    mock_sellable.return_value = None
+    mock_place.return_value = {'rt_cd': '0', 'output': {'ODNO': '999'}}
+
+    m._execute_order(_sell_order(), "손절 도달")
+
+    assert mock_place.call_args[0][3] == 100
+
+
+@patch('modules.reserved_order_monitor.api.send_telegram_message')
+@patch('modules.reserved_order_monitor.db_manager.db.update_reserved_order_status')
+@patch('modules.reserved_order_monitor.api.fetch_sellable_quantity')
+@patch('modules.reserved_order_monitor.api.place_order')
+def test_holding_exit_expands_to_full_position(mock_place, mock_sellable, mock_update, mock_tg):
+    """HOLDING_EXIT은 '전량 청산' 신호이므로 등록 후 추가 매수분까지 함께 판다."""
+    m = ReservedOrderMonitor()
+    mock_sellable.return_value = 150         # 등록 시 100주 → 추가 매수로 150주
+    mock_place.return_value = {'rt_cd': '0', 'output': {'ODNO': '999'}}
+
+    m._execute_order(_sell_order(condition_type="HOLDING_EXIT"), "보유분석 청산: 손절(-8.0%)")
+
+    assert mock_place.call_args[0][3] == 150
+
+
+@patch('modules.reserved_order_monitor.api.send_telegram_message')
+@patch('modules.reserved_order_monitor.db_manager.db.update_reserved_order_status')
+@patch('modules.reserved_order_monitor.api.fetch_sellable_quantity')
+@patch('modules.reserved_order_monitor.api.place_order')
+def test_execute_buy_skips_qty_reconcile(mock_place, mock_sellable, mock_update, mock_tg):
+    """매수는 매도가능수량 대사 대상이 아니다 (조회 자체를 하지 않는다)."""
+    m = ReservedOrderMonitor()
+    mock_place.return_value = {'rt_cd': '0', 'output': {'ODNO': '999'}}
+    order = _sell_order()
+    order['order_type'] = 'buy'
+
+    m._execute_order(order, "지정가 도달")
+
+    mock_sellable.assert_not_called()
+    assert mock_place.call_args[0][3] == 100
