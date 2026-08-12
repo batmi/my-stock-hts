@@ -313,7 +313,7 @@ def _fmt_holding_days_cell(res):
     return f"{days}일"
 
 def _fmt_profit_cell(amount_str, rate_str, color=""):
-    """평가손익 = 금액 + 그 아래 수익률. 최고가(MFE) 칸과 같은 모양으로 맞춘다.
+    """평가손익 = 금액 + 그 아래 수익률. 최고가 칸과 같은 모양으로 맞춘다.
 
     [표기] 두 줄 모두 우측 정렬이고 괄호는 없다.
      - 괄호: 한 칸 안에 있다는 것만으로 수익률이 금액의 부속값임은 이미 자명한데,
@@ -368,6 +368,7 @@ def _fmt_ts_stop(res, is_overseas=False, buy_price=0):
         return f"${v:,.2f}" if is_overseas else f"{round(v):,}"
 
     # 표기는 한 줄로 묶는다. 셀이 세 줄이 되면 표 전체가 종목당 3행으로 늘어난다.
+    #  (열 폭이 모자라면 rich가 fold로 접어 넘긴다 — 잘라내지 않는다. add_column 주석 참조)
     #  ↑ = 이 가격에 닿으면 무장, ≥ = 무장에 필요한 MFE. 범례는 표 캡션에 한 번만 단다.
     act = ts.get('activation') or 0
     dynamic = ts_activation_dynamic()
@@ -493,8 +494,13 @@ def build_domestic_holdings_table(items, holding_analysis, marks_ctx=None, title
     #  반면, 열을 하나 줄이면 그만큼이 손절가 칸으로 간다(TS 표기가 잘리던 자리).
     table.add_column("평가손익(원/%)", justify="right")
     table.add_column("보유일", justify="right", style="dim")
-    table.add_column("최고가(MFE)", justify="right", style="dim")
-    table.add_column("청산선", justify="right", style="dim")
+    table.add_column("최고가", justify="right", style="dim")
+    # [overflow] 청산선 셀은 'TS:57,470↑37%→44,245(-23.4%)≥30%'처럼 공백이 없는 한 덩어리라
+    #  rich가 줄바꿈할 지점을 찾지 못하고 기본값(ellipsis)으로 뒤를 잘라낸다. 잘린 자리에
+    #  들어가는 것이 하필 '실제 청산 가격'이라 화면만 보고는 어디서 잘리는지 알 수 없었다.
+    #  fold로 바꿔 폭이 모자라면 다음 줄로 접어 넘긴다 — 좁은 터미널에서 행이 한 줄 늘 수는
+    #  있어도 값이 사라지지는 않는다.
+    table.add_column("청산선", justify="right", style="dim", overflow="fold")
 
     totals = {'pchs': 0, 'eval': 0, 'profit': 0, 'count': 0}
     sell_signals = []
@@ -559,8 +565,8 @@ def build_overseas_holdings_table(items, holding_analysis, marks_ctx=None, title
     table.add_column("평가금액($)", justify="right")
     table.add_column("평가손익($/%)", justify="right")   # 국내 표와 같은 이유로 두 줄 묶음
     table.add_column("보유일", justify="right", style="dim")
-    table.add_column("최고가(MFE)", justify="right", style="dim")
-    table.add_column("청산선", justify="right", style="dim")
+    table.add_column("최고가", justify="right", style="dim")
+    table.add_column("청산선", justify="right", style="dim", overflow="fold")  # 잘림 방지(국내 표 주석 참조)
 
     totals = {'pchs': 0.0, 'eval': 0.0, 'profit': 0.0, 'count': 0}
     sell_signals = []
