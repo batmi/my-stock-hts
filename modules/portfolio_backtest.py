@@ -192,7 +192,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                   atr_mult=None, market_filter_dates=None, reserved_cash=0.0,
                   risk_scale_by_date=None, oversize_limit=None,
                   ts_act_fn=None, pyr_trigger_fn=None, sl_rate_fn=None,
-                  profit_lock_dates=None, rank_fn=None, rotation=None):
+                  profit_lock_dates=None, rank_fn=None, rotation=None, probe_fn=None,
+                  entry_gate=None):
     """N슬롯 포트폴리오 시뮬레이션.
 
     Args:
@@ -227,6 +228,18 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
               only_losing: 평가손실 중인 보유만 대상
             보유 점수는 sell_check(매도 상태면 0)를 쓴다 — 매도 판정과 같은 잣대다.
             (tools/audit_slot_rotation.py)
+
+        entry_gate: fn(day, code, held_codes) -> True면 그날 그 종목을 후보에서 뺀다.
+            실매매에만 있고 백테스트에는 없는 진입 게이트(상관관계 보류 등)를 재현하기 위한
+            훅이다(tools/audit_entry_gate_parity.py). 순위 실험은 '후보가 슬롯보다 많을 때
+            누가 들어가는가'를 묻는데, 후보 집합 자체가 실매매와 다르면 그 답을 실매매로
+            옮길 수 없다 — 그래서 게이트를 백테스트 쪽에 맞춰 넣고 다시 잰다.
+
+        probe_fn: fn(day, candidates, free_slots) -> None. 매수 직전의 후보 목록(정렬 후)과
+            남은 슬롯 수를 그대로 넘기는 **계측 전용** 훅이다. 순위 실험의 타당성은
+            '후보가 슬롯보다 많았는가'와 '경계에서 동점이 몇 번이었는가'에 달렸는데,
+            rank_fn만으로는 남은 슬롯 수를 알 수 없어 경쟁을 후보 2개 이상으로 어림할
+            수밖에 없었다(tools/audit_scoring_weights.py). 반환값은 쓰지 않는다.
 
         rank_fn: fn(score, code, row, day) -> 정렬키. 후보가 슬롯보다 많을 때 **무엇이
             슬롯을 차지하는가**를 바꾸는 훅이다(tools/audit_scoring_weights.py). None이면
@@ -532,6 +545,10 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                     continue
                 if market_filter_dates and day in market_filter_dates.get(code, ()):
                     continue
+                # [실매매 게이트] 보유 종목과의 관계로 걸리는 조건(상관관계 등)은 그날의
+                #  보유 구성에 달렸으므로 여기서 묻는다 — 사전 계산으로는 재현되지 않는다.
+                if entry_gate is not None and entry_gate(day, code, tuple(positions)):
+                    continue
                 out.append((raw_score, code, row))
             if rank_fn is None:
                 out.sort(reverse=True, key=lambda item: item[0])
@@ -597,6 +614,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
 
         if len(positions) < slots:
             candidates = _candidates_for(day)
+            if probe_fn is not None:
+                probe_fn(day, candidates, slots - len(positions))
 
             for _score, code, row in candidates:
                 if len(positions) >= slots:

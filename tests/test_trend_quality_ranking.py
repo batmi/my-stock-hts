@@ -5,8 +5,11 @@
   1. indicators.get_trend_quality — 최근 TREND_QUALITY_LOOKBACK일 로그 종가 선형회귀로
      '연환산 기울기 × R²'(Clenow 모멘텀)를 계산. 매끄러운 추세일수록 높은 값.
   2. 매수 후보 우선순위 — 게이트(BUY_SCORE)와 랭킹을 분리.
-     candidate_priority_key: 추세 품질 → 점수 → 52주 위치 → 체결강도 순.
-     trend_quality=None(이력 부족)은 최하순위.
+     candidate_priority_key: 점수 → 추세 품질 → 52주 위치 → 체결강도 순.
+     trend_quality=None(이력 부족)은 동점 안에서 최하순위.
+     [2026-08-12] 1순위가 추세 품질에서 점수로 바뀌었다 — 추세 품질 1순위는 10년 실측에서
+     하위 4구간 19/60(게이트 반영 20/60)으로 열위였다. 근거는 candidate_priority_key
+     docstring, 측정은 tools/audit_scoring_weights.py --only C.
 """
 
 import numpy as np
@@ -89,25 +92,36 @@ class TestGetTrendQuality:
 # ─────────────────────────────────────────────
 
 class TestCandidatePriorityKey:
-    def test_trend_quality_beats_higher_score(self):
-        # 점수가 낮아도 추세 품질이 높으면 우선 (게이트 통과 후에는 품질이 1순위)
-        strong = {'score': 7.0, 'trend_quality': 80.0, 'w52_pos': 60.0, 'vol_strength': 100.0}
-        weak = {'score': 9.0, 'trend_quality': 10.0, 'w52_pos': 95.0, 'vol_strength': 150.0}
-        ranked = sorted([weak, strong], key=candidate_priority_key)
-        assert ranked[0] is strong
+    def test_score_beats_higher_trend_quality(self):
+        # [2026-08-12 실증] 점수가 1순위다. 추세 품질을 1순위로 두면 슬롯 경쟁에서 점수가
+        #  한 번도 주인을 가르지 못하고(추세 품질은 연속값이라 동점 0%), 10년 수익의
+        #  4분의 1과 고변동 구간 fat-tail의 절반을 잃는다.
+        high_score = {'score': 9.0, 'trend_quality': 10.0, 'w52_pos': 60.0, 'vol_strength': 100.0}
+        high_tq = {'score': 7.0, 'trend_quality': 80.0, 'w52_pos': 95.0, 'vol_strength': 150.0}
+        ranked = sorted([high_tq, high_score], key=candidate_priority_key)
+        assert ranked[0] is high_score
 
-    def test_score_breaks_quality_tie(self):
-        a = {'score': 8.0, 'trend_quality': 50.0, 'w52_pos': 50.0, 'vol_strength': 100.0}
-        b = {'score': 7.0, 'trend_quality': 50.0, 'w52_pos': 90.0, 'vol_strength': 150.0}
+    def test_trend_quality_breaks_score_tie(self):
+        # 점수는 이진 신호 합산이라 동점이 흔하다(경쟁일의 25~32%). 그 자리를 등록 순서
+        #  같은 임의 상수가 아니라 추세 품질이 가르게 하는 것이 이 키의 요지다.
+        a = {'score': 8.0, 'trend_quality': 90.0, 'w52_pos': 50.0, 'vol_strength': 100.0}
+        b = {'score': 8.0, 'trend_quality': 10.0, 'w52_pos': 90.0, 'vol_strength': 150.0}
         ranked = sorted([b, a], key=candidate_priority_key)
         assert ranked[0] is a
 
-    def test_none_quality_ranks_last(self):
-        # 이력 부족(None)은 음수 품질보다도 뒤 (검증 불가 종목 후순위)
-        no_hist = {'score': 9.5, 'trend_quality': None, 'w52_pos': 99.0, 'vol_strength': 200.0}
+    def test_none_quality_ranks_last_within_a_score_tie(self):
+        # 이력 부족(None)은 음수 품질보다도 뒤 — 단, 점수가 같을 때의 이야기다.
+        no_hist = {'score': 7.0, 'trend_quality': None, 'w52_pos': 99.0, 'vol_strength': 200.0}
         negative = {'score': 7.0, 'trend_quality': -5.0, 'w52_pos': 30.0, 'vol_strength': 90.0}
         ranked = sorted([no_hist, negative], key=candidate_priority_key)
         assert ranked[-1] is no_hist
+
+    def test_higher_score_wins_even_without_history(self):
+        # 이력 부족은 '동점 안에서' 최하순위일 뿐, 점수 우위를 뒤집지 않는다.
+        no_hist = {'score': 9.5, 'trend_quality': None, 'w52_pos': 10.0, 'vol_strength': 90.0}
+        negative = {'score': 7.0, 'trend_quality': -5.0, 'w52_pos': 30.0, 'vol_strength': 90.0}
+        ranked = sorted([negative, no_hist], key=candidate_priority_key)
+        assert ranked[0] is no_hist
 
     def test_w52_then_vol_strength_tiebreak(self):
         a = {'score': 7.0, 'trend_quality': 50.0, 'w52_pos': 90.0, 'vol_strength': 100.0}
@@ -166,15 +180,16 @@ def _selection_log_source():
 def test_log_names_the_tiebreakers_in_sort_order():
     """설명 순서가 candidate_priority_key 튜플 순서와 같아야 한다."""
     text = _selection_log_source()
-    order = ["점수", "52주위치", "체결강도"]
+    order = ["점수", "추세품질", "52주위치", "체결강도"]
     positions = [text.index(w) for w in order]
     assert positions == sorted(positions), f"설명 순서가 정렬 순서와 다르다: {text}"
 
 
-def test_log_says_trend_quality_is_the_primary_key_not_a_tiebreaker():
-    """추세품질은 1순위다. '동점일 때만 쓰는 값'으로 읽히면 안 된다."""
+def test_log_says_score_is_the_primary_key():
+    """로그가 실제 정렬 순서를 말해야 한다 — 틀리면 원인을 엉뚱한 데서 찾게 된다."""
     text = _selection_log_source()
     assert "1순위" in text
+    assert "점수가 1순위" in text, "1순위가 점수라는 사실이 로그에서 빠졌다"
     assert "동점 후보 간 1순위" not in text, "순위를 거꾸로 읽히게 하는 종전 표현이 돌아왔다"
 
 
@@ -183,9 +198,9 @@ def test_log_states_it_is_not_a_buy_gate():
     assert "게이트 아님" in _selection_log_source()
 
 
-def test_sort_key_still_leads_with_trend_quality():
-    """위 문구들이 참이려면 추세품질이 실제로 첫 원소여야 한다."""
+def test_sort_key_leads_with_score():
+    """위 문구들이 참이려면 점수가 실제로 첫 원소여야 한다."""
     high_tq_low_score = {'trend_quality': 90.0, 'score': 7.0, 'w52_pos': 50.0, 'vol_strength': 100.0}
     low_tq_high_score = {'trend_quality': 10.0, 'score': 9.9, 'w52_pos': 99.0, 'vol_strength': 300.0}
-    ranked = sorted([low_tq_high_score, high_tq_low_score], key=candidate_priority_key)
-    assert ranked[0] is high_tq_low_score, "점수가 추세품질을 이겼다 — 로그 설명이 거짓이 된다"
+    ranked = sorted([high_tq_low_score, low_tq_high_score], key=candidate_priority_key)
+    assert ranked[0] is low_tq_high_score, "추세품질이 점수를 이겼다 — 로그 설명이 거짓이 된다"

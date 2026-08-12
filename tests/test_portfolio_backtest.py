@@ -348,10 +348,17 @@ def test_rank_fn은_순서만_바꾸고_게이트는_건드리지_않는다(univ
                             rank_fn=lambda s, c, r, d: -s)
     bought_normal = {t["code"] for t in normal["trades"] if t["reason"] == "매수"}
     bought_rev = {t["code"] for t in rev["trades"] if t["reason"] == "매수"}
-    # 슬롯 경쟁이 있으면 '누가 언제 샀는가'는 달라진다. 그래도 매수된 종목이 후보
-    # 집합 밖으로 나가서는 안 된다 — 역순은 후보 안에서의 순서만 바꾼다.
-    assert bought_rev <= bought_normal | bought_rev
     assert bought_normal and bought_rev
+    # 슬롯 경쟁이 있으면 '누가 언제 샀는가'는 달라져서, 경쟁이 있는 실행끼리는 게이트
+    # 불변을 확인할 수 없다(어떤 부분집합 관계도 항상 참이라 아무것도 못 잰다).
+    # 그래서 슬롯을 종목 수만큼 줘 **경쟁을 없앤 뒤** 대조한다 — 순서가 결과를 못 바꾸는
+    # 조건이므로, 여기서 매수 집합·시점이 어긋나면 그것은 순전히 게이트가 흔들린 것이다.
+    free = {}
+    for label, fn in (("normal", None), ("rev", lambda s, c, r, d: -s)):
+        res = pbt.run_portfolio(dfs, status, dates, slots=len(dfs), rank_fn=fn)
+        free[label] = {(t["code"], t["date"]) for t in res["trades"] if t["reason"] == "매수"}
+    assert free["normal"] == free["rev"]
+    assert free["normal"]
 
 
 def test_교체는_슬롯이_찼을_때만_일어난다(universe):
@@ -426,3 +433,48 @@ def test_교체한_종목을_같은_날_되사지_않는다(universe):
         rotated = {t["code"] for t in ts if t["reason"] == "교체"}
         bought = {t["code"] for t in ts if t["reason"] == "매수"}
         assert not (rotated & bought), f"{day}: 교체 직후 같은 종목 재매수 {rotated & bought}"
+
+
+def test_probe_fn은_결과를_바꾸지_않고_경쟁만_계측한다(universe):
+    """계측 훅은 시뮬레이션을 건드리면 안 되고, 정렬된 후보와 남은 슬롯을 그대로 줘야 한다.
+
+    순위 실험의 타당성('후보가 슬롯보다 많았는가', '경계에서 동점이었는가')이 이 훅의
+    입력에만 기대므로, 순서가 흐트러지거나 슬롯 수가 틀리면 계측이 조용히 거짓말을 한다.
+    """
+    dfs, status, dates = universe
+    seen = []
+    base = pbt.run_portfolio(dfs, status, dates, slots=2)
+    res = pbt.run_portfolio(dfs, status, dates, slots=2,
+                            probe_fn=lambda day, cands, free: seen.append((day, cands, free)))
+    assert base["equity"] == res["equity"]
+    assert base["trades"] == res["trades"]
+    assert seen, "빈 슬롯이 있던 날이 한 번도 없으면 계측 자체가 성립하지 않는다"
+    for _day, cands, free in seen:
+        assert 1 <= free <= 2
+        scores = [c[0] for c in cands]
+        assert scores == sorted(scores, reverse=True)
+
+
+def test_entry_gate는_후보만_걷어내고_다른_경로는_건드리지_않는다(universe):
+    """실매매 게이트(상관관계 등) 재현용 훅 — 끄면 종전과 같고, 켜면 그 종목만 사라진다.
+
+    이 훅은 '후보 집합을 실매매와 맞춘 뒤에도 순위 결론이 유지되는가'를 묻는 데 쓴다.
+    게이트가 후보 말고 다른 것(청산·피라미딩)까지 건드리면 그 비교가 성립하지 않는다.
+    """
+    dfs, status, dates = universe
+    base = pbt.run_portfolio(dfs, status, dates, slots=2)
+    same = pbt.run_portfolio(dfs, status, dates, slots=2, entry_gate=lambda d, c, h: False)
+    assert base["trades"] == same["trades"]
+
+    blocked = sorted(dfs)[0]
+    seen_holds = []
+
+    def gate(day, code, held):
+        seen_holds.append((code, held))
+        return code == blocked
+
+    res = pbt.run_portfolio(dfs, status, dates, slots=2, entry_gate=gate)
+    assert all(t["code"] != blocked for t in res["trades"]), "차단한 종목이 매수됐다"
+    assert res["trades"], "게이트가 후보를 통째로 지워버리면 비교 자체가 성립하지 않는다"
+    # 보유 목록은 '그 시점에 들고 있는 것'이어야 한다 — 후보 자신이 섞이면 상관 판정이 자기 자신과의 비교가 된다.
+    assert all(code not in held for code, held in seen_holds)
