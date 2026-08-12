@@ -826,7 +826,7 @@ def show_help():
     atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
     half_tp_use = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False)
     time_stop_use = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
-    time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)
+    time_stop_days = config.SELL_STRATEGY["TIME_STOP_DAYS"]
     time_stop_min_profit = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 0.0)
     bep_activation = config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 5.0)
     bep_stop = config.SELL_STRATEGY.get("BREAK_EVEN_STOP_RATE", 0.5)

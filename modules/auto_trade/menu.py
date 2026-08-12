@@ -184,7 +184,7 @@ def _input_and_save_rule(code, name):
         "weights": None,
         # 0 = 자동(전역 SYSTEM_INVEST_PER_STOCK → 그것도 0이면 1/슬롯수). 값을 박제하지 않는다.
         "invest_ratio": 0.0,
-        "time_stop_days": config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20),
+        "time_stop_days": config.SELL_STRATEGY["TIME_STOP_DAYS"],
         "use_atr_stop": 1 if config.SELL_STRATEGY.get("USE_ATR_STOP", True) else 0,
         "atr_stop_multiplier": config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0),
         "half_take_profit_use": 1 if config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False) else 0

@@ -669,7 +669,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             half_tp_limit = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_RATE", take_profit_limit / 2.0)
             
             use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
-            time_stop_days = time_stop_days_limit if time_stop_days_limit is not None else config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)
+            time_stop_days = time_stop_days_limit if time_stop_days_limit is not None else config.SELL_STRATEGY["TIME_STOP_DAYS"]
             time_stop_min_profit = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 0.0)
             
             if time_stop_days <= 0:
@@ -1761,7 +1761,7 @@ def run_backtest():
         take_profit_rsi = custom_rule['take_profit_rsi'] if custom_rule else config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
         ts_activation = custom_rule['ts_activation'] if custom_rule else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
         ts_callback = custom_rule['ts_callback'] if custom_rule else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
-        time_stop_days = custom_rule['time_stop_days'] if custom_rule and custom_rule.get('time_stop_days') is not None else config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)
+        time_stop_days = custom_rule['time_stop_days'] if custom_rule and custom_rule.get('time_stop_days') is not None else config.SELL_STRATEGY["TIME_STOP_DAYS"]
         use_atr_stop = bool(custom_rule['use_atr_stop']) if custom_rule and custom_rule.get('use_atr_stop') is not None else config.SELL_STRATEGY.get("USE_ATR_STOP", True)
         atr_mult = custom_rule['atr_stop_multiplier'] if custom_rule and custom_rule.get('atr_stop_multiplier') is not None else config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
         half_tp_use = bool(custom_rule['half_take_profit_use']) if custom_rule and custom_rule.get('half_take_profit_use') is not None else config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False)
@@ -1924,7 +1924,7 @@ def run_backtest():
                 locked_notes.append(f"TS 하락 감지율 {ts_callback}%")
 
             if "TIME_STOP_DAYS" not in locked:
-                def_time_stop = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)
+                def_time_stop = config.SELL_STRATEGY["TIME_STOP_DAYS"]
                 val = Prompt.ask(f"시간 청산 기한(일) (기본: {def_time_stop}일)\n[dim]매수 후 목표 기간 내 수익 미달 시 강제 청산 (0: 미사용)[/dim]", default=str(def_time_stop))
                 if val.lower() in ['b', 'q']: continue
                 try: time_stop_days = int(val)

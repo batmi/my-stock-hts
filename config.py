@@ -1116,7 +1116,7 @@ class GlobalSettings(BaseModel):
         "USE_BREAK_EVEN_STOP": False,       # [본전 청산] 사용 여부 (위 실측에 따라 기본 OFF)
         "BREAK_EVEN_STOP_RATE": 0.5,        # [본전 청산] 손절선을 이 값(+0.5%)으로 끌어올림
         "TIME_STOP_USE": True,              # [시간 청산] 사용 여부
-        "TIME_STOP_DAYS": 20,               # 보유 제한 기간 (일) - 추세 전개에 충분한 시간 부여 (추세추종 기조로 10→20 완화)
+        "TIME_STOP_DAYS": 15,               # 보유 제한 기간 (일) - 추세 전개에 충분한 시간 부여 (추세추종 기조로 20→15 축소)
         "TIME_STOP_MIN_PROFIT_RATE": 0.0,   # 이 기간 내에 달성해야 할 최소 수익률 (%) - 0이면 손실 정체 종목만 청산 ('수익 종목은 보유' 원칙, 3.0→0.0)
         # [2026-08-11 — 0.0 유지. 상향 기각] "발동선이 높으면 반납만 하고 슬롯을 문다"는
         #  의견에서 출발해, 0이 만드는 구멍(소폭 플러스로 정체하는 포지션은 어느 문에도
@@ -2492,7 +2492,7 @@ def reset_all_settings():
             "ATR_CAP_FLOOR": -35.0, "ATR_CAP_CEIL": -6.0,
             "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5,
             "USE_BREAK_EVEN_STOP": False,
-            "TIME_STOP_USE": True, "TIME_STOP_DAYS": 20, "TIME_STOP_MIN_PROFIT_RATE": 0.0,
+            "TIME_STOP_USE": True, "TIME_STOP_DAYS": 15, "TIME_STOP_MIN_PROFIT_RATE": 0.0,
             "MR_GRACE_LOSS_RATE": -7.0, "SELL_SCORE": 4.0, "TAKE_PROFIT_RSI": 0.0,
             "SUPER_TAKE_PROFIT_RSI": 90.0, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 5.0,
             "TRAILING_ATR_MULTIPLIER": 3.5, "TS_MAX_GIVEBACK_RATIO": 0.0, "TS_ACTIVATION_MODE": "breakeven",

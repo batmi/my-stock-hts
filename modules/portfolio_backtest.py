@@ -286,7 +286,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     lock_giveback = sell_cfg.get("PROFIT_LOCK_GIVEBACK", 0.5)
     ts_callback = sell_cfg.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
     ts_atr_mult = sell_cfg.get("TRAILING_ATR_MULTIPLIER", 3.0)
-    time_stop_days = sell_cfg.get("TIME_STOP_DAYS", 20)
+    time_stop_days = sell_cfg["TIME_STOP_DAYS"]
     use_time_stop = sell_cfg.get("TIME_STOP_USE", True) and time_stop_days > 0
     bep_stop = sell_cfg.get("BREAK_EVEN_STOP_RATE", 0.5)
     bep_default = sell_cfg.get("BREAK_EVEN_PROFIT_RATE", 5.0)

@@ -373,7 +373,7 @@ def view_system_config(group=None):
         row("시간 청산 사용", "장기 횡보 종목 강제 매도", "SELL_STRATEGY['TIME_STOP_USE']", f"{sell.get('TIME_STOP_USE', True)}", key="TIME_STOP_USE")
         if sell.get('TIME_STOP_USE', True):
             table.add_row(
-                f"  [dim]└ {sell.get('TIME_STOP_DAYS', 20)}일 경과 & 수익 "
+                f"  [dim]└ {sell['TIME_STOP_DAYS']}일 경과 & 수익 "
                 f"{sell.get('TIME_STOP_MIN_PROFIT_RATE', 0.0)}% 미만일 때만 청산\n"
                 f"    (상방 모멘텀 살아있으면 유예)[/dim]",
                 "[dim](추세추종 검증값 — 조정 잠금)[/dim]", "")
@@ -1154,7 +1154,7 @@ def _sell_strategy_items():
         {"desc": "시간 청산 사용", "help": "장기 횡보 시 강제 매도", "name": "TIME_STOP_USE", "type": "bool", "choices": ["y", "n"], "section": "1-3. 청산 — 손절·트레일링·시간",
          "get": lambda: config.SELL_STRATEGY.get("TIME_STOP_USE", True), "set": lambda v: config.SELL_STRATEGY.update({"TIME_STOP_USE": v})},
         {"desc": "시간 청산 기준일", "help": "매수 후 제한 일수 (예: 10)", "name": "TIME_STOP_DAYS", "type": "int", "section": "1-3. 청산 — 손절·트레일링·시간",
-         "get": lambda: config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20), "set": lambda v: config.SELL_STRATEGY.update({"TIME_STOP_DAYS": v})},
+         "get": lambda: config.SELL_STRATEGY["TIME_STOP_DAYS"], "set": lambda v: config.SELL_STRATEGY.update({"TIME_STOP_DAYS": v})},
         {"desc": "시간청산 최소수익(%)", "help": "기간 내 달성해야 할 목표치", "name": "TIME_STOP_MIN_PROFIT_RATE", "type": "float", "section": "1-3. 청산 — 손절·트레일링·시간",
          "get": lambda: config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 0.0), "set": lambda v: config.SELL_STRATEGY.update({"TIME_STOP_MIN_PROFIT_RATE": v})},
         {"desc": "매도(추세이탈) 점수", "help": "점수 하락 시 매도", "name": "SELL_SCORE", "type": "float", "section": "1-3. 청산 — 손절·트레일링·시간",
@@ -1612,7 +1612,7 @@ DEFAULT_PRESETS = {
     },
     "default": {
         "BUY_SCORE": 7.0, "BUY_RSI_MAX": 70.0, "BUY_VOL_STRENGTH": 100.0, "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": False, "MR_RSI_MAX": 40.0, "MR_VOL_STRENGTH": 120.0, "SUPER_MOMENTUM_USE": True,
-        "TAKE_PROFIT_RATE": 0.0, "HALF_TAKE_PROFIT_USE": False, "DEFENSIVE_HALF_SELL_USE": False, "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 20, "SELL_SCORE": 4.0, "TAKE_PROFIT_RSI": 0.0, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 5.0, "TRAILING_ATR_MULTIPLIER": 3.5,
+        "TAKE_PROFIT_RATE": 0.0, "HALF_TAKE_PROFIT_USE": False, "DEFENSIVE_HALF_SELL_USE": False, "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0, "MAX_ATR_STOP_LOSS_RATE": -15.0, "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5, "TIME_STOP_DAYS": 15, "SELL_SCORE": 4.0, "TAKE_PROFIT_RSI": 0.0, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 5.0, "TRAILING_ATR_MULTIPLIER": 3.5,
         "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0,
         # [동기화 2026-08-03] 시장 필터 기간 검증 결과 60→80. 'default' 프리셋은 시스템 기본값과
         #  같아야 check_and_update_active_preset이 기본 상태를 'custom'으로 오판하지 않는다.

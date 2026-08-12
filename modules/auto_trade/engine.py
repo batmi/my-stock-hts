@@ -617,7 +617,7 @@ def build_sell_thresholds(rule=None, score_adj=0.0, buy_trades=None, fallback_at
             #  이 키가 없으면 전역 BUY_RSI_MAX로 폴백해, 같은 종목·같은 시각인데도
             #  매수 경로/메뉴 2 화면과 상태가 갈렸다(룰 RSI ≠ 전역 RSI인 보유 종목).
             "BUY_RSI_MAX": _rv('buy_rsi', config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]),
-            "TIME_STOP_DAYS": _rv('time_stop_days', config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)),
+            "TIME_STOP_DAYS": _rv('time_stop_days', config.SELL_STRATEGY["TIME_STOP_DAYS"]),
             "HALF_TAKE_PROFIT_USE": bool(_rv('half_take_profit_use',
                                              config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False))),
             # [Fix] 개별 룰의 TS 발동/콜백을 analyze_sell에 실제로 전달
@@ -631,7 +631,7 @@ def build_sell_thresholds(rule=None, score_adj=0.0, buy_trades=None, fallback_at
         thresholds = {
             "WEIGHTS": config.SCORING_WEIGHTS,
             "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"] + score_adj,
-            "TIME_STOP_DAYS": config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20),
+            "TIME_STOP_DAYS": config.SELL_STRATEGY["TIME_STOP_DAYS"],
         }
 
     use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
@@ -1148,7 +1148,7 @@ class DefaultStrategy:
         
         # [추가] 시간 청산 설정 로드
         use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
-        time_stop_days = thresholds.get("TIME_STOP_DAYS", config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)) if thresholds else config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)
+        time_stop_days = thresholds.get("TIME_STOP_DAYS", config.SELL_STRATEGY["TIME_STOP_DAYS"]) if thresholds else config.SELL_STRATEGY["TIME_STOP_DAYS"]
         time_stop_min_profit = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 0.0)
         
         if time_stop_days <= 0:

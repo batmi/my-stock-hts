@@ -69,7 +69,7 @@ def test_null_columns_fall_back_to_global_defaults():
     nones = [k for k, v in th.items() if v is None]
     assert not nones, f"NULL 컬럼이 None으로 새어 나왔다: {nones} — 비교식에서 TypeError를 낸다"
 
-    assert th["TIME_STOP_DAYS"] == config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)
+    assert th["TIME_STOP_DAYS"] == config.SELL_STRATEGY["TIME_STOP_DAYS"]
     assert th["BUY_RSI_MAX"] == config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"]
     assert th["WEIGHTS"] == config.SCORING_WEIGHTS
     # 사용자가 실제로 지정한 값은 그대로 살아남아야 한다

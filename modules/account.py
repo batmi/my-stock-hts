@@ -307,7 +307,7 @@ def _fmt_holding_days_cell(res):
         return "[dim]-[/dim]"
 
     days = res.get('holding_days') or 0
-    limit = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)
+    limit = config.SELL_STRATEGY["TIME_STOP_DAYS"]
     if config.SELL_STRATEGY.get("TIME_STOP_USE", True) and limit and days >= limit:
         return f"[yellow]{days}일[/]"
     return f"{days}일"

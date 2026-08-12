@@ -187,7 +187,7 @@
 *   **ATR 손절**: `USE_ATR_STOP`이 True(기본)일 경우, 고정 손절률 대신 매수 시점의 ATR × `ATR_STOP_MULTIPLIER`(기본 2.0) 만큼의 비율을 손절률로 사용합니다.
 *   **ATR 최대 손절률**: `MAX_ATR_STOP_LOSS_RATE`는 데이터 오류나 과도한 변동성으로 손절폭이 비정상적으로 커지는 것을 방지하는 안전장치입니다. (기본값 -15.0%)
 *   **본전 청산 (Break Even Stop)**: 달성한 최고 수익률이 `BREAK_EVEN_PROFIT_RATE`(기본 5.0%, ATR 사용 시 자동 연동) 이상 도달 시, 손절선을 `BREAK_EVEN_STOP_RATE`(기본 +0.5%)로 상향하여 수익을 방어합니다.
-*   **시간 청산 (Time-based Stop)**: `TIME_STOP_USE`가 True일 경우, 매수 후 설정된 일수(`TIME_STOP_DAYS`, 기본 20일) 경과 시점에 수익률이 `TIME_STOP_MIN_PROFIT_RATE`(기본 **0.0%** = 손실 중인 종목만 대상) 미만이고 상방 모멘텀을 상실했으면 매도합니다. (상승 추세 유지 시 유예됨)
+*   **시간 청산 (Time-based Stop)**: `TIME_STOP_USE`가 True일 경우, 매수 후 설정된 일수(`TIME_STOP_DAYS`, 기본 15일) 경과 시점에 수익률이 `TIME_STOP_MIN_PROFIT_RATE`(기본 **0.0%** = 손실 중인 종목만 대상) 미만이고 상방 모멘텀을 상실했으면 매도합니다. (상승 추세 유지 시 유예됨)
 *   **트레일링 스탑 (Trailing Stop) — 주 익절 수단 (샹들리에 엑시트)**:
     *   **발동 조건**: `TS_ACTIVATION_MODE`(기본 `"breakeven"`) — **손익분기 연동**입니다. 되돌림 한 번(ATR × `TS_ACTIVATION_ATR_MULTIPLIER`, 기본 3.0)을 감안한 지점부터 무장하며, 발동선 = cb ÷ (1 − cb), cb = ATR × 배수 ÷ 매수가. 종목 변동성이 시점을 정하므로 저변동주는 +10%대, 고변동주는 +40%대에서 무장합니다. `TS_ACTIVATION_MAX_RATE`(기본 0 = 해제)로 발동선에 상한을 씌울 수 있습니다.
         *   **[중요] 발동 전용 배수는 아래 콜백 배수(3.5)와 분리돼 있습니다.** 한 키가 둘을 겸하던 시절에는 발동선을 낮추면 청산선까지 좁아져 최대 단일 수익이 165% → 75%로 무너졌습니다. 콜백을 고정한 채 발동선만 낮추면 fat-tail이 보존됩니다.

@@ -39,8 +39,8 @@ def _cfg():
     s = config.SELL_STRATEGY
     return {
         "use_atr": s.get("USE_ATR_STOP", True),
-        "use_time_stop": s.get("TIME_STOP_USE", True) and s.get("TIME_STOP_DAYS", 20) > 0,
-        "time_stop_days": s.get("TIME_STOP_DAYS", 20),
+        "use_time_stop": s.get("TIME_STOP_USE", True) and s["TIME_STOP_DAYS"] > 0,
+        "time_stop_days": s["TIME_STOP_DAYS"],
         "ts_act": s.get("TRAILING_STOP_ACTIVATION_RATE", 10.0),
         "ts_callback": s.get("TRAILING_STOP_CALLBACK_RATE", 5.0),
         "ts_atr_mult": s.get("TRAILING_ATR_MULTIPLIER", 3.5),

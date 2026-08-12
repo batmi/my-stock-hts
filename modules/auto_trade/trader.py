@@ -721,7 +721,7 @@ class AutoTrader:
             use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
             atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
             use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
-            time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)
+            time_stop_days = config.SELL_STRATEGY["TIME_STOP_DAYS"]
 
             msg += "\n\n⚙️ [적용 전략]"
             if config.session.is_toss:
@@ -2317,7 +2317,7 @@ class AutoTrader:
         use_atr = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
         atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
         use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
-        time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)
+        time_stop_days = config.SELL_STRATEGY["TIME_STOP_DAYS"]
         time_stop_min = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 0.0)
 
         # [수정] 0=미사용 규칙은 OFF로 명시 (활성 조건처럼 보이던 표시 모순 해소)

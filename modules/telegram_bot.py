@@ -2285,7 +2285,7 @@ class TelegramCommander:
         atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
         
         use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
-        time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20)
+        time_stop_days = config.SELL_STRATEGY["TIME_STOP_DAYS"]
         time_stop_min = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 0.0)
 
         msg += f"\n[매도 조건]\n"
