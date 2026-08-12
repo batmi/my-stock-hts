@@ -296,10 +296,19 @@ def compute_price_indicators(df):
         df['MACD'], df['MACD_Signal'] = macd_res
         df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
 
-    df['VOL_MA20'] = df['volume'].rolling(window=20, min_periods=1).mean()
+    # [SSOT 2026-08-12] 기간·배수를 config에서 읽는다. 종전에는 20일·2.0배가 여기 박혀 있어
+    #  VOLUME_MA_PERIOD·VOLUME_SPIKE_RATIO를 조정해도 백테스트만 옛 값으로 돌았다 —
+    #  그 상태로는 '강도' 팩터의 거래량 항목을 백테스트로 잴 수 없다(기본값이 같아 지금까지
+    #  드러나지 않았을 뿐이다). 비교 연산자도 실매매(calculate_score)와 같은 >= 로 맞추고,
+    #  거래량 이평이 0인 날 유령 급증이 잡히지 않도록 같은 가드를 둔다.
+    vol_ma_period = config.INDICATOR_PARAMS.get('VOLUME_MA_PERIOD', 20)
+    vol_spike_ratio = config.INDICATOR_PARAMS.get('VOLUME_SPIKE_RATIO', 2.0)
+    df['VOL_MA20'] = df['volume'].rolling(window=vol_ma_period, min_periods=1).mean()
     df['VOL_MA5'] = df['volume'].rolling(window=5, min_periods=1).mean()
     df['VOL_TREND'] = df['VOL_MA5'] > df['VOL_MA20']
-    df['VOL_SPIKE'] = (df['volume'] > df['VOL_MA20'] * 2.0) & (df['close'] > df['open'])
+    df['VOL_SPIKE'] = ((df['VOL_MA20'] > 0)
+                       & (df['volume'] >= df['VOL_MA20'] * vol_spike_ratio)
+                       & (df['close'] > df['open']))
 
     # 52주 위치는 워밍업 구간을 포함한 전체 df 기준으로 계산
     df['roll_high_250'] = df['high'].rolling(250, min_periods=1).max()

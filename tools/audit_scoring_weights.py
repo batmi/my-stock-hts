@@ -98,6 +98,31 @@ def rank_sets(seed):
     ]
 
 
+def rank_sets_d(tq_by_lb):
+    """(라벨, rank_fn) — 동점을 가르는 추세품질의 **룩백**을 스윕한다.
+
+    [왜] 2026-08-12 변경으로 추세품질은 1순위에서 '점수 동점 가름'으로 내려왔다. 그런데
+     룩백 90일은 도입 당시 임의로 정한 값이고 한 번도 실측된 적이 없다. 1순위에서 진 것이
+     '추세품질이 무용해서'인지 '90일이 틀려서'인지도 아직 갈리지 않았다. 동점 가름 자리에서
+     룩백만 바꿔 재면 두 질문이 함께 풀린다 — 어떤 룩백에서도 개선이 없으면 90일은 유지고,
+     특정 룩백이 뚜렷하면 그 값이 답이다.
+    """
+    NEG = float("-inf")
+
+    def make(lb):
+        tq_by_code = tq_by_lb[lb]
+
+        def key(s, c, r, d):
+            v = tq_by_code.get(c, {}).get(d)
+            return (s, NEG if v is None else v)
+        return key
+
+    out = [("점수순 (동점=등록순서)", None)]
+    for lb in sorted(tq_by_lb):
+        out.append((f"점수→추세품질 {lb}일", make(lb)))
+    return out
+
+
 def rank_sets_c(tq_by_code):
     """(라벨, rank_fn) — 백테스트의 순위(점수)와 **실매매의 순위(추세품질)** 를 맞대본다.
 
@@ -241,7 +266,9 @@ def main():
     ap.add_argument("--sample", type=int, default=25)
     ap.add_argument("--days", type=int, default=3650)
     ap.add_argument("--slots", type=int, default=None)
-    ap.add_argument("--only", default=None, help="A(가중치 형태)·B(순위 잣대)·C(실매매 순위 대조)")
+    ap.add_argument("--only", default=None,
+                    help="A(가중치 형태)·B(순위 잣대)·C(실매매 순위 대조)·D(동점 가름 룩백)")
+    ap.add_argument("--tq-lookbacks", default="60,90,120,180", help="D그룹 룩백 목록(쉼표)")
     ap.add_argument("--seed", type=int, default=20260811)
     ap.add_argument("--subperiods", type=int, default=4)
     ap.add_argument("--exclude-from", default="20260301")
@@ -290,6 +317,12 @@ def main():
 
     lookback = int(config.INDICATOR_PARAMS.get("TREND_QUALITY_LOOKBACK", 90))
     want_c = (not args.only) or args.only.upper().startswith("C")
+    want_d = (not args.only) or args.only.upper().startswith("D")
+    lookbacks = [int(x) for x in str(args.tq_lookbacks).split(",") if x.strip()]
+    tq_by_lb = {}
+    if want_d:
+        tq_by_lb = {lb: {c: rolling_trend_quality(df, lb) for c, df in dfs.items()}
+                    for lb in lookbacks}
     tq_by_code = {}
     if want_c:
         tq_by_code = {c: rolling_trend_quality(df, lookback) for c, df in dfs.items()}
@@ -306,6 +339,9 @@ def main():
     if want_c:
         for label, fn in rank_sets_c(tq_by_code):
             sets.append(("C. 실매매 순위(추세품질) 대조", label, wsets[0][0], fn))
+    if want_d:
+        for label, fn in rank_sets_d(tq_by_lb):
+            sets.append(("D. 동점 가름 추세품질 룩백", label, wsets[0][0], fn))
     if args.only:
         sets = [x for x in sets if x[0].upper().startswith(args.only.upper())]
 
@@ -332,7 +368,8 @@ def main():
     #  후보가 '이력부족'이라 순위가 통째로 등록 순서로 정해진다 — 그 구간을 넣으면
     #  실매매 순위를 재는 것이 아니라 등록 순서를 재게 된다. 같은 그룹의 기준선(점수순)도
     #  같은 창에서 돌리므로 짝비교는 그대로 유효하다.
-    head_of = {g: (head[lookback - 1:] if g.startswith("C") else head) for g, _m in groups}
+    warm = {"C": lookback - 1, "D": (max(lookbacks) - 1 if lookbacks else 0)}
+    head_of = {g: head[warm.get(g[0], 0):] for g, _m in groups}
 
     all_results = {}
     for g, members in groups:
