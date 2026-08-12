@@ -130,7 +130,11 @@ def main():
         dd = (int(p.get("DD_LOOKBACK_DAYS", 90)), float(p.get("DD_LEVEL_1", 5.0)),
               float(p.get("DD_SCALE_1", 0.9)), float(p.get("DD_LEVEL_2", 10.0)),
               float(p.get("DD_SCALE_2", 0.8)))
-    scale_fn = make_scale_fn(mkt, dd)
+    # [실행마다 새로 만든다 — 2026-08-13] make_scale_fn 이 돌려주는 콜러블은 내부에 자산곡선
+    #  이력(hist)을 들고 있다. 하나를 만들어 모든 팔·시행에 돌려쓰면 앞선 실행의 자산곡선이
+    #  남아 드로다운 판정이 오염되고, 팔의 실행 순서에 따라 결과가 달라진다(같은 설정을 두 번
+    #  돌리면 392.66% → 284.79%). 짝비교의 전제가 깨지므로 팩토리로 두고 매번 새로 만든다.
+    new_scale_fn = lambda: make_scale_fn(mkt, dd)  # noqa: E731
 
     cut = "".join(ch for ch in str(args.exclude_from) if ch.isdigit())
     head = [d for d in dates if not cut or cut == "0" or "".join(filter(str.isdigit, d)) < cut]
@@ -163,7 +167,7 @@ def main():
             for g, label, rot in sets:
                 r = pb.run_portfolio(sd, st, wdates, initial_capital=INITIAL_CAPITAL,
                                      slots=slots, market_filter_dates=sm,
-                                     risk_scale_by_date=scale_fn, rotation=rot)
+                                     risk_scale_by_date=new_scale_fn(), rotation=rot)
                 results[(g, label)].append(metrics(r))
             print(f"  {wname} 시행 {t + 1}/{args.trials}", end="\r", flush=True)
         all_results[wname] = results

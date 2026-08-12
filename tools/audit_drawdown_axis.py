@@ -59,11 +59,24 @@ def make_scale_fn(mkt_scale, dd_params, use_market=True):
     """run_portfolio에 넘길 콜러블. 자산곡선 피드백으로 드로다운 배수를 계산한다.
 
     dd_params=None이면 드로다운 축을 끈다(대조군).
+
+    [1회용이다 — 실행마다 새로 만들어라] 이 콜러블은 내부에 자산곡선 이력(hist)을 들고 있다.
+     하나를 만들어 여러 run_portfolio 에 돌려쓰면 앞선 실행의 자산곡선이 남아 고점(hwm)이
+     오염되고, 팔의 실행 순서에 따라 결과가 달라진다 — 짝비교의 전제가 바로 깨진다.
+     실측(2026-08-13): 같은 설정을 같은 콜러블로 연달아 돌리면 392.66% → 284.79%.
+     아래 자기방어(되감기 감지)는 안전망일 뿐, 창이 서로 겹치지 않게 앞으로만 나아가는
+     순서(구간1 → 구간2)에서는 되감기가 없어 감지되지 않는다. 호출부가 매번 새로 만들어야 한다.
     """
     hist = []   # [(date, equity)] — 시뮬레이션이 진행되며 쌓인다
+    last = {"day": None}
 
     def fn(day, equity):
         scale = mkt_scale.get(day, 1.0) if use_market else 1.0
+        # [자기방어] 날짜가 뒤로 갔다 = 새 시뮬레이션이 시작됐다. 이력을 비우지 않으면
+        #  이전 실행의 자산곡선이 이번 드로다운 판정에 섞인다.
+        if last["day"] is not None and day <= last["day"]:
+            hist.clear()
+        last["day"] = day
         hist.append((day, float(equity)))
         if dd_params:
             look, l1, s1, l2, s2 = dd_params
