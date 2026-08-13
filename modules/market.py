@@ -1359,7 +1359,11 @@ def show_market_indices(interval=0):
                     # [추가] KIS 실전 전용 지수는 토스·모의 모드 목록에서 제외 (지수 화면과 동일 정책)
                     indices_list = selectable_indices()
                     dict_list = [{'name': n, 'code': c} for n, c in indices_list]
-                    idx, item = utils.search_stock_in_list(dict_list, title="개별 지수 분석 대상 선택")
+                    idx, item = utils.search_stock_in_list(
+                        dict_list, 
+                        title="개별 지수 분석 대상 선택",
+                        display_func=lambda i, s: f"[{i+1}] {s['name']}"
+                    )
                     if item:
                         target_name, target_code = item['name'], item['code']
 
