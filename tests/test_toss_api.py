@@ -933,14 +933,16 @@ def test_order_book_adapter_totals():
     assert out1['total_bidp_rsqn'] == '9300'   # 5200+4100
 
 
-def test_investor_and_vol_strength_na_for_toss():
+def test_vol_strength_na_but_foreign_rate_supported_for_toss():
     import api
     config.session.is_toss = True
     try:
-        assert api.get_investor_trend("005930") == []
         assert api.get_realtime_vol_strength("005930") is None
-        # 외국인 소진율(외인률)도 토스에선 KIS로 누수되지 않고 빈 값
-        assert api.get_daily_foreign_rate("005930") == []
+        # 토스 수급 연동(1.2.14)으로 인해 외인률이 지원됨
+        res = api.get_daily_foreign_rate("005930")
+        assert len(res) > 0
+        assert 'stck_bsop_date' in res[0]
+        assert 'hts_frgn_ehrt' in res[0]
     finally:
         config.session.is_toss = False
 

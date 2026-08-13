@@ -194,7 +194,11 @@ def test_manual_sell_removes_restriction_from_account(mock_dependencies):
         monitor._check_conclusions(initial=False)
         
         # The balance check and restriction removal happen in a daemon thread.
-        time.sleep(0.1) 
+        # Wait up to 2 seconds for the thread to complete its work
+        for _ in range(20):
+            if mock_save.call_count >= 1:
+                break
+            time.sleep(0.1)
         
         # Verify save_restricted_stocks was called and the stock was completely removed since it had no other accounts
         mock_save.assert_called_once()
@@ -242,7 +246,12 @@ def test_manual_sell_partial_keeps_restriction_in_account(mock_dependencies):
         monitor.order_status = {}
         
         monitor._check_conclusions(initial=False)
-        time.sleep(0.1)
+        # Wait up to 2 seconds for the daemon thread to call get_domestic_balance
+        for _ in range(20):
+            if mock_api.get_domestic_balance.call_count >= 1:
+                break
+            time.sleep(0.1)
+        time.sleep(0.1) # Extra wait to ensure mock_save is not called subsequently
         
         # Verify save_restricted_stocks was NOT called because qty != 0
         mock_save.assert_not_called()
@@ -285,7 +294,11 @@ def test_manual_sell_removes_only_account_restriction(mock_dependencies):
         monitor.order_status = {}
         
         monitor._check_conclusions(initial=False)
-        time.sleep(0.1)
+        # Wait up to 2 seconds for the daemon thread to complete
+        for _ in range(20):
+            if mock_save.call_count >= 1:
+                break
+            time.sleep(0.1)
         
         # Verify save_restricted_stocks was called and the stock is still there but with the account removed
         mock_save.assert_called_once()

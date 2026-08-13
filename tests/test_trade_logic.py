@@ -246,24 +246,25 @@ def test_dynamic_atr_trailing_stop(mock_calc_score, mock_classify, mock_calc_ind
     buy_price = 10000
     highest_price = 11500 # +15% 수익 도달 (트레일링 발동)
     
-    # 시나리오 1: 11,500원에서 11,200원으로 하락 (-2.6% 하락)
-    # 고정 비율 2.0%라면 매도되어야 하지만, 변동성(ATR) 동적 허용치(300*2=600원, 약 5.21%) 덕분에 홀딩해야 함
-    result_hold = strategy.analyze_sell(
-        code="005930", name="삼성전자", df=df, 
-        current_price=11200, buy_price=buy_price, 
-        profit_rate=12.0, thresholds=thresholds, highest_price=highest_price
-    )
-    assert result_hold['action'] == 'hold'
-    
-    # 시나리오 2: 11,500원에서 10,800원으로 하락 (-6.08% 하락)
-    # 동적 ATR 허용치 5.21%마저 초과 이탈하였으므로 확실하게 트레일링 스탑(매도)을 실행해야 함
-    result_sell = strategy.analyze_sell(
-        code="005930", name="삼성전자", df=df, 
-        current_price=10800, buy_price=buy_price, 
-        profit_rate=8.0, thresholds=thresholds, highest_price=highest_price
-    )
-    assert result_sell['action'] == 'sell'
-    assert "트레일링스탑" in result_sell['reason']
+    with patch.dict(config.SELL_STRATEGY, {"TRAILING_ATR_MULTIPLIER": 2.0}):
+        # 시나리오 1: 11,500원에서 11,200원으로 하락 (-2.6% 하락)
+        # 고정 비율 2.0%라면 매도되어야 하지만, 변동성(ATR) 동적 허용치(300*2=600원, 약 5.21%) 덕분에 홀딩해야 함
+        result_hold = strategy.analyze_sell(
+            code="005930", name="삼성전자", df=df, 
+            current_price=11200, buy_price=buy_price, 
+            profit_rate=12.0, thresholds=thresholds, highest_price=highest_price
+        )
+        assert result_hold['action'] == 'hold'
+        
+        # 시나리오 2: 11,500원에서 10,800원으로 하락 (-6.08% 하락)
+        # 동적 ATR 허용치 5.21%마저 초과 이탈하였으므로 확실하게 트레일링 스탑(매도)을 실행해야 함
+        result_sell = strategy.analyze_sell(
+            code="005930", name="삼성전자", df=df, 
+            current_price=10800, buy_price=buy_price, 
+            profit_rate=8.0, thresholds=thresholds, highest_price=highest_price
+        )
+        assert result_sell['action'] == 'sell'
+        assert "트레일링스탑" in result_sell['reason']
 
 def test_defensive_half_sell(strategy):
     """방어적 반매도 (하락 반전 신호) 테스트"""

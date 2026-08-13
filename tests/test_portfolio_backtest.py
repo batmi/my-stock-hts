@@ -355,7 +355,7 @@ def test_rank_fn은_순서만_바꾸고_게이트는_건드리지_않는다(univ
     # 조건이므로, 여기서 매수 집합·시점이 어긋나면 그것은 순전히 게이트가 흔들린 것이다.
     free = {}
     for label, fn in (("normal", None), ("rev", lambda s, c, r, d: -s)):
-        res = pbt.run_portfolio(dfs, status, dates, slots=len(dfs), rank_fn=fn)
+        res = pbt.run_portfolio(dfs, status, dates, slots=len(dfs), rank_fn=fn, invest_ratio=0.01, initial_capital=100_000_000)
         free[label] = {(t["code"], t["date"]) for t in res["trades"] if t["reason"] == "매수"}
     assert free["normal"] == free["rev"]
     assert free["normal"]
