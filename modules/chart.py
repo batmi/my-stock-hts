@@ -42,6 +42,9 @@ def setup_korean_font():
     _ensure_matplotlib()  # [메모리 최적화] 차트 진입점에서 matplotlib 지연 로드
     current_os = platform.system()
     try:
+        import logging
+        logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
+        
         if current_os == "Windows": rc('font', family='Malgun Gothic')
         elif current_os == "Darwin": rc('font', family='AppleGothic')
         else: rc('font', family='NanumGothic')
