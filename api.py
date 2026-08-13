@@ -4475,12 +4475,38 @@ def get_ask_bid_ratio(code, is_overseas=False):
     return None
 
 def get_investor_trend(code, market_div="J"):
-    # [추가] 토스 미제공: 투자자 매매동향 없음
-    if config.session.is_toss:
-        return []
     cache_key = f"inv_{code}_{market_div}"
     cached = _get_micro_cache(cache_key, ttl=300.0) # [수정] 수급 정보는 장중 잠정치가 천천히 갱신되는 일단위 집계라 5분 캐시로 REST/TPS 절감
     if cached is not None: return cached
+
+    # [추가] 토스 수급 연동 (1.2.14)
+    if config.session.is_toss and market_div == "J":
+        import toss_api
+        try:
+            toss_res = toss_api.get_investor_trend(code, count=30)
+            records = toss_res.get('records', [])
+            kis_output = []
+            for r in records:
+                date_str = r.get('date', '').replace('-', '')
+                prsn = r.get('individual') or {}
+                frgn = r.get('foreigner') or {}
+                orgn = r.get('institution') or {}
+                
+                item = {
+                    'stck_bsop_date': date_str,
+                    'prsn_ntby_qty': str(prsn.get('netBuyVolume', 0) or 0),
+                    'frgn_ntby_qty': str(frgn.get('netBuyVolume', 0) or 0),
+                    'orgn_ntby_qty': str(orgn.get('netBuyVolume', 0) or 0),
+                }
+                kis_output.append(item)
+            _set_micro_cache(cache_key, kis_output)
+            return kis_output
+        except Exception as e:
+            logger.debug(f"[Toss] get_investor_trend 에러: {e}")
+            return []
+            
+    if config.session.is_toss:
+        return []
 
     # [수정] 업종(지수)인 경우 별도 TR_ID(FHPTJ04040000) 및 URL 사용
     action = "investor"
@@ -4539,9 +4565,33 @@ def get_investor_trend(code, market_div="J"):
 
 def get_daily_foreign_rate(code):
     """주식 일자별 시세 (최근 30일, 외인소진율 포함) 조회"""
-    # [추가] 토스 미제공: 외국인 소진율 없음 (KIS로 누수되지 않도록 차단)
+    # [추가] 토스 수급 연동 (1.2.14) - 외국인 소진율
     if config.session.is_toss:
-        return []
+        import toss_api
+        try:
+            toss_res = toss_api.get_investor_trend(code, count=30)
+            records = toss_res.get('records', [])
+            kis_output = []
+            for r in records:
+                date_str = r.get('date', '').replace('-', '')
+                frgn_hold = r.get('foreignerHolding') or {}
+                holding_rate = frgn_hold.get('holdingRate')
+                
+                if holding_rate is not None:
+                    # Toss: 소수비율(0.5089) -> KIS: 백분율 문자열("50.89")
+                    rate_pct = str(float(holding_rate) * 100)
+                else:
+                    rate_pct = "0"
+                    
+                item = {
+                    'stck_bsop_date': date_str,
+                    'hts_frgn_ehrt': rate_pct
+                }
+                kis_output.append(item)
+            return kis_output
+        except Exception as e:
+            logger.debug(f"[Toss] get_daily_foreign_rate 에러: {e}")
+            return []
     url = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["DAILY_PRICE"]
     params = {
         "FID_COND_MRKT_DIV_CODE": "J",

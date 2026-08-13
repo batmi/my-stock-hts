@@ -284,6 +284,10 @@ def _request(method, path, group, params=None, json_body=None, account=True, ret
             message = err.get("message", message)
             request_id = err.get("requestId", request_id)
             data = err.get("data") or {}
+            
+            # [추가] 1.2.14 미국장 달러/소수점 주문 마감 안내 메시지 개선
+            if code in ["amount-order-outside-regular-hours", "fractional-quantity-outside-regular-hours"]:
+                message = "미국 주식 금액/소수점 주문은 정규장 종료 1시간 전까지만 접수 가능합니다."
         except Exception:
             pass
 
@@ -526,7 +530,21 @@ def get_sellable_quantity(symbol):
 
 def get_commissions():
     """매매 수수료. [{marketCountry,commissionRate,startDate,endDate}]"""
-    return _request("GET", "/api/v1/commissions", group="ORDER_INFO") or []
+    res = _request("GET", "/api/v1/commissions", group="ORDER_INFO") or []
+    for item in res:
+        if 'commissionRate' in item and item['commissionRate']:
+            try:
+                # 1.2.14 변경: 소수비율(0.00015)을 백분율 문자열(0.015)로 변환 (하위호환 유지)
+                item['commissionRate'] = str(float(item['commissionRate']) * 100)
+            except Exception:
+                pass
+    return res
+
+
+def get_investor_trend(symbol, count=10):
+    """투자자별 매매동향 조회 (국내종목 전용)"""
+    return _request("GET", f"/api/v1/stocks/{symbol}/investor-trading", 
+                    group="STOCK_TRADING_TREND", params={"count": count}) or {}
 
 
 # =========================================================================
