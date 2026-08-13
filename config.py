@@ -2186,11 +2186,13 @@ STARTUP_LOGGER_NAME = "startup"
 
 # [추가] 로깅 설정 초기화 함수
 def setup_logging():
-    # 기존 핸들러 제거
-    root = logging.getLogger()
-    if root.handlers:
-        for handler in root.handlers:
-            root.removeHandler(handler)
+    # 기존 레벨 저장 (변경 감지용)
+    root_logger = logging.getLogger()
+    prev_level_no = root_logger.level
+    prev_level_name = logging.getLevelName(prev_level_no) if prev_level_no != logging.NOTSET else "초기화 전"
+
+    # 기존 핸들러 제거 로직은 logging.basicConfig(force=True)가
+    # handler.close()를 포함해 안전하게 처리하므로 리스트 순회 삭제 버그를 발생시키는 수동 루프를 제거합니다.
 
     # 로깅 활성화
     logging.disable(logging.NOTSET)
@@ -2311,7 +2313,12 @@ def setup_logging():
     #  호출부가 아니라 로깅 계층에서 가린다.
     file_handler.addFilter(SensitiveDataFilter())
         
-    logging.info(f"=== 로깅 시스템 설정 갱신 (현재 파일 로그 레벨: {level_name}) ===")
+    msg_level = max(numeric_level, logging.INFO)
+    
+    if prev_level_name not in ("초기화 전", level_name):
+        logging.log(msg_level, f"=== 로깅 시스템 설정 변경 (파일 로그 레벨: {prev_level_name} -> {level_name}) ===")
+    else:
+        logging.log(msg_level, f"=== 로깅 시스템 설정 갱신 (현재 파일 로그 레벨: {level_name}) ===")
 
 
 def log_system_start():
@@ -2448,6 +2455,7 @@ def reset_custom_settings(keys_to_reset):
             # 초기 상태를 베이스로 새 설정 덮어씌우기
             settings = GlobalSettings()
             load_dynamic_config()
+            setup_logging() # 초기화된 파일 로그 레벨 즉시 적용
         except Exception as e:
             print(f"[Config] 설정 초기화 중 오류: {e}")
 
