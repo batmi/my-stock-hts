@@ -318,7 +318,13 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
         # 전일 대비 상승이면 빨강, 하락이면 파랑
         vol_colors = ['red' if c > o else 'blue' for c, o in zip(df['close'], df['close'].shift(1).fillna(df['close']))]
         ax1v.bar(df.index, df['volume'], color=vol_colors, alpha=0.15, width=0.6)
-        ax1v.set_ylim(0, df['volume'].max() * 5) # 거래량이 캔들을 가리지 않도록 높이 조절
+        
+        import math
+        max_vol = df['volume'].max()
+        if max_vol > 0 and not math.isnan(max_vol):
+            ax1v.set_ylim(0, max_vol * 5) # 거래량이 캔들을 가리지 않도록 높이 조절
+        else:
+            ax1v.set_ylim(0, 1)
         ax1v.axis('off') # 축 눈금 숨김
 
         # [수정] 가격 Y축을 오른쪽으로 명시적 이동 (twinx 생성 후 적용)

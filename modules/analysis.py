@@ -2784,20 +2784,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     config.console.print()
     if Prompt.ask("📊 상세 차트 분석 데이터를 출력하시겠습니까?", choices=["y", "n"], default="n") == 'y':
         from modules import chart
-        if is_domestic_index:
-            if code == "VKOSPI":
-                # VKOSPI는 yfinance 미제공 → 상세 차트(야후 데이터 기반) 생성 불가
-                config.console.print("[yellow]V코스피200(VKOSPI)은 yfinance 미제공 지수로 상세 차트를 지원하지 않습니다.[/yellow]")
-                yf_ticker = None
-            else:
-                yf_ticker = "^KS11"
-                if code == "KOSDAQ": yf_ticker = "^KQ11"
-                elif code == "KOSPI200": yf_ticker = "^KS200"
-                elif code == "KOSDAQ150": yf_ticker = "^KQ150"
-            if yf_ticker:
-                chart.generate_visual_chart(yf_ticker, name, is_overseas=True)
-        else:
-            chart.generate_visual_chart(code, name, is_overseas=is_overseas)
+        chart.generate_visual_chart(code, name, is_overseas=is_overseas)
 
     config.console.print()
     ai_prompt_msg = "🤖 AI 지수 심층 진단을 수행하시겠습니까?" if is_index else "🤖 AI 종목 심층 진단을 수행하시겠습니까?"
