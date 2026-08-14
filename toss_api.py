@@ -541,6 +541,15 @@ def get_commissions():
     return res
 
 
+
+def get_short_selling(symbol, count=30):
+    """공매도 동향 조회 (국내종목 전용)"""
+    res = _request("GET", f"/api/v1/stocks/{symbol}/short-selling", 
+                   group="STOCK_TRADING_TREND", params={"count": count})
+    if res and "records" in res:
+        return res["records"]
+    return []
+
 def get_investor_trend(symbol, count=10):
     """투자자별 매매동향 조회 (국내종목 전용)"""
     return _request("GET", f"/api/v1/stocks/{symbol}/investor-trading", 

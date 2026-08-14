@@ -5415,6 +5415,26 @@ def _print_period_price_common(code, is_overseas, limit=20):
                     for item in inv_data:
                         investor_map[item['stck_bsop_date']] = item
                         
+                # 공매도 추이 데이터 조회
+                try:
+                    short_sale_data = api.get_daily_short_selling(code, limit)
+                    if short_sale_data:
+                        for item in short_sale_data:
+                            d_key = item.get('stck_bsop_date')
+                            if not d_key and 'date' in item:
+                                d_key = item['date'].replace('-', '')
+                            if d_key:
+                                if d_key not in investor_map:
+                                    investor_map[d_key] = {}
+                                
+                                if 'ssts_vol_rlim' in item:
+                                    investor_map[d_key]['short_sale_rate'] = item['ssts_vol_rlim']
+                                elif 'shortSellingVolumeRate' in item:
+                                    val = item['shortSellingVolumeRate']
+                                    investor_map[d_key]['short_sale_rate'] = f"{float(val) * 100:.2f}" if val else "0.00"
+                except Exception as e:
+                    pass
+
                 # 외인 소진율 데이터 조회 및 병합 (최근 30일)
                 frate_data = api.get_daily_foreign_rate(code)
                 if frate_data:
@@ -5487,6 +5507,7 @@ def _print_period_price_common(code, is_overseas, limit=20):
     table.add_column("OBV", justify="right") # [이동]
     if not is_overseas and not is_domestic_index:
         table.add_column("외인률", justify="right") # [추가]
+        table.add_column("공매도", justify="right") # [추가]
         table.add_column("수급(개/외/기)", justify="center") # [수정]
 
     for i, (idx, row) in enumerate(recent_df.iterrows()):
@@ -5561,10 +5582,17 @@ def _print_period_price_common(code, is_overseas, limit=20):
         # [추가] 수급 데이터 포맷팅
         inv_str = "[dim]-[/dim]"
         foreign_rate_str = "[dim]-[/dim]"
+        short_sale_str = "[dim]-[/dim]"
         if not is_overseas and not is_domestic_index:
             d_key = str(row['date']).replace('-', '')[:8]
             if d_key in investor_map:
                 item = investor_map[d_key]
+                
+                if 'short_sale_rate' in item:
+                    val = item['short_sale_rate']
+                    try: short_sale_str = f"{float(val):.2f}%"
+                    except Exception: pass
+
                 p = api.safe_int(item.get('prsn_ntby_qty'))
                 f = api.safe_int(item.get('frgn_ntby_qty'))
                 o = api.safe_int(item.get('orgn_ntby_qty'))
@@ -5604,6 +5632,7 @@ def _print_period_price_common(code, is_overseas, limit=20):
         ]
         if not is_overseas and not is_domestic_index:
             row_data.append(foreign_rate_str)
+            row_data.append(short_sale_str)
             row_data.append(inv_str)
 
         table.add_row(*row_data)

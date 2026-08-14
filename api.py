@@ -4474,6 +4474,31 @@ def get_ask_bid_ratio(code, is_overseas=False):
             return 99.9
     return None
 
+
+def get_daily_short_selling(code: str, limit: int = 30):
+    """국내 주식 기간별 공매도 추이 조회 (최근 limit일치)"""
+    if config.session.is_toss:
+        import toss_api
+        return toss_api.get_short_selling(code, count=limit)
+
+    url_path = "/uapi/domestic-stock/v1/quotations/daily-short-sale"
+    tr_id = "FHPST04830000"
+    import datetime
+    end_dt = datetime.datetime.now()
+    start_dt = end_dt - datetime.timedelta(days=limit * 2) # 여유있게 조회
+    
+    params = {
+        "FID_COND_MRKT_DIV_CODE": "J",
+        "FID_INPUT_ISCD": code,
+        "FID_INPUT_DATE_1": start_dt.strftime("%Y%m%d"),
+        "FID_INPUT_DATE_2": end_dt.strftime("%Y%m%d")
+    }
+
+    res = call_api(url_path, "domestic", "quotations", "short_sale_trend", params=params, tr_id=tr_id, timeout=3)
+    if res and res.get('rt_cd') == '0':
+        return res.get('output2', [])
+    return []
+
 def get_investor_trend(code, market_div="J"):
     cache_key = f"inv_{code}_{market_div}"
     cached = _get_micro_cache(cache_key, ttl=300.0) # [수정] 수급 정보는 장중 잠정치가 천천히 갱신되는 일단위 집계라 5분 캐시로 REST/TPS 절감
