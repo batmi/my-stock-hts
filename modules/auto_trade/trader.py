@@ -2342,7 +2342,12 @@ class AutoTrader:
         time_stop_status = "[green]ON[/]" if use_time_stop else "[red]OFF[/]"
         table.add_row("", f"시간청산 ({time_stop_days}일 경과 & 수익률 +{time_stop_min}% 미만) {time_stop_status}")
         
-        table.add_row("", f"트레일링스탑 ({ts_act}/-{ts_call}%)")
+        ts_atr_mult = config.SELL_STRATEGY.get("TRAILING_ATR_MULTIPLIER", 3.5)
+        act_mult = _pkg().ts_activation_atr_mult()
+        if "손익분기" in ts_act:
+            ts_act = f"동적 손익분기 (ATR x{act_mult})"
+            
+        table.add_row("", f"샹들리에 트레일링스탑 (발동: {ts_act} / 이탈: 고점대비 ATR x{ts_atr_mult}, 하한 -{ts_call}%)")
 
         # 투자 설정
         max_holdings = config.settings.SYSTEM_MAX_HOLDINGS
