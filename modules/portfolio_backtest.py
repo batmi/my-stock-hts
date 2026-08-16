@@ -217,7 +217,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                   exit_intraday=False, exit_path="low_first", exit_intraday_only=None,
                   pyr_reset_time_stop=False, exit_next_open=False,
                   intraday_bars=None, bar_stop_times=None, bar_ts_times=None,
-                  bar_ts_defer=None, intraday_pyramid=None,
+                  bar_ts_defer=None, intraday_pyramid=None, bar_pyr_times=None,
+                  pyr_next_open=False,
                   intraday_status=None, intraday_entry=False, entry_bar_times=None):
     """N슬롯 포트폴리오 시뮬레이션.
 
@@ -287,6 +288,14 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 같은 의미다. 봉의 저가를 쓰면 '매 순간 감시'가 되어 실매매보다 과하다.
               · 트레일링 고점 = 그 봉까지의 고가 러닝맥스(실매매의 highest_price와 같은 갱신).
               · 지표(ATR)는 **전일 확정 봉**을 쓴다 — 그 시점에 확정된 정보만 쓰기 위해서다.
+            bar_pyr_times: 증액을 **어느 봉에서만** 판정할지(분봉 경로). None이면 모든 봉
+              = 현 실매매의 장중 추격. {"1400"}을 주면 그 봉의 종가(=15:00 가격)로 하루
+              한 번만 판정한다 — 시스템은 15:20~15:30 종가 단일가에 매매하지 않으므로
+              접속매매 구간에서 실제로 쓸 수 있는 마지막 판정 시점이 그것이다.
+            pyr_next_open: 증액을 **일봉 종가로 판정하고 익일 시가에 체결**한다. 종가 확인
+              이라는 이점에서 선견(lookahead)을 걷어낸 형태다 — 종가를 보고 그 종가에
+              사는 것은 불가능하지만, 종가를 보고 다음 날 시가에 사는 것은 가능하다.
+              켜면 분봉 증액 경로보다 우선한다(청산은 분봉 그대로 두고 증액 축만 바꾼다).
             intraday_pyramid: 증액도 봉 단위로 판정할지. None(기본)이면 분봉과 시점판정이
                 둘 다 있을 때 자동으로 켜진다(= 실매매). **청산 축만 재는 감사에서는 False로
                 꺼야 한다** — 켜두면 증액 건수가 함께 변해 두 축이 섞이고, '종가 판정 팔이
@@ -421,7 +430,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
 
     # 익일 시가 체결용 (날짜 → 그 종목의 다음 거래일). 안 쓰면 만들지 않는다.
     next_day = {}
-    if exit_next_open or bar_ts_defer == "next_open":
+    if exit_next_open or bar_ts_defer == "next_open" or pyr_next_open:
         for code, df in dfs.items():
             dt = [str(x) for x in df["date"]]
             next_day[code] = {d: dt[i + 1] for i, d in enumerate(dt[:-1])}
@@ -813,6 +822,28 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 #  [한계] 청산은 이 블록보다 먼저 하루치를 끝내므로, 증액으로 오른 평단이
                 #   같은 날의 청산선에는 반영되지 않는다(다음 날부터 반영). 증액일과 청산일이
                 #   겹치는 경우에만 생기는 오차다.
+                if pyr_next_open:
+                    # [익일 시가] 판정은 오늘 일봉 종가, 체결은 다음 거래일 시가.
+                    #  '종가로 확인된 돌파에만 얹는다'를 선견 없이 재현하는 유일한 형태다.
+                    _r, _c, _cb, _state, _rs = status[code][day]
+                    if _state not in ("매수", "강매수"):
+                        continue
+                    nd = next_day.get(code, {}).get(day)
+                    nrow = rows[code].get(nd) if nd else None
+                    if nrow is None:
+                        continue
+                    done_today = 0
+                    while pos["pyr"] < pyr_max and (pyr_day_cap <= 0 or done_today < pyr_day_cap):
+                        trig = pyr_trigger
+                        if pyr_trigger_fn is not None:
+                            trig = float(pyr_trigger_fn(row.get("ATR", 0), pos["avg"]))
+                        if row["close"] < pos["avg"] * (1 + trig / 100.0):
+                            break
+                        if not _pyramid_once(code, pos, day, nrow["open"], row, done_today + 1):
+                            break
+                        done_today += 1
+                    continue
+
                 use_bar_pyr = (intraday_pyramid if intraday_pyramid is not None
                                else bool(intraday_bars and intraday_status))
                 bar_st = ((intraday_status or {}).get(code, {}).get(day)
@@ -820,6 +851,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 if bar_st:
                     done_today = 0
                     for hhmm in sorted(bar_st):
+                        if bar_pyr_times is not None and hhmm not in bar_pyr_times:
+                            continue
                         if pos["pyr"] >= pyr_max:
                             break
                         if pyr_day_cap > 0 and done_today >= pyr_day_cap:
