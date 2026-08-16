@@ -13,10 +13,18 @@
    · 장중 청산이 실제로 몇 건인가 — 이 값이 작으면 애초에 논점이 아니다
 
 [팔 구성] 기준선은 현 실매매(둘 다 장중)다.
-   A. 둘 다 종가   — 현 백테스트. 모든 청산 다이얼의 출처
-   B. 둘 다 장중   — 현 실매매 (기준선)
-   C. 손절만 장중  — 급락은 즉시 막고 트레일링 휩소만 종가로 확인
-   D. TS만 장중    — 반대 조합(대조군)
+   A.  둘 다 종가            — 현 백테스트. 모든 청산 다이얼의 출처
+   A'. 둘 다 종가·익일 시가   — A의 비관 브래킷(아래)
+   B.  둘 다 장중            — 현 실매매 (기준선)
+   C.  손절만 장중           — 급락은 즉시 막고 트레일링 휩소만 종가로 확인 (적용 후보)
+   C'. 손절만 장중·TS 익일시가 — C의 비관 브래킷
+   D.  TS만 장중             — 반대 조합(대조군)
+
+[브래킷이 왜 필요한가] "종가 팔은 그날 종가가 선 위였다는 걸 미리 아는 이점이 섞였다"는
+ 반론은 정당하다. 그래서 **집행을 다음 거래일 시가로 미룬 팔**을 함께 둔다 — 하룻밤 갭을
+ 그대로 맞으므로 실제 마감 직전(15:20) 집행보다 확실히 불리하다. 실제 정책은 종가 체결과
+ 익일 시가 체결 **사이**에 있으므로, 두 끝이 모두 장중 체결을 이기면 그 사이도 이긴다.
+ (판정 시점의 이점 — 15:20에는 종가를 모른다 — 은 이 브래킷으로 못 지우며 분봉이 필요하다.)
 
 [경로 불확실성] 일봉은 고가·저가의 선후를 모른다. `--path` 로 두 극단을 다 재고 **띠로**
  읽어야 한다. low_first 는 트레일링선을 전일까지의 고점으로 긋고(덜 걸림), high_first 는
@@ -45,10 +53,14 @@ BASE = "B. 둘 다 장중"
 
 def arms(path):
     return [
-        ("A. 둘 다 종가", {}),
-        (BASE,            {"exit_intraday": True, "exit_path": path}),
-        ("C. 손절만 장중", {"exit_intraday": True, "exit_path": path, "exit_intraday_only": "stop"}),
-        ("D. TS만 장중",   {"exit_intraday": True, "exit_path": path, "exit_intraday_only": "ts"}),
+        ("A. 둘다종가", {}),
+        ("A'. 둘다종가·익일시가", {"exit_next_open": True}),
+        (BASE,          {"exit_intraday": True, "exit_path": path}),
+        ("C. 손절장중·TS종가", {"exit_intraday": True, "exit_path": path,
+                            "exit_intraday_only": "stop"}),
+        ("C'. 손절장중·TS익일시가", {"exit_intraday": True, "exit_path": path,
+                              "exit_intraday_only": "stop", "exit_next_open": True}),
+        ("D. TS만장중", {"exit_intraday": True, "exit_path": path, "exit_intraday_only": "ts"}),
     ]
 
 
@@ -153,7 +165,7 @@ def main():
         all_results[wname] = results
     print(" " * 50, end="\r")
 
-    W = 120
+    W = 126
     print(f"\n{'=' * W}")
     print(f"청산 체결 시점 — {args.trials}회 × {args.sample}종목 짝비교 · 경로 {args.path} "
           f"(기준선: {BASE} = 현 실매매)")
@@ -162,7 +174,7 @@ def main():
         results = all_results[wname]
         base = results[BASE]
         print(f"\n########## {wname} ({len(wdates)} 거래일) ##########")
-        print(f"{'설정':<16}{'수익%':>9}{'MDD%':>8}{'MAR':>7}{'PF':>6}{'청산':>6}{'승률%':>7}"
+        print(f"{'설정':<22}{'수익%':>9}{'MDD%':>8}{'MAR':>7}{'PF':>6}{'청산':>6}{'승률%':>7}"
               f"{'손절':>6}{'TS':>5}{'장중':>6}{'상위10%':>9}{'최대':>9}{'>30%':>6}{'보유일':>7}"
               f"{'승-무-패':>10}{'MAR승':>7}")
         print("-" * W)
@@ -174,7 +186,7 @@ def main():
             los = sum(1 for a, b in zip(rs, base) if a["ret"] < b["ret"] - 1e-9)
             rw = sum(1 for a, b in zip(rs, base) if a["ret"] > b["ret"])
             mw = sum(1 for a, b in zip(rs, base) if a["mar"] > b["mar"])
-            print(f"{label:<16}{m('ret'):>9.1f}{m('mdd'):>8.1f}{m('mar'):>7.2f}{m('pf'):>6.2f}"
+            print(f"{label:<22}{m('ret'):>9.1f}{m('mdd'):>8.1f}{m('mar'):>7.2f}{m('pf'):>6.2f}"
                   f"{m('n'):>6.0f}{m('win'):>7.1f}{m('stop_n'):>6.0f}{m('ts_n'):>5.0f}"
                   f"{m('intra'):>6.0f}{m('top10'):>9.1f}{m('best'):>9.1f}{m('big'):>6.0f}"
                   f"{m('days'):>7.1f}"

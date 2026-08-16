@@ -200,7 +200,9 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                   profit_lock_dates=None, rank_fn=None, rotation=None, probe_fn=None,
                   entry_gate=None, pyr_intraday=False, pyr_per_day=1, pyr_fill_cap=None,
                   exit_intraday=False, exit_path="low_first", exit_intraday_only=None,
-                  pyr_reset_time_stop=False):
+                  pyr_reset_time_stop=False, exit_next_open=False,
+                  intraday_bars=None, bar_stop_times=None, bar_ts_times=None,
+                  intraday_status=None, intraday_entry=False, entry_bar_times=None):
     """N슬롯 포트폴리오 시뮬레이션.
 
     Args:
@@ -260,6 +262,39 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             백테스트는 그 이틀 전에 작성돼 옛 동작(True)을 2026-08-16까지 들고 있었다
             — 주석에는 "실매매와 동일하게"라고 적혀 있었지만 사실이 아니었다.
             True 는 그 이전 기록값을 재현할 때만 쓴다(tools/audit_timestop_reset.py).
+
+        intraday_bars / bar_stop_times / bar_ts_times: **실제 분봉으로 하루를 되감는다.**
+            intraday_bars = {code: {날짜: [(HHMM, o, h, l, c, v), ...]}} (modules.intraday_bars).
+            주면 exit_intraday 의 고가·저가 근사 대신 봉 순서대로 판정한다 — 고가·저가 선후
+            가정(exit_path)이 필요 없어지고, 판정 시점을 봉으로 고정할 수 있다.
+              · 판정 가격 = 그 봉의 **종가**(= 그 시점의 현재가). 실매매가 주기마다 보는 값과
+                같은 의미다. 봉의 저가를 쓰면 '매 순간 감시'가 되어 실매매보다 과하다.
+              · 트레일링 고점 = 그 봉까지의 고가 러닝맥스(실매매의 highest_price와 같은 갱신).
+              · 지표(ATR)는 **전일 확정 봉**을 쓴다 — 그 시점에 확정된 정보만 쓰기 위해서다.
+            bar_stop_times / bar_ts_times: 각 다리를 **어느 봉에서만** 판정할지. None이면 모든
+                봉(= 현 실매매). {"1400"} 처럼 주면 그 봉의 종가 시점에만 판정한다
+                — 60분봉에서 14:00 봉의 종가는 15:00 가격이므로 '마감 30분 전 1회 판정'이
+                되고, 종가를 미리 아는 이점이 원천적으로 없다(tools/audit_exit_bars.py).
+
+        intraday_status / entry_bar_times: **진입도 분봉으로 되감는다.**
+            intraday_status = {code: {날짜: {HHMM: (raw, chk, can_buy, state, reason, rsi,
+            w52, atr, close, high)}}} (modules.intraday_bars.precompute_intraday_status).
+            실매매는 주기마다 미확정 장중 봉으로 다시 채점하므로, 같은 날 안에서 신호가
+            켜졌다 꺼지면 체결 여부가 '몇 시에 스캔했는가'에 달린다 — 일봉 백테스트에
+            없는 자유도다. 주면 그 자유도를 그대로 재현한다(tools/audit_entry_bars.py).
+              intraday_entry: 진입을 분봉으로 돌릴지. **False면 진입은 종가 그대로**이고
+                intraday_status 는 아래 ATR 용도로만 쓰인다 — 청산 축만 재는 감사에서
+                진입까지 같이 바뀌면 두 축이 섞인다.
+              entry_bar_times: None이면 모든 봉에서 스캔(= 현 실매매), {"1400"} 처럼 주면
+                그 봉의 종가 시점에만 스캔한다.
+            같은 자료의 ATR을 **청산 분봉 경로에도** 써서 지표 기준을 맞춘다(실매매는
+            당일 진행 봉을 덮어 지표를 계산한다 — engine.analyze_sell 경로와 같은 규약).
+
+        exit_next_open: 종가 판정으로 난 청산을 **다음 거래일 시가**에 집행한다(하룻밤 보유).
+            '종가 팔은 그날 종가를 미리 아는 이점이 섞였다'는 반론을 daily 데이터만으로
+            깨기 위한 비관 브래킷이다 — 실제 마감 직전(15:20) 집행은 종가 체결과 익일 시가
+            체결 **사이**에 있으므로, 두 끝이 모두 장중 체결을 이기면 그 사이도 이긴다.
+            장중 청산(exit_intraday)으로 나간 건에는 적용되지 않는다.
 
         exit_intraday / exit_path: 청산을 '언제' 집행하는가. 기본(False)은 종전 동작 —
             **모든 청산이 종가 체결**이고 일봉의 low 는 어디에도 쓰이지 않는다. 그런데
@@ -342,6 +377,20 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
 
     rows = {code: {str(r["date"]): r for r in df.to_dict("records")} for code, df in dfs.items()}
     parsed = {d: pd.to_datetime(d, format="%Y%m%d") for d in dates}
+    # 분봉 리플레이용 전일 확정 봉(지표는 그 시점에 확정된 것만 쓴다).
+    prev_rows = {}
+    if intraday_bars:
+        for code, df in dfs.items():
+            recs = df.to_dict("records")
+            prev_rows[code] = {str(r["date"]): recs[i - 1] for i, r in enumerate(recs) if i}
+
+    # 익일 시가 체결용 (날짜 → 그 종목의 다음 거래일). 안 쓰면 만들지 않는다.
+    next_day = {}
+    if exit_next_open:
+        for code, df in dfs.items():
+            dt = [str(x) for x in df["date"]]
+            next_day[code] = {d: dt[i + 1] for i, d in enumerate(dt[:-1])}
+
     # 상한가 체결 가드용 전일 종가. 가드를 안 쓰면 만들지 않는다(메모리).
     prev_close = {}
     if pyr_fill_cap:
@@ -406,7 +455,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
         })
         del positions[code]
 
-    def _intraday_stop_level(pos, row, hwm, day, ts_act_eff):
+    def _intraday_stop_level(pos, row, hwm, day, ts_act_eff, only_override="__keep__"):
         """장중에 **먼저 닿는** 청산선. (가격, 사유) 또는 None.
 
         [왜 여기서 다시 계산하는가] decide_sell 은 '이 가격이면 파는가'만 답할 뿐 청산선
@@ -427,7 +476,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             if lock is not None and lock > sl_rate:
                 sl_rate, is_lock = lock, True
 
-        only = exit_intraday_only
+        only = exit_intraday_only if only_override == "__keep__" else only_override
         cands = []
         if sl_rate != 0 and only != "ts":
             r = ("이익보호" if is_lock
@@ -481,6 +530,15 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             raw_score, sell_check, _can_buy, state, state_reason = status[code][day]
             holding_days = (parsed[day] - pos["buy_dt"]).days
 
+            # [익일 시가 체결] 어제 종가 판정으로 예약된 청산을 오늘 시가에 집행한다.
+            pending = pos.get("exit_pending")
+            if pending:
+                op = row.get("open") or price
+                sell_price = utils.adjust_to_tick(op * (1 - slippage), False) or op
+                _do_sell(code, pos, day, sell_price, pending[0], holding_days,
+                         pending[1], pending[2])
+                continue
+
             ts_act_eff = ts_act
             if ts_act_fn is not None:
                 ts_act_eff = float(ts_act_fn(row.get("ATR", 0), pos["avg"]))
@@ -491,8 +549,47 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                                                        ts_callback, ts_activation_atr_mult(),
                                                        use_atr)
 
+            # ---------- [분봉 리플레이] 실제 장중 봉으로 하루를 되감는다 ----------
+            bars = (intraday_bars or {}).get(code, {}).get(day) if intraday_bars else None
+            if bars:
+                prev_row = prev_rows.get(code, {}).get(day) or row
+                st_day = (intraday_status or {}).get(code, {}).get(day) or {}
+                hwm = pos["high"]
+                done = False
+                for hhmm, _bo, bh, _bl, bc, _bv in bars:
+                    hwm = max(hwm, bh)   # 실매매의 highest_price 갱신과 같은 시점
+                    legs = []
+                    if bar_stop_times is None or hhmm in bar_stop_times:
+                        legs.append("stop")
+                    if bar_ts_times is None or hhmm in bar_ts_times:
+                        legs.append("ts")
+                    if not legs:
+                        continue
+                    only = None if len(legs) == 2 else legs[0]
+                    # 지표(ATR)는 실매매와 같이 '그 시점의 진행 봉'으로 계산한 값을 쓴다.
+                    #  없으면 전일 확정 봉으로 폴백한다(그 시점에 확정된 정보).
+                    st_now = st_day.get(hhmm)
+                    ref = ({"ATR": st_now[7]} if st_now else prev_row)
+                    hit = _intraday_stop_level(pos, ref, hwm, day, ts_act_eff, only)
+                    if hit and bc <= hit[0]:
+                        # 체결가는 '그 시점의 현재가'(봉 종가)다. 선 위에서 체결됐다고
+                        #  가정하면 실매매보다 유리해진다.
+                        exec_price = utils.adjust_to_tick(bc * (1 - slippage), False) or bc
+                        mfe = (hwm - pos["avg"]) / pos["avg"] * 100
+                        if mfe >= ts_act_eff:
+                            pos["ts_armed_ever"] = True
+                        intraday_exits += 1
+                        _do_sell(code, pos, day, exec_price, hit[1], holding_days, mfe, hit[2])
+                        done = True
+                        break
+                if done:
+                    continue
+                pos["high"] = max(pos["high"], hwm)
+
             # ---------- [장중 청산 모사] 실매매의 손절·TS는 실시간가로 친다 ----------
-            if exit_intraday:
+            if bars:
+                pass
+            elif exit_intraday:
                 hwm = pos["high"]
                 if exit_path == "high_first":
                     hwm = max(hwm, row["high"])
@@ -592,6 +689,10 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                     ts_gated_days += 1
 
             if sell:
+                if exit_next_open and next_day.get(code, {}).get(day):
+                    # 오늘은 팔지 않고 예약만 건다 — 하룻밤 갭을 그대로 맞는다.
+                    pos["exit_pending"] = (reason, max_profit, is_bep)
+                    continue
                 sell_price = utils.adjust_to_tick(price * (1 - slippage), False) or price
                 _do_sell(code, pos, day, sell_price, reason, holding_days, max_profit, is_bep)
 
@@ -619,8 +720,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
         if pyr_use:
             for code, pos in list(positions.items()):
                 row = rows[code].get(day)
-                if row is None or pos["pyr"] >= pyr_max:
-                    continue
+                if row is None or pos["pyr"] >= pyr_max or pos.get("exit_pending"):
+                    continue  # 청산 예약된 포지션에는 얹지 않는다
                 if pyr_require_healthy and market_filter_dates and day in market_filter_dates.get(code, ()):
                     continue
                 _raw, _chk, _can, state, _reason = status[code][day]
@@ -788,7 +889,93 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                     rotated_out_today = weakest
                     rotations += 1
 
-        if len(positions) < slots:
+        def _candidates_at_bar(day, hhmm):
+            """그 시각 봉 시점의 후보. status/지표 모두 '진행 중 봉' 기준이다."""
+            out = []
+            for code in rows:
+                if code in positions or code == rotated_out_today:
+                    continue
+                st = (intraday_status.get(code, {}).get(day) or {}).get(hhmm)
+                if st is None:
+                    continue
+                raw_score, _chk, can_buy, state, _rs, rsi, w52, atr, close, high = st
+                if not can_buy or not (raw_score >= buy_score or state == "역매수"):
+                    continue
+                is_super = super_use and raw_score >= super_score and w52 >= super_w52
+                if rsi >= (super_rsi if is_super else buy_rsi):
+                    continue
+                if market_filter_dates and day in market_filter_dates.get(code, ()):
+                    continue
+                if entry_gate is not None and entry_gate(day, code, tuple(positions)):
+                    continue
+                out.append((raw_score, code, {"ATR": atr, "close": close, "high": high,
+                                              "RSI": rsi, "w52_pos": w52}))
+            out.sort(reverse=True, key=lambda item: item[0])
+            return out
+
+        def _buy(code, row, price_src, day):
+            """후보 1건 집행. 종가 경로와 분봉 경로가 같은 사이징·회계를 쓰게 모은다."""
+            nonlocal cash, max_buy_weight, max_buy_risk, risk_cap_breaches
+            nonlocal skipped_qty0, oversized_buys, heat_budget
+            buy_price = utils.adjust_to_tick(price_src * (1 + slippage), False) or price_src
+            sl_rate = default_sl
+            if use_atr:
+                sl_rate = (sl_rate_fn(row, buy_price, atr_mult) if sl_rate_fn is not None
+                           else _atr_stop_rate(row.get("ATR", 0), buy_price, atr_mult, day))
+            amount = allocate_amount(_equity(day), cash, invest_ratio * day_scale, sl_rate,
+                                     row.get("ATR", 0), buy_price)
+            if heat_budget is not None and sl_rate:
+                amount = min(amount, max(0, heat_budget / (abs(sl_rate) / 100.0)))
+            qty = int(amount / buy_price)
+            if qty < 1:
+                # 배분액 < 1주 값. 실매매는 여기서 배분액을 1주 값까지 끌어올린다
+                #  (trader._execute_buy_orders의 '최소 주문 금액 보정'). 그 초과 허용
+                #  배수를 oversize_limit로 재현한다 — 1.0이면 종전처럼 건너뛴다.
+                if oversize_limit <= 1.0 or amount <= 0 or buy_price > amount * oversize_limit:
+                    skipped_qty0 += 1
+                    return False
+                if buy_price > cash:
+                    skipped_qty0 += 1
+                    return False
+                qty = 1
+                oversized_buys += 1
+
+            # [진입 시점 계측] 최대 비중은 피라미딩이 지배하므로 사이징 상한이 지켜졌는지는
+            #  '진입 순간'을 봐야 드러난다. 1회 리스크가 SYSTEM_RISK_PER_TRADE를 넘는
+            #  매수 건수도 함께 센다 — 그것이 이 가드가 지키려는 바로 그 불변식이다.
+            eq_now = _equity(day) or 1
+            max_buy_weight = max(max_buy_weight, qty * buy_price / eq_now * 100)
+            if sl_rate:
+                buy_risk = qty * buy_price * (abs(sl_rate) / 100.0) / eq_now * 100
+                max_buy_risk = max(max_buy_risk, buy_risk)
+                if buy_risk > risk_per_trade_cap:
+                    risk_cap_breaches += 1
+
+            cash -= qty * buy_price + trading_cost.buy_fee(qty * buy_price)
+            if heat_budget is not None:
+                heat_budget -= qty * buy_price * (abs(sl_rate) / 100.0)
+            positions[code] = {"qty": qty, "avg": buy_price,
+                               "lots": [{"qty": qty, "sl": sl_rate}],
+                               "high": row.get("high", buy_price), "buy_dt": parsed[day],
+                               "pyr": 0}
+            trades.append({"code": code, "date": day, "reason": "매수",
+                           "profit_amt": 0, "profit": 0, "days": 0})
+            return True
+
+        if intraday_status and intraday_entry and len(positions) < slots:
+            # 봉 시각 순서대로 스캔한다 — 먼저 조건을 채운 후보가 슬롯을 가져간다.
+            times = sorted({t for c in rows
+                            for t in ((intraday_status.get(c, {}).get(day) or {}).keys())})
+            for hhmm in times:
+                if len(positions) >= slots:
+                    break
+                if entry_bar_times is not None and hhmm not in entry_bar_times:
+                    continue
+                for _score, code, srow in _candidates_at_bar(day, hhmm):
+                    if len(positions) >= slots:
+                        break
+                    _buy(code, srow, srow["close"], day)
+        elif len(positions) < slots:
             candidates = _candidates_for(day)
             if probe_fn is not None:
                 probe_fn(day, candidates, slots - len(positions))
@@ -796,48 +983,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             for _score, code, row in candidates:
                 if len(positions) >= slots:
                     break
-                buy_price = utils.adjust_to_tick(row["close"] * (1 + slippage), False) or row["close"]
-                sl_rate = default_sl
-                if use_atr:
-                    sl_rate = (sl_rate_fn(row, buy_price, atr_mult) if sl_rate_fn is not None
-                               else _atr_stop_rate(row.get("ATR", 0), buy_price, atr_mult, day))
-                amount = allocate_amount(_equity(day), cash, invest_ratio * day_scale, sl_rate,
-                                         row.get("ATR", 0), buy_price)
-                if heat_budget is not None and sl_rate:
-                    amount = min(amount, max(0, heat_budget / (abs(sl_rate) / 100.0)))
-                qty = int(amount / buy_price)
-                if qty < 1:
-                    # 배분액 < 1주 값. 실매매는 여기서 배분액을 1주 값까지 끌어올린다
-                    #  (trader._execute_buy_orders의 '최소 주문 금액 보정'). 그 초과 허용
-                    #  배수를 oversize_limit로 재현한다 — 1.0이면 종전처럼 건너뛴다.
-                    if oversize_limit <= 1.0 or amount <= 0 or buy_price > amount * oversize_limit:
-                        skipped_qty0 += 1
-                        continue
-                    if buy_price > cash:
-                        skipped_qty0 += 1
-                        continue
-                    qty = 1
-                    oversized_buys += 1
-
-                # [진입 시점 계측] 최대 비중은 피라미딩이 지배하므로 사이징 상한이 지켜졌는지는
-                #  '진입 순간'을 봐야 드러난다. 1회 리스크가 SYSTEM_RISK_PER_TRADE를 넘는
-                #  매수 건수도 함께 센다 — 그것이 이 가드가 지키려는 바로 그 불변식이다.
-                eq_now = _equity(day) or 1
-                buy_w = qty * buy_price / eq_now * 100
-                max_buy_weight = max(max_buy_weight, buy_w)
-                if sl_rate:
-                    buy_risk = qty * buy_price * (abs(sl_rate) / 100.0) / eq_now * 100
-                    max_buy_risk = max(max_buy_risk, buy_risk)
-                    if buy_risk > risk_per_trade_cap:
-                        risk_cap_breaches += 1
-
-                cash -= qty * buy_price + trading_cost.buy_fee(qty * buy_price)
-                if heat_budget is not None:
-                    heat_budget -= qty * buy_price * (abs(sl_rate) / 100.0)
-                positions[code] = {"qty": qty, "avg": buy_price, "lots": [{"qty": qty, "sl": sl_rate}],
-                                   "high": row["high"], "buy_dt": parsed[day], "pyr": 0}
-                trades.append({"code": code, "date": day, "reason": "매수",
-                               "profit_amt": 0, "profit": 0, "days": 0})
+                _buy(code, row, row["close"], day)
 
     final_asset = _equity(dates[-1]) if dates else initial_capital
     # '교체'도 실현손익이 있는 청산이다. profit_amt != 0 조건에 대부분 걸리지만,
