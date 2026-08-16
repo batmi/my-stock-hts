@@ -219,7 +219,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                   intraday_bars=None, bar_stop_times=None, bar_ts_times=None,
                   bar_ts_defer=None, intraday_pyramid=None, bar_pyr_times=None,
                   pyr_next_open=False, sell_structure_ma=None,
-                  intraday_status=None, intraday_entry=False, entry_bar_times=None):
+                  intraday_status=None, intraday_entry=False, entry_bar_times=None,
+                  buy_score_fn=None, daily_loss_limit=None):
     """N슬롯 포트폴리오 시뮬레이션.
 
     Args:
@@ -254,6 +255,16 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
               only_losing: 평가손실 중인 보유만 대상
             보유 점수는 sell_check(매도 상태면 0)를 쓴다 — 매도 판정과 같은 잣대다.
             (tools/audit_slot_rotation.py)
+
+        daily_loss_limit: 그날 자산이 전일 대비 이 비율(%, 양수) 이상 빠지면 그날의 신규
+            매수·증액을 멈춘다(청산은 그대로). **실험용 경로**로, 실매매에만 있는 방어 모드
+            (engine.check_loss_limit → SYSTEM_DAILY_LOSS_LIMIT)를 재현한다
+            (tools/audit_daily_loss_limit.py). None이면 종전과 같이 아무 제약이 없다.
+
+        buy_score_fn: fn(day, code) -> 그날 그 종목에 적용할 매수 문턱. **실험용 경로**로,
+            실매매에만 있는 적응형 임계값(시장 국면별 ±SCORE_ADJ, engine.build_buy_thresholds)을
+            재현하기 위한 훅이다(tools/audit_adaptive_threshold.py). None이면 종전과 같이
+            thr["BUY_SCORE"] 고정값을 쓴다.
 
         entry_gate: fn(day, code, held_codes) -> True면 그날 그 종목을 후보에서 뺀다.
             실매매에만 있고 백테스트에는 없는 진입 게이트(상관관계 보류 등)를 재현하기 위한
@@ -592,6 +603,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             return None
         return max(cands, key=lambda x: x[0])
 
+    prev_equity = None      # 방어 모드 판정용 전일 자산
     for day in dates:
         equity_curve.append(_equity(day))
         if equity_curve[-1] > 0:
@@ -801,6 +813,17 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
         else:
             day_scale = float((risk_scale_by_date or {}).get(day, 1.0) or 1.0)
         day_scale = min(1.0, day_scale) if day_scale > 0 else 1.0
+
+        # ---------- 방어 모드(일일 손실 한도) ----------
+        # 실매매는 그날 시작 자산 대비 손실이 한도에 닿으면 신규 매수를 멈추고 청산 감시만
+        #  남긴다. 일봉 세계에서는 '전일 종가 자산 대비 오늘 종가 자산'이 그날의 손실률이다.
+        halted_today = False
+        if daily_loss_limit and daily_loss_limit > 0 and prev_equity:
+            eq_today = _equity(day)
+            if eq_today > 0 and (eq_today - prev_equity) / prev_equity * 100 <= -daily_loss_limit:
+                halted_today = True
+        prev_equity = _equity(day)
+
         heat_budget = None
         if heat_cap_pct and heat_cap_pct > 0:
             heat = 0.0
@@ -814,7 +837,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             heat_budget = _equity(day) * (heat_cap_pct * day_scale) / 100.0 - heat
 
         # ---------- 2) 피라미딩 (수익 포지션 증액) ----------
-        if pyr_use:
+        # 방어 모드에서는 증액도 신규 매수와 같이 멈춘다(실매매의 '신규 매수 중단'과 동일).
+        if pyr_use and not halted_today:
             for code, pos in list(positions.items()):
                 row = rows[code].get(day)
                 if row is None or pos["pyr"] >= pyr_max or pos.get("exit_pending"):
@@ -939,7 +963,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 if row is None:
                     continue
                 raw_score, _chk, can_buy, state, _reason = status[code][day]
-                if not can_buy or not (raw_score >= buy_score or state == "역매수"):
+                bs = buy_score if buy_score_fn is None else buy_score_fn(day, code)
+                if not can_buy or not (raw_score >= bs or state == "역매수"):
                     continue
                 is_super = super_use and raw_score >= super_score and row.get("w52_pos", 0) >= super_w52
                 if row["RSI"] >= (super_rsi if is_super else buy_rsi):
@@ -1023,7 +1048,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 if st is None:
                     continue
                 raw_score, _chk, can_buy, state, _rs, rsi, w52, atr, close, high = st
-                if not can_buy or not (raw_score >= buy_score or state == "역매수"):
+                bs = buy_score if buy_score_fn is None else buy_score_fn(day, code)
+                if not can_buy or not (raw_score >= bs or state == "역매수"):
                     continue
                 is_super = super_use and raw_score >= super_score and w52 >= super_w52
                 if rsi >= (super_rsi if is_super else buy_rsi):
@@ -1086,7 +1112,10 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                            "profit_amt": 0, "profit": 0, "days": 0})
             return True
 
-        if intraday_status and intraday_entry and len(positions) < slots:
+        if halted_today:
+            # 방어 모드 — 그날 신규 진입만 멈춘다. 위의 청산·손절 판정은 이미 끝났다.
+            pass
+        elif intraday_status and intraday_entry and len(positions) < slots:
             # 봉 시각 순서대로 스캔한다 — 먼저 조건을 채운 후보가 슬롯을 가져간다.
             times = sorted({t for c in rows
                             for t in ((intraday_status.get(c, {}).get(day) or {}).keys())})
