@@ -60,7 +60,8 @@ def main():
     args = ap.parse_args()
 
     config.session.load_stock_config()
-    stocks = config.session.stock_data.get("stocks_kr", [])
+    stocks = [x for k in ("stocks_kr", "etfs_kr")
+              for x in config.session.stock_data.get(k, [])]
     names = {s["code"]: s["name"] for s in stocks}
     codes = [s["code"] for s in stocks if ib.load(s["code"], args.interval) is not None]
     print(f"[대상] 분봉 있는 {len(codes)}종목 · {args.interval} · 룩백 {args.lookback}봉")

@@ -14,6 +14,14 @@
 
 정합성 검증: 슬롯 1·기초비중 25%·히트캡 OFF로 돌려 종목별로 ``simulate_strategy``와 비교하면
 관심종목 50개 기준 수익률 상관 0.9988(평균차 -0.12%p), MDD 평균 동일, 청산 805건 vs 803건이다.
+
+[장중 스캔 모드 · 2026-08-16] 실매매는 진입·청산·증액을 **감시 주기마다 실시간가로** 판정한다.
+ 이 시뮬레이터는 오래 '하루 한 번, 종가'만 낼 수 있었고 그 차이는 작지 않다(실측: 청산 축만
+ 봐도 전체창 수익 94~114% vs 136~217%). 분봉 캐시(modules/intraday_bars)가 있으면 세 다리를
+ 모두 봉 단위로 판정한다 — intraday_bars(청산) · intraday_status+intraday_entry(진입) ·
+ 그 둘이 함께 있으면 증액까지. 증액이 봉 단위가 되면 평단이 오른 뒤 같은 날 다시 발동선에
+ 닿아 1 → 2 → 3차가 이어지는 실매매 동작이 그대로 재현된다.
+ 인자를 주지 않으면 종전(종가) 동작 그대로다.
 """
 import math
 
@@ -28,6 +36,13 @@ import context
 import utils
 from modules import backtest
 from modules import trading_cost
+
+# 분봉 캐시는 선택 의존이다 — 없으면 종가 모델로 돌아간다(감사 도구 전용 경로가 아니라
+#  메뉴 백테스트의 기본 경로가 되므로, 임포트 실패가 백테스트 전체를 막으면 안 된다).
+try:
+    from modules import intraday_bars as intraday_bars_mod
+except Exception:      # pragma: no cover - 선택 의존
+    intraday_bars_mod = None
 
 
 # ==========================================================
@@ -198,10 +213,11 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                   risk_scale_by_date=None, oversize_limit=None,
                   ts_act_fn=None, pyr_trigger_fn=None, sl_rate_fn=None,
                   profit_lock_dates=None, rank_fn=None, rotation=None, probe_fn=None,
-                  entry_gate=None, pyr_intraday=False, pyr_per_day=1, pyr_fill_cap=None,
+                  entry_gate=None, pyr_intraday=False, pyr_per_day=None, pyr_fill_cap=None,
                   exit_intraday=False, exit_path="low_first", exit_intraday_only=None,
                   pyr_reset_time_stop=False, exit_next_open=False,
                   intraday_bars=None, bar_stop_times=None, bar_ts_times=None,
+                  bar_ts_defer=None, intraday_pyramid=None,
                   intraday_status=None, intraday_entry=False, entry_bar_times=None):
     """N슬롯 포트폴리오 시뮬레이션.
 
@@ -271,6 +287,20 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 같은 의미다. 봉의 저가를 쓰면 '매 순간 감시'가 되어 실매매보다 과하다.
               · 트레일링 고점 = 그 봉까지의 고가 러닝맥스(실매매의 highest_price와 같은 갱신).
               · 지표(ATR)는 **전일 확정 봉**을 쓴다 — 그 시점에 확정된 정보만 쓰기 위해서다.
+            intraday_pyramid: 증액도 봉 단위로 판정할지. None(기본)이면 분봉과 시점판정이
+                둘 다 있을 때 자동으로 켜진다(= 실매매). **청산 축만 재는 감사에서는 False로
+                꺼야 한다** — 켜두면 증액 건수가 함께 변해 두 축이 섞이고, '종가 판정 팔이
+                일봉 모델과 일치하는가'라는 자기검증이 성립하지 않는다.
+
+            bar_ts_defer: 트레일링 청산이 **그 자리에서 체결되지 않는 경우**를 가정한다.
+                판정을 마감 쪽으로 미루면 "주문을 냈는데 못 팔면 어쩌나"가 실제 위험이 된다
+                — 15:20~15:30은 KRX 종가 단일가라 시스템이 아예 매매하지 않고
+                (auto_trade.common.is_system_market_open), 미체결은 120초 뒤 자동취소된다.
+                  None       : 판정한 봉의 종가에 체결(기본)
+                  "close"    : 그날 종가(단일가)까지 밀려서 체결
+                  "next_open": 그날 못 팔고 다음 거래일 시가에 체결 — 하룻밤 갭을 전부 맞는
+                               최악 가정이다. 이 팔이 이기면 체결 위험은 결론을 못 뒤집는다.
+                손절 다리에는 적용하지 않는다(즉시 집행이 전제).
             bar_stop_times / bar_ts_times: 각 다리를 **어느 봉에서만** 판정할지. None이면 모든
                 봉(= 현 실매매). {"1400"} 처럼 주면 그 봉의 종가 시점에만 판정한다
                 — 60분봉에서 14:00 봉의 종가는 15:00 가격이므로 '마감 30분 전 1회 판정'이
@@ -342,6 +372,11 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
         oversize_limit = getattr(config, "MAX_POSITION_OVERSHOOT", 1.0)
     oversize_limit = float(oversize_limit or 1.0)
 
+    # [하루 증액 횟수] None이면 자동 — 분봉 모드에서는 실매매와 같이 **제한 없음**,
+    #  일봉 모드에서는 구조상 하루 1회다(하루에 한 번밖에 판정할 수 없다).
+    _bar_pyr = (intraday_pyramid if intraday_pyramid is not None
+                else bool(intraday_bars and intraday_status))
+    pyr_day_cap = pyr_per_day if pyr_per_day is not None else (0 if _bar_pyr else 1)
     pyr_max = pyramiding_max if pyramiding_max is not None else thr.get("PYRAMIDING_MAX_COUNT", 1)
     pyr_use = thr.get("PYRAMIDING_USE", True) and pyr_max > 0
     pyr_trigger = thr.get("PYRAMIDING_PROFIT_TRIGGER", 10.0)
@@ -386,7 +421,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
 
     # 익일 시가 체결용 (날짜 → 그 종목의 다음 거래일). 안 쓰면 만들지 않는다.
     next_day = {}
-    if exit_next_open:
+    if exit_next_open or bar_ts_defer == "next_open":
         for code, df in dfs.items():
             dt = [str(x) for x in df["date"]]
             next_day[code] = {d: dt[i + 1] for i, d in enumerate(dt[:-1])}
@@ -454,6 +489,46 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             "mfe": max_profit, "armed": bool(pos.get("ts_armed_ever")), "bep": bool(is_bep),
         })
         del positions[code]
+
+    def _pyramid_once(code, pos, day, price, ref_row, nth):
+        """증액 1건 집행. 일봉 경로와 분봉 경로가 같은 사이징·회계를 쓰게 모은다.
+
+        ref_row: 손절률 계산에 쓸 지표 소스(일봉 경로는 그날 봉, 분봉 경로는 그 시점 ATR).
+        반환 False면 그날은 더 얹을 수 없다(수량·현금·히트 부족).
+        """
+        nonlocal cash, heat_budget, pyramid_blocked_qty0
+        add_qty = int(pos["qty"] * pyr_ratio)
+        if add_qty < 1:
+            # 보유 수량이 적으면(1주 등) 증액 비율 0.5로는 1주도 안 나온다 = 피라미딩 불발
+            pyramid_blocked_qty0 += 1
+            return False
+        add_price = utils.adjust_to_tick(price * (1 + slippage), False) or price
+        add_qty = min(add_qty, int(cash / add_price))
+        add_sl = default_sl
+        if use_atr:
+            add_sl = (sl_rate_fn(ref_row, add_price, atr_mult) if sl_rate_fn is not None
+                      else _atr_stop_rate(ref_row.get("ATR", 0), add_price, atr_mult, day))
+        if heat_budget is not None and add_sl:
+            affordable = heat_budget / (add_price * (abs(add_sl) / 100.0))
+            add_qty = min(add_qty, int(max(0, affordable)))
+        if add_qty < 1:
+            return False
+
+        cost = add_qty * add_price
+        cash -= cost + trading_cost.buy_fee(cost)
+        if heat_budget is not None:
+            heat_budget -= cost * (abs(add_sl) / 100.0)
+        pos["avg"] = (pos["qty"] * pos["avg"] + cost) / (pos["qty"] + add_qty)
+        pos["qty"] += add_qty
+        pos["lots"].append({"qty": add_qty, "sl": add_sl})
+        pos["pyr"] += 1
+        if pyr_reset_time_stop:
+            # [옛 동작 재현 전용] 실매매는 진입일 기준이라 리셋하지 않는다.
+            pos["buy_dt"] = parsed[day]
+        trades.append({"code": code, "date": day, "reason": f"피라미딩{pos['pyr']}차",
+                       "profit_amt": 0, "profit": 0, "days": 0,
+                       "nth_today": nth, "fill": add_price})
+        return True
 
     def _intraday_stop_level(pos, row, hwm, day, ts_act_eff, only_override="__keep__"):
         """장중에 **먼저 닿는** 청산선. (가격, 사유) 또는 None.
@@ -572,12 +647,20 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                     ref = ({"ATR": st_now[7]} if st_now else prev_row)
                     hit = _intraday_stop_level(pos, ref, hwm, day, ts_act_eff, only)
                     if hit and bc <= hit[0]:
-                        # 체결가는 '그 시점의 현재가'(봉 종가)다. 선 위에서 체결됐다고
-                        #  가정하면 실매매보다 유리해진다.
-                        exec_price = utils.adjust_to_tick(bc * (1 - slippage), False) or bc
                         mfe = (hwm - pos["avg"]) / pos["avg"] * 100
                         if mfe >= ts_act_eff:
                             pos["ts_armed_ever"] = True
+                        is_ts = hit[1] == "트레일링스탑"
+                        if (is_ts and bar_ts_defer == "next_open"
+                                and next_day.get(code, {}).get(day)):
+                            # 그날은 못 팔았다 — 다음 거래일 시가에 나간다(하룻밤 갭 감수).
+                            pos["exit_pending"] = (hit[1], mfe, hit[2])
+                            done = True
+                            break
+                        # 체결가는 '그 시점의 현재가'(봉 종가)다. 선 위에서 체결됐다고
+                        #  가정하면 실매매보다 유리해진다.
+                        raw_px = row["close"] if (is_ts and bar_ts_defer == "close") else bc
+                        exec_price = utils.adjust_to_tick(raw_px * (1 - slippage), False) or raw_px
                         intraday_exits += 1
                         _do_sell(code, pos, day, exec_price, hit[1], holding_days, mfe, hit[2])
                         done = True
@@ -724,6 +807,38 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                     continue  # 청산 예약된 포지션에는 얹지 않는다
                 if pyr_require_healthy and market_filter_dates and day in market_filter_dates.get(code, ()):
                     continue
+                # [분봉 경로] 봉 순서대로 판정한다. 증액하면 평단이 올라 다음 발동선도 함께
+                #  올라가므로, 하루종일 밀려 올라가는 날에는 같은 날 2·3차가 이어질 수 있다
+                #  — 실매매(_try_pyramid_buy)에 하루 제한이 없어 실제로 일어나는 일이다.
+                #  [한계] 청산은 이 블록보다 먼저 하루치를 끝내므로, 증액으로 오른 평단이
+                #   같은 날의 청산선에는 반영되지 않는다(다음 날부터 반영). 증액일과 청산일이
+                #   겹치는 경우에만 생기는 오차다.
+                use_bar_pyr = (intraday_pyramid if intraday_pyramid is not None
+                               else bool(intraday_bars and intraday_status))
+                bar_st = ((intraday_status or {}).get(code, {}).get(day)
+                          if use_bar_pyr else None)
+                if bar_st:
+                    done_today = 0
+                    for hhmm in sorted(bar_st):
+                        if pos["pyr"] >= pyr_max:
+                            break
+                        if pyr_day_cap > 0 and done_today >= pyr_day_cap:
+                            break
+                        st = bar_st[hhmm]
+                        b_state, b_atr, b_close = st[3], st[7], st[8]
+                        if b_state not in ("매수", "강매수"):
+                            continue
+                        trig = pyr_trigger
+                        if pyr_trigger_fn is not None:
+                            trig = float(pyr_trigger_fn(b_atr, pos["avg"]))
+                        if (b_close - pos["avg"]) / pos["avg"] * 100 < trig:
+                            continue
+                        if not _pyramid_once(code, pos, day, b_close, {"ATR": b_atr},
+                                             done_today + 1):
+                            break   # 수량·현금·히트 부족은 그날 내내 풀리지 않는다
+                        done_today += 1
+                    continue
+
                 _raw, _chk, _can, state, _reason = status[code][day]
                 if state not in ("매수", "강매수"):
                     continue
@@ -731,7 +846,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 #  실매매처럼 '장중 발동선 도달'로 판정하고, pyr_per_day<=0이면 평단이 오른 뒤
                 #  같은 날 다시 발동선에 닿는 만큼 반복한다(tools/audit_pyramid_perday.py).
                 done_today = 0
-                while pos["pyr"] < pyr_max and (pyr_per_day <= 0 or done_today < pyr_per_day):
+                while pos["pyr"] < pyr_max and (pyr_day_cap <= 0 or done_today < pyr_day_cap):
                     trigger = pyr_trigger
                     if pyr_trigger_fn is not None:
                         trigger = float(pyr_trigger_fn(row.get("ATR", 0), pos["avg"]))
@@ -753,38 +868,9 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                         if price < need:
                             break
 
-                    add_qty = int(pos["qty"] * pyr_ratio)
-                    if add_qty < 1:
-                        # 보유 수량이 적으면(1주 등) 증액 비율 0.5로는 1주도 안 나온다 = 피라미딩 불발
-                        pyramid_blocked_qty0 += 1
+                    if not _pyramid_once(code, pos, day, price, row, done_today + 1):
                         break
-                    add_price = utils.adjust_to_tick(price * (1 + slippage), False) or price
-                    add_qty = min(add_qty, int(cash / add_price))
-                    add_sl = default_sl
-                    if use_atr:
-                        add_sl = (sl_rate_fn(row, add_price, atr_mult) if sl_rate_fn is not None
-                                  else _atr_stop_rate(row.get("ATR", 0), add_price, atr_mult, day))
-                    if heat_budget is not None and add_sl:
-                        affordable = heat_budget / (add_price * (abs(add_sl) / 100.0))
-                        add_qty = min(add_qty, int(max(0, affordable)))
-                    if add_qty < 1:
-                        break
-
-                    cost = add_qty * add_price
-                    cash -= cost + trading_cost.buy_fee(cost)
-                    if heat_budget is not None:
-                        heat_budget -= cost * (abs(add_sl) / 100.0)
-                    pos["avg"] = (pos["qty"] * pos["avg"] + cost) / (pos["qty"] + add_qty)
-                    pos["qty"] += add_qty
-                    pos["lots"].append({"qty": add_qty, "sl": add_sl})
-                    pos["pyr"] += 1
-                    if pyr_reset_time_stop:
-                        # [옛 동작 재현 전용] 실매매는 진입일 기준이라 리셋하지 않는다.
-                        pos["buy_dt"] = parsed[day]
                     done_today += 1
-                    trades.append({"code": code, "date": day, "reason": f"피라미딩{pos['pyr']}차",
-                                   "profit_amt": 0, "profit": 0, "days": 0,
-                                   "nth_today": done_today, "fill": add_price})
 
         # ---------- 3) 신규 매수 (점수 높은 순) ----------
         slot_usage += len(positions)
@@ -1149,6 +1235,43 @@ def run_portfolio_backtest():
             utils.pause()
             continue
 
+        # ---------- 장중 스캔 모드 (실매매와 같은 체결 시점) ----------
+        # [왜 기본인가] 실매매는 진입·청산·증액을 **감시 주기마다 실시간가로** 판정한다.
+        #  종가 모델은 하루 한 번만 낼 수 있어 실매매와 다른 세계를 잰다(2026-08-16 실측:
+        #  청산만 봐도 전체창 수익 94~114% vs 136~217%). 분봉 캐시가 있으면 실매매 쪽에
+        #  맞춘다 — 증액도 봉마다 판정하므로 하루에 2·3차가 이어지는 것까지 재현된다.
+        # [대가] 분봉이 있는 종목·기간으로 창이 좁아진다. 아래에 무엇이 왜 빠졌는지 표시한다.
+        bars = status_bars = None
+        use_bars = False
+        if intraday_bars_mod is not None:
+            probe = {c: intraday_bars_mod.load(c, "60m") for c in list(dfs)[:1]}
+            if any(v is not None for v in probe.values()):
+                ans = Prompt.ask("장중 스캔 모드 [dim](실매매와 동일한 체결 시점, 분봉 필요)[/dim]",
+                                 choices=["y", "n"], default="y")
+                use_bars = (ans == "y")
+        if use_bars:
+            with config.console.status("[cyan]분봉·시점판정 확인 중...[/cyan]"):
+                bars, status_bars, keep, drop = intraday_bars_mod.gate_universe(dfs)
+                bar_dates = intraday_bars_mod.covered_dates(bars, dates)
+            if not keep or not bar_dates:
+                config.console.print("[yellow]분봉으로 돌릴 수 있는 종목/기간이 없어 "
+                                     "종가 모델로 진행합니다. "
+                                     "tools/fetch_intraday_tv.py → tools/build_intraday_status.py "
+                                     "를 먼저 실행하세요.[/yellow]")
+                use_bars = False
+            else:
+                names_of = {c: n for c, n in targets}
+                if drop:
+                    shown = ", ".join(f"{names_of.get(c, c)}({w})" for c, w in drop[:6])
+                    config.console.print(f"[dim]※ 장중 스캔 제외 {len(drop)}종목: {shown}"
+                                         f"{' 외' if len(drop) > 6 else ''}[/dim]")
+                config.console.print(
+                    f"[cyan]장중 스캔 모드[/cyan] — {len(keep)}종목 · {len(bar_dates)}거래일 "
+                    f"({bar_dates[0]}~{bar_dates[-1]}) · 진입·청산·증액을 모두 봉 단위로 판정합니다.")
+                dfs = {c: dfs[c] for c in keep}
+                mf_dates = {c: mf_dates.get(c, set()) for c in keep}
+                dates = bar_dates
+
         thresholds = {
             "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
             "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
@@ -1173,8 +1296,10 @@ def run_portfolio_backtest():
 
         for slots in slot_list:
             for pyr in pyr_list:
+                extra = ({"intraday_bars": bars, "intraday_status": status_bars,
+                          "intraday_entry": True} if use_bars else {})
                 res = run_portfolio(dfs, status, dates, initial_capital=initial, slots=slots,
-                                    pyramiding_max=pyr, market_filter_dates=mf_dates)
+                                    pyramiding_max=pyr, market_filter_dates=mf_dates, **extra)
                 n_sell = len(res["sells"])
                 win_rate = res["win"] / n_sell * 100 if n_sell else 0.0
                 ret_color = "red" if res["total_return"] > 0 else "blue"
@@ -1196,5 +1321,10 @@ def run_portfolio_backtest():
                                  f"{' 외' if len(failed) > 5 else ''})[/dim]")
         config.console.print("[dim]※ 슬롯 경쟁·현금 제약·포트폴리오 히트 캡이 모두 반영된 단일 경로 결과입니다. "
                              "종목 구성이 바뀌면 값이 크게 달라질 수 있습니다.[/dim]")
+        if use_bars:
+            same_day = sum(1 for r in [res] for t in r["trades"] if t.get("nth_today", 1) >= 2)
+            config.console.print(f"[dim]※ 장중 스캔 모드 결과입니다(실매매와 같은 체결 시점). "
+                                 f"마지막 조합에서 같은 날 2회 이상 증액 {same_day}건. "
+                                 f"종가 모델로 낸 과거 수치와 직접 비교하지 마세요.[/dim]")
         utils.pause()
     return True

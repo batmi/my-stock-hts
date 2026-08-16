@@ -24,6 +24,8 @@
    B. 매 봉 판정        — 현 실매매 (기준선)
    C. 15:00 1회 판정    — 손절·TS 모두 마감 30분 전에만
    D. 손절 매 봉·TS 15:00 — **적용 후보.** 급락은 즉시 막고 트레일링만 확인 후 집행
+   D2. D + TS를 종가(단일가)에 체결   — 15:00에 못 팔고 밀린 경우
+   D3. D + TS를 익일 시가에 체결      — 그날 아예 못 판 경우(하룻밤 갭 전부 감수)
    E. 15:30 1회 판정    — 분봉 경로로 종가 판정을 재현(A와 거의 같아야 정상 · 자기검증)
 
 [데이터] tools/fetch_intraday_tv.py 로 먼저 캐시할 것. 일봉과 OHLC 98% 미만으로
@@ -55,12 +57,19 @@ AT_CLOSE = {"1500"}  # 15:00 봉의 종가 = 15:30 종가
 def arms(bars, st):
     # intraday_status 는 ATR 을 '그 시점의 진행 봉' 기준으로 맞추기 위해 넘긴다.
     #  intraday_entry 를 켜지 않으므로 진입은 네 팔 모두 종가 그대로다(축 분리).
-    b = {"intraday_bars": bars, "intraday_status": st}
+    # [축 분리] 증액은 네 팔 모두 일봉(종가)으로 고정한다. 켜두면 증액 건수가 함께 변해
+    #  청산 축만 재는 이 실험이 오염되고, E팔의 자기검증(일봉 모델과 일치)도 깨진다.
+    b = {"intraday_bars": bars, "intraday_status": st, "intraday_pyramid": False}
     return [
         ("A. 종가(일봉 모델)", {}),
         (BASE,                 dict(b)),
         ("C. 15:00 1회",       {**b, "bar_stop_times": AT_1500, "bar_ts_times": AT_1500}),
         ("D. 손절매봉·TS15:00", {**b, "bar_ts_times": AT_1500}),
+        # [체결 위험 브래킷] 15:00에 판정해도 그 자리에서 못 팔 수 있다. 두 단계로 값을 매긴다.
+        #  15:20~15:30은 KRX 종가 단일가라 시스템이 매매하지 않으므로(common.is_system_market_open)
+        #  '종가까지 밀림'과 '그날 못 팔고 익일 시가'가 현실적인 최악 두 단계다.
+        ("D2. TS15:00·종가체결", {**b, "bar_ts_times": AT_1500, "bar_ts_defer": "close"}),
+        ("D3. TS15:00·익일시가", {**b, "bar_ts_times": AT_1500, "bar_ts_defer": "next_open"}),
         ("E. 15:30 1회(자기검증)", {**b, "bar_stop_times": AT_CLOSE, "bar_ts_times": AT_CLOSE}),
     ]
 
@@ -82,31 +91,6 @@ def metrics(r):
         "days": float(np.median([t["days"] for t in sells])) if sells else 0.0,
     }
 
-
-def gate(dfs, interval, min_match=98.0):
-    """분봉을 일봉으로 합쳐 98% 이상 일치하는 종목만 남긴다. (bars, 채택, 제외)."""
-    bars, keep, drop = {}, [], []
-    for code, df in dfs.items():
-        raw = ib.load(code, interval)
-        if raw is None:
-            drop.append((code, "분봉 없음"))
-            continue
-        g = raw.groupby(raw.index.date).agg(open=("open", "first"), high=("high", "max"),
-                                            low=("low", "min"), close=("close", "last"))
-        d = df.copy()
-        d["d"] = pd.to_datetime(d["date"].astype(str)).dt.date
-        j = g.join(d.set_index("d")[["open", "high", "low", "close"]], how="inner", rsuffix="_k")
-        if j.empty:
-            drop.append((code, "겹치는 날 없음"))
-            continue
-        eq = lambda a: (j[a].round(0) == j[a + "_k"].round(0))  # noqa: E731
-        m = (eq("open") & eq("high") & eq("low") & eq("close")).mean() * 100
-        if m < min_match:
-            drop.append((code, f"일치 {m:.1f}%"))
-            continue
-        bars[code] = ib.by_day(raw)
-        keep.append(code)
-    return bars, keep, drop
 
 
 def main():
@@ -132,30 +116,16 @@ def main():
     print(f"[준비] 관심종목 {len(targets)}개 · {args.days}일 · 슬롯 {slots} · {args.interval}")
 
     dfs, mf, dates, failed = pb.prepare_universe(targets, args.days)
-    bars, keep, drop = gate(dfs, args.interval)
-    stat = {c: ib.load_status(c, args.interval) or {} for c in keep}
+    # 게이트(일봉 정합 98% · 커버리지)는 modules/intraday_bars.gate_universe 가 단독 보유한다.
+    bars, stat, keep, drop = ib.gate_universe(dfs, args.interval,
+                                              min_coverage=args.min_coverage)
     if drop:
         print(f"[제외] {len(drop)}종목 — "
               + ", ".join(f"{names.get(c, c)}({why})" for c, why in drop))
     dfs = {c: dfs[c] for c in keep}
     mf = {c: mf.get(c, set()) for c in keep}
 
-    # 분봉이 있는 날로만 창을 좁힌다 — 없는 날은 종가 모델로 새어 팔이 오염된다.
-    #  다만 교집합을 그대로 쓰면 **늦게 상장한 한 종목이 창 전체를 잘라먹는다**
-    #  (LG CNS 2025-02 상장 → 715일 창이 361일로 붕괴). 커버리지가 중앙값에 크게
-    #  못 미치는 종목을 먼저 떨어뜨린 뒤 교집합을 잡는다.
-    if keep:
-        cov = {c: len(bars[c]) for c in keep}
-        med = float(np.median(list(cov.values())))
-        short = [c for c in keep if cov[c] < med * args.min_coverage]
-        if short:
-            print(f"[제외·커버리지] {len(short)}종목 — "
-                  + ", ".join(f"{names.get(c, c)}({cov[c]}일/{med:.0f}일)" for c in short))
-            keep = [c for c in keep if c not in short]
-            dfs = {c: dfs[c] for c in keep}
-            mf = {c: mf.get(c, set()) for c in keep}
-    covered = set.intersection(*(set(bars[c]) for c in keep)) if keep else set()
-    dates = [d for d in dates if d in covered]
+    dates = ib.covered_dates(bars, dates)
     thresholds = {
         "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
         "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],

@@ -70,39 +70,6 @@ def metrics(r):
     }
 
 
-def gate(dfs, interval, names, min_match=98.0, min_coverage=0.9):
-    """분봉·시점판정이 모두 있고 일봉과 98% 이상 일치하는 종목만."""
-    st, keep, drop = {}, [], []
-    for code, df in dfs.items():
-        raw = ib.load(code, interval)
-        s = ib.load_status(code, interval)
-        if raw is None or not s:
-            drop.append((code, "분봉/판정 없음"))
-            continue
-        g = raw.groupby(raw.index.date).agg(open=("open", "first"), high=("high", "max"),
-                                            low=("low", "min"), close=("close", "last"))
-        d = df.copy()
-        d["d"] = pd.to_datetime(d["date"].astype(str)).dt.date
-        j = g.join(d.set_index("d")[["open", "high", "low", "close"]], how="inner", rsuffix="_k")
-        if j.empty:
-            drop.append((code, "겹치는 날 없음"))
-            continue
-        eq = lambda a: (j[a].round(0) == j[a + "_k"].round(0))  # noqa: E731
-        m = (eq("open") & eq("high") & eq("low") & eq("close")).mean() * 100
-        if m < min_match:
-            drop.append((code, f"일치 {m:.1f}%"))
-            continue
-        st[code] = s
-        keep.append(code)
-    if keep:
-        cov = {c: len(st[c]) for c in keep}
-        med = float(np.median(list(cov.values())))
-        short = [c for c in keep if cov[c] < med * min_coverage]
-        for c in short:
-            drop.append((c, f"{cov[c]}일/{med:.0f}일"))
-        keep = [c for c in keep if c not in short]
-    return {c: st[c] for c in keep}, keep, drop
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -126,13 +93,14 @@ def main():
 
     dfs, mf, dates, _failed = pb.prepare_universe([(s["code"], s["name"]) for s in stocks],
                                                   args.days)
-    st, keep, drop = gate(dfs, args.interval, names, min_coverage=args.min_coverage)
+    # 게이트(일봉 정합 98% · 커버리지)는 modules/intraday_bars.gate_universe 가 단독 보유한다.
+    _bars, st, keep, drop = ib.gate_universe(dfs, args.interval,
+                                             min_coverage=args.min_coverage)
     if drop:
         print(f"[제외] {len(drop)}종목 — " + ", ".join(f"{names.get(c, c)}({w})" for c, w in drop))
     dfs = {c: dfs[c] for c in keep}
     mf = {c: mf.get(c, set()) for c in keep}
-    covered = set.intersection(*(set(st[c]) for c in keep)) if keep else set()
-    dates = [d for d in dates if d in covered]
+    dates = ib.covered_dates(_bars, dates)
     if not dates:
         print("[중단] 겹치는 거래일 없음")
         return

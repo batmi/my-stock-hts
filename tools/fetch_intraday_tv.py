@@ -21,10 +21,14 @@ def main():
     ap.add_argument("--bars", type=int, default=5000)
     ap.add_argument("--force", action="store_true", help="캐시를 무시하고 다시 받는다")
     ap.add_argument("--validate-only", action="store_true")
+    ap.add_argument("--targets", default="all", choices=("stock", "etf", "all"),
+                    help="포트폴리오 백테스트 메뉴가 ETF도 돌리므로 기본은 둘 다 받는다")
     args = ap.parse_args()
 
     config.session.load_stock_config()
-    stocks = config.session.stock_data.get("stocks_kr", [])
+    keys = {"stock": ["stocks_kr"], "etf": ["etfs_kr"],
+            "all": ["stocks_kr", "etfs_kr"]}[args.targets]
+    stocks = [x for k in keys for x in config.session.stock_data.get(k, [])]
     codes = [s["code"] for s in stocks]
     names = {s["code"]: s["name"] for s in stocks}
     print(f"[대상] {len(codes)}종목 · {args.interval} · 최대 {args.bars}봉")
