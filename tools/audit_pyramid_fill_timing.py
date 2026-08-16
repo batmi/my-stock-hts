@@ -41,13 +41,25 @@ INITIAL_CAPITAL = 10_000_000
 SELL_REASONS = ("ATR손절", "손절", "본전청산", "시간청산", "트레일링스탑", "점수하락", "이익보호")
 BASE = "1. 매봉·무제한(현행)"
 
-ARMS = [
-    (BASE,                     dict(pyr_per_day=0)),
-    ("2. 매봉·하루1회",         dict(pyr_per_day=1)),
-    ("3. 15:00 1회",           dict(pyr_per_day=1, bar_pyr_times={"1400"})),
-    ("4. 종가→익일시가",        dict(pyr_per_day=1, pyr_next_open=True)),
-    ("5. [참고]종가→종가",      dict(pyr_per_day=1, bar_pyr_times={"1500"})),
-]
+# 간격마다 봉 라벨이 다르다. '15:00 판정'은 종가가 15:00인 봉(= 마지막 접속매매 시점),
+#  '종가 판정'은 그날 마지막 봉이다. 시스템은 15:20~15:30 종가 단일가에 매매하지 않으므로
+#  접속매매에서 실제로 쓸 수 있는 마지막 시점이 전자다.
+LAST_CONT = {"60m": "1400", "30m": "1430", "15m": "1445", "5m": "1455"}
+CLOSE_BAR = {"60m": "1500", "30m": "1530", "15m": "1545", "5m": "1555"}
+
+
+def build_arms(interval):
+    lc, cb = LAST_CONT.get(interval, "1400"), CLOSE_BAR.get(interval, "1500")
+    return [
+        (BASE,                dict(pyr_per_day=0)),
+        ("2. 매봉·하루1회",    dict(pyr_per_day=1)),
+        ("3. 15:00 1회",      dict(pyr_per_day=1, bar_pyr_times={lc})),
+        ("4. 종가→익일시가",   dict(pyr_per_day=1, pyr_next_open=True)),
+        ("5. [참고]종가→종가", dict(pyr_per_day=1, bar_pyr_times={cb})),
+    ]
+
+
+ARMS = build_arms("60m")
 
 # [교차 확인] --daily-exits 는 청산까지 일봉으로 되돌린 대조 실행이다. 기존 리드
 #  (audit_pyramid_perday, MAR 8.28 vs 6.16)가 **같은 종목·같은 기간**에서 재현되는지
@@ -103,11 +115,15 @@ def main():
     ap.add_argument("--exclude-from", default="20260301")
     ap.add_argument("--daily-exits", action="store_true",
                     help="청산까지 일봉으로 되돌린 대조 실행(기존 리드 재현 확인)")
+    ap.add_argument("--match-interval", default=None,
+                    help="다른 간격의 게이트 통과 종목과 교집합만 쓴다(간격 비교 시 유니버스 고정)")
+    ap.add_argument("--since", default=None,
+                    help="거래일 하한(YYYYMMDD). 간격 비교 시 두 실행의 창을 맞추는 데 쓴다")
     ap.add_argument("--no-gate", action="store_true",
                     help="분봉 게이트를 걸지 않는다(--daily-exits 전용: 10년 전체 창을 쓴다)")
     args = ap.parse_args()
 
-    arms_def = DAILY_ARMS if args.daily_exits else ARMS
+    arms_def = DAILY_ARMS if args.daily_exits else build_arms(args.interval)
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
     config.session.load_stock_config()
     stocks = config.session.stock_data.get("stocks_kr", [])
@@ -131,13 +147,27 @@ def main():
         if drop:
             print(f"[제외] {len(drop)}종목 — "
                   + ", ".join(f"{names.get(c, c)}({w})" for c, w in drop))
+        if args.match_interval:
+            # [간격 비교] 간격마다 게이트 통과 종목이 다르면 '간격 차이'와 '유니버스 차이'가
+            #  섞인다. 다른 간격의 통과 집합과 교집합을 취해 축을 하나로 만든다.
+            _b2, _s2, keep2, _d2 = ib.gate_universe(dfs, args.match_interval,
+                                                    min_coverage=args.min_coverage)
+            before = len(keep)
+            keep = [c for c in keep if c in set(keep2)]
+            print(f"[유니버스 고정] {args.match_interval} 게이트와 교집합 → {before} → {len(keep)}종목")
         dfs = {c: dfs[c] for c in keep}
+        bars = {c: bars[c] for c in keep}
+        st = {c: st[c] for c in keep}
         mf = {c: mf.get(c, set()) for c in keep}
         dates = ib.covered_dates(bars, dates)
     if not dates:
         print("[중단] 겹치는 거래일 없음")
         return
 
+    if args.since:
+        cut0 = "".join(ch for ch in args.since if ch.isdigit())
+        dates = [d for d in dates if d >= cut0]
+        print(f"[창 제한] --since {cut0} → 거래일 {len(dates)}일")
     thresholds = {
         "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
         "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],

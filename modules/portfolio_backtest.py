@@ -218,7 +218,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                   pyr_reset_time_stop=False, exit_next_open=False,
                   intraday_bars=None, bar_stop_times=None, bar_ts_times=None,
                   bar_ts_defer=None, intraday_pyramid=None, bar_pyr_times=None,
-                  pyr_next_open=False,
+                  pyr_next_open=False, sell_structure_ma=None,
                   intraday_status=None, intraday_entry=False, entry_bar_times=None):
     """N슬롯 포트폴리오 시뮬레이션.
 
@@ -288,6 +288,10 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 같은 의미다. 봉의 저가를 쓰면 '매 순간 감시'가 되어 실매매보다 과하다.
               · 트레일링 고점 = 그 봉까지의 고가 러닝맥스(실매매의 highest_price와 같은 갱신).
               · 지표(ATR)는 **전일 확정 봉**을 쓴다 — 그 시점에 확정된 정보만 쓰기 위해서다.
+            sell_structure_ma: 점수하락 매도의 '구조 훼손' 판정에 쓸 이동평균 컬럼명.
+              None이면 현행 "EMA60". 없는 컬럼명을 주면 그 조건이 통과 처리되어(=None)
+              사실상 조건이 제거된다 — 60일이라는 기간이 한 번도 스윕된 적 없어 열어둔
+              **감사 전용 통로**다(tools/audit_sell_structure_ma.py). 실매매는 EMA60 고정.
             bar_pyr_times: 증액을 **어느 봉에서만** 판정할지(분봉 경로). None이면 모든 봉
               = 현 실매매의 장중 추격. {"1400"}을 주면 그 봉의 종가(=15:00 가격)로 하루
               한 번만 판정한다 — 시스템은 15:20~15:30 종가 단일가에 매매하지 않으므로
@@ -398,6 +402,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     use_atr = sell_cfg.get("USE_ATR_STOP", True)
     default_sl = sell_cfg["STOP_LOSS_RATE"]
     sell_score_limit = sell_cfg["SELL_SCORE"]
+    sell_ma_col = sell_structure_ma or "EMA60"
     ts_act = sell_cfg.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
     ts_breakeven = str(sell_cfg.get("TS_ACTIVATION_MODE", "fixed")).lower() == "breakeven"
     lock_use = sell_cfg.get("PROFIT_LOCK_USE", False)
@@ -697,7 +702,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                         sl_rate=_sl, atr_applied=_applied,
                         is_bep=_bep, holding_days=holding_days,
                         state=state, state_reason=state_reason, raw_score=raw_score,
-                        sell_check=sell_check, ema60=row.get("EMA60"), atr=row.get("ATR", 0),
+                        sell_check=sell_check, ema60=row.get(sell_ma_col), atr=row.get("ATR", 0),
                         roll_high_5=row.get("roll_high_5", 0),
                         roll_high_10=row.get("roll_high_10", 0),
                         cfg={"use_atr": use_atr, "use_time_stop": False,
@@ -758,7 +763,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 price=price, high=pos["high"], avg=pos["avg"], sl_rate=sl_rate,
                 atr_applied=atr_applied, is_bep=is_bep, holding_days=holding_days,
                 state=state, state_reason=state_reason, raw_score=raw_score,
-                sell_check=sell_check, ema60=row.get("EMA60"), atr=row.get("ATR", 0),
+                sell_check=sell_check, ema60=row.get(sell_ma_col), atr=row.get("ATR", 0),
                 roll_high_5=row.get("roll_high_5", 0), roll_high_10=row.get("roll_high_10", 0),
                 cfg={"use_atr": use_atr, "use_time_stop": use_time_stop,
                      "time_stop_days": time_stop_days, "ts_act": ts_act_eff,
