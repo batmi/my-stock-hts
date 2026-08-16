@@ -193,7 +193,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                   risk_scale_by_date=None, oversize_limit=None,
                   ts_act_fn=None, pyr_trigger_fn=None, sl_rate_fn=None,
                   profit_lock_dates=None, rank_fn=None, rotation=None, probe_fn=None,
-                  entry_gate=None):
+                  entry_gate=None, pyr_intraday=False, pyr_per_day=1, pyr_fill_cap=None):
     """N슬롯 포트폴리오 시뮬레이션.
 
     Args:
@@ -246,6 +246,17 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             종전대로 점수 내림차순. 가중치를 바꾸는 것만으로는 '점수라는 잣대 자체가
             값을 하는가'를 물을 수 없어서 둔다 — 무작위 순위를 대조군으로 세워야
             비교 대상이 생긴다. 게이트(BUY_SCORE 통과)는 건드리지 않고 순서만 정한다.
+
+        pyr_intraday / pyr_per_day / pyr_fill_cap: 증액을 '하루 몇 번, 어느 가격에' 넣는가.
+            기본값(False, 1, None)은 종전 동작 그대로 — 하루 1회, 종가 판정·종가 체결이다.
+            **실매매는 감시 주기마다 실시간가로 판정하므로 하루에 2·3차까지 갈 수 있는데**
+            일봉 백테스트는 구조상 하루 1회만 낼 수 있어 그 차이를 잰 적이 없었다
+            (tools/audit_pyramid_perday.py).
+              pyr_intraday=True: 그날 고가가 발동선에 닿으면 발동선에서 체결한다(갭 상승이면 시가).
+              pyr_per_day<=0: 증액으로 평단이 오른 뒤 같은 날 다시 발동선에 닿으면 반복한다.
+              pyr_fill_cap: 전일 종가 대비 이 %를 넘는 가격은 체결 불가로 본다(상한가 호가 공백).
+            ※ 판정에 쓰는 state는 그날 종가로 계산된 값이라 장중 체결에는 앞을 본다. 세 팔이
+              같은 편향을 공유하므로 짝비교는 성립하지만, 절대 수치는 낙관 쪽이다.
 
         ts_act_fn / pyr_trigger_fn: fn(atr, price) -> 발동 기준(%). **실험용 경로**로,
             TS 감시 시작·피라미딩 증액의 고정 임계(+10%)를 종목 변동성에 맞춰 동적으로
@@ -302,6 +313,12 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
 
     rows = {code: {str(r["date"]): r for r in df.to_dict("records")} for code, df in dfs.items()}
     parsed = {d: pd.to_datetime(d, format="%Y%m%d") for d in dates}
+    # 상한가 체결 가드용 전일 종가. 가드를 안 쓰면 만들지 않는다(메모리).
+    prev_close = {}
+    if pyr_fill_cap:
+        for code, df in dfs.items():
+            cl, dt = df["close"].tolist(), [str(x) for x in df["date"]]
+            prev_close[code] = {d: (cl[i - 1] if i else None) for i, d in enumerate(dt)}
 
     reserved_cash = float(reserved_cash or 0.0)
     cash = float(initial_capital) - reserved_cash
@@ -473,41 +490,64 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 if pyr_require_healthy and market_filter_dates and day in market_filter_dates.get(code, ()):
                     continue
                 _raw, _chk, _can, state, _reason = status[code][day]
-                price = row["close"]
-                trigger = pyr_trigger
-                if pyr_trigger_fn is not None:
-                    trigger = float(pyr_trigger_fn(row.get("ATR", 0), pos["avg"]))
-                if (price - pos["avg"]) / pos["avg"] * 100 < trigger or state not in ("매수", "강매수"):
+                if state not in ("매수", "강매수"):
                     continue
+                # [하루 다회] 기본은 하루 1회·종가 판정(종전 동작 그대로). pyr_intraday를 켜면
+                #  실매매처럼 '장중 발동선 도달'로 판정하고, pyr_per_day<=0이면 평단이 오른 뒤
+                #  같은 날 다시 발동선에 닿는 만큼 반복한다(tools/audit_pyramid_perday.py).
+                done_today = 0
+                while pos["pyr"] < pyr_max and (pyr_per_day <= 0 or done_today < pyr_per_day):
+                    trigger = pyr_trigger
+                    if pyr_trigger_fn is not None:
+                        trigger = float(pyr_trigger_fn(row.get("ATR", 0), pos["avg"]))
+                    need = pos["avg"] * (1 + trigger / 100.0)
+                    if pyr_intraday:
+                        high = row.get("high", 0) or 0
+                        if high < need:
+                            break
+                        # 갭 상승으로 시가가 이미 발동선 위면 첫 감시 주기의 가격 = 시가다.
+                        #  2회차부터는 장중에 발동선을 통과하는 순간이므로 발동선 자체가 체결가.
+                        price = max(need, row["open"]) if done_today == 0 else need
+                        if pyr_fill_cap and prev_close.get(code, {}).get(day):
+                            # [상한가 미체결] 발동가가 전일 종가 대비 상한 근처면 매수 체결이
+                            #  사실상 불가능하다(호가가 비어 있다). 낙관 편향을 걷어내는 가드.
+                            if price >= prev_close[code][day] * (1 + pyr_fill_cap / 100.0):
+                                break
+                    else:
+                        price = row["close"]
+                        if price < need:
+                            break
 
-                add_qty = int(pos["qty"] * pyr_ratio)
-                if add_qty < 1:
-                    # 보유 수량이 적으면(1주 등) 증액 비율 0.5로는 1주도 안 나온다 = 피라미딩 불발
-                    pyramid_blocked_qty0 += 1
-                    continue
-                add_price = utils.adjust_to_tick(price * (1 + slippage), False) or price
-                add_qty = min(add_qty, int(cash / add_price))
-                add_sl = default_sl
-                if use_atr:
-                    add_sl = (sl_rate_fn(row, add_price, atr_mult) if sl_rate_fn is not None
-                              else _atr_stop_rate(row.get("ATR", 0), add_price, atr_mult, day))
-                if heat_budget is not None and add_sl:
-                    affordable = heat_budget / (add_price * (abs(add_sl) / 100.0))
-                    add_qty = min(add_qty, int(max(0, affordable)))
-                if add_qty < 1:
-                    continue
+                    add_qty = int(pos["qty"] * pyr_ratio)
+                    if add_qty < 1:
+                        # 보유 수량이 적으면(1주 등) 증액 비율 0.5로는 1주도 안 나온다 = 피라미딩 불발
+                        pyramid_blocked_qty0 += 1
+                        break
+                    add_price = utils.adjust_to_tick(price * (1 + slippage), False) or price
+                    add_qty = min(add_qty, int(cash / add_price))
+                    add_sl = default_sl
+                    if use_atr:
+                        add_sl = (sl_rate_fn(row, add_price, atr_mult) if sl_rate_fn is not None
+                                  else _atr_stop_rate(row.get("ATR", 0), add_price, atr_mult, day))
+                    if heat_budget is not None and add_sl:
+                        affordable = heat_budget / (add_price * (abs(add_sl) / 100.0))
+                        add_qty = min(add_qty, int(max(0, affordable)))
+                    if add_qty < 1:
+                        break
 
-                cost = add_qty * add_price
-                cash -= cost + trading_cost.buy_fee(cost)
-                if heat_budget is not None:
-                    heat_budget -= cost * (abs(add_sl) / 100.0)
-                pos["avg"] = (pos["qty"] * pos["avg"] + cost) / (pos["qty"] + add_qty)
-                pos["qty"] += add_qty
-                pos["lots"].append({"qty": add_qty, "sl": add_sl})
-                pos["pyr"] += 1
-                pos["buy_dt"] = parsed[day]  # 실매매와 동일하게 시간청산 기준일 갱신
-                trades.append({"code": code, "date": day, "reason": f"피라미딩{pos['pyr']}차",
-                               "profit_amt": 0, "profit": 0, "days": 0})
+                    cost = add_qty * add_price
+                    cash -= cost + trading_cost.buy_fee(cost)
+                    if heat_budget is not None:
+                        heat_budget -= cost * (abs(add_sl) / 100.0)
+                    pos["avg"] = (pos["qty"] * pos["avg"] + cost) / (pos["qty"] + add_qty)
+                    pos["qty"] += add_qty
+                    pos["lots"].append({"qty": add_qty, "sl": add_sl})
+                    pos["pyr"] += 1
+                    pos["buy_dt"] = parsed[day]  # 실매매와 동일하게 시간청산 기준일 갱신
+                    done_today += 1
+                    trades.append({"code": code, "date": day, "reason": f"피라미딩{pos['pyr']}차",
+                                   "profit_amt": 0, "profit": 0, "days": 0,
+                                   "nth_today": done_today, "fill": add_price})
 
         # ---------- 3) 신규 매수 (점수 높은 순) ----------
         slot_usage += len(positions)
