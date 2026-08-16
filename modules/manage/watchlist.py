@@ -1076,8 +1076,9 @@ def manage_stock_menu():
             ("1", "관심 종목 전체 조회", "View Watchlist"),
             ("2", "관심 종목 추가", "Add Stock"),
             ("3", "관심 종목 삭제", "Delete Stock"),
-            ("4", "관심 종목 정보 변경", "Modify Stock Info"),
-            ("5", "관심 종목 메모 관리", "Manage Memo")
+            ("4", "관심 종목 탐색", "Discover Candidates"),
+            ("5", "관심 종목 정보 변경", "Modify Stock Info"),
+            ("6", "관심 종목 메모 관리", "Manage Memo")
         ]
         choice = utils.show_menu("관심 종목 관리 (Watchlist Management)", menu_items, default_choice=last_choice)
         
@@ -1088,6 +1089,9 @@ def manage_stock_menu():
                 utils.pause()
             continue
         
+        # 기억은 '무엇을 골랐나'이지 '성공했나'가 아니다 — 취소하고 돌아와도 그 번호가 기본값이어야 한다.
+        # (show_menu가 choices로 걸러주므로 여기 오는 choice는 항상 유효하다.)
+        last_choice = choice
         menu_map = dict((k, v) for k, v, _ in menu_items)
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {menu_map[choice]}")
 
@@ -1100,11 +1104,13 @@ def manage_stock_menu():
         elif choice == "3":
             if _pkg().delete_stock() is not False: is_success = True
         elif choice == "4":
-            if modify_stock_info() is not False: is_success = True
+            from modules.manage import discover
+            if discover.discover_candidates() is not False: is_success = True
         elif choice == "5":
+            if modify_stock_info() is not False: is_success = True
+        elif choice == "6":
             manage_stock_memos_by_mode('view')
             is_success = True
 
         if is_success:
-            last_choice = choice
             utils.pause()

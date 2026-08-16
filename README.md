@@ -371,8 +371,11 @@ my-stock-hts/
 │   ├── search_indices_yfinance.py   # yfinance 기반 해외 지수 검색 도구
 │   ├── gemini_tool.py          # Gemini AI 기능 직접 테스트 도구
 │   ├── get_google_genai.py     # Google GenAI SDK 연결 확인 도구
-│   └── check_cb.py             # DART 공시 기반 전환사채(CB) 잔존물량 확인 도구
-├── tests/                # Pytest 단위/통합 테스트 코드 (870개+)
+│   ├── check_cb.py             # DART 공시 기반 전환사채(CB) 잔존물량 확인 도구
+│   ├── fetch_intraday_tv.py    # 분봉(tvDatafeed) 수집·캐시 적재 도구
+│   ├── journal_sync_e2e.py     # 매매일지 웹서버 연동 종단 검증 도구
+│   └── audit_*.py              # 전략 다이얼 검증(백테스트 감사) 스크립트 모음 (48종)
+├── tests/                # Pytest 단위/통합 테스트 코드 (2,400개+)
 └── modules/              # 기능별 모듈 폴더
     ├── db_manager.py     # DB 연결 및 쿼리 관리
     ├── db_queue.py       # SQLite 동시성 제어를 위한 싱글 워커 큐 프록시
@@ -388,20 +391,33 @@ my-stock-hts/
     ├── analysis.py       # [2] 종목 시세 및 기술적 분석
     ├── chart.py          # [3] 차트 시각화 및 분석
     ├── backtest.py       # [4] 전략 백테스팅
+    ├── portfolio_backtest.py # 다종목 포트폴리오 백테스트 (슬롯 경쟁·현금 제약·히트 캡)
+    ├── trading_cost.py   # 거래비용(수수료·세금·슬리피지) 단일 계산 지점
+    ├── intraday_bars.py  # 분봉 수집·캐시 (tvDatafeed) — 체결 시점 검증용
+    ├── krx_daily.py      # 국내 일봉을 KRX 정규장 기준으로 조회 (pykrx/FDR)
     ├── auto_trade/       # [5] 시스템 트레이딩 (자동매매) 패키지
     │   ├── common.py     #   ├ 공용 헬퍼 (제한종목/일일자산/장시간 판정/OrderStatus)
     │   ├── engine.py     #   ├ 매매 엔진 (DefaultStrategy·OrderManager·RiskManager)
     │   ├── conclusion.py #   ├ 체결 감시/확정 (ConclusionMonitor)
     │   ├── trader.py     #   ├ AutoTrader 메인 루프 (분석→매수/매도→리포트)
     │   └── menu.py       #   └ 트레이딩 룰/제한종목 관리 메뉴 UI
+    ├── paper_broker.py   # 관찰(페이퍼) 모드 가상 브로커 — api 층에서 잔고/주문 가로채기
+    ├── instance_lock.py  # 자동매매 단일 실행 보장 (계좌별 중복 기동 차단)
     ├── theme_analysis.py # [6] 종목발굴·재무분석 + AI(Gemini) 분석/공시 요약
     ├── manage/           # [7] 관심 종목 관리 + [6-5~8] 펀더멘털 패키지
     │   ├── watchlist.py  #   ├ 관심 종목 등록/삭제/조회 및 메뉴 UI
-    │   ├── events.py     #   ├ 배당·실적 캘린더 (DART + yfinance)
-    │   └── disclosure.py #   └ 공시 모니터링·실적 추적 + 공시 텔레그램 알림 (DART)
+    │   ├── discover.py   #   ├ [7-4] 관심 종목 탐색 (규칙 기반 후보 발굴·다중 선택 추가)
+    │   ├── events.py     #   ├ [6-5] 배당·실적 캘린더 (DART + yfinance)
+    │   ├── econ_events.py #   ├ 주요 경제 이벤트 일정 (FRED + 연준 캘린더)
+    │   ├── disclosure.py #   ├ [6-6] 공시 모니터링·실적 추적 + 공시 텔레그램 알림 (DART)
+    │   ├── insider.py    #   ├ [6-7] 수급·물량 신호 (자기주식 결정·메자닌 오버행)
+    │   └── financials.py #   └ [6-8] 재무 스냅샷 (DART 주요계정·전기 대비 증감)
     ├── trading.py        # [8] 종목 주문 관리 (매수/매도/정정/취소)
     ├── reserved_order_monitor.py # 백그라운드 예약 주문(스탑로스, 트레일링 등) 감시 스레드
-    └── account.py        # [9] 자산 및 잔고 관리
+    ├── account.py        # [9] 자산 및 잔고 관리
+    ├── paper_report.py   # [9-6] 가상투자(페이퍼) 계좌 관리·리포트
+    ├── holdings_backfill.py # 증권사 체결 기록으로 보유 종목 거래 내역 DB 복원
+    └── journal_sync.py   # 매매일지 웹서버 연동 (Outbox 패턴)
 ```
 
 ## 6. 필수 준비 사항 (Prerequisites)

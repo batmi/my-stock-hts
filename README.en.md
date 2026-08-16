@@ -359,8 +359,11 @@ my-stock-hts/
 │   ├── search_indices_yfinance.py   # yfinance-based overseas index search tool
 │   ├── gemini_tool.py          # Gemini AI feature direct test tool
 │   ├── get_google_genai.py     # Google GenAI SDK connection confirmation tool
-│   └── check_cb.py             # DART disclosure-based CB remaining balance check tool
-├── tests/                # Pytest unit/integration test codes (870+)
+│   ├── check_cb.py             # DART disclosure-based CB remaining balance check tool
+│   ├── fetch_intraday_tv.py    # Intraday bar (tvDatafeed) fetch/cache tool
+│   ├── journal_sync_e2e.py     # End-to-end verification for trading journal sync
+│   └── audit_*.py              # Strategy dial audit scripts (backtest-based, 48 files)
+├── tests/                # Pytest unit/integration test codes (2,400+)
 └── modules/              # Feature-specific module folders
     ├── db_manager.py     # DB connection & query management
     ├── db_queue.py       # Single worker queue proxy for SQLite concurrency control
@@ -376,20 +379,33 @@ my-stock-hts/
     ├── analysis.py       # [2] Stock price & technical analysis
     ├── chart.py          # [3] Chart visualization & analysis
     ├── backtest.py       # [4] Strategy Backtesting
+    ├── portfolio_backtest.py # Multi-stock portfolio backtest (slot contention, cash limits, heat cap)
+    ├── trading_cost.py   # Single source for trading costs (fees, tax, slippage)
+    ├── intraday_bars.py  # Intraday bar collection/cache (tvDatafeed) for fill-timing checks
+    ├── krx_daily.py      # KRX regular-session daily bars (pykrx/FDR)
     ├── auto_trade/       # [5] System Trading (Auto Trading) package
     │   ├── common.py     #   ├ Shared helpers (restricted stocks/daily asset/market hours/OrderStatus)
     │   ├── engine.py     #   ├ Trading engine (DefaultStrategy·OrderManager·RiskManager)
     │   ├── conclusion.py #   ├ Fill monitoring/confirmation (ConclusionMonitor)
     │   ├── trader.py     #   ├ AutoTrader main loop (analyze→buy/sell→report)
     │   └── menu.py       #   └ Trading rules/restricted stocks menu UI
+    ├── paper_broker.py   # Paper-trading virtual broker (intercepts balance/orders at the api layer)
+    ├── instance_lock.py  # Single-instance guard for auto trading (per-account)
     ├── theme_analysis.py # [6] Discovery & Financials + AI (Gemini) analysis/disclosure summary
     ├── manage/           # [7] Watchlist Management + [6-5~8] fundamentals package
     │   ├── watchlist.py  #   ├ Watchlist add/delete/view & menu UI
-    │   ├── events.py     #   ├ Dividend/Earnings Calendar (DART + yfinance)
-    │   └── disclosure.py #   └ Disclosure monitoring/earnings tracking + Telegram alerts (DART)
+    │   ├── discover.py   #   ├ [7-4] Candidate discovery (rule-based screening, multi-select add)
+    │   ├── events.py     #   ├ [6-5] Dividend/Earnings Calendar (DART + yfinance)
+    │   ├── econ_events.py #   ├ Major economic event schedule (FRED + Fed calendar)
+    │   ├── disclosure.py #   ├ [6-6] Disclosure monitoring/earnings tracking + Telegram alerts (DART)
+    │   ├── insider.py    #   ├ [6-7] Supply-demand & overhang signals (treasury stock, mezzanine)
+    │   └── financials.py #   └ [6-8] Financial snapshot (DART key accounts, YoY change)
     ├── trading.py        # [8] Stock Order Management (Buy/Sell/Modify/Cancel)
     ├── reserved_order_monitor.py # Background reserved order (Stop loss, Trailing, etc.) monitoring thread
-    └── account.py        # [9] Asset & Balance Management
+    ├── account.py        # [9] Asset & Balance Management
+    ├── paper_report.py   # [9-6] Paper account management & reports
+    ├── holdings_backfill.py # Restores holdings trade history into DB from broker fills
+    └── journal_sync.py   # Trading journal web server sync (Outbox pattern)
 ```
 
 ## 6. Prerequisites
