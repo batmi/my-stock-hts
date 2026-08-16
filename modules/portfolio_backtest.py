@@ -67,6 +67,11 @@ def _atr_stop_rate(atr, price, atr_mult, day=None):
     return _eng.atr_stop_rate(atr, price, atr_mult=atr_mult, vol_ratio=ratio) or 0.0
 
 
+# 가격이 선에 닿아서 나가는 청산 사유. 실매매에서 이들만 장중 실시간가로 트리거되고,
+# 시간청산·점수하락은 판정 자체가 하루 단위다.
+PRICE_EXIT_REASONS = ("손절", "ATR손절", "본전청산", "이익보호", "트레일링스탑")
+
+
 def decide_sell(*, price, high, avg, sl_rate, atr_applied, is_bep, holding_days,
                 state, state_reason, raw_score, sell_check, ema60, atr,
                 roll_high_5=0.0, roll_high_10=0.0, cfg=None):
@@ -193,7 +198,9 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                   risk_scale_by_date=None, oversize_limit=None,
                   ts_act_fn=None, pyr_trigger_fn=None, sl_rate_fn=None,
                   profit_lock_dates=None, rank_fn=None, rotation=None, probe_fn=None,
-                  entry_gate=None, pyr_intraday=False, pyr_per_day=1, pyr_fill_cap=None):
+                  entry_gate=None, pyr_intraday=False, pyr_per_day=1, pyr_fill_cap=None,
+                  exit_intraday=False, exit_path="low_first", exit_intraday_only=None,
+                  pyr_reset_time_stop=False):
     """N슬롯 포트폴리오 시뮬레이션.
 
     Args:
@@ -246,6 +253,28 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             종전대로 점수 내림차순. 가중치를 바꾸는 것만으로는 '점수라는 잣대 자체가
             값을 하는가'를 물을 수 없어서 둔다 — 무작위 순위를 대조군으로 세워야
             비교 대상이 생긴다. 게이트(BUY_SCORE 통과)는 건드리지 않고 순서만 정한다.
+
+        pyr_reset_time_stop: 증액할 때 시간청산 시계를 0으로 되돌리는가. **기본 False =
+            실매매와 같음.** 실매매는 2026-07-29(engine.resolve_entry_date)부터 보유일수를
+            진입일(보유수량 0→1 시점)으로 재므로 증액해도 시계가 리셋되지 않는다. 이
+            백테스트는 그 이틀 전에 작성돼 옛 동작(True)을 2026-08-16까지 들고 있었다
+            — 주석에는 "실매매와 동일하게"라고 적혀 있었지만 사실이 아니었다.
+            True 는 그 이전 기록값을 재현할 때만 쓴다(tools/audit_timestop_reset.py).
+
+        exit_intraday / exit_path: 청산을 '언제' 집행하는가. 기본(False)은 종전 동작 —
+            **모든 청산이 종가 체결**이고 일봉의 low 는 어디에도 쓰이지 않는다. 그런데
+            실매매의 손절·트레일링 트리거는 항상 실시간가다(config.USE_KRX_CLOSE_AFTER_HOURS
+            주석). 즉 실매매는 장중에 선을 이탈하는 즉시 나가는데, 청산 다이얼(손절폭·TS
+            발동·콜백·BEP)은 전부 종가 체결 세계에서 정해졌다(tools/audit_exit_timing.py).
+              exit_intraday=True: 그날 저가가 청산선을 이탈하면 그 선에서 체결한다
+                  (갭하락이면 시가). 가격성 사유(손절·ATR손절·본전청산·이익보호·트레일링스탑)
+                  만 장중으로 옮기고, 시간청산·점수하락은 종가 판정 그대로 둔다.
+              exit_intraday_only: "stop"이면 손절 계열만, "ts"면 트레일링만 장중으로 옮긴다
+                  (나머지 다리는 종가 판정으로 남는다). 두 다리 중 어느 쪽이 값을 치르는지
+                  가르기 위한 분해축이다. None이면 가격성 사유 전부.
+              exit_path: 일봉은 고가·저가의 **선후를 모르므로** 두 극단을 다 재서 띠로 본다.
+                  "low_first"  — 트레일링선을 전일까지의 고점으로 긋는다(보수적 기본값).
+                  "high_first" — 오늘 고가까지 반영해 선을 올린 뒤 저가를 맞힌다(더 자주 걸림).
 
         pyr_intraday / pyr_per_day / pyr_fill_cap: 증액을 '하루 몇 번, 어느 가격에' 넣는가.
             기본값(False, 1, None)은 종전 동작 그대로 — 하루 1회, 종가 판정·종가 체결이다.
@@ -336,21 +365,94 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     oversized_buys = 0
     # 슬롯 교체로 비운 포지션 수(rotation=None이면 항상 0).
     rotations = 0
+    # 장중 청산으로 나간 건수와, 청산선 산식이 decide_sell 과 어긋난 건수(0이어야 정상).
+    intraday_exits = intraday_mismatch = 0
 
     def _equity(day):
         return cash + reserved_cash + sum(
             p["qty"] * rows[c][day]["close"] for c, p in positions.items() if day in rows[c])
 
-    def _effective_sl(position):
-        """현재 유효 손절률(BEP 상향 반영). BEP는 실매매와 같은 토글을 따른다."""
+    def _effective_sl(position, hwm=None):
+        """현재 유효 손절률(BEP 상향 반영). BEP는 실매매와 같은 토글을 따른다.
+
+        hwm: 고점을 밖에서 주입한다(장중 청산 모사에서 '오늘 고가 반영 전' 고점을 쓰기 위함).
+        """
         sl, applied = _weighted_sl(position, default_sl)
         if not use_bep:
             return sl, applied, False
-        max_profit = (position["high"] - position["avg"]) / position["avg"] * 100
+        peak = position["high"] if hwm is None else hwm
+        max_profit = (peak - position["avg"]) / position["avg"] * 100
         activation = abs(sl) if (applied and sl < 0) else bep_default
         if max_profit >= activation and sl < bep_stop:
             return bep_stop, applied, True
         return sl, applied, False
+
+    def _do_sell(code, pos, day, sell_price, reason, holding_days, max_profit, is_bep):
+        """청산 1건 집행. 종가 경로와 장중 경로가 같은 회계를 쓰도록 한 군데로 모은다."""
+        nonlocal cash
+        amount = pos["qty"] * sell_price
+        amount -= trading_cost.sell_fee(amount)
+        # 보고 손익은 왕복(매수+매도) 비용을 모두 뺀다. 현금(cash)에는 매수 수수료가
+        # 진입 시점에 이미 빠져 있으므로 이 값을 잔고에 더하지 않는다.
+        profit, _ = trading_cost.net_realized_profit(pos["avg"], sell_price, pos["qty"])
+        cash += amount
+        trades.append({
+            "code": code, "date": day, "reason": reason, "profit_amt": profit,
+            "profit": profit / (pos["qty"] * pos["avg"]) * 100, "days": holding_days,
+            # [진단] 슬롯 점유·수익 반납을 재려면 실현손익만으로는 부족하다.
+            #  mfe = 보유 중 최대 평가수익률, armed = TS 무장 경험, bep = 청산 시
+            #  손절선이 본전선까지 올라와 있었는가.
+            "mfe": max_profit, "armed": bool(pos.get("ts_armed_ever")), "bep": bool(is_bep),
+        })
+        del positions[code]
+
+    def _intraday_stop_level(pos, row, hwm, day, ts_act_eff):
+        """장중에 **먼저 닿는** 청산선. (가격, 사유) 또는 None.
+
+        [왜 여기서 다시 계산하는가] decide_sell 은 '이 가격이면 파는가'만 답할 뿐 청산선
+        자체를 돌려주지 않는데, 장중 체결가는 그 선이다. 그래서 선의 산식만 여기서 뒤집는다
+        — 게이트(무장 여부·이익보호·BEP)는 decide_sell 과 같은 SSOT 헬퍼를 그대로 쓰고,
+        아래 호출부가 매번 decide_sell(price=저가) 과 교차검증해 어긋나면 세어 보고한다.
+        [먼저 닿는 선] 가격이 내려오며 더 높은 선을 먼저 통과하므로, decide_sell 의
+        if/elif 우선순위가 아니라 **선의 높이**로 고른다.
+        """
+        avg = pos["avg"]
+        sl_rate, atr_applied, is_bep = _effective_sl(pos, hwm=hwm)
+        max_profit = (hwm - avg) / avg * 100 if avg > 0 else 0.0
+        is_lock = False
+        lock_on = (day in profit_lock_dates) if profit_lock_dates is not None else lock_use
+        if lock_on:
+            from modules.auto_trade.engine import profit_lock_stop_rate
+            lock = profit_lock_stop_rate(max_profit, lock_min_mfe, lock_giveback)
+            if lock is not None and lock > sl_rate:
+                sl_rate, is_lock = lock, True
+
+        only = exit_intraday_only
+        cands = []
+        if sl_rate != 0 and only != "ts":
+            r = ("이익보호" if is_lock
+                 else "본전청산" if is_bep
+                 else ("ATR손절" if (use_atr and atr_applied) else "손절"))
+            cands.append((avg * (1 + sl_rate / 100.0), r, is_bep))
+        if hwm > 0 and only != "stop":
+            atr = row.get("ATR", 0) or 0
+            callback = ts_callback
+            if use_atr and atr > 0:
+                from modules.auto_trade.engine import effective_callback
+                callback = effective_callback(ts_callback, (atr * ts_atr_mult / hwm) * 100,
+                                              max_profit)
+            if ts_breakeven:
+                from modules.auto_trade.engine import (breakeven_activation_rate,
+                                                       ts_activation_atr_mult)
+                armed = max_profit >= breakeven_activation_rate(atr, avg, ts_callback,
+                                                                ts_activation_atr_mult(), use_atr)
+            else:
+                armed = max_profit >= ts_act_eff
+            if armed:
+                cands.append((hwm * (1 - callback / 100.0), "트레일링스탑", is_bep))
+        if not cands:
+            return None
+        return max(cands, key=lambda x: x[0])
 
     for day in dates:
         equity_curve.append(_equity(day))
@@ -377,10 +479,6 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
 
             pos = positions[code]
             raw_score, sell_check, _can_buy, state, state_reason = status[code][day]
-            pos["high"] = max(pos["high"], row["high"])
-            loss_rate = (price - pos["avg"]) / pos["avg"] * 100
-            max_profit = (pos["high"] - pos["avg"]) / pos["avg"] * 100
-            sl_rate, atr_applied, is_bep = _effective_sl(pos)
             holding_days = (parsed[day] - pos["buy_dt"]).days
 
             ts_act_eff = ts_act
@@ -392,6 +490,56 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 ts_act_eff = breakeven_activation_rate(row.get("ATR", 0), pos["avg"],
                                                        ts_callback, ts_activation_atr_mult(),
                                                        use_atr)
+
+            # ---------- [장중 청산 모사] 실매매의 손절·TS는 실시간가로 친다 ----------
+            if exit_intraday:
+                hwm = pos["high"]
+                if exit_path == "high_first":
+                    hwm = max(hwm, row["high"])
+                low = row.get("low", 0) or 0
+                hit = _intraday_stop_level(pos, row, hwm, day, ts_act_eff) if low > 0 else None
+                if hit and low <= hit[0]:
+                    level, hit_reason, hit_bep = hit
+                    # [자기검증] 같은 상황을 decide_sell 에 저가로 물어봐도 가격성 사유로
+                    #  팔아야 한다. 시간청산은 종가 판정이므로 꺼서 우선순위 가림을 막는다.
+                    _sl, _applied, _bep = _effective_sl(pos, hwm=hwm)
+                    chk, chk_reason = decide_sell(
+                        price=low, high=hwm, avg=pos["avg"],
+                        sl_rate=_sl, atr_applied=_applied,
+                        is_bep=_bep, holding_days=holding_days,
+                        state=state, state_reason=state_reason, raw_score=raw_score,
+                        sell_check=sell_check, ema60=row.get("EMA60"), atr=row.get("ATR", 0),
+                        roll_high_5=row.get("roll_high_5", 0),
+                        roll_high_10=row.get("roll_high_10", 0),
+                        cfg={"use_atr": use_atr, "use_time_stop": False,
+                             "time_stop_days": time_stop_days, "ts_act": ts_act_eff,
+                             "time_stop_min": time_stop_min,
+                             "ts_callback": ts_callback, "ts_atr_mult": ts_atr_mult,
+                             "ts_breakeven": ts_breakeven,
+                             "sell_score_limit": sell_score_limit,
+                             "profit_lock_use": (day in profit_lock_dates
+                                                 if profit_lock_dates is not None else lock_use),
+                             "profit_lock_min_mfe": lock_min_mfe,
+                             "profit_lock_giveback": lock_giveback})
+                    if not (chk and chk_reason in PRICE_EXIT_REASONS):
+                        # 한쪽 다리만 장중으로 옮긴 경우 decide_sell 은 다른 다리를 답할 수
+                        #  있으므로, 전수 대조는 두 다리를 다 켠 실행에서만 의미가 있다.
+                        if exit_intraday_only is None:
+                            intraday_mismatch += 1
+                    # 갭하락으로 시가가 이미 선 아래면 그 시가가 체결가다.
+                    raw = min(level, row["open"]) if (row.get("open") or 0) > 0 else level
+                    exec_price = utils.adjust_to_tick(raw * (1 - slippage), False) or raw
+                    mfe = (hwm - pos["avg"]) / pos["avg"] * 100
+                    if mfe >= ts_act_eff:
+                        pos["ts_armed_ever"] = True
+                    intraday_exits += 1
+                    _do_sell(code, pos, day, exec_price, hit_reason, holding_days, mfe, hit_bep)
+                    continue
+
+            pos["high"] = max(pos["high"], row["high"])
+            loss_rate = (price - pos["avg"]) / pos["avg"] * 100
+            max_profit = (pos["high"] - pos["avg"]) / pos["avg"] * 100
+            sl_rate, atr_applied, is_bep = _effective_sl(pos)
 
             # [무장 래치 — 기각됨. 켜지 말 것] 발동선은 매일 '현재 봉' ATR로 다시 계산되므로
             #  변동성이 오르면 문턱이 올라가 이미 무장된 TS가 풀린다(실측 2026-08-09:
@@ -445,21 +593,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
 
             if sell:
                 sell_price = utils.adjust_to_tick(price * (1 - slippage), False) or price
-                amount = pos["qty"] * sell_price
-                amount -= trading_cost.sell_fee(amount)
-                # 보고 손익은 왕복(매수+매도) 비용을 모두 뺀다. 현금(cash)에는 매수 수수료가
-                # 진입 시점에 이미 빠져 있으므로 이 값을 잔고에 더하지 않는다.
-                profit, _ = trading_cost.net_realized_profit(pos["avg"], sell_price, pos["qty"])
-                cash += amount
-                trades.append({
-                    "code": code, "date": day, "reason": reason, "profit_amt": profit,
-                    "profit": profit / (pos["qty"] * pos["avg"]) * 100, "days": holding_days,
-                    # [진단] 슬롯 점유·수익 반납을 재려면 실현손익만으로는 부족하다.
-                    #  mfe = 보유 중 최대 평가수익률, armed = TS 무장 경험, bep = 청산 시
-                    #  손절선이 본전선까지 올라와 있었는가.
-                    "mfe": max_profit, "armed": bool(pos.get("ts_armed_ever")), "bep": bool(is_bep),
-                })
-                del positions[code]
+                _do_sell(code, pos, day, sell_price, reason, holding_days, max_profit, is_bep)
 
         # ---------- 히트(총 오픈 리스크) 예산 ----------
         # 계좌 드로다운 축은 시뮬레이션 자신의 자산곡선에 의존하는 피드백 루프라
@@ -543,7 +677,9 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                     pos["qty"] += add_qty
                     pos["lots"].append({"qty": add_qty, "sl": add_sl})
                     pos["pyr"] += 1
-                    pos["buy_dt"] = parsed[day]  # 실매매와 동일하게 시간청산 기준일 갱신
+                    if pyr_reset_time_stop:
+                        # [옛 동작 재현 전용] 실매매는 진입일 기준이라 리셋하지 않는다.
+                        pos["buy_dt"] = parsed[day]
                     done_today += 1
                     trades.append({"code": code, "date": day, "reason": f"피라미딩{pos['pyr']}차",
                                    "profit_amt": 0, "profit": 0, "days": 0,
@@ -721,6 +857,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
         "trades": trades,
         "sells": sells,
         "pyramid_count": sum(1 for t in trades if "피라미딩" in t["reason"]),
+        "intraday_exits": intraday_exits,          # 장중 선 이탈로 나간 건수
+        "intraday_mismatch": intraday_mismatch,    # 청산선 산식 자기검증 실패(0이어야 정상)
         "avg_slots": slot_usage / len(dates) if dates else 0.0,
         "avg_cash_ratio": (sum(cash_ratios) / len(cash_ratios)) if cash_ratios else 0.0,
         # 슬롯 만재 시점의 평균 현금 비율 — 피라미딩 여력의 실제 지표
