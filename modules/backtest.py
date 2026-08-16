@@ -2037,24 +2037,86 @@ def run_backtest():
             else:
                 header_msg = "⚪ [기본 설정] 시스템 권장 설정 (또는 개별 룰)으로 진행합니다."
 
+        # [SSOT] 요약표는 실제 판정부와 **같은 함수·같은 분기**로 문구를 만든다.
+        #  원시 config 값을 그대로 찍으면 '설정에는 있으나 쓰이지 않는 값'이 표시된다 —
+        #  breakeven 무장에서 TRAILING_STOP_ACTIVATION_RATE, ATR 동적 콜백에서
+        #  TRAILING_STOP_CALLBACK_RATE(하한일 뿐), ATR 손절에서 STOP_LOSS_RATE(폴백일 뿐),
+        #  TAKE_PROFIT_RATE/RSI의 0(=미사용인데 '0% 익절'·'RSI 0 초과'로 읽힘)이 그 예다.
+        from modules.auto_trade.engine import ts_activation_dynamic, ts_activation_label
+        _ss = config.SELL_STRATEGY
+        _at = config.ANALYSIS_THRESHOLDS
+
+        def _g(v, d=0.0):
+            """표시용 수치 — 점수·%·배수를 한 자리 소수로 통일한다(7.0을 7로 줄이지 않는다)."""
+            try:
+                return f"{float(v if v is not None else d):.1f}"
+            except (TypeError, ValueError):
+                return str(v)
+
+        def _pos(v):
+            try:
+                return float(v or 0) > 0
+            except (TypeError, ValueError):
+                return False
+
+        # 매도 허들 — 점수 매도는 '주가 < 60일선' 동시 충족이 필요하다(실매매 analyze_sell과 동일).
+        _rsi_txt = f" / RSI {_g(take_profit_rsi)} 초과" if _pos(take_profit_rsi) else " (RSI과열 OFF)"
+        # 익절 — 0은 목표가 아니라 미사용이다(판정부도 `> 0` 가드로 건너뛴다).
+        _tp_txt = (f"+{_g(take_profit)}% (반익절 {'ON' if half_tp_use else 'OFF'})"
+                   if _pos(take_profit) else "OFF (반익절 OFF)")
+        # 손절 — ATR 모드에서 실제 손절폭은 ATR×배수를 캡으로 clamp한 값. stop_loss는 폴백.
+        if use_atr_stop:
+            _cap = _ss.get("MAX_ATR_STOP_LOSS_RATE", -15.0)
+            if not _cap:
+                _cap_txt = "캡 없음"
+            elif _ss.get("ATR_CAP_DYNAMIC", True):
+                _cap_txt = f"동적 캡 {_g(_ss.get('ATR_CAP_CEIL', -6.0))}~{_g(_ss.get('ATR_CAP_FLOOR', -35.0))}%"
+            else:
+                _cap_txt = f"캡 {_g(_cap)}%"
+            _sl_txt = f"ATR x{_g(atr_mult)} ({_cap_txt}, 미산출 시 {_g(stop_loss)}%)"
+        else:
+            _sl_txt = f"{_g(stop_loss)}%"
+        # 트레일링 스탑 — 무장선은 모드가, 콜백은 ATR 사용 여부가 정한다.
+        _ts_act_txt = ts_activation_label(None if ts_activation_dynamic() else ts_activation)
+        _ts_cb_txt = (f"-max({_g(ts_callback)}%, ATR x{_g(_ss.get('TRAILING_ATR_MULTIPLIER', 3.5))})"
+                      if use_atr_stop else f"-{_g(ts_callback)}%")
+        _gb = _ss.get("TS_MAX_GIVEBACK_RATIO", 0.0) or 0.0
+        _cbmax = _ss.get("TRAILING_STOP_CALLBACK_MAX", 0.0) or 0.0
+        if _gb > 0:
+            _ts_cb_txt += f" [반납상한 MFE x{_g(_gb)}]"
+        elif _cbmax > 0:
+            _ts_cb_txt += f" [콜백상한 {_g(_cbmax)}%]"
+        # 시간 청산 — 달력일 기준이며 상방 모멘텀 유지 시 유예된다(강제 아님).
+        _tstop_txt = (f"{time_stop_days}일(달력일) · 상방 모멘텀 유지 시 유예"
+                      if _ss.get("TIME_STOP_USE", True) and _pos(time_stop_days) else "OFF")
+
         msg = f"\n{header_msg}\n"
         msg += "[dim]" + "─" * 75 + "[/dim]\n"
         msg += f"   [cyan]시뮬레이션 기간[/cyan]          {days}일\n"
-        msg += f"   [cyan]매수 허들 (점수/RSI)[/cyan]     {buy_score}점 이상 / RSI {buy_rsi} 미만\n"
-        msg += f"   [cyan]매도 허들 (점수/RSI)[/cyan]     점수 {sell_score} 미만 / RSI {take_profit_rsi} 초과\n"
-        msg += f"   [cyan]익절 / 손절[/cyan]              +{take_profit}% (반익절: {'ON' if half_tp_use else 'OFF'}) / {f'{stop_loss}% (ATR x{atr_mult})' if use_atr_stop else f'{stop_loss}%'}\n"
-        msg += f"   [cyan]트레일링 스탑[/cyan]            +{ts_activation}% 발동 후 -{ts_callback}%\n"
-        msg += f"   [cyan]시간 청산[/cyan]                {time_stop_days}일 경과 시 강제 매도\n"
+        msg += f"   [cyan]매수 허들[/cyan]                {_g(buy_score)}점 이상 & RSI {_g(buy_rsi)} 미만\n"
+        msg += f"   [cyan]매도 허들[/cyan]                점수 {_g(sell_score)} 미만 & 60일선 이탈{_rsi_txt}\n"
+        msg += f"   [cyan]익절[/cyan]                     {_tp_txt}\n"
+        msg += f"   [cyan]손절[/cyan]                     {_sl_txt}\n"
+        msg += f"   [cyan]트레일링 스탑[/cyan]            {_ts_act_txt} 무장 후 {_ts_cb_txt}\n"
+        msg += f"   [cyan]시간 청산[/cyan]                {_tstop_txt}\n"
         _mf_ma = int(getattr(config, 'MARKET_FILTER_MA', 80))
         _mf_band = float(getattr(config, 'MARKET_FILTER_BAND', 1.0))
         _mf_band_txt = f" -{_mf_band:g}%" if _mf_band else ""
         msg += (f"   [cyan]시장 필터[/cyan]                "
                 f"{f'ON — 지수 {_mf_ma}일선{_mf_band_txt} 아래면 신규 진입 보류' if use_market_filter else 'OFF'}\n")
         if pyramiding_max is not None:
-            pyr_disp = f"최대 {pyramiding_max}차" if pyramiding_max > 0 else "미사용"
+            _pyr_n = pyramiding_max
         else:
-            pyr_disp = f"최대 {config.ANALYSIS_THRESHOLDS.get('PYRAMIDING_MAX_COUNT', 1)}차" if config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_USE", True) else "미사용"
-        msg += f"   [cyan]피라미딩 차수[/cyan]            {pyr_disp}\n"
+            _pyr_n = _at.get("PYRAMIDING_MAX_COUNT", 1) if _at.get("PYRAMIDING_USE", True) else 0
+        if _pyr_n > 0:
+            # 차수만 적으면 '언제·얼마나' 얹는지가 빠져 증액 조건을 오해한다.
+            pyr_disp = (f"+{_g(_at.get('PYRAMIDING_PROFIT_TRIGGER', 10.0))}%마다 "
+                        f"{_g(_at.get('PYRAMIDING_RATIO', 0.5))}배씩 최대 {_pyr_n}차")
+            if _at.get("PYRAMIDING_REQUIRE_HEALTHY_MARKET", True):
+                pyr_disp += " (건전시장 요구)"
+        else:
+            pyr_disp = "미사용"
+        msg += f"   [cyan]피라미딩[/cyan]                 {pyr_disp}\n"
         if weights:
             msg += f"   [cyan]스코어링 가중치[/cyan]          추세 {weights.get('TREND', 4.0)} / 모멘텀 {weights.get('MOMENTUM', 2.5)} / 강도 {weights.get('STRENGTH', 1.5)} / 시너지 {weights.get('SYNERGY', 2.0)}\n"
         msg += "[dim]" + "─" * 75 + "[/dim]\n"
