@@ -158,7 +158,10 @@ def main():
         # [크기 축의 진짜 반례] 확장 풀도 '오늘까지 살아남은' 종목이라, 종목을 늘린 효과에
         #  생존 편향이 그대로 얹힌다. 표본을 실제 폐지율만큼 폐지 종목으로 채워, 과거에
         #  실제로 고를 수 있었던 관심종목에 가깝게 만든 뒤 같은 기울기가 남는지 본다.
-        need = int(max(args.__dict__.get("sizes_max", 100), 100) * args.dead_frac) + 10
+        # 필요한 폐지 종목 수는 '가장 큰 표본 × 폐지 비율'이다. 100으로 고정해 두면
+        # 100종목 너머를 잴 때 폐지 풀이 모자라 혼합 비율이 조용히 낮아진다.
+        _smax = max([int(x) for x in args.sizes.split(",") if x] or [100])
+        need = int(max(_smax, 100) * args.dead_frac) + 10
         dt = dead_targets(need)
         dead_dfs, dead_mf, _dd = prep(dt, args.days, f"폐지 풀(요청 {len(dt)})")
         mf.update({c: dead_mf.get(c, set()) for c in dead_dfs})
