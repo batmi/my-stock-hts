@@ -220,7 +220,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                   bar_ts_defer=None, intraday_pyramid=None, bar_pyr_times=None,
                   pyr_next_open=False, sell_structure_ma=None,
                   intraday_status=None, intraday_entry=False, entry_bar_times=None,
-                  buy_score_fn=None, daily_loss_limit=None):
+                  buy_score_fn=None, daily_loss_limit=None, invest_ratio_fn=None):
     """N슬롯 포트폴리오 시뮬레이션.
 
     Args:
@@ -255,6 +255,10 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
               only_losing: 평가손실 중인 보유만 대상
             보유 점수는 sell_check(매도 상태면 0)를 쓴다 — 매도 판정과 같은 잣대다.
             (tools/audit_slot_rotation.py)
+
+        invest_ratio_fn: fn(day, code) -> 그 종목에 쓸 기초 비중(0~1). **실험용 경로**로,
+            '슬롯마다 1/N 균등'이라는 전제를 흔들어 보기 위한 훅이다(점수 가중·변동성
+            역가중 등, tools/audit_allocation.py). None이면 종전과 같이 invest_ratio 고정.
 
         daily_loss_limit: 그날 자산이 전일 대비 이 비율(%, 양수) 이상 빠지면 그날의 신규
             매수·증액을 멈춘다(청산은 그대로). **실험용 경로**로, 실매매에만 있는 방어 모드
@@ -1072,7 +1076,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             if use_atr:
                 sl_rate = (sl_rate_fn(row, buy_price, atr_mult) if sl_rate_fn is not None
                            else _atr_stop_rate(row.get("ATR", 0), buy_price, atr_mult, day))
-            amount = allocate_amount(_equity(day), cash, invest_ratio * day_scale, sl_rate,
+            _ratio = invest_ratio if invest_ratio_fn is None else invest_ratio_fn(day, code)
+            amount = allocate_amount(_equity(day), cash, _ratio * day_scale, sl_rate,
                                      row.get("ATR", 0), buy_price)
             if heat_budget is not None and sl_rate:
                 amount = min(amount, max(0, heat_budget / (abs(sl_rate) / 100.0)))
