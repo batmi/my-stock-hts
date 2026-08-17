@@ -220,7 +220,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                   bar_ts_defer=None, intraday_pyramid=None, bar_pyr_times=None,
                   pyr_next_open=False, sell_structure_ma=None,
                   intraday_status=None, intraday_entry=False, entry_bar_times=None,
-                  buy_score_fn=None, daily_loss_limit=None, invest_ratio_fn=None):
+                  buy_score_fn=None, daily_loss_limit=None, invest_ratio_fn=None,
+                  reentry_block=False):
     """N슬롯 포트폴리오 시뮬레이션.
 
     Args:
@@ -255,6 +256,12 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
               only_losing: 평가손실 중인 보유만 대상
             보유 점수는 sell_check(매도 상태면 0)를 쓴다 — 매도 판정과 같은 잣대다.
             (tools/audit_slot_rotation.py)
+
+        reentry_block: 당일 손절/본전청산으로 나간 종목을 **그 손절가 이상**에서 되사지
+            않는다(실매매 trader.py의 REENTRY_BLOCK_ABOVE_STOP_PRICE). **실험용 경로**로,
+            실매매에만 있고 백테스트에는 없던 게이트를 재현한다(tools/audit_reentry_block.py).
+            분봉 진입 경로에서만 의미가 있다 — 종가 모델은 매도·매수가 같은 가격이라
+            '더 비싸게 되사기'라는 현상 자체가 없다.
 
         invest_ratio_fn: fn(day, code) -> 그 종목에 쓸 기초 비중(0~1). **실험용 경로**로,
             '슬롯마다 1/N 균등'이라는 전제를 흔들어 보기 위한 훅이다(점수 가중·변동성
@@ -500,9 +507,15 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             return bep_stop, applied, True
         return sl, applied, False
 
+    stop_px_today = {}          # {code: 그날 마지막 손절 체결가} — reentry_block 전용
+    reentry_blocked = 0         # 게이트가 실제로 막은 진입 횟수(빈도부터 센다)
+
     def _do_sell(code, pos, day, sell_price, reason, holding_days, max_profit, is_bep):
         """청산 1건 집행. 종가 경로와 장중 경로가 같은 회계를 쓰도록 한 군데로 모은다."""
         nonlocal cash
+        if reentry_block and str(reason).startswith(("손절", "ATR손절", "본전청산")):
+            # 같은 날 여러 번이면 마지막 값이 남는다 — 실매매 _collect_stop_exit_prices와 같다.
+            stop_px_today[code] = sell_price
         amount = pos["qty"] * sell_price
         amount -= trading_cost.sell_fee(amount)
         # 보고 손익은 왕복(매수+매도) 비용을 모두 뺀다. 현금(cash)에는 매수 수수료가
@@ -609,6 +622,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
 
     prev_equity = None      # 방어 모드 판정용 전일 자산
     for day in dates:
+        stop_px_today.clear()   # 게이트는 '당일'만 — 실매매도 today_trades로 하루치만 본다
         equity_curve.append(_equity(day))
         if equity_curve[-1] > 0:
             cash_ratios.append(cash / equity_curve[-1] * 100)
@@ -1132,7 +1146,12 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 for _score, code, srow in _candidates_at_bar(day, hhmm):
                     if len(positions) >= slots:
                         break
-                    _buy(code, srow, srow["close"], day)
+                    px = srow["close"]
+                    spx = stop_px_today.get(code)
+                    if reentry_block and spx and px >= spx:
+                        reentry_blocked += 1
+                        continue    # 판 값보다 비싸게 되사지 않는다
+                    _buy(code, srow, px, day)
         elif len(positions) < slots:
             candidates = _candidates_for(day)
             if probe_fn is not None:
@@ -1162,6 +1181,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
         "sells": sells,
         "pyramid_count": sum(1 for t in trades if "피라미딩" in t["reason"]),
         "intraday_exits": intraday_exits,          # 장중 선 이탈로 나간 건수
+        "reentry_blocked": reentry_blocked,        # 손절가 재진입 게이트가 막은 횟수
         "intraday_mismatch": intraday_mismatch,    # 청산선 산식 자기검증 실패(0이어야 정상)
         "avg_slots": slot_usage / len(dates) if dates else 0.0,
         "avg_cash_ratio": (sum(cash_ratios) / len(cash_ratios)) if cash_ratios else 0.0,
