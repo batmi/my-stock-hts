@@ -4648,6 +4648,16 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
             sm_flag, sm_reason = check_smart_money_turnaround(code, is_overseas)
             class_name, class_color, _ = classify_stock_state(df=chart_df, ind=ind, prev_rsi=prev_rsi_val, thresholds=thresholds, w52_pos=w52_pos_val, smart_money=sm_flag)
 
+            # [추가] 분류 옆에 추세품질 — 같은 '매수'라도 검증된 추세인지가 갈린다.
+            #  진입 순위에서 점수 동점을 가르는 값이라(후보 점수는 절반 넘게 동점이다)
+            #  분류만 봐서는 왜 그 종목이 먼저 잡혔는지 알 수 없었다.
+            #  색은 indicators.TREND_QUALITY_COLORS 단일 소스 — 도움말 표와 같은 밴드색이다.
+            #  데이터가 90봉에 못 미치면 None → '-'(흰색, 이력부족).
+            tq_val = indicators.get_trend_quality(chart_df)
+            tq_color = indicators.TREND_QUALITY_COLORS.get(
+                indicators.describe_trend_quality(tq_val), "white")
+            tq_cell = f" [{tq_color}]({'-' if tq_val is None else f'{tq_val:.0f}'})[/]"
+
             # [추가] 수동 조회 결과도 상태 캐시에 남긴다 — 텔레그램 /stocks가 조회 시각과 함께
             #  보여준다. 시스템 트레이딩이 분석하지 않는 종목(ETF, NXT 시간대 비거래 종목)과
             #  시스템 정지 중의 공백을 메운다. 세션이 넘어가면 자동 만료된다.
@@ -4781,7 +4791,7 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
             if marks:
                 final_name_str += f"[dim]{''.join(marks)}[/dim]"
 
-            row_data = [final_name_str, f"{code}", f"{class_color}{class_name}[/]", curr_str, rate_str, w52_pos_str, ema_5_str, ema_20_str, ema_60_str, ema_120_str, trend_str, adx_str, rsi_str, cci_str]
+            row_data = [final_name_str, f"{code}", f"{class_color}{class_name}[/]{tq_cell}", curr_str, rate_str, w52_pos_str, ema_5_str, ema_20_str, ema_60_str, ema_120_str, trend_str, adx_str, rsi_str, cci_str]
             if not is_overseas:
                 if use_investor_data: row_data.append(inv_str)
                 else: row_data.append(obv_disp)
@@ -4916,7 +4926,10 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None, is_
     table = Table(title=display_title, box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
     table.add_column("종목명", justify="left", style="white", no_wrap=True)
     table.add_column("코드", justify="center", style="dim")
-    table.add_column("분류", justify="center") 
+    # [표기] '분류' 셀은 분류 문구와 추세품질 값을 함께 담는다(예: 매수 (143)) — 헤더도
+    #  그 사실을 말해야 한다. '추세품질'을 다 쓰면 폭 15로 이 컬럼 최대 셀(13)보다 넓어져
+    #  표가 통째로 밀리므로 폭 11인 '(품질)'로 줄인다. 밴드·산식은 도움말 표에 있다.
+    table.add_column("분류 (품질)", justify="center") 
     table.add_column("현재가", justify="right")
     col_header = "등락폭 (등락률)"
     if not is_overseas and not use_investor_data:

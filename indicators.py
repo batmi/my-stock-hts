@@ -376,6 +376,14 @@ TREND_QUALITY_BANDS = (
 )
 
 
+# 밴드별 표시색 — 도움말 표(main.show_help)와 종목 표 '분류' 컬럼이 이 하나를 공유한다.
+#  두 곳에 따로 두면 한쪽만 고쳐져 같은 값이 다른 색으로 보인다.
+TREND_QUALITY_COLORS = {
+    "강함": "red", "양호": "green", "약함": "yellow",
+    "미검증": "sky_blue3", "하락": "blue", "이력부족": "white",
+}
+
+
 def describe_trend_quality(tq):
     """추세 품질 값 → 운용자용 한 단어 해석.
 
