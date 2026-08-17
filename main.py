@@ -470,7 +470,7 @@ def show_help():
         _tq_rows.append((f"{_tq[i-1][0]:g} ~ {_upper:g} 미만" if i else f"{_upper:g} 미만", _label))
     _tq_rows.append((f"거래일 {tq_lookback}일 미만", "이력부족"))
     for i, (_cond, _label) in enumerate(_tq_rows):
-        col1 = "추세품질 (분류 옆 값)" if i == 0 else (f"(최근 {tq_lookback}일 회귀 모멘텀)" if i == 1 else "")
+        col1 = "추세품질 (TQ)" if i == 0 else (f"(Clenow 모멘텀 · 최근 {tq_lookback}일)" if i == 1 else "")
         table.add_row(col1, _cond, f"[{tq_color[_label]}]{_label}[/]",
                       tq_note.get(_label, "이력이 짧아 판정 불가 — 동점 시 최하순위"))
     table.add_row("", "[dim]연환산 기울기(%) × R²[/dim]", "",

@@ -25,6 +25,7 @@
 """
 import argparse
 import os
+import time
 import sys
 
 import numpy as np
@@ -43,11 +44,73 @@ LIVE_WINDOW = 260      # 실매매가 지수 차트로 들고 있는 봉 수(_to
 # ----------------------------------------------------------------------------
 # 데이터
 # ----------------------------------------------------------------------------
-def load_index(ticker, start):
-    """FDR 지수 일봉 → (DatetimeIndex, close ndarray). KRX 정규장 확정 종가."""
-    import FinanceDataReader as fdr
-    df = fdr.DataReader(ticker, start)
-    close = pd.to_numeric(df['Close'], errors='coerce').dropna()
+INDEX_CACHE_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "index_cache")
+
+
+def _fetch_index(ticker, start, timeout=60):
+    """FDR 조회를 스레드로 감싸 **멈춤(hang)에 상한**을 둔다.
+
+    2026-08-17: FDR의 KRX 지수 경로("KS11")가 빈 프레임을 돌려주거나 응답이 멈춰
+     감사 도구 두 개가 KeyError: 'Close'로 죽었다. 상류 장애는 통제할 수 없으므로
+     ① 시간 상한 ② '^' 접두어 폴백 ③ 로컬 캐시 세 겹으로 막는다.
+    """
+    import threading
+    box = {}
+
+    def work():
+        try:
+            import FinanceDataReader as fdr
+            box["df"] = fdr.DataReader(ticker, start)
+        except Exception as exc:      # noqa: BLE001 — 폴백 판단에만 쓴다
+            box["err"] = exc
+
+    t = threading.Thread(target=work, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        raise TimeoutError(f"{ticker} 조회가 {timeout}초를 넘겼다(상류 지연)")
+    if "err" in box:
+        raise box["err"]
+    df = box.get("df")
+    if df is None or len(df) == 0 or "Close" not in getattr(df, "columns", []):
+        raise ValueError(f"{ticker} 응답에 Close가 없다(빈 프레임)")
+    return df
+
+
+def load_index(ticker, start, use_cache=True):
+    """지수 일봉 → (DatetimeIndex, close ndarray). KRX 정규장 확정 종가.
+
+    [실패해도 조용히 넘어가지 않는다] 빈 프레임을 그대로 흘리면 리스크 스케일링이
+     통째로 빠진 채 감사가 끝나 결과가 조용히 오염된다. 못 받으면 예외를 던진다.
+    """
+    key = f"{ticker.lstrip('^')}_{str(start)[:10]}.csv"
+    path = os.path.join(INDEX_CACHE_DIR, key)
+    if use_cache and os.path.exists(path):
+        c = pd.read_csv(path, index_col=0, parse_dates=True)["Close"].dropna()
+        if len(c) > 0:
+            return c.index, c.values.astype(float)
+
+    df, last = None, None
+    for cand in (ticker, "^" + ticker.lstrip("^")):   # KRX 경로 → yfinance 경로 폴백
+        for attempt in range(2):
+            try:
+                df = _fetch_index(cand, start)
+                break
+            except Exception as exc:                  # noqa: BLE001
+                last = f"{cand}: {type(exc).__name__} {exc}"
+                time.sleep(1.5 * (attempt + 1))
+        if df is not None:
+            break
+    if df is None:
+        raise RuntimeError(f"지수 {ticker} 조회 실패 — {last}")
+
+    close = pd.to_numeric(df["Close"], errors="coerce").dropna()
+    if len(close) == 0:
+        raise RuntimeError(f"지수 {ticker} 종가가 비어 있다")
+    if use_cache:
+        os.makedirs(INDEX_CACHE_DIR, exist_ok=True)
+        close.to_frame("Close").to_csv(path)
     return close.index, close.values.astype(float)
 
 

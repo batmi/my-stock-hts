@@ -3,6 +3,24 @@ from rich.table import Table
 from rich.prompt import Prompt
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn, DownloadColumn, TransferSpeedColumn
 from rich import box
+from rich.cells import cell_len
+
+# [표 정렬] '분류 (TQ)' 컬럼은 한 셀에 두 값을 담는다. 분류 문구 길이가 4~6폭으로
+#  들쭉날쭉해 그냥 이어 붙이면 분류가 세로로 안 읽힌다. **분류만 고정폭(6 = 최대 문구
+#  '강매수·역매수')으로 채워 좌측 정렬**하고, TQ는 그 바로 뒤에 붙인다.
+#  TQ까지 우측 정렬하면 자릿수는 맞지만 짧은 값(예: 상승 (4))에서 사이가 5칸까지 벌어져
+#  두 값이 한 덩어리로 안 보인다 — 붙여 두는 쪽을 택했다.
+#  구분 공백은 두지 않는다. 최대 문구('강매수(124)')는 붙지만 그 편이 한 덩어리로 읽힌다.
+_CLASS_W = 6
+
+
+def _class_tq_cell(left):
+    """'분류 (TQ)' 셀에서 분류 뒤에 붙일 여백 — 분류를 고정폭으로 채워 좌측 정렬한다.
+
+    헤더와 데이터 행이 **같은 함수**를 써야 폭 상수를 바꿔도 둘이 어긋나지 않는다.
+    left는 색 마크업이 없는 순수 문자열이어야 한다(폭 계산이 틀어진다).
+    """
+    return " " * max(0, _CLASS_W - cell_len(left))
 import config
 import context
 import api
@@ -4656,7 +4674,12 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
             tq_val = indicators.get_trend_quality(chart_df)
             tq_color = indicators.TREND_QUALITY_COLORS.get(
                 indicators.describe_trend_quality(tq_val), "white")
-            tq_cell = f" [{tq_color}]({'-' if tq_val is None else f'{tq_val:.0f}'})[/]"
+            #  [정렬] 한 컬럼에 두 값을 담으면 분류 문구 길이(매수 4폭 / 강매수 6폭)에 따라
+            #   TQ 위치가 들쭉날쭉해 분류도 TQ도 세로로 안 읽힌다. 컬럼을 쪼개는 대신
+            #   **분류는 좌측·TQ는 우측**으로 각각 고정폭을 채워 한 셀 안에서 두 열을 만든다.
+            #   폭은 표시폭(cell_len) 기준이다 — 한글은 2폭이라 len()으로 세면 어긋난다.
+            tq_txt = f"({'-' if tq_val is None else f'{tq_val:.0f}'})"
+            tq_cell = f"{_class_tq_cell(class_name)}[{tq_color}]{tq_txt}[/]"
 
             # [추가] 수동 조회 결과도 상태 캐시에 남긴다 — 텔레그램 /stocks가 조회 시각과 함께
             #  보여준다. 시스템 트레이딩이 분석하지 않는 종목(ETF, NXT 시간대 비거래 종목)과
@@ -4928,8 +4951,8 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None, is_
     table.add_column("코드", justify="center", style="dim")
     # [표기] '분류' 셀은 분류 문구와 추세품질 값을 함께 담는다(예: 매수 (143)) — 헤더도
     #  그 사실을 말해야 한다. '추세품질'을 다 쓰면 폭 15로 이 컬럼 최대 셀(13)보다 넓어져
-    #  표가 통째로 밀리므로 폭 11인 '(품질)'로 줄인다. 밴드·산식은 도움말 표에 있다.
-    table.add_column("분류 (품질)", justify="center") 
+    #  표가 통째로 밀리므로 폭 9인 '(TQ)'로 줄인다. 밴드·산식은 도움말 표에 있다.
+    table.add_column("분류" + _class_tq_cell("분류") + "(TQ)", justify="left")
     table.add_column("현재가", justify="right")
     col_header = "등락폭 (등락률)"
     if not is_overseas and not use_investor_data:
