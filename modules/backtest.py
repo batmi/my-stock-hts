@@ -277,7 +277,12 @@ def compute_price_indicators(df):
     ※ smart_money 등 가격과 무관한 사전 병합 컬럼은 건드리지 않는다.
     ※ 단일 백테스트와 Monte Carlo(노이즈 주입 후 재계산)가 동일 로직을 쓰도록 공유한다.
     """
-    df['EMA5'] = df['close'].ewm(span=5, adjust=False).mean()
+    # [SSOT 2026-08-17] 기간을 config에서 읽는다. 종전에는 5가 여기 박혀 있어
+    #  EMA_SHORT를 조정해도 백테스트만 옛 값으로 돌았다 — 2026-08-12에
+    #  VOLUME_MA_PERIOD에서 고친 것과 같은 결함이다(analysis.py는 config를 읽는다).
+    #  기본값이 5라 현재 결과는 바뀌지 않는다.
+    df['EMA5'] = df['close'].ewm(
+        span=config.INDICATOR_PARAMS.get('EMA_SHORT', 5), adjust=False).mean()
     df['EMA20'] = df['close'].ewm(span=20, adjust=False).mean()
     df['EMA60'] = df['close'].ewm(span=60, adjust=False).mean()
     df['EMA120'] = df['close'].ewm(span=120, adjust=False).mean()
