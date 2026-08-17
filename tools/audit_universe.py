@@ -51,6 +51,35 @@ def apply(ov):
     return prev
 
 
+def _listing(kind):
+    """FDR 종목 목록을 디스크에 캐시한다 — 감사 도구가 매번 원격을 두드리면 429로 막힌다.
+
+    2026-08-17에 `StockListing("KRX")`가 HTTP 429로 실패해 감사가 통째로 죽었다. 목록은
+    하루 단위로도 거의 안 변하는 데다, 팔 사이 비교의 **배경**일 뿐이어서 최신성이
+    결론에 영향을 주지 않는다. 그러니 받으면 남기고, 못 받으면 남은 것을 쓴다.
+    캐시조차 없으면 조용히 빈 결과를 주지 않고 그대로 터뜨린다 — 표본이 없으면 없다고
+    말하는 것이 규약이다.
+    """
+    import os
+    import pandas as pd
+    d = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                     "data", "listing_cache")
+    os.makedirs(d, exist_ok=True)
+    f = os.path.join(d, kind.replace("/", "_") + ".csv")
+    try:
+        import FinanceDataReader as fdr
+        df = fdr.StockListing(kind)
+        if df is not None and len(df):
+            df.to_csv(f, index=False, encoding="utf-8")
+            return df
+        raise RuntimeError("빈 목록")
+    except Exception as e:
+        if os.path.exists(f):
+            print(f"[캐시] {kind} 원격 실패({type(e).__name__}) → 캐시 사용: {f}", flush=True)
+            return pd.read_csv(f, dtype={"Code": str, "Symbol": str})
+        raise
+
+
 def extend_targets(exclude, limit, mode="marcap", pool=500, seed=20260816):
     """관심종목에 없는 종목으로 풀을 넓힌다. '44개를 넘기면 나아지는가'를 재려면 필요하다.
 
@@ -63,8 +92,7 @@ def extend_targets(exclude, limit, mode="marcap", pool=500, seed=20260816):
       승자 선택은 제거한다. 이쪽에서도 좋아지면 크기 효과가 진짜다.
     """
     import random as _r
-    import FinanceDataReader as fdr
-    df = fdr.StockListing("KRX")
+    df = _listing("KRX")
     df = df[df["Market"].isin(["KOSPI", "KOSDAQ"])].dropna(subset=["Marcap"])
     bad = df["Name"].str.contains("스팩|리츠", na=False) | df["Code"].str.endswith(("5", "7", "9"))
     df = df[~bad].sort_values("Marcap", ascending=False)
@@ -77,9 +105,8 @@ def extend_targets(exclude, limit, mode="marcap", pool=500, seed=20260816):
 
 def dead_targets(limit, since="2016-01-01"):
     """상장폐지 주권 목록. 스팩·피흡수합병처럼 '전략과 무관한 소멸'은 뺀다."""
-    import FinanceDataReader as fdr
     import pandas as pd
-    df = fdr.StockListing("KRX-DELISTING")
+    df = _listing("KRX-DELISTING")
     df["DelistingDate"] = pd.to_datetime(df["DelistingDate"], errors="coerce")
     m = (df["DelistingDate"] >= since) & (df["SecuGroup"] == "주권")
     df = df[m].copy()
