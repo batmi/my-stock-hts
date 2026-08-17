@@ -579,6 +579,35 @@ def show_help():
     table.add_row("", "0.5 미만", "[blue]파란색[/]", "위험 대비 수익 낮음")
     table.add_section()
 
+    # [추가] 추세품질 밴드 — 색이 아니라 '문구'가 붙는 항목이라 표 맨 아래에 둔다.
+    #  값이 연환산 기울기 × R²의 곱이라 크기 감이 안 잡혀(p50 0.2 · p90 133) 밴드 없이는 못 읽는다.
+    #  경계는 indicators.TREND_QUALITY_BANDS 단일 소스에서 읽는다 — 문구와 코드가 어긋나지 않도록.
+    tq_lookback = config.INDICATOR_PARAMS.get("TREND_QUALITY_LOOKBACK", 90)
+    tq_color = {"강함": "red", "양호": "green", "약함": "yellow",
+                "미검증": "sky_blue3", "하락": "blue", "이력부족": "white"}
+    tq_note = {
+        "강함": "검증된 주도주 — 동점 후보 중 최우선",
+        "양호": "추세가 잡힌 일반적인 진입 후보",
+        "약함": "기울기는 살아 있으나 매끄럽지 않음 (R² 낮음)",
+        "미검증": "기울기가 미미하거나 R²가 낮음 (횡보 끝 급등 포함)",
+        "하락": "회귀선이 우하향 — 추세추종 대상 아님",
+    }
+    _tq = list(indicators.TREND_QUALITY_BANDS)
+    _tq_rows = [(f"{_tq[-1][0]:g} 이상", "강함")]
+    for i in range(len(_tq) - 1, -1, -1):
+        _upper, _label = _tq[i]
+        _tq_rows.append((f"{_tq[i-1][0]:g} ~ {_upper:g} 미만" if i else f"{_upper:g} 미만", _label))
+    _tq_rows.append((f"거래일 {tq_lookback}일 미만", "이력부족"))
+    for i, (_cond, _label) in enumerate(_tq_rows):
+        col1 = "추세품질 (매수 순위)" if i == 0 else (f"(최근 {tq_lookback}일 회귀 모멘텀)" if i == 1 else "")
+        table.add_row(col1, _cond, f"[{tq_color[_label]}]{_label}[/]",
+                      tq_note.get(_label, "이력이 짧아 판정 불가 — 동점 시 최하순위"))
+    table.add_row("", "[dim]연환산 기울기(%) × R²[/dim]", "",
+                  "[dim]색상 없음 — 자동매매 '매수 후보 선정' 로그에 문구로 표기[/dim]")
+    table.add_row("", "[dim]매수 여부는 가르지 않는다(게이트 아님)[/dim]", "",
+                  "[dim]점수가 1순위, 점수 동점일 때만 이 값이 순위를 가른다[/dim]")
+    table.add_section()
+
     config.console.print(table)
     
     # [추가] 스코어링 가중치 계산
