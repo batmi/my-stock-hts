@@ -59,6 +59,11 @@ def main():
     ap.add_argument("--placebo-draws", type=int, default=5)
     ap.add_argument("--live-only", action="store_true",
                     help="관심종목만 사용 (확장·폐지 풀 없이 — 목록 원본이 죽었을 때)")
+    # [계측기 파리티] 기본 정렬은 점수만 봐서 슬롯 당락 경계의 45~52%를 등록 순서로 가른다
+    #  — 실매매와 다른 모델이다([[backtest-tiebreak-parity]]). 순위가 결과에 닿는 축은
+    #  반드시 켜고 잴 것.
+    ap.add_argument("--live-rank", action="store_true",
+                    help="실매매와 같은 동점가름(점수 → 추세품질 → 52주위치)을 적용한다")
     args = ap.parse_args()
     seeds = [int(x) for x in args.seeds.split(",")]
     caps = [float(x) for x in args.caps.split(",")]
@@ -71,7 +76,15 @@ def main():
     else:
         ext = extend_targets({c for c, _ in live}, 60, mode="random", pool=args.pool)
         n_dead = int(args.size * args.dead_frac)
-        dead_t = dead_targets(n_dead + 10)
+        try:
+            dead_t = dead_targets(n_dead + 10)
+        except Exception as e:
+            # 폐지 목록 원본이 죽어도 확장 풀만으로 진행한다 — 다만 폐지가 빠졌다는 사실을
+            #  숨기지 않는다. 표본 크기를 유지하려 조용히 생존 종목으로 채우면 생존 편향이
+            #  기록 없이 섞인다([[survivorship-premium-2x]]).
+            print(f"[경고] 폐지 목록을 못 받았다({type(e).__name__}) — 폐지 0으로 진행한다. "
+                  f"생존 편향이 걸린 표본이다.", flush=True)
+            dead_t, n_dead = [], 0
     dfs, mf, dates, _f = pb.prepare_universe(live + ext + dead_t, args.days)
     dead_set = {c for c, _ in dead_t}
     dead_c = [c for c in dfs if c in dead_set]
@@ -93,8 +106,20 @@ def main():
         tq_map[c] = dict(zip((str(d) for d in df["date"]),
                              rolling_trend_quality(df["close"], lb)))
 
+    rank_fn = None
+    if args.live_rank:
+        NEG = float("-inf")
+
+        def rank_fn(sc, code, row, day):        # noqa: F811 — 점수 1순위, 동점은 추세품질
+            v = tq_map.get(code, {}).get(str(day))
+            return (sc, NEG if v is None or not np.isfinite(v) else float(v),
+                    float(row.get("w52_pos", 0.0) or 0.0))
+        # 워밍업 구간 제외 — 앞부분은 이력부족이라 동점가름이 등록 순서로 떨어진다.
+        dates = dates[lb - 1:]
+
     print(f"[준비] {len(dfs)}종목(폐지 {len(dead_c)}) · 표본 {size} · 거래일 {len(dates)} · "
-          f"TQ 룩백 {lb}일 · 슬롯 {slots}", flush=True)
+          f"TQ 룩백 {lb}일 · 슬롯 {slots} · "
+          f"동점가름 {'실매매식' if args.live_rank else '없음(등록 순서)'}", flush=True)
     if args.live_only:
         print("[주의] --live-only: 폐지 종목이 없다. 상한의 이득은 보수적으로(작게) 나온다 "
               "— 극단 TQ 뒤 붕괴의 결정적 사례가 표본에서 빠졌기 때문이다.", flush=True)
@@ -139,7 +164,7 @@ def main():
                     {c: dfs[c] for c in pick}, {c: status[c] for c in pick}, wd,
                     initial_capital=INITIAL_CAPITAL, slots=slots,
                     market_filter_dates={c: mf.get(c, set()) for c in pick},
-                    risk_scale_by_date=new_scale(), entry_gate=gate)
+                    risk_scale_by_date=new_scale(), entry_gate=gate, rank_fn=rank_fn)
                 res.append(metrics(r))
         return res
 

@@ -94,7 +94,15 @@ def main():
     else:
         ext = extend_targets({c for c, _ in live}, 60, mode="random", pool=args.pool)
         n_dead = int(args.size * args.dead_frac)
-        dead_t = dead_targets(n_dead + 10)
+        try:
+            dead_t = dead_targets(n_dead + 10)
+        except Exception as e:
+            # 폐지 목록 원본이 죽어도 확장 풀만으로 진행한다 — 다만 폐지가 빠졌다는 사실을
+            #  숨기지 않는다. 표본 크기를 유지하려 조용히 생존 종목으로 채우면 생존 편향이
+            #  기록 없이 섞인다([[survivorship-premium-2x]]).
+            print(f"[경고] 폐지 목록을 못 받았다({type(e).__name__}) — 폐지 0으로 진행한다. "
+                  f"생존 편향이 걸린 표본이다.", flush=True)
+            dead_t, n_dead = [], 0
     dfs, mf, dates, _f = pb.prepare_universe(live + ext + dead_t, args.days)
     dead_set = {c for c, _ in dead_t}
     dead_c = [c for c in dfs if c in dead_set]
