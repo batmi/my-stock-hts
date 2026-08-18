@@ -6,7 +6,7 @@ import threading
 import os
 import shutil
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import config
 import context
 import atexit
@@ -363,6 +363,44 @@ class DBManager:
                         ref_close REAL DEFAULT 0.0,
                         source TEXT,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
+
+                # [추가 2026-08-19] 신호 원장 — 매수 신호가 게이트에서 어떻게 됐는가.
+                #  [왜 필요한가] 실매매에만 있는 게이트(체결강도·매도잔량비·재진입 차단)는
+                #   일봉 백테스트에 아예 없어 이 기계의 운영 기록으로만 셀 수 있다. 그런데
+                #   그 기록이 로그 **문자열**뿐이라 두 가지가 걸렸다.
+                #    ① 30일 뒤 지워진다 — config가 "3개월쯤 쌓여야 답할 수 있다"고 적어 둔
+                #       바로 그 증거를. 그래서 감사 창이 영원히 18거래일에 묶여 있었다.
+                #    ② 파싱이 위험하다 — `[매도비:3.92]`(정보 표기)와 `매도비:3.92<1.0`
+                #       (차단)을 혼동해 차단율을 1.3% → 75%로 잘못 보고한 적이 있다.
+                #  [왜 하루 1행인가] 주기마다 1행이면 44종목×약 390주기 = 하루 17,000행이라
+                #   파이3 SD카드에 부담이다. 감사가 묻는 것은 "그날 그 신호가 한 번도 못
+                #   뚫었는가(완전 차단), 일부만 막혔는가(부분 차단)"이므로 **(일자, 종목)당
+                #   1행에 주기 수를 세면 충분**하다. 하루 최대 44행 → 1년에 1.5MB 남짓.
+                #  [주의] 매수 상태였던 주기만 센다. 애초에 신호가 아니었던 것까지 세면
+                #   차단율의 분모가 부풀어 기회비용을 과대평가한다.
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS signal_ledger (
+                        date TEXT,
+                        code TEXT,
+                        name TEXT,
+                        cycles INTEGER DEFAULT 0,
+                        passed INTEGER DEFAULT 0,
+                        blocked_vol INTEGER DEFAULT 0,
+                        blocked_abr INTEGER DEFAULT 0,
+                        blocked_hold INTEGER DEFAULT 0,
+                        blocked_corr INTEGER DEFAULT 0,
+                        blocked_rs INTEGER DEFAULT 0,
+                        blocked_tq INTEGER DEFAULT 0,
+                        blocked_reentry INTEGER DEFAULT 0,
+                        blocked_other INTEGER DEFAULT 0,
+                        max_score REAL DEFAULT 0.0,
+                        max_vol REAL,
+                        min_abr REAL,
+                        last_state TEXT,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (date, code)
                     )
                 ''')
 
@@ -1213,6 +1251,98 @@ class DBManager:
             cursor.execute("DELETE FROM stock_strategies WHERE code = ?", (code,))
             conn.commit()
 
+    # ------------------------------------------------------------------
+    # 신호 원장 (signal_ledger)
+    # ------------------------------------------------------------------
+    #  결과 분류(outcome) → 컬럼. 로그 문자열을 파싱하지 않고 판정 지점이 직접 넘긴다.
+    _LEDGER_COLS = {
+        "passed": "passed",                 # 게이트를 모두 통과해 매수 후보가 됨
+        "gate_vol": "blocked_vol",          # 체결강도 미달
+        "gate_abr": "blocked_abr",          # 매도잔량비 미달
+        "gate_hold": "blocked_hold",        # 체결강도 미확인(보류)
+        "corr": "blocked_corr",             # 상관관계
+        "rs": "blocked_rs",                 # 상대강도
+        "tq": "blocked_tq",                 # 추세품질 상한
+        "reentry": "blocked_reentry",       # 당일 재진입 차단
+        "other": "blocked_other",
+    }
+
+    def record_signal_ledger(self, date_str, rows):
+        """한 주기의 매수 신호 판정을 (일자, 종목) 단위로 누적한다.
+
+        rows: [{'code','name','outcome','score','vol','abr','state'}, ...]
+        주기마다 한 번 호출한다 — 종목마다 쓰면 파이3에서 쓰기가 주기당 수십 번이 된다.
+        실패해도 매매에 영향을 주지 않는다(계측은 매매를 막지 않는다).
+        """
+        if not rows:
+            return
+        payload = []
+        for r in rows:
+            col = self._LEDGER_COLS.get(r.get("outcome"), "blocked_other")
+            counts = {c: 0 for c in self._LEDGER_COLS.values()}
+            counts[col] = 1
+            payload.append((
+                date_str, r.get("code"), r.get("name"),
+                counts["passed"], counts["blocked_vol"], counts["blocked_abr"],
+                counts["blocked_hold"], counts["blocked_corr"], counts["blocked_rs"],
+                counts["blocked_tq"], counts["blocked_reentry"], counts["blocked_other"],
+                float(r.get("score") or 0.0), r.get("vol"), r.get("abr"), r.get("state"),
+            ))
+        sql = '''
+            INSERT INTO signal_ledger
+                (date, code, name, cycles, passed, blocked_vol, blocked_abr, blocked_hold,
+                 blocked_corr, blocked_rs, blocked_tq, blocked_reentry, blocked_other,
+                 max_score, max_vol, min_abr, last_state, updated_at)
+            VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(date, code) DO UPDATE SET
+                cycles          = cycles + 1,
+                passed          = passed + excluded.passed,
+                blocked_vol     = blocked_vol + excluded.blocked_vol,
+                blocked_abr     = blocked_abr + excluded.blocked_abr,
+                blocked_hold    = blocked_hold + excluded.blocked_hold,
+                blocked_corr    = blocked_corr + excluded.blocked_corr,
+                blocked_rs      = blocked_rs + excluded.blocked_rs,
+                blocked_tq      = blocked_tq + excluded.blocked_tq,
+                blocked_reentry = blocked_reentry + excluded.blocked_reentry,
+                blocked_other   = blocked_other + excluded.blocked_other,
+                max_score       = MAX(max_score, excluded.max_score),
+                -- NULL은 '못 쟀다'이지 0이 아니다. 한쪽만 값이 있으면 그 값을 남긴다.
+                max_vol = CASE WHEN excluded.max_vol IS NULL THEN max_vol
+                               WHEN max_vol IS NULL THEN excluded.max_vol
+                               ELSE MAX(max_vol, excluded.max_vol) END,
+                min_abr = CASE WHEN excluded.min_abr IS NULL THEN min_abr
+                               WHEN min_abr IS NULL THEN excluded.min_abr
+                               ELSE MIN(min_abr, excluded.min_abr) END,
+                last_state = excluded.last_state,
+                updated_at = CURRENT_TIMESTAMP
+        '''
+        with self.lock:
+            try:
+                conn = self._get_conn()
+                conn.executemany(sql, payload)   # 주기당 트랜잭션 1회
+                conn.commit()
+            except Exception as e:
+                logger.warning(f"[Ledger] 신호 원장 기록 실패 (매매에는 영향 없음): {e}")
+
+    def get_signal_ledger(self, start_date=None, end_date=None, code=None):
+        """신호 원장 조회. 감사 도구가 로그 파싱 대신 쓰는 경로."""
+        sql = "SELECT * FROM signal_ledger WHERE 1=1"
+        params = []
+        if start_date:
+            sql += " AND date >= ?"; params.append(start_date)
+        if end_date:
+            sql += " AND date <= ?"; params.append(end_date)
+        if code:
+            sql += " AND code = ?"; params.append(code)
+        sql += " ORDER BY date, code"
+        try:
+            cursor = self._get_conn().cursor()
+            cursor.execute(sql, params)
+            return [dict(r) for r in cursor.fetchall()]
+        except Exception as e:
+            logger.warning(f"[Ledger] 신호 원장 조회 실패: {e}")
+            return []
+
     def cleanup_old_data(self, days_to_keep):
         """보존 기간이 지난 오래된 거래 내역 삭제"""
         if days_to_keep <= 0: return
@@ -1245,6 +1375,12 @@ class DBManager:
             retention_days = getattr(config, 'DB_DATA_RETENTION_DAYS', 365)
             if retention_days > 0:
                 conn.execute(f"DELETE FROM trades WHERE time < date('now', '-{retention_days} days')")
+
+            # 신호 원장은 감사 증거라 거래 내역보다 훨씬 오래 남긴다(하루 최대 44행).
+            ledger_days = getattr(config, 'SIGNAL_LEDGER_RETENTION_DAYS', 1095)
+            if ledger_days > 0:
+                conn.execute("DELETE FROM signal_ledger WHERE date < ?",
+                             ((datetime.now() - timedelta(days=ledger_days)).strftime("%Y%m%d"),))
             
             # 2. VACUUM 실행 (공간 회수)
             conn.execute("VACUUM;")

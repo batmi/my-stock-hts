@@ -296,21 +296,46 @@ def test_portfolio_heat_basic(monkeypatch):
     assert heat == pytest.approx(10 * 500)
 
 
-def test_portfolio_heat_bep_and_ts_uplift(monkeypatch):
-    """BEP/트레일링 발동 이력이 있으면 손절선이 상향되어 오픈 리스크가 줄어든다"""
+def test_portfolio_heat_bep_uplift_follows_toggle(monkeypatch):
+    """BEP 상향은 USE_BREAK_EVEN_STOP을 따른다 — 없는 손절선을 가정하면 안 된다.
+
+    [왜 양쪽을 다 거는가] 이 함수는 2026-08-19까지 토글을 보지 않고 **항상** 손절선을
+     매수가로 끌어올렸다. 현행 기본값이 OFF라 실제 청산 로직에는 존재하지 않는 손절선을
+     가정한 셈이고, 그만큼 오픈 리스크를 과소 계상했다(실측 히트 -30%, 히트 예산 초과일
+     0.8% → 0.0%). 함수 독스트링이 표방하는 '보수적 = 과대평가' 방향과 정반대다.
+     한쪽만 걸면 다음 사람이 조건을 지우고도 테스트를 통과시킬 수 있으므로 둘 다 건다.
+    """
     trader = MockHeatTrader()
     rm = RiskManager(trader)
     monkeypatch.setitem(config.SELL_STRATEGY, 'USE_ATR_STOP', True)
     monkeypatch.setitem(config.SELL_STRATEGY, 'TRAILING_STOP_ACTIVATION_RATE', 10.0)
     monkeypatch.setitem(config.SELL_STRATEGY, 'TRAILING_STOP_CALLBACK_RATE', 5.0)
 
-    # BEP: 최고가 +6% ≥ 손절폭 5%(ATR 동기화) → 손절선 본전(매수가) 상향
+    # 최고가 +6% ≥ 손절폭 5%(ATR 동기화) → BEP 발동선은 넘겼다. 무장 여부만 다르다.
     trader.trailing_stop_cache['000001'] = 10600.0
-    heat = rm.compute_portfolio_heat(
-        [_holding('000001', 10, 10000, 10300)],
-        {'000001': [{'qty': 10, 'stop_loss_rate': -5.0}]},
-    )
-    assert heat == pytest.approx(10 * 300)
+    holding = [_holding('000001', 10, 10000, 10300)]
+    trades = {'000001': [{'qty': 10, 'stop_loss_rate': -5.0}]}
+
+    monkeypatch.setitem(config.SELL_STRATEGY, 'USE_BREAK_EVEN_STOP', True)
+    # 손절선이 본전(10000)으로 상향 → 리스크 = 10주 × (10300 - 10000)
+    assert rm.compute_portfolio_heat(holding, trades) == pytest.approx(10 * 300)
+
+    monkeypatch.setitem(config.SELL_STRATEGY, 'USE_BREAK_EVEN_STOP', False)
+    # 상향 없음 → 손절선은 그대로 9500 → 리스크 = 10주 × (10300 - 9500)
+    assert rm.compute_portfolio_heat(holding, trades) == pytest.approx(10 * 800)
+
+
+def test_portfolio_heat_ts_uplift(monkeypatch):
+    """트레일링이 무장했으면 손절선이 고점 기준으로 올라가 오픈 리스크가 줄어든다.
+
+    TS는 BEP 토글과 무관하다 — 주청산 경로라 항상 살아 있다.
+    """
+    trader = MockHeatTrader()
+    rm = RiskManager(trader)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'USE_ATR_STOP', True)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'USE_BREAK_EVEN_STOP', False)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'TRAILING_STOP_ACTIVATION_RATE', 10.0)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'TRAILING_STOP_CALLBACK_RATE', 5.0)
 
     # TS: 최고가 +20% ≥ 발동 10% → 손절선 = 12000×(1-5%)=11400
     trader.trailing_stop_cache['000002'] = 12000.0

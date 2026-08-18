@@ -3213,10 +3213,27 @@ PAPER_DB_FILE_PATH = os.path.join(DB_DIR, "paper_trading.db")
 
 DB_DATA_RETENTION_DAYS = 365
 
+# [추가 2026-08-19] 신호 원장(signal_ledger) 보존 기간.
+#  거래 내역과 **따로 둔다.** 이것은 매매 기록이 아니라 감사 증거이고, (일자, 종목)당
+#  1행이라 하루 최대 44행 = 1년에 1.5MB 남짓이라 오래 두어도 부담이 없다.
+#  실매매 전용 게이트의 사후 수익 판정은 최소 3개월, 국면을 걸쳐 보려면 수년이 필요하다.
+SIGNAL_LEDGER_RETENTION_DAYS = 1095
+
 # [추가] 로그 파일 보존 기간 (일 단위)
 # 설정된 기간보다 오래된 로그 파일은 자동매매 시작 시 자동으로 삭제됩니다.
 # (기본값: 30일, 0으로 설정 시 자동 삭제 안 함)
 LOG_RETENTION_DAYS = 30
+
+# [자동매매 로그만 따로 · 2026-08-19] autotrade_*.log 는 **감사 증거**다.
+#  실매매에만 있는 게이트(체결강도·매도잔량비)와 재진입 차단은 일봉 백테스트로 재현할 수
+#  없어, 판정 여부는 이 기계의 운영 기록으로만 셀 수 있다(tools/audit_pi_operation.py).
+#  그런데 ANALYSIS_THRESHOLDS['BUY_VOL_STRENGTH'] 주석은 "차단된 신호의 사후 수익을 보려면
+#  **파이 로그가 3개월쯤 쌓여야 한다**"고 적어 두었는데, 보존이 30일이라 그 창이 영원히
+#  18거래일에 묶여 있었다 — 시스템이 자기 질문의 답을 스스로 지우고 있었다.
+#  하루치 최대 647KB이므로 120일이어도 80MB 남짓이라 파이3 SD카드에 부담이 없다.
+#  ※ 더 정확한 증거는 로그가 아니라 DB의 signal_ledger 다(문자열 파싱이 없다). 이 값은
+#    그 원장이 쌓이기 전 구간과 상세 확인용 폴백을 위한 것이다.
+AUTOTRADE_LOG_RETENTION_DAYS = 120
 
 # ==========================================================
 # [설정] 시스템 및 네트워크 정책
@@ -3484,8 +3501,8 @@ def setup_logging():
 
     # [수정] 오래된 로그 파일 정리 (과거 패턴 및 핸들러 버그로 누적된 파일 강제 정리)
     try:
-        if LOG_RETENTION_DAYS > 0:
-            cutoff_date = datetime.now().date() - timedelta(days=LOG_RETENTION_DAYS)
+        if LOG_RETENTION_DAYS > 0 or AUTOTRADE_LOG_RETENTION_DAYS > 0:
+            today = datetime.now().date()
             for filename in os.listdir(LOG_DIR):
                 file_path = os.path.join(LOG_DIR, filename)
                 
@@ -3494,16 +3511,19 @@ def setup_logging():
                     if filename.startswith("system_trade_") and filename.endswith(".log"):
                         date_part = filename.replace("system_trade_", "").replace(".log", "")
                         file_date = datetime.strptime(date_part, "%Y-%m-%d").date()
-                        if file_date < cutoff_date:
+                        if LOG_RETENTION_DAYS > 0 and file_date < today - timedelta(days=LOG_RETENTION_DAYS):
                             os.remove(file_path)
                     
                     # 2. 누적된 mystock_YYYYMMDD.log 및 autotrade_YYYYMMDD.log 강제 정리
+                    #    자동매매 로그는 감사 증거이므로 별도(더 긴) 보존 기간을 쓴다.
                     elif (filename.startswith("mystock_") or filename.startswith("autotrade_")) and filename.endswith(".log"):
                         match = re.search(r'_(\d{8})\.log$', filename)
                         if match:
                             date_part = match.group(1)
                             file_date = datetime.strptime(date_part, "%Y%m%d").date()
-                            if file_date < cutoff_date:
+                            limit = (AUTOTRADE_LOG_RETENTION_DAYS
+                                     if filename.startswith("autotrade_") else LOG_RETENTION_DAYS)
+                            if limit > 0 and file_date < (datetime.now().date() - timedelta(days=limit)):
                                 os.remove(file_path)
                 except Exception as e:
                     print(f"[Config] Old log file remove error ({filename}): {e}")
@@ -3642,7 +3662,8 @@ def get_autotrade_logger():
     
     # [수정] CustomTimedRotatingFileHandler 적용 (백업 파일 삭제 버그 수정)
     handler = CustomTimedRotatingFileHandler(
-        log_filepath, when='midnight', interval=1, backupCount=LOG_RETENTION_DAYS, encoding='utf-8', delay=False
+        log_filepath, when='midnight', interval=1,
+        backupCount=AUTOTRADE_LOG_RETENTION_DAYS, encoding='utf-8', delay=False
     )
     handler.suffix = "%Y%m%d"
     handler.namer = _log_namer

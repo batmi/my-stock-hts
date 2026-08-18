@@ -2137,7 +2137,9 @@ class RiskManager:
         유효 손절선 추정(매도 로직의 근사, 보수적 = 리스크 과대평가 방향):
           ① 매수가 × (1 + 손절률): 손절률은 보유분 매수 기록의 수량가중 평균(ATR 손절 저장값),
              없으면 전역 STOP_LOSS_RATE.
-          ② 최고가 기준 max_profit이 BEP 발동선(ATR 손절 시 손절폭과 동일) 이상이면 본전(매수가)으로 상향.
+          ② **USE_BREAK_EVEN_STOP이 켜져 있고** 최고가 기준 max_profit이 BEP 발동선
+             (ATR 손절 시 손절폭과 동일) 이상이면 본전(매수가)으로 상향.
+             꺼져 있으면 상향하지 않는다 — 없는 손절선을 가정하면 리스크를 과소 계상한다.
           ③ max_profit이 트레일링 발동선 이상이면 최고가×(1-콜백%)으로 상향.
         손절선이 현재가 위(이미 이익 잠김)면 해당 포지션 리스크는 0으로 본다.
         """
@@ -2148,6 +2150,7 @@ class RiskManager:
         sell_cfg = config.SELL_STRATEGY
         default_sl = sell_cfg.get("STOP_LOSS_RATE", -5.0)
         use_atr_stop = sell_cfg.get("USE_ATR_STOP", True)
+        use_bep = sell_cfg.get("USE_BREAK_EVEN_STOP", False)
         bep_rate_cfg = sell_cfg.get("BREAK_EVEN_PROFIT_RATE", 5.0)
         ts_act = sell_cfg.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
         ts_cb = sell_cfg.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
@@ -2193,8 +2196,20 @@ class RiskManager:
 
                 if highest > 0:
                     max_profit = (highest - buy_price) / buy_price * 100.0
+                    # [Fix 2026-08-19] BEP 상향은 **BEP가 켜져 있을 때만** 적용한다.
+                    #  종전에는 USE_BREAK_EVEN_STOP을 보지 않고 항상 손절선을 매수가로
+                    #  끌어올렸다. 현행 기본값은 OFF라 실제 청산 로직에는 없는 손절선을
+                    #  가정한 셈이고, 그만큼 오픈 리스크를 **과소** 계상했다 —
+                    #  이 함수가 표방하는 '보수적(과대평가)' 방향과 정반대다.
+                    #  [실측] 44종목 10년·표본 30·8장에서 히트 중앙값이 1.3배로 늘고
+                    #   히트 예산 초과일이 0.0% → 0.8%가 된다. 리스크 스케일링의 실효
+                    #   방어 경로가 히트 캡이므로(config SYSTEM_MAX_PORTFOLIO_RISK 주석)
+                    #   과소 계상은 방어를 그만큼 무르게 만든다.
+                    #  ※ BEP가 켜지면 실제 손절선은 매수가×(1+BREAK_EVEN_STOP_RATE)로
+                    #    매수가보다 조금 위다. 여기서 매수가를 쓰는 것은 리스크를 살짝
+                    #    크게 잡는 쪽이므로 그대로 둔다(보수적 방향).
                     bep_threshold = abs(sl_rate) if use_atr_stop else bep_rate_cfg
-                    if bep_threshold > 0 and max_profit >= bep_threshold:
+                    if use_bep and bep_threshold > 0 and max_profit >= bep_threshold:
                         stop_price = max(stop_price, buy_price)
                     # 발동 기준은 설정 모드를 따른다(고정 % / 손익분기 연동).
                     #  여기엔 ATR 시계열이 없지만 sl_rate가 매수 시점 ATR 손절률이므로

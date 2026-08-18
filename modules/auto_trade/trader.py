@@ -5535,7 +5535,21 @@ class AutoTrader:
             rule_msg = " [개별 룰 적용]" if rule else ""
             
             is_buy_state = result['state'] in ["매수", "강매수", "역매수"]
-            
+
+            # [신호 원장] 판정 결과를 로그 문자열이 아니라 **판정한 자리에서** 넘긴다.
+            #  종전에는 감사가 [분석] 줄을 정규식으로 되읽었는데, `[매도비:3.92]`(정보 표기)와
+            #  `매도비:3.92<1.0`(차단)이 한 글자 차이라 실제로 한 번 뒤집어 읽은 적이 있다
+            #  (차단율 1.3% → 75%). 여기서 넘기면 그 위험이 원천적으로 없다.
+            #  매수 상태였던 주기만 남긴다 — 신호가 아니었던 것까지 세면 차단율의 분모가
+            #  부풀어 기회비용을 과대평가한다.
+            def _ledger(outcome):
+                if not is_buy_state:
+                    return None
+                return {'code': code, 'name': name, 'outcome': outcome,
+                        'score': result.get('score'), 'state': result['state'],
+                        'vol': result.get('vol_strength'),
+                        'abr': result.get('ask_bid_ratio')}
+
             # [추가] 가짜 체결강도로 걸러진 경우 사유 표시 (매수 시그널일 때만)
             vol_reject_msg = ""
             if is_buy_state:
@@ -5557,7 +5571,7 @@ class AutoTrader:
                 stop_px = (stop_exit_prices or {}).get(code)
                 if (stop_px and current_price >= stop_px
                         and getattr(config, 'REENTRY_BLOCK_ABOVE_STOP_PRICE', True)):
-                    return {'type': 'log_only',
+                    return {'type': 'log_only', 'ledger': _ledger('reentry'),
                             'log': f"[분석스킵] {name}({code}): 당일 손절가 재진입 불가 "
                                    f"(현재가 {current_price:,.0f} >= 손절가 {stop_px:,.0f}) "
                                    f"— 더 비싸게 되사지 않습니다"}
@@ -5571,12 +5585,12 @@ class AutoTrader:
                         min_abr = result.get('min_ask_bid_ratio', 0) or 0
                         if abr is None or (min_abr > 0 and abr < min_abr):
                             log_msg = f"[분석스킵] {name}({code}): 당일 재진입 불가 (매도비 {abr if abr is not None else 0:.2f} < {min_abr:.2f})"
-                            return {'type': 'log_only', 'log': log_msg}
+                            return {'type': 'log_only', 'log': log_msg, 'ledger': _ledger('reentry')}
                         else:
                             reentry_msg = f"당일 재진입(매도비 {abr:.2f})"
                     elif vol_strength_val is None or vol_strength_val <= req_vol:
                         log_msg = f"[분석스킵] {name}({code}): 당일 재진입 불가 (체결강도 {vol_strength_val if vol_strength_val else 0:.1f}% <= 기존매수 {req_vol:.1f}%)"
-                        return {'type': 'log_only', 'log': log_msg}
+                        return {'type': 'log_only', 'log': log_msg, 'ledger': _ledger('reentry')}
                     else:
                         reentry_msg = f"당일 재진입(기존 {req_vol:.1f}% 경신)"
 
@@ -5595,15 +5609,19 @@ class AutoTrader:
                 
                 if correlation_skip_msg:
                     log_msg += f" {correlation_skip_msg}"
-                    return {'type': 'correlation_skip', 'name': name, 'log': log_msg}
+                    return {'type': 'correlation_skip', 'name': name, 'log': log_msg,
+                            'ledger': _ledger('corr')}
                 elif rs_skip_msg:
                     log_msg += f" {rs_skip_msg}"
-                    return {'type': 'rs_skip', 'name': name, 'log': log_msg}
+                    return {'type': 'rs_skip', 'name': name, 'log': log_msg,
+                            'ledger': _ledger('rs')}
                 elif tq_cap_skip_msg:
                     log_msg += f" {tq_cap_skip_msg}"
-                    return {'type': 'tq_cap_skip', 'name': name, 'log': log_msg}
+                    return {'type': 'tq_cap_skip', 'name': name, 'log': log_msg,
+                            'ledger': _ledger('tq')}
 
-                return {'type': 'candidate', 'data': candidate_data, 'log': log_msg}
+                return {'type': 'candidate', 'data': candidate_data, 'log': log_msg,
+                        'ledger': _ledger('passed')}
             else:
                 # [보류 집계의 의미] '보류'는 **살 수 있었는데 게이트가 막았다**는 뜻이어야 한다.
                 #  애초에 매수 상태가 아니었던 종목까지 보류로 세면, 주기 말미 요약
@@ -5613,20 +5631,36 @@ class AutoTrader:
                 #  집계에는 들어가는데 로그엔 이유가 없는 상태였다.
                 if correlation_skip_msg and is_buy_state:
                     log_msg += f" {correlation_skip_msg}"
-                    return {'type': 'correlation_skip', 'name': name, 'log': log_msg}
+                    return {'type': 'correlation_skip', 'name': name, 'log': log_msg,
+                            'ledger': _ledger('corr')}
                 elif rs_skip_msg and is_buy_state:
                     log_msg += f" {rs_skip_msg}"
-                    return {'type': 'rs_skip', 'name': name, 'log': log_msg}
+                    return {'type': 'rs_skip', 'name': name, 'log': log_msg,
+                            'ledger': _ledger('rs')}
                 elif tq_cap_skip_msg and is_buy_state:
                     log_msg += f" {tq_cap_skip_msg}"
-                    return {'type': 'tq_cap_skip', 'name': name, 'log': log_msg}
+                    return {'type': 'tq_cap_skip', 'name': name, 'log': log_msg,
+                            'ledger': _ledger('tq')}
 
-                return {'type': 'log_only', 'log': log_msg}
+                # [게이트 분류] action이 buy가 아닌데 상태는 매수인 경우 = 수급 게이트가 막았다.
+                #  사유 문자열은 engine.analyze_buy가 만든 것을 그대로 분기 판단에만 쓴다
+                #  (로그를 되읽는 것이 아니라 같은 프로세스의 구조화된 값이다).
+                _reason = (result.get('vol_reject_reason') or "") if is_buy_state else ""
+                if _reason.startswith("체결:"):
+                    _out = 'gate_vol'
+                elif _reason.startswith("매도비:"):
+                    _out = 'gate_abr'
+                elif _reason:
+                    _out = 'gate_hold'          # "체결강도 미확인(보류)"
+                else:
+                    _out = 'other'
+                return {'type': 'log_only', 'log': log_msg, 'ledger': _ledger(_out)}
         except Exception: return None
 
     def _analyze_candidates(self, targets, holding_codes, rules_map, reentry_hurdles, holding_names_map, holding_groups_map, restricted_stocks=None, stop_exit_prices=None):
         candidates = []
         skipped_stocks = []
+        ledger_rows = []               # [신호 원장] 이 주기의 매수 신호 판정 (주기 끝에 1회 기록)
         restricted_skipped_stocks = [] # [추가] 트레이딩 제한 스킵 리스트
         correlation_skipped_stocks = [] # [추가] 상관관계 스킵 리스트
         rs_skipped_stocks = [] # [추세추종] 상대강도(RS) 필터 스킵 리스트
@@ -5712,6 +5746,8 @@ class AutoTrader:
                         logger.exception("[매수분석] 후보 판정 실패")
                         continue
                     if res:
+                        if res.get('ledger'):
+                            ledger_rows.append(res['ledger'])
                         if res['type'] == 'candidate':
                             self.log(res['log'])
                             candidates.append(res['data'])
@@ -5735,6 +5771,14 @@ class AutoTrader:
                             tq_cap_skipped_stocks.append(res['name'])
         finally:
             io_pool.shutdown(wait=False)
+
+        # [신호 원장] 주기당 쓰기 1회. 실패해도 매매는 그대로 간다 — 계측이 매매를 막지 않는다.
+        if ledger_rows:
+            try:
+                db_manager.db.record_signal_ledger(
+                    datetime.now().strftime("%Y%m%d"), ledger_rows)
+            except Exception as e:
+                logger.warning(f"[Ledger] 신호 원장 기록 생략: {e}")
 
         # [추가] 트레이딩 제한 종목 스킵 로그 기록
         if restricted_skipped_stocks:
