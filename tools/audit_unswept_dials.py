@@ -98,6 +98,8 @@ def main():
     ap.add_argument("--seeds", default="20260816,7,101")
     ap.add_argument("--slots", type=int, default=None)
     ap.add_argument("--subperiods", type=int, default=3)
+    ap.add_argument("--placebo-draws", type=int, default=5,
+                    help="차단형 팔의 같은 차단율 무작위 대조 장수")
     args = ap.parse_args()
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
     seeds = [int(x) for x in args.seeds.split(",")]
@@ -105,6 +107,10 @@ def main():
     config.session.load_stock_config()
     live = [(s["code"], s["name"]) for s in config.session.stock_data.get("stocks_kr", [])]
     dfs, mf, dates, failed = pb.prepare_universe(live, args.days)
+    # [계측기] 엔진 기본 정렬은 2026-08-18부터 실매매 동점가름이다. 앞의 룩백-1일은
+    #  추세품질 이력이 없어 동점이 다시 등록 순서로 떨어지므로 잘라낸다.
+    _lb = config.INDICATOR_PARAMS.get("TREND_QUALITY_LOOKBACK", 90)
+    dates = dates[_lb - 1:]
     print(f"[준비] {len(dfs)}종목 · 거래일 {len(dates)} · 슬롯 {slots}"
           + (f" · 제외 {failed}" if failed else ""), flush=True)
 
@@ -132,6 +138,37 @@ def main():
             corr_gates[t] = CorrGate(dfs, dates, t)
             print(f"[준비] 상관 게이트 문턱 {t}", flush=True)
 
+    # [진입 필터의 필수 대조] 후보를 막는 팔은 '무엇을 보고 막았는가'와 '덜 샀다'가
+    #  섞인다. 같은 차단율의 무작위 게이트를 세우지 않으면 둘을 못 가른다
+    #  ([[entry-filter-random-control]]). 상관 게이트(축 D)가 바로 그 형태다.
+    counters = {"calls": 0, "blocks": 0}
+
+    def counted(g):
+        def f(day, code, held):
+            counters["calls"] += 1
+            hit = bool(g(day, code, held))
+            counters["blocks"] += hit
+            return hit
+        return f
+
+    def rnd_gate(rate, salt):
+        # 결정적 난수 — 같은 (날짜,종목)은 항상 같은 판정이라 팔 사이 비교가 재현된다.
+        def f(day, code, _held):
+            return random.Random(f"{salt}|{day}|{code}").random() < rate
+        return f
+
+    def run_plain(wd, gate):
+        out = []
+        for sd in seeds:
+            for pick in picks[sd]:
+                r = pb.run_portfolio(
+                    {c: dfs[c] for c in pick}, {c: status[c] for c in pick}, wd,
+                    initial_capital=INITIAL_CAPITAL, slots=slots,
+                    market_filter_dates={c: mf.get(c, set()) for c in pick},
+                    risk_scale_by_date=new_scale(), entry_gate=gate)
+                out.append(metrics(r))
+        return out
+
     for ax in args.axis.split(","):
         ax = ax.strip()
         if ax not in AXES:
@@ -143,8 +180,10 @@ def main():
             print(f"{'팔':<22}{'수익%':>9}{'MDD%':>8}{'MAR':>7}{'PF':>6}{'청산':>6}"
                   f"{'상위10%':>9}{'승률%':>7}{'승-무-패':>10}")
             base_res = None
+            rates = {}
             for label, ov, extra in arms:
                 res = []
+                counters["calls"] = counters["blocks"] = 0
                 prev = apply_cfg([("settings" if t == "cfg" else t, k2, v)
                                    for t, k2, v in ov]) if ov else None
                 try:
@@ -154,9 +193,7 @@ def main():
                             if "corr" in extra:
                                 t = extra["corr"]
                                 if t is not None:
-                                    g = corr_gates[t]
-                                    kw["entry_gate"] = (lambda day, code, held, _g=g:
-                                                        _g(day, code, held))
+                                    kw["entry_gate"] = counted(corr_gates[t])
                             r = pb.run_portfolio(
                                 {c: dfs[c] for c in pick}, {c: status[c] for c in pick}, wd,
                                 initial_capital=INITIAL_CAPITAL, slots=slots,
@@ -175,12 +212,37 @@ def main():
                     tie = sum(1 for x, y in zip(res, base_res)
                               if abs(x["ret"] - y["ret"]) <= 1e-9)
                     wl = f"{win}-{tie}-{len(res) - win - tie}"
+                blocked = counters["blocks"] / counters["calls"] if counters["calls"] else 0.0
+                if blocked > 0:
+                    rates[label] = blocked
+                    label = f"{label} (차단 {blocked * 100:.1f}%)"
                 print(f"{label:<22}{g2('ret'):>9.1f}{g2('mdd'):>8.1f}{g2('mar'):>7.2f}"
                       f"{g2('pf'):>6.2f}{g2('n'):>6.0f}{g2('top10'):>9.1f}{g2('win'):>7.1f}"
                       f"{wl:>10}", flush=True)
 
+            # 같은 차단율 무작위 대조 — 게이트가 '보고 막아서' 이긴 것인지 가른다.
+            for label, rate in rates.items():
+                pooled, per_draw = [], []
+                for j in range(max(1, args.placebo_draws)):
+                    r = run_plain(wd, rnd_gate(rate, f"plc|{ax}|{label}|{wn}|{j}"))
+                    pooled += r
+                    per_draw.append(float(np.mean([m["ret"] for m in r])))
+                gb = lambda key: float(np.mean([m[key] for m in pooled]))  # noqa: E731
+                ref = base_res * max(1, args.placebo_draws)
+                win = sum(1 for x, y in zip(pooled, ref) if x["ret"] > y["ret"] + 1e-9)
+                tie = sum(1 for x, y in zip(pooled, ref) if abs(x["ret"] - y["ret"]) <= 1e-9)
+                print(f"{'[대조] 무작위 ' + f'{rate * 100:.1f}%':<22}{gb('ret'):>9.1f}"
+                      f"{gb('mdd'):>8.1f}{gb('mar'):>7.2f}{gb('pf'):>6.2f}{gb('n'):>6.0f}"
+                      f"{gb('top10'):>9.1f}{gb('win'):>7.1f}"
+                      f"{f'{win}-{tie}-{len(pooled) - win - tie}':>10}", flush=True)
+                print(f"      ↳ '{label}'의 대조 · 장별 수익%: "
+                      + " · ".join(f"{x:.1f}" for x in per_draw)
+                      + f"  (표준편차 {np.std(per_draw):.1f})", flush=True)
+
     print("\n[읽는 법] 완전 동률(0-N-0)은 '그 다이얼이 아무 일도 하지 않는다'는 뜻이다. "
           "값을 바꿀 이유도, 남겨 둘 위험도 그만큼 작다.")
+    print("[차단형 팔] 상관 게이트처럼 후보를 막는 팔은 **같은 차단율 무작위 대조까지** "
+          "이겨야 값을 하는 것이다. 대조와 비슷하면 공은 게이트가 아니라 '덜 사는 것'에 있다.")
 
 
 if __name__ == "__main__":

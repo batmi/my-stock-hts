@@ -43,6 +43,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config  # noqa: E402
+import indicators  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 from tools.audit_defensive_sector import (  # noqa: E402
     INITIAL_CAPITAL, metrics, new_scale_fn_factory,
@@ -52,34 +53,13 @@ TQ_LOOKBACK = None   # None이면 config의 TREND_QUALITY_LOOKBACK(기본 90)
 
 
 def rolling_trend_quality(close, lookback):
-    """indicators.get_trend_quality를 롤링으로 — 닫힌 형태 회귀로 한 번에 계산한다.
+    """indicators.rolling_trend_quality 재수출 — 산식은 지표 계층 한 곳에만 둔다.
 
-    종목·날짜마다 polyfit을 돌리면 44종목 × 2,450일에서 수십만 번이 된다. 기울기와 R²는
-    Σy·Σy²·Σxy만 있으면 닫힌 형태로 나오므로 고정 가중 합성곱으로 한 번에 구한다.
-    (같은 정의: 연환산 기울기 % × R², 데이터 부족 구간은 NaN)
+    [2026-08-18] 같은 산식이 tools 안에 두 벌 있었고 백테스트 엔진은 아예 없었다.
+     엔진이 실매매 순위를 기본값으로 재현하게 되면서 원본을 indicators로 올렸다.
+     이 이름으로 import하는 도구가 여럿이라 자리는 남긴다.
     """
-    y = np.log(np.asarray(close, dtype=float))
-    n = lookback
-    x = np.arange(n, dtype=float)
-    Sx, Sxx_raw = x.sum(), (x ** 2).sum()
-    Sxx = Sxx_raw - Sx ** 2 / n
-
-    ones = np.ones(n)
-    sum_y = np.convolve(y, ones, mode="valid")
-    sum_y2 = np.convolve(y ** 2, ones, mode="valid")
-    # x 가중 합 — convolve는 커널을 뒤집으므로 x를 뒤집어 넣는다.
-    sum_xy = np.convolve(y, x[::-1], mode="valid")
-
-    Sxy = sum_xy - Sx * sum_y / n
-    ss_tot = sum_y2 - sum_y ** 2 / n
-    slope = Sxy / Sxx
-    with np.errstate(divide="ignore", invalid="ignore"):
-        r2 = np.where(ss_tot > 0, np.clip(slope ** 2 * Sxx / ss_tot, 0.0, 1.0), 0.0)
-    ann = (np.exp(slope * 252) - 1) * 100
-    tq = ann * r2
-    out = np.full(len(y), np.nan)
-    out[n - 1:] = tq
-    return out
+    return indicators.rolling_trend_quality(close, lookback)
 
 
 def main():

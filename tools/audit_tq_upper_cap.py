@@ -63,7 +63,9 @@ def main():
     #  — 실매매와 다른 모델이다([[backtest-tiebreak-parity]]). 순위가 결과에 닿는 축은
     #  반드시 켜고 잴 것.
     ap.add_argument("--live-rank", action="store_true",
-                    help="실매매와 같은 동점가름(점수 → 추세품질 → 52주위치)을 적용한다")
+                    help="(2026-08-18부터 기본값이라 무동작) 실매매식 동점가름 — 하위호환용")
+    ap.add_argument("--legacy-rank", action="store_true",
+                    help="옛 기본 정렬(점수만·동점은 등록 순서)로 되돌려 잰다")
     args = ap.parse_args()
     seeds = [int(x) for x in args.seeds.split(",")]
     caps = [float(x) for x in args.caps.split(",")]
@@ -106,20 +108,15 @@ def main():
         tq_map[c] = dict(zip((str(d) for d in df["date"]),
                              rolling_trend_quality(df["close"], lb)))
 
-    rank_fn = None
-    if args.live_rank:
-        NEG = float("-inf")
-
-        def rank_fn(sc, code, row, day):        # noqa: F811 — 점수 1순위, 동점은 추세품질
-            v = tq_map.get(code, {}).get(str(day))
-            return (sc, NEG if v is None or not np.isfinite(v) else float(v),
-                    float(row.get("w52_pos", 0.0) or 0.0))
+    # 동점가름은 엔진 기본값(실매매식)을 쓴다 — 도구가 따로 만들면 두 벌이 되어 어긋난다.
+    rank_fn = "legacy" if args.legacy_rank else None
+    if rank_fn is None:
         # 워밍업 구간 제외 — 앞부분은 이력부족이라 동점가름이 등록 순서로 떨어진다.
         dates = dates[lb - 1:]
 
     print(f"[준비] {len(dfs)}종목(폐지 {len(dead_c)}) · 표본 {size} · 거래일 {len(dates)} · "
           f"TQ 룩백 {lb}일 · 슬롯 {slots} · "
-          f"동점가름 {'실매매식' if args.live_rank else '없음(등록 순서)'}", flush=True)
+          f"동점가름 {'옛 기본값(등록 순서)' if args.legacy_rank else '실매매식'}", flush=True)
     if args.live_only:
         print("[주의] --live-only: 폐지 종목이 없다. 상한의 이득은 보수적으로(작게) 나온다 "
               "— 극단 TQ 뒤 붕괴의 결정적 사례가 표본에서 빠졌기 때문이다.", flush=True)

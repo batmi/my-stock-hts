@@ -53,6 +53,11 @@ def main():
     ext = extend_targets({c for c, _ in live}, 45, mode="random", pool=args.pool)
 
     dfs, mf, dates, failed = pb.prepare_universe(live + ext + etfs, args.days)
+    # [계측기] 진입 순위가 닿는 축이다(후보 풀을 바꾸면 슬롯 경쟁의 주인이 바뀐다).
+    #  엔진 기본 정렬은 2026-08-18부터 실매매 동점가름이지만, 앞의 룩백-1일은 추세품질
+    #  이력이 없어 동점이 다시 등록 순서로 떨어진다 — 그 구간을 잘라낸다.
+    _lb = config.INDICATOR_PARAMS.get("TREND_QUALITY_LOOKBACK", 90)
+    dates = dates[_lb - 1:]
     etf_c = [c for c, _ in etfs if c in dfs]
     stock_c = [c for c, _ in (live + ext) if c in dfs]
     n_etf = len(etf_c)
@@ -108,7 +113,8 @@ def main():
                         initial_capital=INITIAL_CAPITAL, slots=slots,
                         market_filter_dates={c: mf.get(c, set()) for c in pick},
                         risk_scale_by_date=new_scale())
-                    res.append(dict(metrics(r), cash=r["avg_cash_ratio"]))
+                    res.append(dict(metrics(r), cash=r["avg_cash_ratio"],
+                                    no_tq=r["rank_no_tq_pct"]))
             cell[kind] = res
             g = lambda key: float(np.mean([m[key] for m in res]))  # noqa: E731
             if base_res is None:
@@ -120,6 +126,10 @@ def main():
             print(f"{label:<28}{g('ret'):>9.1f}{g('mdd'):>8.1f}{g('mar'):>7.2f}{g('pf'):>6.2f}"
                   f"{g('n'):>6.0f}{g('top10'):>9.1f}{g('win'):>7.1f}{g('cash'):>7.1f}"
                   f"{wl:>10}", flush=True)
+        no_tq = float(np.mean([m["no_tq"] for m in cell["base"]]))
+        if no_tq > 1.0:
+            print(f"  [경고] 동점가름에 추세품질을 못 쓴 비율 {no_tq:.1f}% — 이 창의 순위는 "
+                  f"부분적으로 등록 순서다", flush=True)
         a, b = cell["add_etf"], cell["add_stock"]
         w = sum(1 for x, y in zip(a, b) if x["ret"] > y["ret"] + 1e-9)
         print(f"  [핵심] ETF 추가 vs 같은 크기 주식 추가: {w}-{len(a) - w} "

@@ -281,6 +281,7 @@ def view_system_config(group=None):
         row("매수 기준 점수", "진입 임계값 (종합 점수)", "ANALYSIS_THRESHOLDS['BUY_SCORE']", f"{thresholds.get('BUY_SCORE')}", key="BUY_SCORE")
         row("상승 추세 점수", "'상승' 상태 분류 기준", "ANALYSIS_THRESHOLDS['RISE_SCORE']", f"{thresholds.get('RISE_SCORE')}", key="RISE_SCORE")
         row("매수 허용 RSI 상한", "과열 방지 (이 값보다 낮아야 매수)", "ANALYSIS_THRESHOLDS['BUY_RSI_MAX']", f"{thresholds.get('BUY_RSI_MAX')}", key="BUY_RSI_MAX")
+        row("추세품질 상한", "과열 추세 차단 (이 값 미만이어야 매수, 0=해제)", "ANALYSIS_THRESHOLDS['TREND_QUALITY_MAX']", f"{thresholds.get('TREND_QUALITY_MAX', 300.0):,.0f}", key="TREND_QUALITY_MAX")
         row("매수 체결강도 기준", "수급 확인 (이 값 이상이어야 매수)", "ANALYSIS_THRESHOLDS['BUY_VOL_STRENGTH']", f"{thresholds.get('BUY_VOL_STRENGTH')}%", key="BUY_VOL_STRENGTH")
         row("비대칭성 자동 계산", "체결강도 100% 기준으로 비례하여 자동 조정", "ANALYSIS_THRESHOLDS['AUTO_ADJUST_ASK_BID_RATIO']", f"{thresholds.get('AUTO_ADJUST_ASK_BID_RATIO', True)}", key="AUTO_ADJUST_ASK_BID_RATIO")
         row("매도잔량 비율 기준", "가짜 체결강도 방어 (체결강도 100% 기준 비율)", "ANALYSIS_THRESHOLDS['BUY_ASK_BID_RATIO']", f"{thresholds.get('BUY_ASK_BID_RATIO', 1.0)}배", key="BUY_ASK_BID_RATIO")
@@ -877,6 +878,9 @@ _RANGE_RULES = {
     "BUY_SCORE":                  (3.0, 10.0, "매수 게이트가 사라지거나 도달 불가한 값"),
     "RISE_SCORE":                 (1.0, 10.0, None),
     "BUY_RSI_MAX":                (55.0, 95.0, "55 미만은 점수 게이트와 충돌해 진입이 고갈됩니다"),
+    # 0은 '해제'라 아래 하한을 비껴간다(_RANGE_MAP는 0을 특례로 두는 다른 키들과 같은 규약).
+    #  200 이하로 조이면 수익이 깎이고(실측 전체 180.5) 상한은 실질 무동작 구간이다.
+    "TREND_QUALITY_MAX":          (200.0, 2000.0, "200 미만은 정상 추세까지 잘라 수익을 깎습니다 (0=해제)"),
     "BUY_VOL_STRENGTH":           (0.0, 300.0, None),
     "BUY_ASK_BID_RATIO":          (0.0, 10.0, None),
     # --- 슈퍼 모멘텀 (스위치는 잠금, 다이얼만 조정 가능) ---
@@ -1069,6 +1073,8 @@ def _entry_strategy_items():
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("INTEREST_MA60_NEAR", 0.97), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"INTEREST_MA60_NEAR": v})},
         {"desc": "매수 허용 RSI 상한", "help": "과열 방지 (이 값보다 낮아야 매수)", "name": "BUY_RSI_MAX", "type": "float", "section": "1-1. 진입 조건",
          "get": lambda: config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"], "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"BUY_RSI_MAX": v})},
+        {"desc": "추세품질 상한", "help": "과열 추세 차단 (이 값 이상이면 매수 제외, 0=해제)", "name": "TREND_QUALITY_MAX", "type": "float", "section": "1-1. 진입 조건",
+         "get": lambda: config.ANALYSIS_THRESHOLDS.get("TREND_QUALITY_MAX", 300.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"TREND_QUALITY_MAX": v})},
         {"desc": "매수 체결강도 기준", "help": "수급 확인 (이 값 이상이어야 매수)", "name": "BUY_VOL_STRENGTH", "type": "float", "section": "1-1. 진입 조건",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"BUY_VOL_STRENGTH": v})},
         {"desc": "매도잔량비 자동 연동", "help": "체결강도 100% 기준으로 비례하여 매도잔량비를 자동 조정", "name": "AUTO_ADJUST_ASK_BID_RATIO", "type": "bool", "choices": ["y", "n"], "section": "1-1. 진입 조건",

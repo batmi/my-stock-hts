@@ -5473,6 +5473,25 @@ class AutoTrader:
                 self.set_stock_state(code, None)
                 return None
 
+            # [추세추종] 추세품질 상한 게이트 — '너무 가파른' 추세는 사지 않는다.
+            #  추세품질은 단조가 아니다. 300 위에서는 전방수익이 음수로 꺾이고 꼬리가
+            #  잘린다(상위10% 56.6 → 14.2, ATR손절 20.5 → 45.5%). 종목 축의 모멘텀
+            #  크래시라 '강할수록 좋다'는 직관과 반대다 — 근거는 config의
+            #  ANALYSIS_THRESHOLDS['TREND_QUALITY_MAX'] 주석.
+            #  이력 부족(None)은 통과시킨다(fail-open) — 데이터가 없다고 막으면 신규 상장·
+            #  데이터 장애가 매수 전면 중단으로 번진다. 순위에서는 이미 최하위로 밀리므로
+            #  이중으로 벌하지 않는다.
+            #  [위치] 상관·RS 게이트와 같은 높이에 둔다. 매수 상태가 아닌 종목도 아래에서
+            #  이 변수를 읽으므로(보류 집계 규약) 분기 안에서 만들면 NameError가 난다.
+            #  전역 방어 게이트라 개별 룰로 덮지 않는다 — build_buy_thresholds를 거치지
+            #  않고 config에서 직접 읽는다.
+            tq_cap_skip_msg = None
+            _tq_cap = float(config.ANALYSIS_THRESHOLDS.get('TREND_QUALITY_MAX', 0) or 0)
+            _tq_now = result.get('trend_quality')
+            if _tq_cap > 0 and _tq_now is not None and _tq_now >= _tq_cap:
+                tq_cap_skip_msg = (f"[추세품질 상한] (추세품질 {_tq_now:,.0f} >= {_tq_cap:,.0f}"
+                                   f" — 모멘텀 크래시 구간)")
+
             # [최적화] 호가(매도잔량비) 지연 조회.
             #  종전에는 **모든 후보**의 호가를 점수 계산 전에 미리 당겼다. 그런데 호가비는
             #  analyze_buy의 마지막 수급 게이트에만 쓰이고, 거기까지 도달하는 종목은 주기당
@@ -5580,7 +5599,10 @@ class AutoTrader:
                 elif rs_skip_msg:
                     log_msg += f" {rs_skip_msg}"
                     return {'type': 'rs_skip', 'name': name, 'log': log_msg}
-                
+                elif tq_cap_skip_msg:
+                    log_msg += f" {tq_cap_skip_msg}"
+                    return {'type': 'tq_cap_skip', 'name': name, 'log': log_msg}
+
                 return {'type': 'candidate', 'data': candidate_data, 'log': log_msg}
             else:
                 # [보류 집계의 의미] '보류'는 **살 수 있었는데 게이트가 막았다**는 뜻이어야 한다.
@@ -5595,6 +5617,9 @@ class AutoTrader:
                 elif rs_skip_msg and is_buy_state:
                     log_msg += f" {rs_skip_msg}"
                     return {'type': 'rs_skip', 'name': name, 'log': log_msg}
+                elif tq_cap_skip_msg and is_buy_state:
+                    log_msg += f" {tq_cap_skip_msg}"
+                    return {'type': 'tq_cap_skip', 'name': name, 'log': log_msg}
 
                 return {'type': 'log_only', 'log': log_msg}
         except Exception: return None
@@ -5605,6 +5630,7 @@ class AutoTrader:
         restricted_skipped_stocks = [] # [추가] 트레이딩 제한 스킵 리스트
         correlation_skipped_stocks = [] # [추가] 상관관계 스킵 리스트
         rs_skipped_stocks = [] # [추세추종] 상대강도(RS) 필터 스킵 리스트
+        tq_cap_skipped_stocks = [] # [추세추종] 추세품질 상한(모멘텀 크래시) 스킵 리스트
 
         # [추가] 트레이딩 제한 종목 로드 (현재 시스템 트레이딩 계좌 기준으로 필터링)
         #  ([최적화] 루프에서 주기당 1회 로드해 전달받으면 파일 재조회 생략)
@@ -5704,6 +5730,9 @@ class AutoTrader:
                         elif res['type'] == 'rs_skip':
                             self.log(res['log'])
                             rs_skipped_stocks.append(res['name'])
+                        elif res['type'] == 'tq_cap_skip':
+                            self.log(res['log'])
+                            tq_cap_skipped_stocks.append(res['name'])
         finally:
             io_pool.shutdown(wait=False)
 
@@ -5727,6 +5756,13 @@ class AutoTrader:
         # [추세추종] 상대강도(RS) 필터 보류 종목 로그 기록
         if rs_skipped_stocks:
             self.log(f"[RS필터 보류] 지수 대비 약세로 매수 제외 ({len(rs_skipped_stocks)}종목): {', '.join(rs_skipped_stocks)}")
+
+        # [추세추종] 추세품질 상한 보류 종목 로그 기록 — 이 줄이 주기마다 여러 건 찍히면
+        #  유니버스가 과열된 것이다(config TREND_QUALITY_MAX 주석의 '되돌릴 조건').
+        if tq_cap_skipped_stocks:
+            _cap = config.ANALYSIS_THRESHOLDS.get('TREND_QUALITY_MAX', 0)
+            self.log(f"[추세품질 상한] 과열 추세(추세품질 {_cap:,.0f} 이상)로 매수 제외 "
+                     f"({len(tq_cap_skipped_stocks)}종목): {', '.join(tq_cap_skipped_stocks)}")
 
         # [추세추종] 우선순위 정렬 — 추세 품질(회귀 모멘텀) 1순위 (근거는 candidate_priority_key docstring)
         candidates.sort(key=candidate_priority_key)

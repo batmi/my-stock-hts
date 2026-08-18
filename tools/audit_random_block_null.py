@@ -60,8 +60,13 @@ def main():
     #  동점이고, 그 동점을 파이썬 안정정렬이 **딕셔너리 등록 순서**로 가른다 — 근거 없는
     #  고정 편애다. 실매매(trader.candidate_priority_key)는 이미 (점수 → 추세품질 → 52주
     #  위치 → 체결강도)로 가른다. 이 옵션을 켜면 그 순서를 백테스트에 넣는다.
+    # [2026-08-18 이후] 엔진 기본값이 실매매 동점가름으로 바뀌었다. --live-rank는 이제
+    #  아무것도 바꾸지 않고(기본), 옛 모델을 보려면 --legacy-rank를 켠다. 이 도구가
+    #  드러낸 가짜 신호가 바로 그 옛 모델의 산물이라 대조 통로는 남겨 둔다.
     ap.add_argument("--live-rank", action="store_true",
-                    help="실매매와 같은 동점가름(점수 → 추세품질)을 적용한다")
+                    help="(기본값이라 무동작) 실매매와 같은 동점가름 — 하위호환용")
+    ap.add_argument("--legacy-rank", action="store_true",
+                    help="옛 기본 정렬(점수만·동점은 등록 순서)로 되돌려 잰다")
     args = ap.parse_args()
     seeds = [int(x) for x in args.seeds.split(",")]
     rates = [float(x) / 100 for x in args.rates.split(",")]
@@ -104,26 +109,17 @@ def main():
             picks[(sd, i)] = (rng.sample(dead_c, n_dead)
                               + rng.sample(live_c, min(size - n_dead, len(live_c))))
 
-    rank_fn = None
-    if args.live_rank:
-        from tools.audit_score_weighted_sizing import rolling_trend_quality
-        lb = config.INDICATOR_PARAMS.get("TREND_QUALITY_LOOKBACK", 90)
-        tq_by = {c: dict(zip((str(d) for d in df["date"]),
-                             rolling_trend_quality(df["close"], lb)))
-                 for c, df in dfs.items()}
-        NEG = float("-inf")
-
-        def rank_fn(sc, code, row, day):        # noqa: F811 — 점수 1순위, 동점은 추세품질
-            v = tq_by.get(code, {}).get(str(day))
-            return (sc, NEG if v is None or not np.isfinite(v) else float(v),
-                    float(row.get("w52_pos", 0.0) or 0.0))
+    # 동점가름은 엔진 기본값(실매매식)을 그대로 쓴다 — 도구가 따로 만들지 않는다.
+    rank_fn = "legacy" if args.legacy_rank else None
+    lb = config.INDICATOR_PARAMS.get("TREND_QUALITY_LOOKBACK", 90)
+    if rank_fn is None:
         # 워밍업 구간은 잘라낸다 — 앞부분은 모든 후보가 이력부족이라 동점가름이 다시
         #  등록 순서로 떨어져 비교가 오염된다(audit_entry_rank_order와 같은 규약).
         dates = dates[lb - 1:]
 
     print(f"[준비] {len(dfs)}종목(폐지 {len(dead_c)}) · 표본 {size} · 거래일 {len(dates)} · "
           f"슬롯 {slots} · 장수 {args.draws} · "
-          f"동점가름 {'실매매식(점수→추세품질)' if args.live_rank else '없음(등록 순서)'}",
+          f"동점가름 {'옛 기본값(등록 순서)' if args.legacy_rank else '실매매식(점수→추세품질)'}",
           flush=True)
 
     def gate(rate, salt):

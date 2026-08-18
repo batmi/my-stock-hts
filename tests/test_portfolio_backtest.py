@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 
 import config
+import indicators
 from modules import backtest, portfolio_backtest as pbt
 
 
@@ -36,6 +37,25 @@ def _make_df(seed, n=260, start=10000.0, drift=0.004):
 @pytest.fixture(scope="module")
 def universe():
     dfs = {f"00000{i}": _make_df(seed=i) for i in range(1, 6)}
+    thresholds = {
+        "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
+        "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
+        "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"],
+        "WEIGHTS": config.SCORING_WEIGHTS,
+    }
+    status = pbt.precompute_status(dfs, thresholds)
+    dates = sorted({str(d) for df in dfs.values() for d in df["date"]})
+    return dfs, status, dates
+
+
+@pytest.fixture(scope="module")
+def wide_universe():
+    """순위 검증용 넓은 유니버스 — 후보가 슬롯보다 많은 날이 실제로 생겨야 한다.
+
+    5종목짜리 기본 유니버스로는 경쟁일이 거의 없어(관측 0~2일) 정렬을 검증해도
+    '점수만 확인한 것'과 구분되지 않는다.
+    """
+    dfs = {f"9{i:05d}": _make_df(seed=100 + i) for i in range(20)}
     thresholds = {
         "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
         "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
@@ -478,3 +498,107 @@ def test_entry_gate는_후보만_걷어내고_다른_경로는_건드리지_않�
     assert res["trades"], "게이트가 후보를 통째로 지워버리면 비교 자체가 성립하지 않는다"
     # 보유 목록은 '그 시점에 들고 있는 것'이어야 한다 — 후보 자신이 섞이면 상관 판정이 자기 자신과의 비교가 된다.
     assert all(code not in held for code, held in seen_holds)
+
+
+def test_기본_진입순위는_실매매_동점가름을_쓴다(wide_universe):
+    """기본 정렬이 (점수 → 추세품질 → 52주위치)여야 한다 — 실매매 순위와 같은 잣대다.
+
+    [왜 고정하나] 2026-08-18 이전의 기본 정렬은 점수 하나만 봤고, 동점(슬롯 당락 경계의
+     45~52%)을 관심종목 등록 순서로 갈랐다. 그 임의 상수 때문에 '근거 없이 무작위로
+     진입을 차단하기만 해도 기준선을 이기는' 가짜 신호가 나왔고, 같은 표본에서 수익이
+     252 vs 419%로 갈렸다. 순위는 이 백테스트로 정한 거의 모든 결론이 딛고 선 바닥이라,
+     기본값이 실매매와 어긋나면 도구 하나가 아니라 결론 전체가 흔들린다.
+    """
+    dfs, status, dates = wide_universe
+    lookback = config.INDICATOR_PARAMS.get("TREND_QUALITY_LOOKBACK", 90)
+    tq = {code: indicators.trend_quality_map(df, lookback) for code, df in dfs.items()}
+    seen = {"compete": 0, "unsorted": 0, "tie_split_by_tq": 0}
+
+    def probe(day, cands, free_slots):
+        if len(cands) < 2:
+            return
+        seen["compete"] += 1
+        keys = []
+        for score, code, row in cands:
+            q = tq[code].get(str(day))
+            keys.append((score, float("-inf") if q is None else q,
+                         float(row.get("w52_pos", 0.0) or 0.0)))
+        if keys != sorted(keys, reverse=True):
+            seen["unsorted"] += 1
+        for a, b in zip(keys, keys[1:]):
+            if a[0] == b[0] and a[1] != b[1]:
+                seen["tie_split_by_tq"] += 1
+
+    # 슬롯을 좁게 줘야 후보가 남은 자리보다 많아진다 — 경쟁이 없으면 순위는 죽은 조항이다.
+    pbt.run_portfolio(dfs, status, dates, slots=2, probe_fn=probe)
+    assert seen["compete"] > 0, "후보가 2개 이상인 날이 없으면 순위를 잰 것이 아니다"
+    assert seen["unsorted"] == 0
+    # 동점이 한 번도 없었다면 위 정렬 확인은 점수만 확인한 것과 같다 — 표본이 무효다.
+    assert seen["tie_split_by_tq"] > 0, "동점 구간이 없어 동점 가름을 검증하지 못했다"
+
+
+def test_legacy_순위는_점수만_본다(universe):
+    """rank_fn="legacy"는 옛 기본값(점수 단독·동점은 등록 순서)을 그대로 재현해야 한다.
+
+    과거 기록값과 대조할 통로가 없으면 '수치가 달라진 것이 결함 수정 때문인지'를 증명할
+    수 없다. 그래서 옛 경로를 지우지 않고 이름을 붙여 남긴다.
+    """
+    dfs, status, dates = universe
+    legacy = pbt.run_portfolio(dfs, status, dates, slots=3, rank_fn="legacy")
+    # 점수만 돌려주는 rank_fn은 파이썬 정렬이 안정적이라 '점수 → 등록 순서'와 같다.
+    same = pbt.run_portfolio(dfs, status, dates, slots=3, rank_fn=lambda s, c, r, d: s)
+    assert legacy["trades"] == same["trades"]
+    assert legacy["equity"] == same["equity"]
+
+
+def test_추세품질_이력부족은_최하순위이고_비율이_보고된다(universe):
+    """이력이 모자란 구간은 동점 가름이 다시 등록 순서로 떨어진다 — 그 사실을 숨기지 않는다.
+
+    워밍업 오염을 조용히 넘기면 '실매매 순위로 쟀다'는 전제가 창의 앞부분에서만 거짓이
+    되는데, 그건 겉으로 드러나지 않는다. run_portfolio가 비율을 돌려주도록 해 감사 도구가
+    dates 앞을 자를지 판단할 수 있게 한다.
+    """
+    dfs, status, dates = universe
+    res = pbt.run_portfolio(dfs, status, dates, slots=3)
+    assert 0.0 <= res["rank_no_tq_pct"] <= 100.0
+    # 합성 데이터는 260봉이라 앞의 lookback-1일에는 추세품질이 없다.
+    assert res["rank_no_tq_pct"] > 0.0
+    late = [d for d in dates if d >= dates[len(dates) // 2]]
+    assert pbt.run_portfolio(dfs, status, late, slots=3)["rank_no_tq_pct"] == 0.0
+
+
+def test_추세품질_상한은_과열_추세를_후보에서_뺀다(wide_universe):
+    """TREND_QUALITY_MAX 이상인 종목·일은 매수되지 않아야 한다 (실매매 게이트와 같은 판정).
+
+    추세품질은 단조가 아니라 300 위에서 꺾인다 — 종목 축의 모멘텀 크래시다. 이 게이트가
+    조용히 무동작이 되면(예: 캐시가 옛 값을 물거나 분봉 경로만 빠지거나) 백테스트는 방어가
+    걸린 줄 알고 수치를 내지만 실제로는 아무것도 막지 않는다. 그 상태를 고정으로 막는다.
+    """
+    dfs, status, dates = wide_universe
+    lookback = config.INDICATOR_PARAMS.get("TREND_QUALITY_LOOKBACK", 90)
+    tq = {code: indicators.trend_quality_map(df, lookback) for code, df in dfs.items()}
+
+    # 기준선은 '해제(0)'다 — config 기본값이 이미 300이라 기본 실행은 게이트가 켜진 상태다.
+    with patch.dict(config.ANALYSIS_THRESHOLDS, {"TREND_QUALITY_MAX": 0}):
+        base = pbt.run_portfolio(dfs, status, dates, slots=3)
+    bought = [(t["code"], t["date"]) for t in base["trades"] if t["reason"] == "매수"]
+    assert bought, "기준선에서 매수가 없으면 게이트를 검증할 수 없다"
+
+    # 실제 매수된 건들의 추세품질 중앙값을 상한으로 잡으면 절반쯤이 막힌다.
+    vals = sorted(v for v in (tq[c].get(d) for c, d in bought) if v is not None)
+    assert vals, "매수 시점의 추세품질이 전부 이력부족이면 표본이 무효다"
+    cap = vals[len(vals) // 2]
+
+    with patch.dict(config.ANALYSIS_THRESHOLDS, {"TREND_QUALITY_MAX": cap}):
+        capped = pbt.run_portfolio(dfs, status, dates, slots=3)
+    for t in capped["trades"]:
+        if t["reason"] != "매수":
+            continue
+        v = tq[t["code"]].get(t["date"])
+        assert v is None or v < cap, f"상한 {cap} 이상({v})인데 매수됐다: {t['code']} {t['date']}"
+    assert capped["trades"] != base["trades"], "상한이 아무것도 막지 못했다 — 게이트가 무동작이다"
+
+    # 닿지 않는 큰 값은 해제(0)와 같아야 한다 — 게이트가 엉뚱한 것을 막고 있지 않다는 확인.
+    with patch.dict(config.ANALYSIS_THRESHOLDS, {"TREND_QUALITY_MAX": 1e9}):
+        unreachable = pbt.run_portfolio(dfs, status, dates, slots=3)
+    assert unreachable["trades"] == base["trades"]

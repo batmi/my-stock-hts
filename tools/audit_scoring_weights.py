@@ -50,6 +50,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config  # noqa: E402
+import indicators  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 
 INITIAL_CAPITAL = 10_000_000
@@ -191,54 +192,17 @@ class Probe:
 
 
 def rolling_trend_quality(df, lookback):
-    """일자 -> 추세품질(연환산 기울기 × R²). 산식은 indicators.get_trend_quality와 같다.
+    """indicators.trend_quality_map 재수출 — {일자: 추세품질}. 산식은 지표 계층 한 곳.
 
-    [왜 여기서 다시 계산하나] 실매매는 후보를 고를 때마다 마지막 시점 한 값만 구하면
-     되지만, 백테스트는 2,338일 × 종목마다 필요하다. 매일 polyfit을 부르면 수십만 번이
-     되므로 롤링 합으로 한 번에 편다. **같은 값이 나오는지는 아래 verify_tq_parity가
-     실제 종목으로 대조한다** — 산식이 어긋나면 '실매매 순위를 재현했다'는 전제가 깨진다.
+    [2026-08-18] 백테스트 엔진이 실매매 동점 가름을 기본값으로 재현하게 되면서 원본을
+     indicators로 올렸다. 이 이름으로 import하는 도구가 여럿이라 자리는 남긴다.
     """
-    closes = pd.to_numeric(df["close"], errors="coerce").to_numpy(dtype=float)
-    dates = [str(d) for d in df["date"]]
-    out = {d: None for d in dates}
-    n, L = len(closes), int(lookback)
-    if n < L:
-        return out
-    y = np.where(closes > 0, closes, np.nan)
-    y = np.log(y)
-    x = np.arange(L, dtype=float)
-    Sx, Sxx = x.sum(), (x * x).sum()
-    ones = np.ones(L)
-    # 롤링 합(유효 구간만) — np.convolve는 뒤집힌 커널과 곱하므로 x를 뒤집어 넣는다.
-    Sy = np.convolve(y, ones, mode="valid")
-    Syy = np.convolve(y * y, ones, mode="valid")
-    Sxy = np.convolve(y, x[::-1], mode="valid")
-    den_x = L * Sxx - Sx * Sx
-    slope = (L * Sxy - Sx * Sy) / den_x
-    den_y = L * Syy - Sy * Sy
-    with np.errstate(invalid="ignore", divide="ignore"):
-        r2 = np.where(den_y > 0, (L * Sxy - Sx * Sy) ** 2 / (den_x * den_y), 0.0)
-    r2 = np.clip(r2, 0.0, 1.0)
-    tq = (np.exp(slope * 252) - 1) * 100 * r2
-    for i, v in enumerate(tq):
-        d = dates[i + L - 1]
-        out[d] = None if not np.isfinite(v) else round(float(v), 2)
-    return out
+    return indicators.trend_quality_map(df, lookback)
 
 
 def verify_tq_parity(dfs, tq_by_code, lookback, sample=8):
     """마지막 시점 값을 indicators.get_trend_quality와 대조한다(불일치 건수를 돌려준다)."""
-    import indicators
-    bad = 0
-    for code in list(dfs)[:sample]:
-        df = dfs[code]
-        ref = indicators.get_trend_quality(df, lookback=lookback)
-        mine = tq_by_code[code].get(str(df["date"].iloc[-1]))
-        if ref is None and mine is None:
-            continue
-        if ref is None or mine is None or abs(ref - mine) > 0.05:
-            bad += 1
-    return bad
+    return indicators.verify_trend_quality_parity(dfs, lookback, sample=sample)
 
 
 def metrics(r, cand_mean=0.0, cand_comp=0.0, tie_pct=0.0):

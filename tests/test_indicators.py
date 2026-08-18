@@ -60,3 +60,23 @@ def test_calculate_indicators_structure(sample_uptrend_df):
     # 상승장이므로 정배열 확인 (5일 > 20일)
     if ind['ema_5'] and ind['ema_20']:
         assert ind['ema_5'] > ind['ema_20']
+
+def test_롤링_추세품질은_실매매_산식과_같은_값을_낸다(sample_uptrend_df):
+    """rolling_trend_quality(전 구간 한 번에) == get_trend_quality(마지막 한 점).
+
+    백테스트의 진입 순위 기본값이 이 롤링판으로 실매매 동점 가름을 재현한다. 산식이
+    어긋나면 '실매매 순위로 쟀다'가 조용히 거짓이 되고, 그 위에 쌓은 감사 결론이
+    전부 계측기 결함이 된다(2026-08-18 기본 정렬 사건).
+    """
+    lookback = 60
+    df = sample_uptrend_df.copy()
+    if "date" not in df.columns:
+        df["date"] = [f"2024{i:04d}" for i in range(len(df))]
+    ref = indicators.get_trend_quality(df, lookback=lookback)
+    mapped = indicators.trend_quality_map(df, lookback)
+    assert ref is not None
+    assert abs(mapped[str(df["date"].iloc[-1])] - ref) <= 0.05
+    assert indicators.verify_trend_quality_parity({"X": df}, lookback) == 0
+    # 이력이 모자란 앞부분은 값이 없어야 한다 — 랭킹에서 '검증 불가'로 최하순위가 된다.
+    assert all(v is None for v in list(mapped.values())[:lookback - 1])
+    assert mapped[str(df["date"].iloc[lookback - 1])] is not None

@@ -33,6 +33,7 @@ from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
 
 import config
 import context
+import indicators
 import utils
 from modules import backtest
 from modules import trading_cost
@@ -207,6 +208,25 @@ def allocate_amount(equity, cash, invest_ratio, sl_rate, atr, price):
     return max(0, min(amount, cash))
 
 
+def _trend_quality_cached(df, lookback):
+    """{일자: 추세품질} — 같은 DataFrame·같은 룩백이면 다시 계산하지 않는다.
+
+    감사 도구는 같은 dfs로 run_portfolio를 수천 번 부른다. 종목 44개 기준 한 번에
+    120ms라 캐시가 없으면 짧은 창일수록 시뮬레이션 자체보다 순위 준비가 더 비싸진다.
+    DataFrame.attrs는 판다스가 메타데이터용으로 두는 자리라 계산 결과에 영향이 없다.
+    """
+    key = f"_tq_map_{int(lookback)}"
+    try:
+        cached = df.attrs.get(key)
+        if cached is not None:
+            return cached
+    except AttributeError:
+        return indicators.trend_quality_map(df, lookback)
+    out = indicators.trend_quality_map(df, lookback)
+    df.attrs[key] = out
+    return out
+
+
 def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                   pyramiding_max=None, heat_cap_pct=None, invest_ratio=None,
                   atr_mult=None, market_filter_dates=None, reserved_cash=0.0,
@@ -290,10 +310,14 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             수밖에 없었다(tools/audit_scoring_weights.py). 반환값은 쓰지 않는다.
 
         rank_fn: fn(score, code, row, day) -> 정렬키. 후보가 슬롯보다 많을 때 **무엇이
-            슬롯을 차지하는가**를 바꾸는 훅이다(tools/audit_scoring_weights.py). None이면
-            종전대로 점수 내림차순. 가중치를 바꾸는 것만으로는 '점수라는 잣대 자체가
-            값을 하는가'를 물을 수 없어서 둔다 — 무작위 순위를 대조군으로 세워야
-            비교 대상이 생긴다. 게이트(BUY_SCORE 통과)는 건드리지 않고 순서만 정한다.
+            슬롯을 차지하는가**를 바꾸는 훅이다(tools/audit_scoring_weights.py). 가중치를
+            바꾸는 것만으로는 '점수라는 잣대 자체가 값을 하는가'를 물을 수 없어서 둔다 —
+            무작위 순위를 대조군으로 세워야 비교 대상이 생긴다. 게이트(BUY_SCORE 통과)는
+            건드리지 않고 순서만 정한다.
+              None(기본)  : 실매매와 같은 (점수 → 추세품질 → 52주위치). 위 '진입 순위'
+                            주석 참조 — 2026-08-18 이전에는 점수만 보는 정렬이 기본이었다.
+              "legacy"    : 그 옛 정렬(점수만, 동점은 등록 순서). 과거 기록값 재현 전용.
+              콜러블      : 실험용 순위.
 
         pyr_reset_time_stop: 증액할 때 시간청산 시계를 0으로 되돌리는가. **기본 False =
             실매매와 같음.** 실매매는 2026-07-29(engine.resolve_entry_date)부터 보유일수를
@@ -448,6 +472,41 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
 
     rows = {code: {str(r["date"]): r for r in df.to_dict("records")} for code, df in dfs.items()}
     parsed = {d: pd.to_datetime(d, format="%Y%m%d") for d in dates}
+
+    # ---------- 진입 순위: 기본값이 실매매다 ----------
+    # [2026-08-18] 종전 기본 정렬은 **점수 하나만** 보고 동점을 dict 등록 순서로 갈랐다.
+    #  점수는 0~10을 0.5로 끊은 21개 값뿐이라 슬롯 당락 경계의 45~52%가 동점이고(99,110건
+    #  실측), 그 자리를 관심종목 등록 순서라는 임의 상수가 채우고 있었다. 결과는 계측기
+    #  결함이다 — 근거 없이 진입 후보를 무작위로 차단하기만 해도 기준선을 거의 항상 이기고
+    #  (기준선 순위 12장 중 13/13·12/13), 같은 표본에서 수익이 252.0 vs 419.4%로 갈린다.
+    #  실매매(trader.candidate_priority_key)는 처음부터 (점수 → 추세품질 → 52주위치 →
+    #  체결강도)로 갈라 왔으므로, **매매가 아니라 계측기만 달랐다.**
+    #  그래서 기본값을 실매매 쪽으로 옮긴다. 감사자가 rank_fn을 기억해야만 옳은 수치가
+    #  나오는 구조는 같은 사고를 반복한다(실제로 60개 넘는 도구가 기본값으로 재고 있었다).
+    #  체결강도는 실시간 체결 데이터라 백테스트에 없다 — 3단까지만 재현하고, 그 아래는
+    #  여전히 등록 순서다(동점이 3단을 모두 통과하는 일은 드물다).
+    #  rank_fn="legacy"를 주면 옛 동작(점수만)으로 돌아간다. 과거 기록값을 재현할 때만 쓸 것.
+    rank_diag = {"calls": 0, "no_tq": 0}
+    # [추세품질 상한] 실매매 게이트(trader의 tq_cap_skip)를 그대로 재현한다. 300 위에서는
+    #  전방수익이 꺾이고 꼬리가 잘리므로 진입을 막는다 — 근거는 config
+    #  ANALYSIS_THRESHOLDS['TREND_QUALITY_MAX'] 주석. 이력 부족은 실매매와 같이 통과.
+    #  0을 주면 해제된다(옛 수치를 재현할 때).
+    _tq_lb = config.INDICATOR_PARAMS.get("TREND_QUALITY_LOOKBACK", 90)
+    _tq_cap = float(config.ANALYSIS_THRESHOLDS.get("TREND_QUALITY_MAX", 0) or 0)
+    _tq = ({code: _trend_quality_cached(df, _tq_lb) for code, df in dfs.items()}
+           if (_tq_cap > 0 or rank_fn is None) else {})
+    if rank_fn == "legacy":
+        rank_fn = None
+    elif rank_fn is None:
+        _NEG = float("-inf")
+
+        def rank_fn(sc, code, row, day):
+            # 이력 부족(None)은 실매매와 같이 동점 안에서 최하순위 — 검증 불가는 못 산다.
+            v = _tq.get(code, {}).get(str(day))
+            rank_diag["calls"] += 1
+            if v is None:
+                rank_diag["no_tq"] += 1
+            return (sc, _NEG if v is None else v, float(row.get("w52_pos", 0.0) or 0.0))
     # 분봉 리플레이용 전일 확정 봉(지표는 그 시점에 확정된 것만 쓴다).
     prev_rows = {}
     if intraday_bars:
@@ -989,12 +1048,18 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                     continue
                 if market_filter_dates and day in market_filter_dates.get(code, ()):
                     continue
+                # [추세품질 상한] 종목 축의 모멘텀 크래시 방어(실매매 tq_cap_skip과 같은 판정).
+                if _tq_cap > 0:
+                    _q = _tq.get(code, {}).get(day)
+                    if _q is not None and _q >= _tq_cap:
+                        continue
                 # [실매매 게이트] 보유 종목과의 관계로 걸리는 조건(상관관계 등)은 그날의
                 #  보유 구성에 달렸으므로 여기서 묻는다 — 사전 계산으로는 재현되지 않는다.
                 if entry_gate is not None and entry_gate(day, code, tuple(positions)):
                     continue
                 out.append((raw_score, code, row))
             if rank_fn is None:
+                # legacy — 점수만 보고 동점은 등록 순서. 과거 기록값 재현 전용이다.
                 out.sort(reverse=True, key=lambda item: item[0])
             else:
                 # 동점 처리까지 종전과 같게 두려면 정렬 자체를 갈아끼운다(점수는 그대로 전달).
@@ -1074,11 +1139,22 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                     continue
                 if market_filter_dates and day in market_filter_dates.get(code, ()):
                     continue
+                if _tq_cap > 0:
+                    _q = _tq.get(code, {}).get(day)
+                    if _q is not None and _q >= _tq_cap:
+                        continue
                 if entry_gate is not None and entry_gate(day, code, tuple(positions)):
                     continue
                 out.append((raw_score, code, {"ATR": atr, "close": close, "high": high,
                                               "RSI": rsi, "w52_pos": w52}))
-            out.sort(reverse=True, key=lambda item: item[0])
+            # [2026-08-18] 분봉 경로도 종가 경로와 같은 순위를 쓴다. 종전에는 여기만 점수
+            #  단독 정렬이라, 장중 스캔 모드에서는 동점이 여전히 등록 순서로 갈렸다
+            #  ([[backtest-tiebreak-parity]]와 같은 결함이 한 군데 더 남아 있던 것이다).
+            if rank_fn is None:
+                out.sort(reverse=True, key=lambda item: item[0])
+            else:
+                out.sort(reverse=True,
+                         key=lambda item: rank_fn(item[0], item[1], item[2], day))
             return out
 
         def _buy(code, row, price_src, day):
@@ -1197,6 +1273,11 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
         "max_buy_weight": max_buy_weight,                # 진입 순간의 최대 비중(%)
         "max_buy_risk": max_buy_risk,                    # 진입 1회의 최대 리스크(계좌 대비 %)
         "risk_cap_breaches": risk_cap_breaches,          # SYSTEM_RISK_PER_TRADE를 넘긴 매수 건수
+        # 동점 가름에 추세품질을 못 쓴 비율(%) — 워밍업 오염 경보. 앞부분 lookback-1일은
+        #  이력이 없어 동점이 다시 등록 순서로 떨어진다. 이 값이 크면 그 창의 순위 결론은
+        #  옛 기본 정렬과 다를 바 없으므로, 감사 도구는 dates 앞을 잘라 0에 가깝게 만들 것.
+        "rank_no_tq_pct": (rank_diag["no_tq"] / rank_diag["calls"] * 100
+                           if rank_diag["calls"] else 0.0),
         "equity": equity_curve,
     }
 

@@ -2370,6 +2370,21 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     
     table_tech.add_row("52주 위치", f"{w_color}{w52_pos:.1f}%[/] [dim]({l52_str} ~ {h52_str})[/dim]", "최고가/최저가 밴드 내 현 위치")
 
+    # 추세품질(TQ) — 진입 순위에서 점수 동점을 가르는 값(연환산 회귀 기울기 × R²).
+    #  종목 표(분류 옆)와 자동매매 후보 로그에는 이미 나오는데 개별 분석 표에만 없었다.
+    #  같은 '매수'라도 검증된 추세인지가 여기서 갈리므로 추세 지표들 맨 위에 둔다.
+    #  색·밴드는 indicators.TREND_QUALITY_COLORS/BANDS 단일 소스 — 도움말 표와 같다.
+    tq_lb = config.INDICATOR_PARAMS.get("TREND_QUALITY_LOOKBACK", 90)
+    tq_val = indicators.get_trend_quality(df, lookback=tq_lb)
+    tq_band = indicators.describe_trend_quality(tq_val)
+    tq_color = indicators.TREND_QUALITY_COLORS.get(tq_band, "white")
+    if tq_val is None:
+        tq_str = f"[dim]- ({tq_band})[/dim]"
+    else:
+        tq_str = f"[{tq_color}]{tq_val:,.1f} ({tq_band})[/]"
+    table_tech.add_row(f"추세품질 ({tq_lb}일)", tq_str,
+                       "연환산 기울기 × R² (진입 순위 동점 가름)")
+
     # SAR
     sar_val = ind.get('psar')
     if sar_val is not None and not math.isnan(sar_val):

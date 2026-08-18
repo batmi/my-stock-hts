@@ -368,6 +368,83 @@ def get_trend_quality(df, lookback=None):
     except Exception:
         return None
 
+def rolling_trend_quality(close, lookback=None):
+    """get_trend_quality를 **전 구간 한 번에** 계산한다(연환산 기울기 × R², 반올림 없음).
+
+    실매매는 후보를 고를 때마다 마지막 한 값만 구하면 되지만, 백테스트·감사는 종목마다
+    수천 일치가 필요하다. 매일 polyfit을 부르면 수십만 번이 되므로, 기울기와 R²가
+    Σy·Σy²·Σxy만으로 닫힌 형태로 나온다는 점을 이용해 고정 커널 합성곱으로 편다.
+
+    [왜 여기 있나] 종전에는 이 산식이 tools/ 안에 두 벌(배열판·딕트판)로 흩어져 있었고,
+     백테스트 엔진은 아예 갖고 있지 않아 순위 재현이 감사자의 손에 달려 있었다
+     (그래서 기본 정렬이 실매매와 어긋난 채 오래 남았다). 실매매·백테스트·감사가
+     같은 한 벌을 쓰도록 지표 계층으로 올린다. 대조는 verify_trend_quality_parity.
+
+    Args:
+        close: 종가 시퀀스(오름차순). Series·ndarray·list 모두 받는다.
+        lookback: 회귀 구간. None이면 config의 TREND_QUALITY_LOOKBACK.
+    Returns:
+        len(close) 길이의 ndarray. 이력이 부족한 앞부분과 계산 불능(0 이하·결측)은 NaN.
+    """
+    if lookback is None:
+        lookback = config.INDICATOR_PARAMS.get("TREND_QUALITY_LOOKBACK", 90)
+    L = int(lookback)
+    arr = pd.to_numeric(pd.Series(np.asarray(close).ravel()), errors="coerce").to_numpy(dtype=float)
+    out = np.full(len(arr), np.nan)
+    if L < 2 or len(arr) < L:
+        return out
+    with np.errstate(invalid="ignore", divide="ignore"):
+        y = np.log(np.where(arr > 0, arr, np.nan))
+    x = np.arange(L, dtype=float)
+    Sx, Sxx = x.sum(), float((x * x).sum())
+    ones = np.ones(L)
+    # np.convolve는 커널을 뒤집으므로 x를 뒤집어 넣어야 Σ(x·y)가 된다.
+    Sy = np.convolve(y, ones, mode="valid")
+    Syy = np.convolve(y * y, ones, mode="valid")
+    Sxy = np.convolve(y, x[::-1], mode="valid")
+    den_x = L * Sxx - Sx * Sx
+    num = L * Sxy - Sx * Sy
+    den_y = L * Syy - Sy * Sy
+    with np.errstate(invalid="ignore", divide="ignore"):
+        slope = num / den_x
+        r2 = np.where(den_y > 0, num ** 2 / (den_x * den_y), 0.0)
+    r2 = np.clip(r2, 0.0, 1.0)
+    out[L - 1:] = (np.exp(slope * 252) - 1) * 100 * r2
+    return out
+
+
+def trend_quality_map(df, lookback=None):
+    """{'YYYYMMDD': 추세품질 or None} — rolling_trend_quality를 날짜로 키한 형태.
+
+    실매매(get_trend_quality)와 같은 소수 2자리 반올림을 적용한다. 동점 가름에 쓰는 값이라
+    반올림 자리까지 같아야 '실매매 순위를 재현했다'가 참이 된다.
+    """
+    vals = rolling_trend_quality(df["close"], lookback)
+    out = {}
+    for d, v in zip((str(x) for x in df["date"]), vals):
+        out[d] = None if not np.isfinite(v) else round(float(v), 2)
+    return out
+
+
+def verify_trend_quality_parity(dfs, lookback=None, sample=8, tol=0.05):
+    """롤링판과 실매매판(get_trend_quality)의 마지막 시점 값을 대조해 불일치 수를 돌려준다.
+
+    산식이 어긋나면 백테스트의 '실매매식 동점 가름'이 조용히 거짓이 된다 — 그 상태로 낸
+    결론은 전부 계측기 결함이 된다(2026-08-18 기본 정렬 사건). 감사 도구는 시작할 때
+    이 값이 0인지 찍고 들어갈 것.
+    """
+    bad = 0
+    for code in list(dfs)[:sample]:
+        df = dfs[code]
+        ref = get_trend_quality(df, lookback=lookback)
+        mine = trend_quality_map(df, lookback).get(str(df["date"].iloc[-1]))
+        if ref is None and mine is None:
+            continue
+        if ref is None or mine is None or abs(ref - mine) > tol:
+            bad += 1
+    return bad
+
+
 TREND_QUALITY_BANDS = (
     (0.0,   "하락"),    # 기울기가 음수 — 회귀선이 우하향
     (10.0,  "미검증"),  # 기울기가 미미하거나 R²가 낮음(횡보 끝 급등 포함) — 추세로 검증되지 않음

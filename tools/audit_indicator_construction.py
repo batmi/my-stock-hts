@@ -49,9 +49,12 @@ AXES = {
         ("6 (빠름)", {"MACD_SIGNAL": 6}),
         ("12 (느림)", {"MACD_SIGNAL": 12}),
     ]),
+    # [주의] 이 축은 2026-08-17에 5 → 10으로 **채택돼 config가 이미 바뀌었다.** 기준선을
+    #  None(=현행 config)으로 두면 기준선과 '10' 팔이 같아져 0-N-0으로 나온다. 그래서
+    #  두 값을 모두 명시한다 — 재실행 때 옛 값과 새 값을 그대로 맞대볼 수 있어야 한다.
     "C": ("OBV 이평 기간", [
-        ("[기준선] 5", None),
-        ("10", {"OBV_MA_PERIOD": 10}),
+        ("[기준선] 5 (2026-08-17 이전)", {"OBV_MA_PERIOD": 5}),
+        ("10 (현행)", {"OBV_MA_PERIOD": 10}),
         ("20", {"OBV_MA_PERIOD": 20}),
     ]),
     "D": ("거래량 이평 기간", [
@@ -87,6 +90,10 @@ def main():
     n_dead = int(args.size * args.dead_frac)
     dfs, mf, dates, _f = pb.prepare_universe(
         live + ext + dead_targets(n_dead + 10), args.days)
+    # [계측기] 진입 순위가 닿는 축이다(점수가 바뀌면 슬롯 경쟁의 주인이 바뀐다).
+    #  엔진 기본 정렬은 실매매 동점가름이지만 앞의 룩백-1일은 추세품질 이력이 없다.
+    _lb = config.INDICATOR_PARAMS.get("TREND_QUALITY_LOOKBACK", 90)
+    dates = dates[_lb - 1:]
     dead_set = {c for c, _ in dead_targets(n_dead + 10)}
     dead_c = [c for c in dfs if c in dead_set]
     live_c = [c for c in dfs if c not in dead_set]
@@ -145,7 +152,8 @@ def main():
                 for kk, vv in prev.items():
                     P[kk] = vv
             # 컬럼이 실제로 달라졌는지 확인한다 — 안 바뀌면 0-N-0이 나오고 오독한다.
-            if ov:
+            #  (첫 팔은 비교 대상이 없다 — 기준선이 곧 자기 자신이다.)
+            if ov and prepared:
                 c0 = next(iter(d2))
                 same = np.allclose(d2[c0].select_dtypes("number").fillna(0).values,
                                    prepared[0][1][c0].select_dtypes("number").fillna(0).values)
