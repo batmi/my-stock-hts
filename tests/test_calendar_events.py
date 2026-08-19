@@ -219,6 +219,7 @@ def test_calendar_alert_sends_digest_for_today_and_tomorrow():
     assert "내일" in msg and "삼성전자 (005930)" in msg
     assert "📊" not in msg and "💰" not in msg   # 종목 줄도 '•'로 통일
     assert "• 삼성전자 (005930)" in msg
+    assert "직전 거래일" not in msg   # '내일'이면 오독의 여지가 없어 덧붙이지 않는다
     assert mark.call_count == 2  # 경제 1건 + 종목 1건
 
 
@@ -259,3 +260,25 @@ def test_calendar_alert_does_not_mark_when_send_fails():
         send.side_effect = RuntimeError("network down")
         assert calendar_events.check_and_alert_calendar() == 0
     mark.assert_not_called()
+
+
+def test_calendar_alert_labels_prev_trading_day_when_gap_widens():
+    """주말·공휴일이 끼어 D-3으로 찍혀도 오늘이 마지막 거래일임을 헤더에 드러낸다.
+
+    배당락 직전 매수처럼 '오늘만 가능한' 조치를 D-3 숫자만 보고 놓치는 걸 막는다.
+    """
+    _set_watchlist(kr=[{"code": "005930", "name": "삼성전자"}])
+    today = datetime.now().date()
+    ex_date = today + timedelta(days=3)
+    stocks = [{"code": "005930", "name": "삼성전자", "type": "배당락",
+               "date": ex_date, "estimated": True, "freq": "분기배당"}]
+
+    p1, p2, p3, p4, p5 = _alert_env(stock_events=stocks)
+    with p1, p2, p3, p4, p5 as send, \
+         patch.object(calendar_events, "_prev_trading_day",
+                      lambda d: today if d == ex_date else d):
+        assert calendar_events.check_and_alert_calendar() == 1
+
+    msg = send.call_args.args[0]
+    assert "D-3" in msg and "오늘이 직전 거래일" in msg
+    assert "삼성전자 (005930) 배당락" in msg

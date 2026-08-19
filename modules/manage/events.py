@@ -437,9 +437,19 @@ def _alert_key(kind, ev_date, label, gap):
     return f"CAL:{kind}:{ev_date}:{label}:D{gap}"
 
 
-def _alert_dday_label(gap, d):
-    return f"▸ {'오늘' if gap == 0 else '내일' if gap == 1 else f'D-{gap}'} " \
-           f"({d.strftime('%m-%d')} {_WEEKDAY_KR[d.weekday()]})"
+def _alert_dday_label(gap, d, prev_td=False):
+    """D-n 헤더. prev_td면 '오늘이 직전 거래일'을 덧붙인다.
+
+    주말·공휴일이 끼면 달력 격차가 벌어져 'D-3'으로 찍히는데, 실제로는 오늘이
+    그 일정 전의 마지막 거래일이다. 숫자만 보고 아직 여유가 있다고 오독하면
+    배당락 직전 매수처럼 당일에만 가능한 조치를 놓친다.
+    'D-1'은 이미 '내일'로 나가 오독의 여지가 없으므로 덧붙이지 않는다.
+    """
+    label = f"▸ {'오늘' if gap == 0 else '내일' if gap == 1 else f'D-{gap}'} " \
+            f"({d.strftime('%m-%d')} {_WEEKDAY_KR[d.weekday()]})"
+    if prev_td and gap > 1:
+        label += " · 오늘이 직전 거래일"
+    return label
 
 
 def check_and_alert_calendar(lead_days=ALERT_LEAD_DAYS):
@@ -455,6 +465,7 @@ def check_and_alert_calendar(lead_days=ALERT_LEAD_DAYS):
     today = datetime.now().date()
     horizon = max(lead_days)
     targets = {}   # gap -> [(icon, 본문)]
+    prev_td_gaps = set()   # '직전 거래일' 분기로 걸린 gap (헤더 문구용)
     keys = []
 
     try:
@@ -469,7 +480,8 @@ def check_and_alert_calendar(lead_days=ALERT_LEAD_DAYS):
         is_alert = (gap in lead_days)
         if not is_alert and today == _prev_trading_day(d):
             is_alert = True
-            
+            prev_td_gaps.add(gap)
+
         if not is_alert:
             continue
         key = _alert_key("econ", ev["date"], ev["name"], gap)
@@ -491,7 +503,8 @@ def check_and_alert_calendar(lead_days=ALERT_LEAD_DAYS):
             # 배당락일/실적 등 주식 일정은 달력 D-1 외에 '직전 거래일'에도 추가 알림
             if not is_alert and today == _prev_trading_day(e["date"]):
                 is_alert = True
-                
+                prev_td_gaps.add(gap)
+
             if not is_alert:
                 continue
             key = _alert_key("stock", e["date"].strftime("%Y-%m-%d"), f"{e['code']}:{e['type']}", gap)
@@ -512,7 +525,8 @@ def check_and_alert_calendar(lead_days=ALERT_LEAD_DAYS):
     lines = ["🔔 [캘린더 알림] 임박한 일정"]
     for gap in sorted(targets):   # 오늘 → 내일 순
         lines.append("")
-        lines.append(_alert_dday_label(gap, today + timedelta(days=gap)))
+        lines.append(_alert_dday_label(gap, today + timedelta(days=gap),
+                                       prev_td=gap in prev_td_gaps))
         lines.extend(targets[gap])
 
     try:
