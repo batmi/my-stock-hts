@@ -384,6 +384,11 @@ class DBManager:
                     CREATE TABLE IF NOT EXISTS signal_ledger (
                         date TEXT,
                         code TEXT,
+                        -- 실전/모의는 같은 DB 파일을 쓰고 trades는 is_sim으로 가른다.
+                        --  원장도 같이 갈라야 한다 — 재진입 차단·상관 차단은 그 계좌의
+                        --  보유 상태에 따라 달라지므로, 섞으면 차단율이 무엇을 뜻하는지
+                        --  알 수 없게 된다(관찰모드는 DB 파일 자체가 분리된다).
+                        is_sim INTEGER DEFAULT 0,
                         name TEXT,
                         cycles INTEGER DEFAULT 0,
                         passed INTEGER DEFAULT 0,
@@ -400,9 +405,44 @@ class DBManager:
                         min_abr REAL,
                         last_state TEXT,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        PRIMARY KEY (date, code)
+                        PRIMARY KEY (date, code, is_sim)
                     )
                 ''')
+
+                # [마이그레이션 2026-08-19] is_sim 없이 만들어진 원장을 옮긴다.
+                #  PK가 (date, code) → (date, code, is_sim)로 바뀌므로 ALTER로는 안 되고
+                #  테이블을 다시 만들어야 한다. 기존 행은 전부 실전(0)으로 본다 —
+                #  원장은 2026-08-19에 신설됐고 그 전에는 모드 구분 없이 쌓인 적이 없다.
+                cursor.execute("PRAGMA table_info(signal_ledger)")
+                _led_cols = [c[1] for c in cursor.fetchall()]
+                if _led_cols and "is_sim" not in _led_cols:
+                    cursor.execute("ALTER TABLE signal_ledger RENAME TO signal_ledger_old")
+                    cursor.execute('''
+                        CREATE TABLE signal_ledger (
+                            date TEXT, code TEXT, is_sim INTEGER DEFAULT 0, name TEXT,
+                            cycles INTEGER DEFAULT 0, passed INTEGER DEFAULT 0,
+                            blocked_vol INTEGER DEFAULT 0, blocked_abr INTEGER DEFAULT 0,
+                            blocked_hold INTEGER DEFAULT 0, blocked_corr INTEGER DEFAULT 0,
+                            blocked_rs INTEGER DEFAULT 0, blocked_tq INTEGER DEFAULT 0,
+                            blocked_reentry INTEGER DEFAULT 0, blocked_other INTEGER DEFAULT 0,
+                            max_score REAL DEFAULT 0.0, max_vol REAL, min_abr REAL,
+                            last_state TEXT,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            PRIMARY KEY (date, code, is_sim)
+                        )
+                    ''')
+                    cursor.execute('''
+                        INSERT INTO signal_ledger
+                            (date, code, is_sim, name, cycles, passed, blocked_vol, blocked_abr,
+                             blocked_hold, blocked_corr, blocked_rs, blocked_tq, blocked_reentry,
+                             blocked_other, max_score, max_vol, min_abr, last_state, updated_at)
+                        SELECT date, code, 0, name, cycles, passed, blocked_vol, blocked_abr,
+                               blocked_hold, blocked_corr, blocked_rs, blocked_tq, blocked_reentry,
+                               blocked_other, max_score, max_vol, min_abr, last_state, updated_at
+                        FROM signal_ledger_old
+                    ''')
+                    cursor.execute("DROP TABLE signal_ledger_old")
+                    print("[DB] 신호 원장에 계좌 구분(is_sim) 추가됨")
 
                 # 컬럼 확장 (마이그레이션)
                 cursor.execute("PRAGMA table_info(trades)")
@@ -1276,13 +1316,15 @@ class DBManager:
         """
         if not rows:
             return
+        # 모의투자 원장은 실전과 섞이면 안 된다(같은 DB 파일을 쓴다). trades.is_sim과 같은 기준.
+        is_sim = 1 if getattr(config.session, "is_simulation", False) else 0
         payload = []
         for r in rows:
             col = self._LEDGER_COLS.get(r.get("outcome"), "blocked_other")
             counts = {c: 0 for c in self._LEDGER_COLS.values()}
             counts[col] = 1
             payload.append((
-                date_str, r.get("code"), r.get("name"),
+                date_str, r.get("code"), is_sim, r.get("name"),
                 counts["passed"], counts["blocked_vol"], counts["blocked_abr"],
                 counts["blocked_hold"], counts["blocked_corr"], counts["blocked_rs"],
                 counts["blocked_tq"], counts["blocked_reentry"], counts["blocked_other"],
@@ -1290,11 +1332,11 @@ class DBManager:
             ))
         sql = '''
             INSERT INTO signal_ledger
-                (date, code, name, cycles, passed, blocked_vol, blocked_abr, blocked_hold,
+                (date, code, is_sim, name, cycles, passed, blocked_vol, blocked_abr, blocked_hold,
                  blocked_corr, blocked_rs, blocked_tq, blocked_reentry, blocked_other,
                  max_score, max_vol, min_abr, last_state, updated_at)
-            VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(date, code) DO UPDATE SET
+            VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(date, code, is_sim) DO UPDATE SET
                 cycles          = cycles + 1,
                 passed          = passed + excluded.passed,
                 blocked_vol     = blocked_vol + excluded.blocked_vol,
@@ -1324,10 +1366,17 @@ class DBManager:
             except Exception as e:
                 logger.warning(f"[Ledger] 신호 원장 기록 실패 (매매에는 영향 없음): {e}")
 
-    def get_signal_ledger(self, start_date=None, end_date=None, code=None):
-        """신호 원장 조회. 감사 도구가 로그 파싱 대신 쓰는 경로."""
+    def get_signal_ledger(self, start_date=None, end_date=None, code=None, is_sim=None):
+        """신호 원장 조회. 감사 도구가 로그 파싱 대신 쓰는 경로.
+
+        is_sim: None이면 실전·모의를 모두 준다(계좌별로 보고 싶으면 0/1을 준다).
+         두 모드를 섞어 세면 재진입·상관 차단율이 무엇을 뜻하는지 알 수 없게 되므로,
+         감사 도구는 기본적으로 실전(0)만 본다.
+        """
         sql = "SELECT * FROM signal_ledger WHERE 1=1"
         params = []
+        if is_sim is not None:
+            sql += " AND is_sim = ?"; params.append(1 if is_sim else 0)
         if start_date:
             sql += " AND date >= ?"; params.append(start_date)
         if end_date:

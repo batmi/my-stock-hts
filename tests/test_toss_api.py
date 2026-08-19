@@ -934,17 +934,31 @@ def test_order_book_adapter_totals():
 
 
 def test_vol_strength_na_but_foreign_rate_supported_for_toss():
+    """토스 모드: 체결강도는 미제공(None), 외인 소진율은 KIS 형태로 변환되어 나온다.
+
+    [2026-08-19] 종전에는 목 없이 실 토스 서버를 호출해 `len(res) > 0`만 봤다.
+    결과가 서버 상태에 좌우돼 플래키했고(전체 스위트 3회 중 1회 실패), 실 운용
+    토큰까지 건드릴 수 있었다. 어차피 이 테스트가 지켜야 할 것은 서버 응답이 아니라
+    **어댑터 변환**(비율 0.5089 → 백분율 "50.89", date → stck_bsop_date)이다.
+    """
     import api
+    trend = {'records': [
+        {'date': '2026-08-18', 'foreignerHolding': {'holdingRate': 0.5089}},
+        {'date': '2026-08-17', 'foreignerHolding': {'holdingRate': None}},   # 미제공일
+    ]}
     config.session.is_toss = True
     try:
         assert api.get_realtime_vol_strength("005930") is None
-        # 토스 수급 연동(1.2.14)으로 인해 외인률이 지원됨
-        res = api.get_daily_foreign_rate("005930")
-        assert len(res) > 0
-        assert 'stck_bsop_date' in res[0]
-        assert 'hts_frgn_ehrt' in res[0]
+        with patch("toss_api.get_investor_trend", return_value=trend):
+            res = api.get_daily_foreign_rate("005930")
     finally:
         config.session.is_toss = False
+
+    assert len(res) == 2
+    assert res[0]['stck_bsop_date'] == '20260818'
+    assert float(res[0]['hts_frgn_ehrt']) == pytest.approx(50.89)
+    # 값이 없는 날을 버리면 날짜 축이 어긋난다 — "0"으로 채워 자리를 지킨다.
+    assert res[1]['hts_frgn_ehrt'] == "0"
 
 
 def test_print_table_worker_toss_enriches_change_and_52w():

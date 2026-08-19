@@ -33,6 +33,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
+
+from tools.audit_common import exits  # noqa: E402
 from tools.audit_defensive_sector import (  # noqa: E402
     INITIAL_CAPITAL, metrics, new_scale_fn_factory,
 )
@@ -106,12 +108,17 @@ def run_with_cooldown(kwargs, dates, days, losses_only):
     [한계] 2패스의 청산 시점은 1패스와 달라질 수 있다(경로 의존). 완전한 재현은
      시뮬레이터 안에서 게이트가 실시간으로 갱신돼야 하지만, 그 정도의 차이는
      '쿨다운이 성과를 바꾸는가'라는 질문의 답을 뒤집지 못한다. 방향만 본다.
+
+    [Fix 2026-08-19] 종전에는 `reason != "매수"` 로 걸러 **증액(피라미딩N차)까지
+     청산으로 먹였다.** 증액은 profit=0 이라 losses_only 팔에서도 차단 대상으로
+     등록됐고(0 > 0 이 거짓), 결과적으로 '증액할 때마다 그 종목을 N일 재진입 금지'
+     라는 없는 규칙이 쿨다운 팔에만 걸렸다. 등록 건수가 실측 37 → 71건으로 배가 된다.
+     쿨다운 팔이 부당하게 불리한 상태로 측정됐으므로 이 축은 재실행 대상이다.
     """
     r1 = pb.run_portfolio(**kwargs)
     gate = CooldownGate(dates, days, losses_only)
-    for t in r1["trades"]:
-        if t["reason"] != "매수":
-            gate.note_exit(t["date"], t["code"], t["reason"], t.get("profit", 0))
+    for t in exits(r1):
+        gate.note_exit(t["date"], t["code"], t["reason"], t.get("profit", 0))
     return pb.run_portfolio(**dict(kwargs, entry_gate=gate))
 
 

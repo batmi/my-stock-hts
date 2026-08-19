@@ -320,7 +320,8 @@
     *   종전에는 그 기록이 로그 문자열뿐이었고 30일 뒤 삭제되어, 감사 창이 18거래일에 묶여 "게이트가 이익인지 손해인지"를 판정할 수 없었습니다. 또한 `[매도비:3.92]`(정보 표기)와 `매도비:3.92<1.0`(차단)이 한 글자 차이라 파싱 오독의 위험이 있었습니다.
     *   이제 판정 지점이 결과를 **DB(`signal_ledger`)에 직접** 남깁니다. **(일자, 종목)당 1행**에 주기별 통과·사유별 차단 횟수를 누적하므로, 하루 최대 관심종목 수만큼의 행만 쌓입니다(연 1.5MB 수준, 보존 `SIGNAL_LEDGER_RETENTION_DAYS` 기본 3년).
     *   이 구조 덕분에 **"그날 한 번도 통과 못함(완전 차단)"과 "일부 주기만 막힘(부분 차단)"** 이 구분됩니다. 후자를 차단으로 세면 오후에 통과해 실제로 매수된 종목까지 차단으로 잡혀 기회비용이 부풀려집니다.
-    *   분석: `python3 tools/audit_signal_ledger.py [--db db/paper_trading.db] [--forward 20]`
+    *   **계좌 구분**: 실전과 모의투자는 같은 DB 파일을 쓰므로 원장도 `is_sim`으로 갈라 적습니다. 재진입·상관 차단은 그 계좌의 보유 상태에서 나오기 때문에, 섞으면 차단율이 어느 계좌의 것인지 알 수 없게 됩니다(관찰모드는 DB 파일 자체가 분리됩니다).
+    *   분석: `python3 tools/audit_signal_ledger.py [--db db/paper_trading.db] [--forward 20] [--account real|sim|all]`
     *   자동매매 로그(`autotrade_*.log`)도 감사 증거이므로 일반 로그와 분리해 더 오래 보존합니다(`AUTOTRADE_LOG_RETENTION_DAYS`, 기본 120일 / 일반 로그 `LOG_RETENTION_DAYS` 30일).
 *   **메모리 보호 (라즈베리파이 OOM 방어)**:
     *   라즈베리파이(1GB) 등 제약 환경의 장기 무중단 운영을 위해, 시세 마이크로 캐시와 차트 캐시에 **항목 수 상한**을 두고 초과 시 가장 오래된 항목부터 자동 제거(eviction)합니다. 전체 시장 스캔 시에도 메모리가 무제한으로 증가하지 않습니다.
@@ -384,8 +385,9 @@ my-stock-hts/
 │   ├── check_cb.py             # DART 공시 기반 전환사채(CB) 잔존물량 확인 도구
 │   ├── fetch_intraday_tv.py    # 분봉(tvDatafeed) 수집·캐시 적재 도구
 │   ├── journal_sync_e2e.py     # 매매일지 웹서버 연동 종단 검증 도구
-│   └── audit_*.py              # 전략 다이얼 검증(백테스트 감사) 스크립트 모음 (48종)
-├── tests/                # Pytest 단위/통합 테스트 코드 (2,400개+)
+│   ├── audit_common.py         # 감사 공통 규약(청산 표본 정의) — 도구들이 함께 부른다
+│   └── audit_*.py              # 전략 다이얼 검증(백테스트 감사) 스크립트 모음 (80종)
+├── tests/                # Pytest 단위/통합 테스트 코드 (3,000개+)
 └── modules/              # 기능별 모듈 폴더
     ├── db_manager.py     # DB 연결 및 쿼리 관리
     ├── db_queue.py       # SQLite 동시성 제어를 위한 싱글 워커 큐 프록시
@@ -509,6 +511,7 @@ pip install -r requirements.txt
 *   `DART_API_KEY`: (선택) 국내 공시·배당·실적 조회용 OpenDART API Key ([발급 안내](#12--opendart-전자공시-연동-설정-disclosure-integration))
 *   `FRED_API_KEY`: (선택) 미국 경제지표 발표일정(CPI·고용보고서·PCE 등) 조회용 FRED API Key ([발급 안내](#fred-api-key-발급-무료))
 *   `TV_USERNAME`, `TV_PASSWORD`: (선택) TradingView 계정. 지수·미국채 금리 조회에 쓰는 tvDatafeed가 **로그인 모드**로 동작해 익명 대비 조회 한도·안정성이 좋아집니다. 미설정 시 종전대로 익명(nologin)으로 동작하며 파일 로그에 WARNING이 남습니다(로그인 성공 시 INFO). 발급 토큰은 `data/tv_token.json`에 7일간 캐시되어 재시작 때마다 재로그인하지 않습니다(잦은 로그인은 TradingView 캡차를 유발). 캡차가 뜨면 잠시 후 다시 시도하거나 브라우저에서 한 번 로그인한 뒤 재시작하세요.
+*   지수 화면은 지수마다 워커를 띄워 병렬 수집하지만, tvDatafeed·yfinance 호출은 각각 전역 락으로 직렬화됩니다(소스 보호). 소스가 흔들리면 마지막 몇 개가 줄을 서므로 **수집 마감 시한**(`INDEX_FETCH_DEADLINE_SEC`, 기본 60초)을 두어, 시한을 넘긴 지수는 `수신 실패 (N초 내 미응답)`으로 표시하고 나머지 표를 그립니다(0이면 종전처럼 무한 대기). 한 지수가 전 재시도에 실패하면 **회로차단**이 열려 이어지는 tvDatafeed 조회는 1회만 시도합니다(120초, 한 번 성공하면 즉시 해제).
 *   `JOURNAL_API_URL`, `JOURNAL_API_KEY`: (선택) 체결 내역을 원격 매매일지 웹서버로 자동 전송하는 연동 설정 ([상세](#13--매매일지-웹서버-연동-trading-journal-sync)). 둘 다 설정돼야 연동이 켜집니다.
 *   `JOURNAL_SOURCE`: (선택) 서버 측 동기화 스코프 식별자 (기본값: `my-stock-hts`). **기기(설치)마다 달라야 합니다.**
 *   `JOURNAL_BOT_ID`: (선택) 봇 식별자의 접두어 (기본값: `JOURNAL_SOURCE` 값). 실제 `botId`는 여기에 운용 모드·계좌가 붙습니다 (`raspi:real:68029263`). 모드는 `--mode` CLI 인자라 환경변수로 구분되지 않기 때문입니다.

@@ -193,27 +193,27 @@ def test_알려진_차이는_도달_불가_영역에만_있다():
 # 증액(피라미딩) 게이트 패리티
 # ==========================================================
 #
-# [구조상의 한계 — 읽는 사람이 알아야 한다] 사이징과 달리 백테스트의 증액 게이트는
-#  `run_portfolio` 안에 **인라인**이라 함수로 꺼내 부를 수 없다. 그래서 여기서는 그
-#  조건을 옮겨 적어(transcribe) 실매매 구현과 대조한다. 옮겨 적은 것을 대조하는 것은
-#  '두 구현이 같다'를 증명하지 못한다 — **백테스트 쪽이 바뀌면 이 테스트는 통과한 채로
-#  거짓이 된다.** 아래 참조 위치를 함께 고칠 것:
-#    modules/portfolio_backtest.py  982행(상태) · 988행(차수·하루상한) · 992행(발동가)
-#  더 강한 보장을 원하면 그 게이트를 작은 순수 함수로 빼서 양쪽이 같은 것을 부르게 하면
-#  된다(사이징의 allocate_amount처럼). 지금은 조건이 셋뿐이고 전부 여기서 고정된다.
+# [2026-08-19 한계 해소] 종전에는 백테스트의 증액 게이트가 `run_portfolio` 안에 인라인이라
+#  조건을 여기에 옮겨 적어 대조했다. 옮겨 적은 것을 대조하면 '두 구현이 같다'를 증명하지
+#  못한다 — 백테스트가 바뀌면 테스트는 통과한 채 거짓이 된다. 이제 판정식은
+#  `engine.pyramid_gate_ok` 하나뿐이고, 실매매(analyze_pyramid)와 백테스트의 세 경로
+#  (익일시가·분봉·종가)가 모두 그것을 부른다. 그래서 이 테스트는 '옮겨 적은 것끼리의
+#  대조'가 아니라 **실매매 진입점과 SSOT가 같은 답을 내는가**를 본다.
 
 _BUY_STATES = ("매수", "강매수")
 
 
 def _backtest_pyramid_allowed(state, profit_rate, pyr_count, pyr_max, trigger):
-    """portfolio_backtest.run_portfolio 의 증액 게이트를 옮겨 적은 것(위 주석 참조)."""
+    """백테스트가 실제로 부르는 그 함수(engine.pyramid_gate_ok)를 그대로 부른다.
+
+    백테스트 쪽 래퍼(_pyramid_gate)는 '가격 → 수익률' 환산만 하므로, 판정 자체는
+    이 호출과 같다. pyr_max <= 0(증액 OFF)은 run_portfolio가 블록 진입 전에 거른다.
+    """
+    from modules.auto_trade import engine
+
     if pyr_max <= 0:
         return False                                    # pyr_use = ... and pyr_max > 0
-    if state not in _BUY_STATES:                        # 982행
-        return False
-    if pyr_count >= pyr_max:                            # 988행 while 조건
-        return False
-    return profit_rate >= trigger                       # 992행 need = avg × (1+trigger)
+    return engine.pyramid_gate_ok(profit_rate, state, pyr_count, pyr_max, trigger)
 
 
 @pytest.mark.parametrize("state", ["매수", "강매수", "상승", "대기", "관망", "매도", "역매수"])

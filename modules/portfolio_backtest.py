@@ -255,8 +255,14 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
         reserved_cash: 운용자가 수동 운용 등으로 묶어둔 금액. 같은 계좌에 있으므로
             사이징 기준 자산(_equity)에는 포함되지만 시스템이 집행할 수는 없다.
         risk_scale_by_date: {날짜: 배수} 일별 리스크 배수. **기초 비중과 히트 캡에 곱한다.**
-            실매매의 현행 risk_scale은 리스크층에만 곱해 사실상 무력하므로(리스크층이 구속되지
-            않음), '기초 비중에 적용하면 실제로 방어가 되는가'를 검증하기 위한 실험용 경로다.
+            [정정 2026-08-19] 종전 설명은 "실매매는 리스크층에만 곱해 사실상 무력하므로
+            이것은 실험용 경로"라고 적혀 있었으나, 그 서술은 2026-07-27 이전 상태다.
+            실매매도 그때 적용 지점을 기초 비중으로 옮겼다(engine.allocate_budget —
+            리스크층이 최종액을 결정하는 일이 없어 배수가 사실상 무력이었던 것이 이유다).
+            따라서 이 경로는 실험용이 아니라 **실매매와 같은 지점**이다. 다만 실매매는
+            리스크층에도 배수를 곱하고(max_loss_amt) 여기서는 곱하지 않는다 —
+            현행 파라미터에서 실데이터 615건 매수 기준 배분액 불일치 0건이며,
+            그 조건은 tests/test_sizing_parity.py 가 고정한다.
             콜러블 fn(day, equity) -> 배수 도 받는다 — 계좌 드로다운 축처럼 시뮬레이션 자신의
             자산곡선에 의존하는 축은 사전 계산이 불가능하기 때문이다(tools/audit_drawdown_axis.py).
         sl_rate_fn: fn(row, price, atr_mult) -> 손절률(%, 음수). **실험용 경로**로, 손절 캡
@@ -419,6 +425,9 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     하루 처리 순서는 실매매와 같다: 매도 → 피라미딩 → 신규 매수(점수 높은 순).
     """
     sell_cfg, thr = config.SELL_STRATEGY, config.ANALYSIS_THRESHOLDS
+    # 증액 판정의 SSOT. 실행당 한 번만 묶는다 — 게이트는 하루×보유 종목마다 불리고
+    #  감사 도구는 run_portfolio를 수천 번 돌린다(engine은 무거워 모듈 최상단에선 안 부른다).
+    from modules.auto_trade.engine import pyramid_gate_ok as _pyramid_gate_ok
     invest_ratio = invest_ratio if invest_ratio is not None else (1.0 / max(1, slots))
     atr_mult = atr_mult if atr_mult is not None else sell_cfg.get("ATR_STOP_MULTIPLIER", 2.0)
     if heat_cap_pct is None:
@@ -590,6 +599,20 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             "mfe": max_profit, "armed": bool(pos.get("ts_armed_ever")), "bep": bool(is_bep),
         })
         del positions[code]
+
+    def _pyramid_gate(price, pos, state, trigger):
+        """증액 판정 — 차수·수익률·상태.
+
+        [SSOT 2026-08-19] 판정식은 engine.pyramid_gate_ok 가 단독 보유한다. 종전에는
+        같은 조건 셋을 이 함수 안 세 경로(익일시가·분봉·종가)에 각각 옮겨 적었고,
+        실매매(engine.analyze_pyramid)와도 따로 적혀 있었다. 백테스트가 실매매를 검증하는
+        구조에서 판정식이 갈라지면 검증이 무의미해진다. 여기서는 '가격 → 수익률' 환산만
+        맡는다(경로마다 어느 가격으로 판정하는지가 다르다: 종가·고가·봉 종가).
+        """
+        if not price or pos["avg"] <= 0:
+            return False
+        profit_rate = (price - pos["avg"]) / pos["avg"] * 100.0
+        return _pyramid_gate_ok(profit_rate, state, pos["pyr"], pyr_max, trigger)
 
     def _pyramid_once(code, pos, day, price, ref_row, nth):
         """증액 1건 집행. 일봉 경로와 분봉 경로가 같은 사이징·회계를 쓰게 모은다.
@@ -939,11 +962,11 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                     if nrow is None:
                         continue
                     done_today = 0
-                    while pos["pyr"] < pyr_max and (pyr_day_cap <= 0 or done_today < pyr_day_cap):
+                    while pyr_day_cap <= 0 or done_today < pyr_day_cap:
                         trig = pyr_trigger
                         if pyr_trigger_fn is not None:
                             trig = float(pyr_trigger_fn(row.get("ATR", 0), pos["avg"]))
-                        if row["close"] < pos["avg"] * (1 + trig / 100.0):
+                        if not _pyramid_gate(row["close"], pos, _state, trig):
                             break
                         if not _pyramid_once(code, pos, day, nrow["open"], row, done_today + 1):
                             break
@@ -965,12 +988,10 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                             break
                         st = bar_st[hhmm]
                         b_state, b_atr, b_close = st[3], st[7], st[8]
-                        if b_state not in ("매수", "강매수"):
-                            continue
                         trig = pyr_trigger
                         if pyr_trigger_fn is not None:
                             trig = float(pyr_trigger_fn(b_atr, pos["avg"]))
-                        if (b_close - pos["avg"]) / pos["avg"] * 100 < trig:
+                        if not _pyramid_gate(b_close, pos, b_state, trig):
                             continue
                         if not _pyramid_once(code, pos, day, b_close, {"ATR": b_atr},
                                              done_today + 1):
@@ -979,20 +1000,19 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                     continue
 
                 _raw, _chk, _can, state, _reason = status[code][day]
-                if state not in ("매수", "강매수"):
-                    continue
                 # [하루 다회] 기본은 하루 1회·종가 판정(종전 동작 그대로). pyr_intraday를 켜면
                 #  실매매처럼 '장중 발동선 도달'로 판정하고, pyr_per_day<=0이면 평단이 오른 뒤
                 #  같은 날 다시 발동선에 닿는 만큼 반복한다(tools/audit_pyramid_perday.py).
                 done_today = 0
-                while pos["pyr"] < pyr_max and (pyr_day_cap <= 0 or done_today < pyr_day_cap):
+                while pyr_day_cap <= 0 or done_today < pyr_day_cap:
                     trigger = pyr_trigger
                     if pyr_trigger_fn is not None:
                         trigger = float(pyr_trigger_fn(row.get("ATR", 0), pos["avg"]))
                     need = pos["avg"] * (1 + trigger / 100.0)
                     if pyr_intraday:
+                        # 장중 판정은 '고가가 발동선에 닿았는가' — 게이트에 넘기는 가격도 고가다.
                         high = row.get("high", 0) or 0
-                        if high < need:
+                        if not _pyramid_gate(high, pos, state, trigger):
                             break
                         # 갭 상승으로 시가가 이미 발동선 위면 첫 감시 주기의 가격 = 시가다.
                         #  2회차부터는 장중에 발동선을 통과하는 순간이므로 발동선 자체가 체결가.
@@ -1004,7 +1024,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                                 break
                     else:
                         price = row["close"]
-                        if price < need:
+                        if not _pyramid_gate(price, pos, state, trigger):
                             break
 
                     if not _pyramid_once(code, pos, day, price, row, done_today + 1):

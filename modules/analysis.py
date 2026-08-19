@@ -263,8 +263,12 @@ def _fetch_index_via_tvdatafeed(market_type, n_bars=260):
     # 최대 4회 재시도한다. 호출은 전역 락으로 직렬화(페이싱)한다. get_hist는 호출마다 웹소켓을
     # 새로 맺으므로(인증 토큰 재전송 포함) 인스턴스를 재생성할 필요가 없다 — 로그인 상태에서
     # 반복 재생성 시 매번 재-signin(캡차/차단 위험)이 발생하므로 인스턴스는 재사용한다.
-    max_attempts = 4
+    #  [회로차단 2026-08-19] 직전에 tvDatafeed가 전 재시도 실패했다면 1회만 시도한다.
+    #   토스 모드 지수 화면은 7개가 이 소스를 전역 락으로 직렬 사용하므로, 각자 4회씩
+    #   재시도하면 그 대기가 그대로 화면 정지로 나타난다.
+    max_attempts = 1 if _tv_circuit_open() else 4
     df = None
+    _t0 = time.time()
     for attempt in range(max_attempts):
         try:
             with _TVDATAFEED_LOCK:
@@ -279,8 +283,11 @@ def _fetch_index_via_tvdatafeed(market_type, n_bars=260):
             time.sleep(0.8 * (attempt + 1))  # 페이싱 후 재시도(UI 지연 최소화 위해 점증 백오프)
 
     if df is None or df.empty:
-        logger.debug(f"[TVDATAFEED] {market_type} 데이터 없음")
+        logger.warning(f"[TVDATAFEED] {market_type} 데이터 없음 — {max_attempts}회 시도 실패 "
+                       f"({time.time() - _t0:.1f}s)")
+        _tv_note_failure()
         return None
+    _tv_note_success()
 
     try:
         out = df.reset_index().rename(columns={'datetime': 'date'})
@@ -353,10 +360,40 @@ def _merge_index_volume_from_yfinance(df, yf_ticker):
 _US_TREASURY_SPOT_CACHE = {}   # symbol -> {"df": DataFrame, "time": datetime, "fail": datetime|None}
 _US_TREASURY_TTL_SEC = 120     # 미국 장중 금리 변동 대응 (다른 지수 fast_info 60s와 유사 수준)
 _US_TREASURY_NEG_TTL_SEC = 180  # 실패 음성 캐시(익명 웹소켓 다운 시 매 조회 재시도로 UI 지연 방지)
-# [추가] 회로차단 — 한 심볼이 전 재시도 실패(TV 전면 장애 가능성)하면 직후 다른 심볼은
-#  재시도 1회만 수행해 지수 화면 콜드스타트가 수십 초 지연되는 것을 막는다.
-_US_TREASURY_ANY_FAIL_TIME = None
-_US_TREASURY_CIRCUIT_SEC = 120
+# [회로차단] 한 심볼이 전 재시도 실패(TV 전면 장애 가능성)하면 직후 다른 심볼은 재시도
+#  1회만 수행해 지수 화면 콜드스타트가 수십 초 지연되는 것을 막는다.
+#
+#  [확대 2026-08-19] 종전에는 국채 경로만 이 차단을 썼다. 그런데 토스 모드 지수 화면은
+#  코스피200·코스닥150·국채 4개 테너·HY OAS까지 **7개가 tvDatafeed**를 쓰고, 그 호출은
+#  _TVDATAFEED_LOCK으로 한 번에 하나씩만 돈다. TV가 흔들릴 때 국내 지수(4회)·FRED(4회)가
+#  각자 재시도 예산을 다 쓰면 직렬 대기가 분 단위로 쌓여 화면이 멈춘 것처럼 보인다
+#  (실측 신고: 전체 지수 96%에서 정지). 그래서 신호를 **세 경로가 공유**한다.
+_TV_ANY_FAIL_TIME = None
+_TV_CIRCUIT_SEC = 120
+
+
+def _tv_circuit_open(now=None):
+    """직전에 tvDatafeed가 전 재시도 실패했는가 — True면 이번 호출은 1회만 시도한다."""
+    if _TV_ANY_FAIL_TIME is None:
+        return False
+    now = now or datetime.now()
+    return (now - _TV_ANY_FAIL_TIME).total_seconds() < _TV_CIRCUIT_SEC
+
+
+def _tv_note_failure(now=None):
+    global _TV_ANY_FAIL_TIME
+    _TV_ANY_FAIL_TIME = now or datetime.now()
+
+
+def _tv_note_success():
+    global _TV_ANY_FAIL_TIME
+    _TV_ANY_FAIL_TIME = None
+
+
+def reset_tvdatafeed_circuit():
+    """회로차단만 해제한다(음성 캐시는 각 경로의 reset_*가 담당)."""
+    _tv_note_success()
+
 
 def reset_us_treasury_spot_failures():
     """국채 현물(TVC) 음성 캐시·회로차단을 해제한다.
@@ -364,8 +401,7 @@ def reset_us_treasury_spot_failures():
     사용자가 지수 화면에서 명시적으로 재시도(y)할 때 호출 — 해제하지 않으면
     음성 캐시(600s) 동안 재시도가 즉시 실패를 반환해 무의미해진다.
     """
-    global _US_TREASURY_ANY_FAIL_TIME
-    _US_TREASURY_ANY_FAIL_TIME = None
+    reset_tvdatafeed_circuit()
     for ent in _US_TREASURY_SPOT_CACHE.values():
         ent["fail"] = None
 
@@ -376,7 +412,6 @@ def get_us_treasury_spot_data(symbol, n_bars=300):
     반환 스키마는 지수 경로와 동일: ['date','open','high','low','close','volume']
     (volume=0 — 금리 지수라 OBV 불가, attrs['source']='TVDATAFEED'). 실패 시 None.
     """
-    global _US_TREASURY_ANY_FAIL_TIME
     now = datetime.now()
     ent = _US_TREASURY_SPOT_CACHE.setdefault(symbol, {"df": None, "time": None, "fail": None})
     cached = ent["df"]
@@ -396,9 +431,7 @@ def get_us_treasury_spot_data(symbol, n_bars=300):
     # 회로차단: 직전 다른 심볼이 전 재시도 실패였다면 이번 심볼은 1회만 시도.
     # 콜드스타트(성공 캐시 없음)는 실패 시 표시할 값 자체가 없으므로(특히 2년물은 폴백도 없음)
     # 재시도를 6회로 늘려 간헐 실패 버스트를 견딘다.
-    circuit_open = (_US_TREASURY_ANY_FAIL_TIME and
-                    (now - _US_TREASURY_ANY_FAIL_TIME).total_seconds() < _US_TREASURY_CIRCUIT_SEC)
-    max_attempts = 1 if circuit_open else (6 if cached is None else 4)
+    max_attempts = 1 if _tv_circuit_open(now) else (6 if cached is None else 4)
 
     df = None
     for attempt in range(max_attempts):  # 익명 웹소켓 간헐 실패 대응(국내 지수 경로와 동일 재시도 정책)
@@ -425,9 +458,11 @@ def get_us_treasury_spot_data(symbol, n_bars=300):
             time.sleep(0.8 * (attempt + 1))
 
     if df is None or df.empty:
-        logger.debug(f"[TVDATAFEED] {symbol} 데이터 없음")
+        # 실패는 warning으로 남긴다 — debug로 두면 FILE_DEBUG_LEVEL=DEBUG가 아닌 운영에서
+        #  '화면이 왜 느렸는지'를 사후에 확인할 방법이 없다(2026-08-19 신고 건이 그랬다).
+        logger.warning(f"[TVDATAFEED] {symbol} 데이터 없음 — {max_attempts}회 시도 실패")
         ent["fail"] = now
-        _US_TREASURY_ANY_FAIL_TIME = now
+        _tv_note_failure(now)
         return cached
 
     try:
@@ -441,7 +476,7 @@ def get_us_treasury_spot_data(symbol, n_bars=300):
         ent["df"] = out
         ent["time"] = now
         ent["fail"] = None
-        _US_TREASURY_ANY_FAIL_TIME = None  # 성공 → 회로차단 해제
+        _tv_note_success()  # 성공 → 회로차단 해제
         return out
     except Exception as e:
         logger.debug(f"[TVDATAFEED] {symbol} 스키마 변환 실패: {e}")
@@ -458,6 +493,7 @@ _FRED_NEG_TTL_SEC = 180     # 실패 음성 캐시 — 익명 웹소켓 다운 �
 
 def reset_fred_failures():
     """FRED 음성 캐시를 해제한다(사용자가 지수 화면에서 명시적으로 재시도할 때)."""
+    reset_tvdatafeed_circuit()   # 재시도인데 회로가 닫혀 있으면 1회 시도로 끝나 무의미하다
     for ent in _FRED_CACHE.values():
         ent["fail"] = None
 
@@ -488,7 +524,12 @@ def get_fred_data(symbol, n_bars=300):
         return cached
 
     df = None
-    for attempt in range(4):   # 익명 웹소켓 간헐 실패 대응(국내 지수 경로와 동일 재시도 정책)
+    # 익명 웹소켓 간헐 실패 대응(국내 지수 경로와 동일 재시도 정책).
+    #  [회로차단 2026-08-19] TV가 전면으로 흔들리는 중이면 1회만 — 같은 락을 기다리는
+    #  다른 지수까지 이 재시도 시간을 그대로 물려받는다.
+    max_attempts = 1 if _tv_circuit_open(now) else 4
+    _t0 = time.time()
+    for attempt in range(max_attempts):
         try:
             with _TVDATAFEED_LOCK:
                 df = tv.get_hist(symbol=symbol, exchange="FRED",
@@ -498,13 +539,16 @@ def get_fred_data(symbol, n_bars=300):
         except Exception as e:
             logger.debug(f"[TVDATAFEED] FRED:{symbol} 조회 오류(attempt={attempt}): {e}")
             df = None
-        if attempt < 3:
+        if attempt < max_attempts - 1:
             time.sleep(0.8 * (attempt + 1))   # 페이싱 후 재시도(점증 백오프)
 
     if df is None or df.empty:
-        logger.debug(f"[TVDATAFEED] FRED:{symbol} 데이터 없음")
+        logger.warning(f"[TVDATAFEED] FRED:{symbol} 데이터 없음 — {max_attempts}회 시도 실패 "
+                       f"({time.time() - _t0:.1f}s)")
         ent["fail"] = now
+        _tv_note_failure(now)
         return cached
+    _tv_note_success()
 
     try:
         out = df.reset_index().rename(columns={'datetime': 'date'})

@@ -104,6 +104,12 @@ class ConclusionMonitor:
             cls._instance.active_until = 0 # 집중 감시 유지 만료 시간
             
             cls._instance.event = threading.Event() # 즉시 실행 트리거용
+            # [추가] 종료 신호. 감시 루프 밖에서 띄우는 보조 스레드(제한 해제 확인 등)가
+            #  sleep 대신 이 이벤트를 기다리게 해서, stop() 한 번으로 같이 끝나게 한다.
+            #  daemon 스레드는 프로세스가 죽을 때까지 살아 있어서, 종료 후에도 잔고를
+            #  조회하고 제한 목록을 건드릴 수 있다(테스트에서는 다음 테스트의 patch 구간을
+            #  침범해 간헐 실패를 만들었다).
+            cls._instance.shutdown = threading.Event()
             cls._instance.initialized = False # [추가] 초기화 여부
             cls._instance.consecutive_errors = 0 # [추가] 연속 에러 카운트 (Kill Switch용)
         return cls._instance
@@ -111,6 +117,7 @@ class ConclusionMonitor:
     def start(self):
         if self.is_running: return
 
+        self.shutdown.clear()   # 재시작 시 이전 종료 신호가 남아 있으면 보조 스레드가 즉시 죽는다
         self.is_running = True
         self.thread = threading.Thread(target=self._run_loop, daemon=True, name="ConclusionMonitor")
         self.thread.start()
@@ -159,6 +166,7 @@ class ConclusionMonitor:
 
     def stop(self):
         self.is_running = False
+        self.shutdown.set()  # 보조 스레드(제한 해제 확인)의 대기도 함께 깬다
         self.event.set() # 대기 해제
         if self.thread and self.thread is not threading.current_thread():
             self.thread.join(timeout=2)
@@ -707,7 +715,12 @@ class ConclusionMonitor:
                                     def _check_and_remove_restriction(t_code, t_cano, t_acnt, t_is_ovrs):
                                         # [수정] 잔고 반영 지연/일시적 조회 실패 대비 재시도 (고정 1회 → 최대 5회)
                                         for attempt in range(5):
-                                            time.sleep(3)  # 증권사 API 체결 및 잔고 반영 대기
+                                            # 증권사 API 체결 및 잔고 반영 대기.
+                                            #  sleep이 아니라 종료 신호를 기다린다 — 감시가 멈춘 뒤에도
+                                            #  최대 15초를 더 살면서 잔고를 조회하고 제한 목록을 건드리는
+                                            #  스레드가 남는다(종료 지연·테스트 간섭의 원인).
+                                            if self.shutdown.wait(3):
+                                                return
                                             try:
                                                 qty = None  # None: 조회 실패(미확정), 정수: 확정 잔고
                                                 if t_is_ovrs:
@@ -738,7 +751,7 @@ class ConclusionMonitor:
                                                 logger.error(f"수동매매 제한 해제 검사 중 오류: {e}")
                                         logger.warning(f"[Restriction] {t_code} 잔고 확인 실패로 제한 해제를 보류합니다. (계좌 {t_cano}-{t_acnt})")
 
-                                    threading.Thread(target=_check_and_remove_restriction, args=(code, cano, acnt, is_overseas_trade), daemon=True).start()
+                                    threading.Thread(target=_check_and_remove_restriction, args=(code, cano, acnt, is_overseas_trade), daemon=True, name=f"RestrictionCheck-{code}").start()
 
                                 # 상태 업데이트
                                 with self._lock:

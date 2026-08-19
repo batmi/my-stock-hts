@@ -524,6 +524,27 @@ def entry_atr_stop_rate(df, entry_date=None, atr_mult=None):
         return None
 
 
+def pyramid_gate_ok(profit_rate, state, pyramid_count, max_count, trigger):
+    """[SSOT 2026-08-19] 증액(피라미딩)을 허용하는 세 조건 — 차수·수익률·추세 유지.
+
+    물타기의 정반대다. 수익으로 추세가 검증된 포지션에만, 추세가 유지되는 동안 증액한다.
+    셋 중 하나라도 어긋나면 증액하지 않는다.
+      1) 남은 차수가 있다(pyramid_count < max_count)
+      2) 발동 수익률에 도달했다(profit_rate >= trigger)
+      3) 신규 진입과 **같은 매수 신호**가 살아 있다(state가 매수·강매수)
+
+    [왜 함수인가] 실매매(analyze_pyramid)와 포트폴리오 백테스트(run_portfolio)가 이 조건을
+    각자 옮겨 적고 있었다. 백테스트가 실매매를 검증하는 구조에서 판정식이 조용히 갈라지면
+    검증 자체가 무의미해진다 — 실제로 진입 순위 동점가름이 그렇게 갈라져 오래 살아남았다
+    ([[backtest-tiebreak-parity]]). 산식을 한 곳에 두면 갈라질 수 없다.
+    """
+    if pyramid_count >= max_count:
+        return False
+    if profit_rate < trigger:
+        return False
+    return state in ("매수", "강매수")
+
+
 def rule_value(rule, key, default):
     """개별 룰의 값을 읽되, NULL이면 전역 기본값으로 되돌린다.
 
@@ -1117,12 +1138,9 @@ class DefaultStrategy:
         trigger = thresholds.get("PYRAMIDING_PROFIT_TRIGGER", at.get("PYRAMIDING_PROFIT_TRIGGER", 10.0)) if thresholds else at.get("PYRAMIDING_PROFIT_TRIGGER", 10.0)
         max_count = thresholds.get("PYRAMIDING_MAX_COUNT", at.get("PYRAMIDING_MAX_COUNT", 1)) if thresholds else at.get("PYRAMIDING_MAX_COUNT", 1)
 
-        if pyramid_count >= max_count:
-            return False, ""
-        if profit_rate < trigger:
-            return False, ""
-        # 추세 유지 확인: 신규 진입과 동일한 '매수' 신호가 살아있어야 증액
-        if state not in ("매수", "강매수"):
+        # 판정은 pyramid_gate_ok가 단독 보유한다(백테스트도 같은 함수를 부른다).
+        #  여기서 조건을 다시 쓰면 두 구현이 갈라져도 아무도 모른다.
+        if not pyramid_gate_ok(profit_rate, state, pyramid_count, max_count, trigger):
             return False, ""
 
         return True, f"피라미딩 {pyramid_count + 1}차 (수익률:+{profit_rate:.1f}%, 점수:{score}, 상태:{state})"

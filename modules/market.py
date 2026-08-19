@@ -1219,7 +1219,14 @@ def _show_market_indices_core(target_indices=None):
             results_dict = {}
             # 야후 API 동시 호출 차단을 방지하고 부드러운 진행을 위해 max_workers를 5로 조정
             max_w = 5
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
+            # [마감 시한 2026-08-19] 종전에는 as_completed에 timeout이 없어, 워커 하나가
+            #  안 끝나면 화면이 무한정 기다렸다(토스 모드에서 전체 지수가 96%에 정지).
+            #  워커의 외부 호출은 전역 락(tvDatafeed·yfinance)으로 직렬화되므로 소스가
+            #  흔들리면 마지막 몇 개가 줄을 선다. 시한을 넘긴 지수는 '수신 실패'로 표시한다
+            #  — 표를 못 보는 것보다 무엇을 못 받았는지 보이는 편이 낫다(fail-closed).
+            deadline = getattr(config, 'INDEX_FETCH_DEADLINE_SEC', 60) or 0
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_w)
+            try:
                 futures = {}
                 for name, ticker in indices_map.items():
                     stored = data_storage.get(ticker, {'daily': pd.DataFrame(), 'intra': pd.DataFrame()})
@@ -1227,15 +1234,28 @@ def _show_market_indices_core(target_indices=None):
                     df_daily = stored['daily'].copy() if not stored['daily'].empty else pd.DataFrame()
                     df_intraday = stored['intra'].copy() if not stored['intra'].empty else pd.DataFrame()
                     futures[executor.submit(_process_index_worker, name, ticker, df_daily, df_intraday)] = name
-                    
-                for future in concurrent.futures.as_completed(futures):
-                    name = futures[future]
-                    try:
-                        results_dict[name] = future.result()
-                    except Exception as e:
-                        results_dict[name] = {'status': 'error', 'name': name, 'error': e}
-                    finally:
+
+                try:
+                    for future in concurrent.futures.as_completed(
+                            futures, timeout=(deadline if deadline > 0 else None)):
+                        name = futures[future]
+                        try:
+                            results_dict[name] = future.result()
+                        except Exception as e:
+                            results_dict[name] = {'status': 'error', 'name': name, 'error': e}
+                        finally:
+                            progress.advance(task)
+                except concurrent.futures.TimeoutError:
+                    late = [n for f, n in futures.items() if n not in results_dict]
+                    for name in late:
+                        results_dict[name] = {'status': 'timeout', 'name': name, 'sec': deadline}
                         progress.advance(task)
+                    logger.warning(f"[MARKET_INDEX] 수집 마감 시한({deadline}s) 초과 — "
+                                   f"{len(late)}개 지수를 '수신 실패'로 표시: {', '.join(late)}")
+            finally:
+                # 시한을 넘긴 워커를 기다리지 않는다(with 블록은 항상 join하므로 쓰지 않는다).
+                #  아직 시작하지 않은 작업은 취소하고, 진행 중인 호출은 자체 타임아웃으로 끝난다.
+                executor.shutdown(wait=False, cancel_futures=True)
 
             for name, ticker in indices_map.items():
                 if name in SECTION_START_INDICES:
@@ -1252,6 +1272,12 @@ def _show_market_indices_core(target_indices=None):
                     elif res['status'] == 'skipped':
                         # [추가] 토스 모드 코스닥150 등 미지원 지수: 재시도 없이 '-'만 표시
                         table.add_row(name, "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]")
+                    elif res['status'] == 'timeout':
+                        # 마감 시한 초과 — 실패와 구분한다. '소스가 빈 응답을 줬다'와
+                        #  '제 시간에 안 왔다'는 원인도 대처도 다르다.
+                        table.add_row(name, "[red]수신 실패[/]", f"[dim]{res.get('sec', 0)}초 내 미응답[/]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]")
+                        failed_tickers.append(name)
+                        failed_srcs.add("응답 지연")
                     elif res['status'] == 'failed':
                         fail_src = res.get('src', 'yfinance')
                         table.add_row(name, "[red]수신 실패[/]", f"[dim]{fail_src} 응답 없음[/]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]", "[dim]-[/dim]")

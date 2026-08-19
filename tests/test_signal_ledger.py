@@ -248,3 +248,82 @@ def test_매수_상태가_아니면_원장에_남기지_않는다(trader):
     """신호가 아니었던 주기까지 세면 차단율의 분모가 부풀어 기회비용을 과대평가한다."""
     res = _analyze(trader, _df(0.0008), action="wait", state="관망")
     assert res["ledger"] is None
+
+
+# ==========================================================
+# 계좌 구분 (2026-08-19)
+# ==========================================================
+#
+# 실전과 모의는 **같은 trade_history.db** 를 쓰고, trades는 is_sim으로 갈라 적는다.
+# 원장만 안 가르면 두 계좌의 판정이 (일자, 종목) 한 행에 합산된다. 체결강도처럼 시세에서
+# 나오는 게이트는 계좌와 무관하지만, 재진입 차단·상관 차단은 **그 계좌의 보유 상태**에서
+# 나온다 — 섞이면 차단율이 어느 계좌 얘기인지 알 수 없어진다.
+# (관찰모드는 DB 파일 자체가 분리되므로 이 구분과 무관하다.)
+
+def test_실전과_모의는_같은_날_같은_종목이어도_다른_행이다(db, monkeypatch):
+    monkeypatch.setattr(config.session, "is_simulation", False, raising=False)
+    db.record_signal_ledger("20260819", [_row(outcome="passed")])
+
+    monkeypatch.setattr(config.session, "is_simulation", True, raising=False)
+    db.record_signal_ledger("20260819", [_row(outcome="reentry")])
+
+    rows = db.get_signal_ledger()
+    assert len(rows) == 2, "실전·모의가 한 행에 합산됐다"
+
+    real = db.get_signal_ledger(is_sim=0)
+    sim = db.get_signal_ledger(is_sim=1)
+    assert len(real) == 1 and real[0]["passed"] == 1 and real[0]["blocked_reentry"] == 0
+    assert len(sim) == 1 and sim[0]["blocked_reentry"] == 1 and sim[0]["passed"] == 0
+
+
+def test_같은_계좌의_주기는_종전대로_한_행에_누적된다(db, monkeypatch):
+    """계좌를 가른다고 주기 누적이 깨지면 완전·부분 차단 구분이 통째로 무너진다."""
+    monkeypatch.setattr(config.session, "is_simulation", False, raising=False)
+    for _ in range(3):
+        db.record_signal_ledger("20260819", [_row(outcome="gate_vol")])
+
+    rows = db.get_signal_ledger(is_sim=0)
+    assert len(rows) == 1
+    assert rows[0]["cycles"] == 3 and rows[0]["blocked_vol"] == 3
+
+
+def test_옛_원장은_실전으로_옮겨진다(tmp_path, monkeypatch):
+    """is_sim 없이 만들어진 원장이 있어도 기동이 깨지지 않고 행이 보존돼야 한다."""
+    import sqlite3
+
+    path = tmp_path / "legacy.sqlite"
+    conn = sqlite3.connect(str(path))
+    conn.execute('''
+        CREATE TABLE signal_ledger (
+            date TEXT, code TEXT, name TEXT, cycles INTEGER DEFAULT 0,
+            passed INTEGER DEFAULT 0, blocked_vol INTEGER DEFAULT 0,
+            blocked_abr INTEGER DEFAULT 0, blocked_hold INTEGER DEFAULT 0,
+            blocked_corr INTEGER DEFAULT 0, blocked_rs INTEGER DEFAULT 0,
+            blocked_tq INTEGER DEFAULT 0, blocked_reentry INTEGER DEFAULT 0,
+            blocked_other INTEGER DEFAULT 0, max_score REAL DEFAULT 0.0,
+            max_vol REAL, min_abr REAL, last_state TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (date, code)
+        )''')
+    conn.execute("INSERT INTO signal_ledger (date, code, name, cycles, passed, max_score) "
+                 "VALUES ('20260818', '005930', '삼성전자', 7, 2, 8.1)")
+    conn.commit()
+    conn.close()
+
+    original = config.DB_FILE_PATH
+    config.DB_FILE_PATH = str(path)
+    try:
+        manager = DBManager()
+        rows = manager.get_signal_ledger()
+        assert len(rows) == 1
+        assert rows[0]["is_sim"] == 0, "옛 행은 실전으로 옮겨져야 한다"
+        assert rows[0]["cycles"] == 7 and rows[0]["passed"] == 2
+        # 옮긴 뒤에도 같은 (일자, 종목)에 계속 누적된다.
+        monkeypatch.setattr(config.session, "is_simulation", False, raising=False)
+        manager.record_signal_ledger("20260818", [_row(outcome="passed")])
+        rows = manager.get_signal_ledger(is_sim=0)
+        assert len(rows) == 1 and rows[0]["cycles"] == 8
+    finally:
+        if getattr(getattr(manager, "local", None), "conn", None):
+            manager.local.conn.close()
+        config.DB_FILE_PATH = original

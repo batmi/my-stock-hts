@@ -34,8 +34,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 
+from tools.audit_common import exits  # noqa: E402
+
 INITIAL_CAPITAL = 10_000_000  # 실거래 시드와 같게 둔다(seed-slot-sizing)
-SELL_REASONS = ("ATR손절", "손절", "본전청산", "시간청산", "트레일링스탑", "점수하락", "교체")
+# [SSOT 2026-08-19] 청산 표본은 tools/audit_common.exits 가 정한다. 사유를 여기서
+#  다시 나열하면 두 가지가 조용히 샌다 — 증액(피라미딩)이 청산으로 들어오거나,
+#  점수매도가 상태 문자열로 기록된 청산(이평선 완전 이탈 등)이 표본에서 빠진다.
 
 # 방어주 — KRX 업종 기준(통신 / 전기가스 / 음식료 / 필수소비 유통).
 #  경기와 무관하게 수요가 유지된다고 통상 분류되는 업종만 넣는다. 제약·바이오는 한국에서
@@ -74,7 +78,7 @@ def new_scale_fn_factory(dates, days):
 
 
 def metrics(r):
-    sells = [t for t in r["trades"] if t["reason"] in SELL_REASONS]
+    sells = exits(r)
     profits = sorted((t["profit"] for t in sells), reverse=True)
     top10 = profits[:max(1, len(profits) // 10)]
     wins = [p for p in profits if p > 0]

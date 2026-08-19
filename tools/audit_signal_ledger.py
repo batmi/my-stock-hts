@@ -45,11 +45,17 @@ BLOCK_COLS = {
 GATE_COLS = ("blocked_vol", "blocked_abr", "blocked_hold")   # 실매매 전용 수급 게이트
 
 
-def load(db_path, start, end):
+def load(db_path, start, end, is_sim=0):
+    """원장을 읽는다. 기본은 **실전(is_sim=0)만** — 실전·모의는 같은 DB 파일을 쓴다.
+
+    두 모드를 섞어 세면 안 된다. 재진입 차단·상관 차단은 그 계좌의 보유 상태에서 나오므로,
+    모의 원장이 섞이면 차단율이 어느 계좌 얘기인지 알 수 없어진다. (관찰모드는 --db로
+    파일 자체를 갈아끼우므로 이 구분과 무관하다.)
+    """
     if db_path:
         config.DB_FILE_PATH = db_path
     from modules.db_manager import DBManager
-    return DBManager().get_signal_ledger(start_date=start, end_date=end)
+    return DBManager().get_signal_ledger(start_date=start, end_date=end, is_sim=is_sim)
 
 
 def forward_returns(rows, horizon):
@@ -86,11 +92,14 @@ def main():
     ap.add_argument("--start", default=None, help="YYYYMMDD")
     ap.add_argument("--end", default=None, help="YYYYMMDD")
     ap.add_argument("--forward", type=int, default=20, help="전방 수익 지평(거래일)")
+    ap.add_argument("--account", default="real", choices=["real", "sim", "all"],
+                    help="원장 계좌 구분 (기본 real=실전만. 실전·모의는 같은 DB를 쓴다)")
     ap.add_argument("--min-sample", type=int, default=15,
                     help="이 미만이면 전방 수익 비교를 '판정 불가'로 보고한다")
     args = ap.parse_args()
 
-    rows = load(args.db, args.start, args.end)
+    _scope = {"real": 0, "sim": 1, "all": None}[args.account]
+    rows = load(args.db, args.start, args.end, is_sim=_scope)
     if not rows:
         print("[없음] 신호 원장이 비어 있다. 자동매매가 돌아야 쌓인다 "
               "(2026-08-19 이전 기간은 원장이 없다 — 그때는 로그를 봐야 한다).")

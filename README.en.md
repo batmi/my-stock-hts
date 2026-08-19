@@ -308,7 +308,8 @@ This system applies a robust backend architecture to solve concurrency issues an
     *   Previously that record existed only as log text and was deleted after 30 days, pinning the audit window at 18 trading days and leaving "is the gate a net gain or loss?" unanswerable. Parsing was also fragile — `[askbid:3.92]` (informational) and `askbid:3.92<1.0` (blocked) differ by one character.
     *   Decision points now write the outcome **directly to the DB (`signal_ledger`)**. Each **(date, code) pair is one row** accumulating per-cycle pass counts and per-reason block counts, so at most one row per watchlist symbol per day (~1.5 MB/year; retention `SIGNAL_LEDGER_RETENTION_DAYS`, default 3 years).
     *   This separates **"never passed all day" (fully blocked)** from **"blocked in some cycles only" (partially blocked)**. Counting the latter as blocked would inflate opportunity cost, since those symbols passed later in the day and were actually bought.
-    *   Analysis: `python3 tools/audit_signal_ledger.py [--db db/paper_trading.db] [--forward 20]`
+    *   **Account separation**: real and simulated accounts share one DB file, so ledger rows are split by `is_sim`. Re-entry and correlation blocks depend on that account's holdings, so mixing them makes the block rate meaningless (paper mode uses a separate DB file entirely).
+    *   Analysis: `python3 tools/audit_signal_ledger.py [--db db/paper_trading.db] [--forward 20] [--account real|sim|all]`
     *   Auto-trading logs (`autotrade_*.log`) are audit evidence too, so they are retained separately and longer than general logs (`AUTOTRADE_LOG_RETENTION_DAYS`, default 120 days vs. `LOG_RETENTION_DAYS` 30 days).
 *   **Memory Protection (Raspberry Pi OOM guard)**: 
     *   For long-running operation on constrained devices (e.g., Raspberry Pi 1GB), the quote micro-cache and chart cache enforce a **maximum item count** and evict the oldest entries when exceeded, so memory does not grow unbounded even during full-market scans.
@@ -372,8 +373,9 @@ my-stock-hts/
 │   ├── check_cb.py             # DART disclosure-based CB remaining balance check tool
 │   ├── fetch_intraday_tv.py    # Intraday bar (tvDatafeed) fetch/cache tool
 │   ├── journal_sync_e2e.py     # End-to-end verification for trading journal sync
-│   └── audit_*.py              # Strategy dial audit scripts (backtest-based, 48 files)
-├── tests/                # Pytest unit/integration test codes (2,400+)
+│   ├── audit_common.py         # Shared audit contract (exit-sample definition) used by the tools
+│   └── audit_*.py              # Strategy dial audit scripts (backtest-based, 80 files)
+├── tests/                # Pytest unit/integration test codes (3,000+)
 └── modules/              # Feature-specific module folders
     ├── db_manager.py     # DB connection & query management
     ├── db_queue.py       # Single worker queue proxy for SQLite concurrency control
@@ -480,6 +482,7 @@ Register sensitive information like API Keys as **environment variables**:
 *   `DART_API_KEY`: OpenDART API Key for disclosures (Optional)
 *   `FRED_API_KEY`: FRED API Key for US economic release dates — CPI, employment report, PCE, etc. (Optional, [how to get one](#fred-api-key-free))
 *   `TV_USERNAME`, `TV_PASSWORD`: TradingView account (Optional). Lets tvDatafeed (indices, US Treasury yields) run in **logged-in mode**, with better quotas/stability than anonymous access. If unset, it stays anonymous (nologin) as before and a WARNING is written to the file log (INFO on successful login). The issued token is cached in `data/tv_token.json` for 7 days so restarts don't re-login (frequent logins trigger TradingView's captcha). If a captcha is returned, retry later or sign in once from a browser and restart.
+*   The index screen fetches indices in parallel workers, but tvDatafeed and yfinance calls are each serialized behind a global lock (source protection). When a source is flaky the last few queue up, so a **collection deadline** (`INDEX_FETCH_DEADLINE_SEC`, default 60s) marks anything past it as `수신 실패 (N초 내 미응답)` and still renders the rest (0 waits indefinitely, the old behavior). When one symbol exhausts its retries a **circuit breaker** opens so subsequent tvDatafeed calls try only once (120s; a single success closes it).
 *   `JOURNAL_API_URL`, `JOURNAL_API_KEY`: Sync fills to a remote trading-journal web server (Optional, [details](#13--trading-journal-sync)). Both must be set for the integration to turn on.
 *   `JOURNAL_SOURCE`: Server-side sync scope identifier (Optional, default: `my-stock-hts`). **Must differ per machine (installation).**
 *   `JOURNAL_BOT_ID`: Prefix for the bot identifier (Optional, default: the `JOURNAL_SOURCE` value). The actual `botId` appends the runtime mode and account (`raspi:real:68029263`), because the mode comes from the `--mode` CLI flag and is invisible to environment variables.

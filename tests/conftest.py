@@ -1,3 +1,4 @@
+import json as _json
 import sys
 import os
 import pytest
@@ -69,24 +70,61 @@ def block_side_effects_for_whole_session():
     #  호출부가 '조회 실패' 경로를 그대로 타므로 빠르고 결정적이다.
     #  '조용히 가짜 성공'이 되지 않는 것이 핵심이다 — 성공을 흉내 내지 않는다.
     #  실 서버가 필요한 진단은 tools/ 에서 pytest 밖으로 돌린다.
+    #
+    #  [확대 2026-08-19] 종전에는 KIS·TV·야후만 막았다. 그런데 토스(mode 3·4의 시세·주문
+    #  소스)가 열려 있어 test_toss_api.py가 목 없이 실 서버를 호출했고, 실행마다 결과가
+    #  달라지며 로그에 '401 invalid-token → 토큰 재발급' 경고가 찍혔다(실측: 전체 스위트
+    #  3회 중 1회 실패). 위 ①②③은 토스에도 그대로 적용된다 — 특히 ③은 파이에서 자동매매가
+    #  도는 중이면 실 운용 토큰을 무효화할 수 있다(같은 앱키 재발급 = 앞선 토큰 폐기).
+    #  DART·네이버·KRX·구글뉴스도 같은 이유로 함께 막는다.
+    #  차단 응답은 **호스트별 실패 형태**로 돌려준다. 한 가지 형태로 통일하면 파서가
+    #  예외를 내면서 '차단'이 '버그'로 보인다.
     _LIVE_HOSTS = ("koreainvestment.com", "tradingview.com", "finance.yahoo.com")
+    _TOSS_HOSTS = ("tossinvest.com",)
+    _DART_HOSTS = ("opendart.fss.or.kr", "dart.fss.or.kr")
+    _ETC_HOSTS = ("finance.naver.com", "news.google.com", "krx.co.kr")
 
-    class _BlockedLiveResponse:
+    class _BlockedResponse:
+        """차단 응답의 공통 껍데기 — 본문만 호스트별로 갈아끼운다."""
         status_code = 200
-        text = '{"rt_cd": "1", "msg_cd": "TEST_BLOCKED"}'
+        headers = {}
 
-        @staticmethod
-        def json():
-            return {"rt_cd": "1", "msg_cd": "TEST_BLOCKED",
-                    "msg1": "[테스트 격리] 실 서버 접속이 차단되었습니다",
-                    "output": {}, "output1": [], "output2": []}
+        def __init__(self, payload):
+            self._payload = payload
+            self.text = _json.dumps(payload, ensure_ascii=False)
+            self.content = self.text.encode("utf-8")
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            return None
+
+    _BLOCKED_MSG = "[테스트 격리] 실 서버 접속이 차단되었습니다"
+
+    def _blocked_for(url):
+        if any(h in url for h in _TOSS_HOSTS):
+            # 토스 envelope: 200 + result 없음 → 호출부가 '조회 실패'로 흐른다.
+            #  비 2xx로 막으면 TossApiError가 나면서 재시도·토큰 재발급 경로가 돈다.
+            return _BlockedResponse({"result": None,
+                                     "error": {"code": "TEST_BLOCKED", "message": _BLOCKED_MSG}})
+        if any(h in url for h in _DART_HOSTS):
+            # DART status 013 = '조회된 데이터 없음'(정상 케이스) → 경고 로그 없이 빈 결과.
+            return _BlockedResponse({"status": "013", "message": _BLOCKED_MSG, "list": []})
+        if any(h in url for h in _ETC_HOSTS):
+            return _BlockedResponse({})
+        return _BlockedResponse({"rt_cd": "1", "msg_cd": "TEST_BLOCKED",
+                                 "msg1": _BLOCKED_MSG,
+                                 "output": {}, "output1": [], "output2": []})
+
+    _ALL_BLOCKED = _LIVE_HOSTS + _TOSS_HOSTS + _DART_HOSTS + _ETC_HOSTS
 
     def _guarded_request(self, method, url, *args, **kwargs):
         u = str(url)
         if "api.telegram.org" in u:
             return _FakeTelegramResponse()
-        if any(h in u for h in _LIVE_HOSTS):
-            return _BlockedLiveResponse()
+        if any(h in u for h in _ALL_BLOCKED):
+            return _blocked_for(u)
         return _orig_request(self, method, url, *args, **kwargs)
 
     mp.setattr(_requests.Session, "request", _guarded_request)
@@ -318,6 +356,10 @@ def reset_all_singletons():
     TelegramCommander._instance = None
     # [격리] 시장 국면 TTL 캐시 초기화 (테스트별 모킹 데이터가 캐시로 새지 않도록)
     analysis._MARKET_REGIME_CACHE.clear()
+    # [격리 2026-08-19] tvDatafeed 회로차단. 한 테스트가 '전 재시도 실패'를 만들면 그 신호가
+    #  모듈 전역에 남아, 다음 테스트의 재시도 횟수가 4회 → 1회로 조용히 줄어든다
+    #  (실제로 test_fred_resilience의 백오프 검증이 그렇게 깨졌다).
+    analysis.reset_tvdatafeed_circuit()
     # [격리 2026-08-10] 지수 변동성 배율. trader 루프를 태우는 테스트가 합성 지수
     #  데이터로 이 전역을 갱신하고 되돌리지 않으면, 이후 실행되는 **다른 파일**의
     #  ATR 손절 캡이 조용히 달라진다(effective_atr_stop_cap이 이 값을 본다).
@@ -327,10 +369,24 @@ def reset_all_singletons():
 
     yield
 
+    # [격리 2026-08-19] 인스턴스를 None으로 만들어도 **이미 떠 있는 스레드는 안 죽는다** —
+    #  그 스레드는 옛 self를 참조로 붙들고 있다. 체결 감시가 매도 체결마다 띄우는
+    #  제한 해제 확인 스레드(RestrictionCheck-*, 3초 × 5회)가 대표적이고, 테스트가 끝난
+    #  뒤 patch가 원복된 구간에서 깨어나 다음 테스트의 mock을 건드렸다(실측: 전체 스위트
+    #  3회 중 2회 간헐 실패, 매번 다른 테스트). 참조를 끊기 전에 종료 신호부터 준다.
+    _monitor = ConclusionMonitor._instance
+    if _monitor is not None:
+        try:
+            _monitor.is_running = False
+            _monitor.shutdown.set()
+        except Exception:
+            pass
+
     AutoTrader._instance = None
     ConclusionMonitor._instance = None
     TelegramCommander._instance = None
     analysis._MARKET_REGIME_CACHE.clear()
+    analysis.reset_tvdatafeed_circuit()
     _atr_engine.set_vol_regime_ratio(1.0)
 
 def create_mock_df(trend='up', periods=100, start_price=10000):

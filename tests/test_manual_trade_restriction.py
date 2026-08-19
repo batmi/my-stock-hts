@@ -182,9 +182,10 @@ def test_manual_sell_removes_restriction_from_account(mock_dependencies):
     # Mock domestic balance to return 0 holdings for 005930
     mock_api.get_domestic_balance.return_value = ([], {}) # Empty holdings means qty = 0
     
-    # We need to speed up the time.sleep(3) in the thread, so patch time.sleep
-    with patch('modules.auto_trade.conclusion.time.sleep', return_value=None):
-        monitor = ConclusionMonitor()
+    # 제한 해제 확인 스레드의 대기(3초 × 5회)를 건너뛴다. 이 대기는 sleep이 아니라
+    #  monitor.shutdown.wait 이다 — 감시가 멈추면 함께 끝나야 하기 때문이다(2026-08-19).
+    monitor = ConclusionMonitor()
+    with patch.object(monitor.shutdown, 'wait', return_value=False):
         monitor.initialized = True
         
         # Reset cancel_status/order_status to avoid logic skips
@@ -240,8 +241,9 @@ def test_manual_sell_partial_keeps_restriction_in_account(mock_dependencies):
         'hldg_qty': '5'
     }], {})
     
-    with patch('modules.auto_trade.conclusion.time.sleep', return_value=None):
-        monitor = ConclusionMonitor()
+    # 대기는 sleep이 아니라 monitor.shutdown.wait 이다(2026-08-19) — 건너뛴다.
+    monitor = ConclusionMonitor()
+    with patch.object(monitor.shutdown, 'wait', return_value=False):
         monitor.initialized = True
         monitor.order_status = {}
         
@@ -288,8 +290,9 @@ def test_manual_sell_removes_only_account_restriction(mock_dependencies):
     # Mock domestic balance to return 0 holdings
     mock_api.get_domestic_balance.return_value = ([], {})
     
-    with patch('modules.auto_trade.conclusion.time.sleep', return_value=None):
-        monitor = ConclusionMonitor()
+    # 대기는 sleep이 아니라 monitor.shutdown.wait 이다(2026-08-19) — 건너뛴다.
+    monitor = ConclusionMonitor()
+    with patch.object(monitor.shutdown, 'wait', return_value=False):
         monitor.initialized = True
         monitor.order_status = {}
         
