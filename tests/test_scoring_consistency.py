@@ -152,7 +152,8 @@ def test_theme_analysis_ui_score_params(mock_db_rule, mock_regime, mock_chart, m
     """AI 심층 분석 UI에서 시장 국면 보정값이 점수 계산에 반영되는지 검증"""
     mock_chart.return_value = pd.DataFrame({'close': [10000]*20, 'high': [10000]*20, 'low': [10000]*20, 'open': [10000]*20, 'volume': [1000]*20})
     
-    with patch('rich.prompt.Prompt.ask', side_effect=["5", "005930", "y", "n"]), \
+    with patch.dict('config.MARKET_REGIME_PARAMS', {'USE_ADAPTIVE_THRESHOLD': True}), \
+         patch('rich.prompt.Prompt.ask', side_effect=["5", "005930", "y", "n"]), \
          patch('modules.analysis.classify_stock_state') as mock_classify, \
          patch('api.get_stock_name_by_code', return_value="삼성전자"):
         
@@ -160,6 +161,7 @@ def test_theme_analysis_ui_score_params(mock_db_rule, mock_regime, mock_chart, m
         
         mock_classify.assert_called()
         _, kwargs = mock_classify.call_args
+        
         # 시장 보정값이 적용된 thresholds가 전달되었는지 확인
         assert 'thresholds' in kwargs
         assert kwargs['thresholds']['BUY_SCORE'] == config.ANALYSIS_THRESHOLDS['BUY_SCORE'] - 0.5
