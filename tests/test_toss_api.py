@@ -2019,12 +2019,12 @@ def test_merge_index_volume_from_yfinance_fills_volume():
         'open': [7000.0] * 3, 'high': [7000.0] * 3, 'low': [7000.0] * 3,
         'close': [7000.0, 7100.0, 7200.0], 'volume': [0, 0, 0],
     })
-    yf = pd.DataFrame({
-        'date': ['20260713', '20260714', '20260715'],
-        'open': [0.0] * 3, 'high': [0.0] * 3, 'low': [0.0] * 3,
-        'close': [0.0] * 3, 'volume': [100, 200, 300],
-    })
-    with patch("api.get_chart_data", return_value=yf) as mock_yf:
+    # [2026-08-19] 보강은 api.get_chart_data가 아니라 **야후 원본**을 직접 받는다.
+    #  전자를 쓰면 ^KS200·^KQ150이 지수 소스 체인으로 되돌려져 조회가 자기 자신을 다시
+    #  부르고 영구 교착한다(tests/test_index_source_recursion.py).
+    raw = pd.DataFrame({'Volume': [100, 200, 300]},
+                       index=pd.to_datetime(['2026-07-13', '2026-07-14', '2026-07-15']))
+    with patch("api.fetch_yfinance_data", return_value=raw) as mock_yf:
         out = analysis._merge_index_volume_from_yfinance(tv, "^KS11")
     assert list(out['volume']) == [100.0, 200.0, 300.0]   # 거래량 채워짐
     assert list(out['close']) == [7000.0, 7100.0, 7200.0]  # 가격은 tvDatafeed 유지
@@ -2040,7 +2040,7 @@ def test_merge_index_volume_noop_when_yfinance_empty():
         'open': [1.0] * 2, 'high': [1.0] * 2, 'low': [1.0] * 2,
         'close': [1.0, 2.0], 'volume': [0, 0],
     })
-    with patch("api.get_chart_data", return_value=pd.DataFrame()):
+    with patch("api.fetch_yfinance_data", return_value=pd.DataFrame()):
         out = analysis._merge_index_volume_from_yfinance(tv, "^KQ150")
     assert list(out['volume']) == [0, 0]
 

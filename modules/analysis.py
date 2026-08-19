@@ -324,23 +324,41 @@ def _merge_index_volume_from_yfinance(df, yf_ticker):
     """
     if not yf_ticker or df is None or df.empty or 'date' not in df.columns:
         return df
+    # [교착 수정 2026-08-19] 종전에는 api.get_chart_data(yf_ticker)를 불렀다. 그런데 지수
+    #  '단일 소스' 규칙(2026-07)이 들어오면서 ^KS200·^KQ150은 그 안에서 다시 지수 소스
+    #  체인으로 되돌려진다 → get_domestic_index_data → _fetch_index_via_tvdatafeed →
+    #  여기 → get_chart_data … 사이클이 생겼고, get_domestic_index_data의 market_type별
+    #  single-flight 락을 **같은 스레드가 다시 잡으며 영구 교착**했다(토스 모드에서
+    #  코스피200·코스닥150이 조회 중 멈춤 — 2026-08-19 신고).
+    #  거래량 보강에 필요한 것은 야후 원본 거래량뿐이므로 소스 체인을 타지 않고 직접 받는다.
     try:
-        yf_df = api.get_chart_data(yf_ticker, is_overseas=True)
+        raw = api.fetch_yfinance_data(yf_ticker, period="1y")
     except Exception as e:
         logger.debug(f"[TVDATAFEED] 거래량 보강 yfinance 조회 실패({yf_ticker}): {e}")
         return df
-    if yf_df is None or yf_df.empty or 'volume' not in yf_df.columns or 'date' not in yf_df.columns:
+    if raw is None or getattr(raw, 'empty', True):
         return df
 
     vol_map = {}
-    for _, r in yf_df.iterrows():
-        key = str(r['date']).replace('-', '')[:8]
-        try:
-            v = float(r['volume'])
-        except (TypeError, ValueError):
-            continue
-        if v == v and v > 0:  # NaN 제외 & 양수만
-            vol_map[key] = v
+    try:
+        cols = raw.columns
+        if hasattr(cols, 'nlevels') and cols.nlevels > 1:
+            # 단일 티커라도 group_by에 따라 MultiIndex가 올 수 있다.
+            raw = raw.xs(yf_ticker, axis=1, level=-1) if yf_ticker in cols.get_level_values(-1) \
+                else raw.droplevel(-1, axis=1)
+        if 'Volume' not in raw.columns:
+            return df
+        for idx, v in raw['Volume'].items():
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                continue
+            if v == v and v > 0:  # NaN 제외 & 양수만
+                key = idx.strftime('%Y%m%d') if hasattr(idx, 'strftime') else str(idx).replace('-', '')[:8]
+                vol_map[key] = v
+    except Exception as e:
+        logger.debug(f"[TVDATAFEED] 거래량 보강 파싱 실패({yf_ticker}): {e}")
+        return df
     if not vol_map:
         return df
 
@@ -1086,6 +1104,19 @@ def _current_market_day():
     except Exception:
         return datetime.now().strftime('%Y%m%d')
 
+# [재진입 가드 2026-08-19] 같은 스레드가 같은 market_type 조회 안에서 다시 들어오면
+#  아래 single-flight 락을 자기 자신이 다시 잡아 **영구 교착**한다. 실제로 거래량 보강이
+#  api.get_chart_data를 타고 이 함수로 되돌아와 토스 모드 코스피200·코스닥150이 멈췄다.
+#  산식이 아니라 호출 그래프의 문제라 언제든 재발할 수 있으므로, 교착 대신 '보강 없이
+#  진행'으로 빠지고 경고를 남긴다 — 멈추는 것보다 시끄러운 편이 낫다.
+_INDEX_FETCH_INPROGRESS = threading.local()
+
+
+def _index_fetch_reentrant(market_type):
+    """이 스레드가 이미 같은 지수를 조회하는 중인가."""
+    return market_type in getattr(_INDEX_FETCH_INPROGRESS, "types", ())
+
+
 def _get_index_fetch_lock(market_type):
     """market_type별 single-flight 잠금을 반환한다(없으면 생성)."""
     with _INDEX_FETCH_LOCKS_GUARD:
@@ -1312,28 +1343,45 @@ def get_domestic_index_data(market_type, force_refresh=False):
         # status == 'miss'/'expired': 동기 조회 필요
 
     # 2. single-flight: market_type별 1개 스레드만 실제 조회, 나머지는 대기 후 결과 공유
+    if _index_fetch_reentrant(market_type):
+        # 같은 스레드가 이미 이 지수를 조회 중이다 — 락을 다시 잡으면 영구 교착이다.
+        logger.warning(f"[MARKET_INDEX] {market_type} 조회가 자기 자신을 다시 불렀다 "
+                       f"(호출 그래프 순환) — 재귀 호출은 캐시값으로 되돌린다")
+        return _lookup_index_cache(market_type)[1]
+
     fetch_lock = _get_index_fetch_lock(market_type)
     with fetch_lock:
-        stale_df = None
-        # 대기 중 다른 스레드가 캐시를 채웠을 수 있으니 재확인(강제 갱신 제외)
-        if not force_refresh:
-            status, df = _lookup_index_cache(market_type)
-            if status in ('fresh', 'suppress'):
-                return df
-            if status == 'stale':
-                _trigger_async_refresh(market_type)
-                return df
-            stale_df = df  # 'miss' → None / 'expired' → 날짜 지난 옛 데이터(폴백용)
+        if not hasattr(_INDEX_FETCH_INPROGRESS, "types"):
+            _INDEX_FETCH_INPROGRESS.types = set()
+        _INDEX_FETCH_INPROGRESS.types.add(market_type)
+        try:
+            return _fetch_index_locked(market_type, force_refresh)
+        finally:
+            _INDEX_FETCH_INPROGRESS.types.discard(market_type)
 
-        df = _fetch_domestic_index_data(market_type)
-        _store_index_cache(market_type, df)
 
-        # 조회 실패(빈 결과) 시 직전 정상 데이터(stale)로 폴백
-        if (df is None or df.empty) and stale_df is not None and not stale_df.empty:
-            # 날짜가 지난 데이터를 계속 서빙하는 상황은 조용히 넘기면 안 된다(등락률 고착·국면 오판).
-            logger.warning(f"[MARKET_INDEX] {market_type} 지수 재조회 실패 — 직전(과거) 데이터로 폴백")
-            return stale_df
-        return df
+def _fetch_index_locked(market_type, force_refresh):
+    """single-flight 락을 잡은 상태의 실제 조회 본문(get_domestic_index_data 전용)."""
+    stale_df = None
+    # 대기 중 다른 스레드가 캐시를 채웠을 수 있으니 재확인(강제 갱신 제외)
+    if not force_refresh:
+        status, df = _lookup_index_cache(market_type)
+        if status in ('fresh', 'suppress'):
+            return df
+        if status == 'stale':
+            _trigger_async_refresh(market_type)
+            return df
+        stale_df = df  # 'miss' → None / 'expired' → 날짜 지난 옛 데이터(폴백용)
+
+    df = _fetch_domestic_index_data(market_type)
+    _store_index_cache(market_type, df)
+
+    # 조회 실패(빈 결과) 시 직전 정상 데이터(stale)로 폴백
+    if (df is None or df.empty) and stale_df is not None and not stale_df.empty:
+        # 날짜가 지난 데이터를 계속 서빙하는 상황은 조용히 넘기면 안 된다(등락률 고착·국면 오판).
+        logger.warning(f"[MARKET_INDEX] {market_type} 지수 재조회 실패 — 직전(과거) 데이터로 폴백")
+        return stale_df
+    return df
 
 # 국면 문자열 -> 점수 보정 설정 키. 국면 상태를 추가할 때 이 표만 갱신하면 된다.
 REGIME_SCORE_ADJ_KEYS = {

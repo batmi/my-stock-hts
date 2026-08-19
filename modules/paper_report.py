@@ -9,6 +9,7 @@
 '시드 대비 성과'와 백테스트 분포 대비 위치.
 """
 import logging
+from datetime import datetime
 
 from rich import box
 from rich.prompt import Prompt
@@ -146,9 +147,122 @@ def _print_status():
     config.console.print(
         f"[dim]※ 백테스트에서 3년을 손실로 끝낸 경로 {BACKTEST_REFERENCE['손실 경로 비율']}%, "
         f"PF 1.0 미만 {BACKTEST_REFERENCE['PF 1.0 미만 비율']}%. 손실 구간은 설계상 정상입니다.[/dim]")
+    _print_verification_detail(perf)
+
     config.console.print(
         "[dim]※ 체결 내역·일별 성과는 [5-4] 트레이딩 평가, 잔고·평가손익은 [9-1] 자산 조회·"
         "[9-2] 보유 잔고에서 그대로 확인할 수 있습니다.[/dim]")
+
+
+def _holding_days(started):
+    """보유 일수(달력일). 시간 청산이 달력일 기준이므로 같은 기준으로 센다."""
+    if not started:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y%m%d"):
+        try:
+            return (datetime.now() - datetime.strptime(str(started)[:19], fmt)).days
+        except ValueError:
+            continue
+    return None
+
+
+def _print_verification_detail(perf):
+    """검증용 상세 — '지금 무엇이 돌고 있나'를 청산 없이도 확인할 수 있게 한다.
+
+    [왜 필요한가] 위 표는 청산이 쌓여야 채워진다(PF·승률·연속손절). 운용 초기에는 전부
+    0이라, 화면만 보면 시스템이 일하고 있는지 멈춰 있는지 구분되지 않는다. 그런데 이
+    모드의 존재 이유가 '실매매와 같은 판정을 하는지' 확인하는 것이므로, 판정의 산출물인
+    **포지션 상태**(보유일·증액 차수·TS 무장·청산선)를 그대로 보여준다. 표시선은 실제
+    청산 로직과 같은 함수(engine.compute_trailing_stop)로 계산한다 — 표시용으로 다시
+    쓰면 화면과 실제 청산선이 갈라진다.
+    """
+    positions = paper_broker.get_positions()
+    curve = paper_broker.get_equity_curve()
+
+    # 1) 표본 적정성 — 위의 '백테스트 분포 대비'가 3년 경로와의 비교라 반드시 함께 읽어야 한다.
+    days = _holding_days(perf.get("started_at"))
+    parts = []
+    if days is not None:
+        parts.append(f"운용 {days}일")
+    parts.append(f"자산 스냅샷 {len(curve)}개")
+    parts.append(f"청산 {perf['sell_count']}건")
+    config.console.print(f"\n[bold]운용 표본[/bold] [dim]({' · '.join(parts)})[/dim]")
+    if perf["sell_count"] < 20 or (days is not None and days < 180):
+        config.console.print(
+            "[dim yellow]※ 위 분포 대비는 3년 경로와의 비교입니다. 표본이 이만큼일 때는 "
+            "위치(백분위)를 성과 판정으로 읽지 마세요 — 지금 읽을 값은 '규칙대로 동작하는가'입니다."
+            "[/dim yellow]")
+
+    # 2) 노출 — 백테스트가 재현하는 슬롯 경쟁·현금 제약이 실제로 걸리고 있는가.
+    slots = getattr(config, "SYSTEM_MAX_HOLDINGS", 4) or 4
+    cash_ratio = (perf["cash"] / perf["total"] * 100) if perf["total"] else 0.0
+    config.console.print(
+        f"[dim]· 슬롯 {len(positions)}/{slots} 사용 · 현금 비중 {cash_ratio:.1f}% "
+        f"(슬롯이 차 있는데 현금이 많으면 증액 여력이 남았다는 뜻입니다)[/dim]")
+
+    if not positions:
+        return
+
+    # 3) 포지션 상세 — 판정 로직의 현재 출력물
+    from modules import db_manager
+    from modules.auto_trade import engine
+
+    highs = {}
+    try:
+        highs = db_manager.db.get_all_trailing_stops() or {}
+    except Exception as e:
+        logger.debug(f"[PAPER] 트레일링 고점 조회 실패: {e}")
+
+    time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 15)
+    use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
+
+    pt = Table(title="\n보유 포지션 상세 (판정 상태)", box=box.HORIZONTALS,
+               header_style="dim", border_style="dim")
+    for col, just in (("종목", "left"), ("보유", "right"), ("평단", "right"),
+                      ("현재가", "right"), ("수익률", "right"), ("증액", "right"),
+                      ("최고가", "right"), ("TS", "left"), ("TS 기준", "right"),
+                      ("시간청산", "right")):
+        pt.add_column(col, justify=just, no_wrap=True)
+
+    for p in positions:
+        cur = paper_broker._current_price(p["code"], p["avg_price"])
+        profit = (cur - p["avg_price"]) / p["avg_price"] * 100 if p["avg_price"] else 0.0
+        held = _holding_days(p.get("first_buy_at"))
+        try:
+            pyr = db_manager.db.get_pyramid_count(p["code"])
+        except Exception:
+            pyr = -1
+        high = float(highs.get(p["code"]) or 0.0)
+
+        ts = engine.compute_trailing_stop(high, p["avg_price"], cur) if high else None
+        if ts is None:
+            ts_txt, ts_ref = "[dim]추적 전[/dim]", "[dim]-[/dim]"
+        elif ts["armed"]:
+            # 무장했으면 '지금 이 가격 아래로 내려가면 판다' — 실제 청산선을 그대로 보여준다.
+            ts_txt = "[red]무장[/]"
+            ts_ref = f"청산 {ts['stop_price']:,.0f} (-{ts['callback']:.1f}%)"
+        else:
+            # 아직이면 '얼마나 더 올라야 무장하는가'가 확인할 값이다.
+            ts_txt = "[dim]대기[/dim]"
+            ts_ref = f"발동 +{ts['activation']:.1f}% (최고 +{ts['max_profit_rate']:.1f}%)"
+
+        if use_time_stop and held is not None:
+            left = time_stop_days - held
+            stop_txt = f"D-{left}" if left > 0 else "[yellow]도달[/]"
+        else:
+            stop_txt = "[dim]-[/dim]"
+
+        pc = "red" if profit > 0 else ("blue" if profit < 0 else "white")
+        pt.add_row(f"{p['name']}", f"{held if held is not None else '-'}일",
+                   f"{p['avg_price']:,.0f}", f"{cur:,.0f}", f"[{pc}]{profit:+.2f}%[/]",
+                   ("?" if pyr < 0 else f"{pyr}차"), f"{high:,.0f}" if high else "[dim]-[/dim]",
+                   ts_txt, ts_ref, stop_txt)
+        if pt.row_count % 5 == 0 and pt.row_count < len(positions):
+            pt.add_section()
+    config.console.print(pt)
+    config.console.print(
+        "[dim]※ TS 청산선은 실제 청산 판정과 같은 함수(engine.compute_trailing_stop)로 "
+        "계산합니다. '추적 전'은 최고가 기록이 아직 없다는 뜻입니다(매수 직후·재시작 직후).[/dim]")
 
 
 def _adjust_seed(deposit=True):
@@ -237,12 +351,17 @@ def _show_equity_curve():
     t = Table(title="\n일별 가상 자산 추이", box=box.HORIZONTALS, header_style="dim", border_style="dim")
     for col in ("일자", "현금", "주식평가", "총자산", "고점대비"):
         t.add_column(col, justify="left" if col == "일자" else "right")
-    for e in curve[-40:]:
+    rows = curve[-40:]
+    for e in rows:
         peak = max(peak, e["total"])
         dd = (e["total"] - peak) / peak * 100 if peak else 0.0
         c = "blue" if dd < 0 else "white"
         t.add_row(e["date"], f"{e['cash']:,.0f}", f"{e['stock_value']:,.0f}",
                   f"{e['total']:,.0f}", f"[{c}]{dd:.2f}%[/]")
+        # 5행마다 구분선 — 다른 목록 표(종목 표·테마 표)와 같은 규칙. 마지막 행 뒤에는
+        #  넣지 않는다(표 하단 테두리와 겹쳐 두 줄로 보인다).
+        if t.row_count % 5 == 0 and t.row_count < len(rows):
+            t.add_section()
     config.console.print(t)
     if len(curve) > 40:
         config.console.print(f"[dim]※ 최근 40일만 표시 (전체 {len(curve)}일)[/dim]")

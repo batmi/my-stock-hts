@@ -1219,12 +1219,15 @@ def _show_market_indices_core(target_indices=None):
             results_dict = {}
             # 야후 API 동시 호출 차단을 방지하고 부드러운 진행을 위해 max_workers를 5로 조정
             max_w = 5
-            # [마감 시한 2026-08-19] 종전에는 as_completed에 timeout이 없어, 워커 하나가
-            #  안 끝나면 화면이 무한정 기다렸다(토스 모드에서 전체 지수가 96%에 정지).
+            # [정지 감지 2026-08-19] 종전에는 as_completed를 타임아웃 없이 기다려, 워커 하나가
+            #  안 끝나면 화면이 무한정 멈췄다(토스 모드 전체 지수가 96%에서 정지).
             #  워커의 외부 호출은 전역 락(tvDatafeed·yfinance)으로 직렬화되므로 소스가
-            #  흔들리면 마지막 몇 개가 줄을 선다. 시한을 넘긴 지수는 '수신 실패'로 표시한다
-            #  — 표를 못 보는 것보다 무엇을 못 받았는지 보이는 편이 낫다(fail-closed).
-            deadline = getattr(config, 'INDEX_FETCH_DEADLINE_SEC', 60) or 0
+            #  흔들리면 마지막 몇 개가 줄을 선다.
+            #  재는 것은 **전체 소요가 아니라 '한 건도 끝나지 않은 채 흐른 시간'** 이다.
+            #  전체에 시한을 걸면 느리지만 진행 중인 실행에서도 꼬리가 항상 잘린다 —
+            #  실제로 그렇게 만들었다가 코스피200·코스닥150이 매번 '수신 실패'로 찍혔다.
+            #  이 둘은 tvDatafeed를 쓰는 마지막 주자라 전체 시한의 꼬리에 항상 걸린다.
+            stall_sec = getattr(config, 'INDEX_FETCH_STALL_SEC', 60) or 0
             executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_w)
             try:
                 futures = {}
@@ -1235,9 +1238,21 @@ def _show_market_indices_core(target_indices=None):
                     df_intraday = stored['intra'].copy() if not stored['intra'].empty else pd.DataFrame()
                     futures[executor.submit(_process_index_worker, name, ticker, df_daily, df_intraday)] = name
 
-                try:
-                    for future in concurrent.futures.as_completed(
-                            futures, timeout=(deadline if deadline > 0 else None)):
+                pending = set(futures)
+                while pending:
+                    done, pending = concurrent.futures.wait(
+                        pending, timeout=(stall_sec if stall_sec > 0 else None),
+                        return_when=concurrent.futures.FIRST_COMPLETED)
+                    if not done:
+                        # 대기 시간 동안 한 건도 끝나지 않았다 = 진행이 멈췄다.
+                        late = [futures[f] for f in pending]
+                        for name in late:
+                            results_dict[name] = {'status': 'timeout', 'name': name, 'sec': stall_sec}
+                            progress.advance(task)
+                        logger.warning(f"[MARKET_INDEX] {stall_sec}초 동안 진행 없음 — "
+                                       f"{len(late)}개 지수를 '수신 실패'로 표시: {', '.join(late)}")
+                        break
+                    for future in done:
                         name = futures[future]
                         try:
                             results_dict[name] = future.result()
@@ -1245,15 +1260,8 @@ def _show_market_indices_core(target_indices=None):
                             results_dict[name] = {'status': 'error', 'name': name, 'error': e}
                         finally:
                             progress.advance(task)
-                except concurrent.futures.TimeoutError:
-                    late = [n for f, n in futures.items() if n not in results_dict]
-                    for name in late:
-                        results_dict[name] = {'status': 'timeout', 'name': name, 'sec': deadline}
-                        progress.advance(task)
-                    logger.warning(f"[MARKET_INDEX] 수집 마감 시한({deadline}s) 초과 — "
-                                   f"{len(late)}개 지수를 '수신 실패'로 표시: {', '.join(late)}")
             finally:
-                # 시한을 넘긴 워커를 기다리지 않는다(with 블록은 항상 join하므로 쓰지 않는다).
+                # 멈춘 워커를 기다리지 않는다(with 블록은 항상 join하므로 쓰지 않는다).
                 #  아직 시작하지 않은 작업은 취소하고, 진행 중인 호출은 자체 타임아웃으로 끝난다.
                 executor.shutdown(wait=False, cancel_futures=True)
 

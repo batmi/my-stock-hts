@@ -186,6 +186,16 @@ def block_external_market_api(request, monkeypatch):
     monkeypatch.setattr(config, "USE_MULTI_PRICE", False, raising=False)
     monkeypatch.setattr(api, "_MULTI_PRICE_DISABLED", False, raising=False)
 
+    # [격리 2026-08-19] yfinance는 세션 스코프의 requests 차단을 **우회한다** — curl_cffi
+    #  세션을 자체 생성하므로 requests.Session.request를 갈아끼워도 소용이 없다(실측: 지수
+    #  거래량 보강 테스트에 야후 실 거래량 474,100이 들어왔다). 앱 쪽 진입점에서 막는다.
+    #  빈 DataFrame은 yfinance의 실제 실패 형태와 같아 호출부가 '조회 실패' 경로를 탄다 —
+    #  가짜 성공을 만들지 않는다. 데이터가 필요한 테스트는 각자 이 함수를 patch하고,
+    #  fetch_yfinance_data 자체의 로직을 검증하는 테스트는 @pytest.mark.real_yfinance 로
+    #  이 차단을 비활성화한다(그 테스트는 api.yf.download를 직접 patch하므로 망을 타지 않는다).
+    if not request.node.get_closest_marker("real_yfinance"):
+        monkeypatch.setattr(api, "fetch_yfinance_data", lambda *a, **k: pd.DataFrame())
+
 _EMPTY_DOMESTIC_BALANCE = {
     'rt_cd': '0', 'msg_cd': 'MOCK', 'msg1': '테스트용 빈 잔고',
     'output1': [],

@@ -27,6 +27,7 @@ def reset_singletons():
 # ==========================================================
 # 1. api.py 커버리지 보완
 # ==========================================================
+@pytest.mark.real_yfinance
 @patch('api.yf.download')
 @patch('api.clear_yfinance_cache')
 @patch('time.sleep')
