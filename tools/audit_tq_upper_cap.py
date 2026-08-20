@@ -52,6 +52,12 @@ def main():
     ap.add_argument("--dead-frac", type=float, default=0.2)
     ap.add_argument("--subperiods", type=int, default=3)
     ap.add_argument("--caps", default="300,500,1000")
+    # [하한 축] "회귀선이 우하향(TQ<0)이면 점수를 넘어도 사지 않는다"는 제안을 같은
+    #  기계로 잰다. 상한과 방향만 다를 뿐 질문의 구조가 같고(후보를 지우면 그 자리에
+    #  다음 후보가 들어온다), 특히 **같은 차단율 무작위 대조**가 필수라 도구를 따로
+    #  만들지 않고 여기에 붙인다. 비어 있으면 종전과 완전히 같게 동작한다.
+    ap.add_argument("--floors", default="",
+                    help="추세품질 하한 게이트(쉼표 구분, 예: 0,10). 이 값 미만이면 배제")
     # [대조군의 분산] 무작위 차단은 '한 번 뽑은 패턴'이다. 1회 실행에서 구간3의 4.0% 대조가
     #  282.2%(기준선 191.8%)로 튀었고 6.5% 대조는 177.6%로 내려갔다 — 차단율이 높은 쪽이
     #  더 나쁜, 순서가 뒤집힌 결과다. 대조가 그만큼 흔들린다는 뜻이므로 한 장으로 판정하면
@@ -68,7 +74,8 @@ def main():
                     help="옛 기본 정렬(점수만·동점은 등록 순서)로 되돌려 잰다")
     args = ap.parse_args()
     seeds = [int(x) for x in args.seeds.split(",")]
-    caps = [float(x) for x in args.caps.split(",")]
+    caps = [float(x) for x in args.caps.split(",") if x.strip()]
+    floors = [float(x) for x in args.floors.split(",") if x.strip()]
     slots = getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
 
     config.session.load_stock_config()
@@ -146,6 +153,17 @@ def main():
             return False
         return g
 
+    def floor_gate(floor):
+        """이력 부족(None/비유한)은 통과시킨다 — 상한 게이트·실매매와 같은 fail-open 규약."""
+        def g(day, code, _held):
+            counters["calls"] += 1
+            q = tq_map.get(code, {}).get(str(day))
+            if q is not None and np.isfinite(q) and q < floor:
+                counters["blocks"] += 1
+                return True
+            return False
+        return g
+
     def rnd_gate(rate, salt):
         def g(day, code, _held):
             # 결정적 난수 — 같은 (날짜,종목)은 항상 같은 판정이라 팔 사이 비교가 재현된다.
@@ -195,6 +213,11 @@ def main():
             res = run(wd, cap_gate(cap))
             rates[cap] = counters["blocks"] / max(1, counters["calls"])
             show(f"TQ 상한 {cap:.0f} (차단 {rates[cap] * 100:.1f}%)", res, base)
+        for fl in floors:
+            counters["calls"] = counters["blocks"] = 0
+            res = run(wd, floor_gate(fl))
+            rates[("floor", fl)] = counters["blocks"] / max(1, counters["calls"])
+            show(f"TQ 하한 {fl:.0f} (차단 {rates[('floor', fl)] * 100:.1f}%)", res, base)
         for cap in caps:
             if rates[cap] <= 0:
                 print(f"  [대조] 상한 {cap:.0f}은 이 창에서 한 건도 차단하지 않았다 "
@@ -208,6 +231,21 @@ def main():
                 pooled += r
                 per_draw.append(float(np.mean([m["ret"] for m in r])))
             show(f"[대조] 무작위 {rates[cap] * 100:.1f}% ({len(per_draw)}장 평균)",
+                 pooled, base * max(1, args.placebo_draws))
+            print("      장별 수익%: " + " · ".join(f"{x:.1f}" for x in per_draw)
+                  + f"  (표준편차 {np.std(per_draw):.1f})", flush=True)
+        for fl in floors:
+            rate = rates[("floor", fl)]
+            if rate <= 0:
+                print(f"  [대조] 하한 {fl:.0f}은 이 창에서 한 건도 차단하지 않았다 "
+                      f"— 대조를 세울 것이 없다(비교 불가).", flush=True)
+                continue
+            pooled, per_draw = [], []
+            for j in range(max(1, args.placebo_draws)):
+                r = run(wd, rnd_gate(rate, f"plcF{fl:.0f}|{wn}|{j}"))
+                pooled += r
+                per_draw.append(float(np.mean([m["ret"] for m in r])))
+            show(f"[대조] 무작위 {rate * 100:.1f}% (하한{fl:.0f}·{len(per_draw)}장 평균)",
                  pooled, base * max(1, args.placebo_draws))
             print("      장별 수익%: " + " · ".join(f"{x:.1f}" for x in per_draw)
                   + f"  (표준편차 {np.std(per_draw):.1f})", flush=True)
