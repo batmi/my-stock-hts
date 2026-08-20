@@ -119,6 +119,41 @@ def test_paper_fill_uses_ledger_price(paper, monitor, monkeypatch):
     assert inserted[0][0][4] == pytest.approx(trading_cost.apply_slippage(70000, 'buy'))
 
 
+def test_paper_fill_updates_order_row_price(paper, monitor, monkeypatch):
+    """접수 행의 단가도 체결가로 갱신된다 — 실체결 경로와 같은 규약.
+
+    [배경] 성과 리포트(9-4)는 접수·체결 두 행을 (거래일, odno)로 병합하는데, 체결가를
+     채택하는 것은 접수 단가가 0(시장가)일 때뿐이다. 지정가 주문은 접수 단가가 그대로
+     남아, 관찰모드 리포트의 단가·매매금액이 주문가로 굳었다(가상 브로커는 슬리피지를
+     얹어 체결하므로 지정가 주문도 항상 어긋난다). 실체결 경로는 update_trade로 이미
+     갱신하고 있었다 — 관찰모드만 빠져 있었던 파리티 결함이다.
+    """
+    res = api.place_order("domestic", "buy", "005930", 1, 70000, "00")  # 지정가
+    odno = res['output']['ODNO']
+    fill_price = trading_cost.apply_slippage(70000, 'buy')
+    assert fill_price != 70000, "슬리피지가 0이면 이 테스트가 아무것도 지키지 못한다"
+
+    trader = _FakeTrader()
+    trader.order_manager.pending_orders['005930'] = {odno: OrderStatus.ORDER_SENT}
+    monkeypatch.setattr(auto_trade, 'AutoTrader', lambda: trader)
+    monkeypatch.setattr(db_manager.db, 'get_trade_by_odno',
+                        lambda o: {'type': 'buy(AUTO)', 'name': '삼성전자', 'qty': 1,
+                                   'price': 70000, 'reason': '조건 만족'})
+    monkeypatch.setattr(db_manager.db, 'check_trade_exists', lambda *a, **k: False)
+    monkeypatch.setattr(db_manager.db, 'insert_trade', lambda *a, **k: None)
+    monkeypatch.setattr(api, 'send_telegram_message', lambda msg, **k: None)
+
+    updates = []
+    monkeypatch.setattr(db_manager.db, 'update_trade',
+                        lambda o, **k: updates.append((o, k)))
+
+    monitor._check_conclusions()
+
+    assert updates, "접수 행의 단가가 갱신되지 않았다"
+    assert updates[0][0] == odno
+    assert updates[0][1]['price'] == pytest.approx(fill_price)
+
+
 def test_paper_pending_without_ledger_stays_open(paper, monitor, monkeypatch):
     """원장에 없는 주문은 건드리지 않는다(주문 기록 큐 지연 시 오탐 방지)."""
     trader = _FakeTrader()

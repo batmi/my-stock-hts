@@ -1023,6 +1023,16 @@ class ConclusionMonitor:
                 if config.FILE_DEBUG_LEVEL == "DEBUG":
                     logger.debug(f"[ORDER_DEBUG] insert_trade 성공")
 
+                # [체결가 파리티] 원 '접수' 행의 단가도 체결가로 갱신한다 — 실체결 경로가
+                #  하는 것과 같다(_check_conclusions의 update_trade(odno, price=avg_price)).
+                #  성과 리포트는 접수·체결 행을 (거래일, odno)로 병합하는데, 병합 규칙이
+                #  체결가를 채택하는 것은 **접수 단가가 0(시장가)일 때뿐**이다. 지정가로
+                #  낸 주문은 접수 단가가 남아, 관찰모드에서만 리포트의 단가·매매금액이
+                #  주문가로 굳었다(가상 브로커는 슬리피지를 얹어 체결하므로 항상 어긋난다).
+                #  손익은 체결 행에서 병합되므로 단가만 어긋나 더 눈에 띄지 않았다.
+                if price > 0:
+                    db_manager.db.update_trade(odno, price=price)
+
                 # 3. 알림 발송 (상세 정보 포함)
                 try:
                     type_name = "매수" if "buy" in type_str.lower() or "매수" in type_str else "매도"
