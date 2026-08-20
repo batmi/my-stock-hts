@@ -44,10 +44,10 @@ def test_seed_and_initial_state(paper):
 def test_buy_sell_roundtrip_updates_cash_and_positions(paper):
     """매수→매도 왕복에서 현금·포지션·손익이 일관되게 갱신된다.
 
-    [2026-08-10] 체결가에 슬리피지가 붙는다. 종전에는 관찰모드만 '지정가 그대로 체결'이라
-    백테스트보다 구조적으로 유리했고, 두 성과를 직접 비교할 수 없었다.
+    [2026-08-20] 지정가 주문은 주문가 그대로 체결된다 — 주문가가 이미
+    adjust_to_tick(현재가 × (1 + SLIPPAGE_RATE))이라 백테스트 체결가와 같은 자리다.
     """
-    buy_fill = trading_cost.apply_slippage(70000, 'buy')
+    buy_fill = paper_broker.fill_price(70000, 'buy')
     res = api.place_order("domestic", "buy", "005930", 10, 70000, "00")
     assert res['rt_cd'] == '0' and res['output']['ODNO']
     assert paper.get_cash() == pytest.approx(
@@ -55,7 +55,7 @@ def test_buy_sell_roundtrip_updates_cash_and_positions(paper):
     pos = paper.get_positions()
     assert len(pos) == 1 and pos[0]['qty'] == 10 and pos[0]['avg_price'] == pytest.approx(buy_fill)
 
-    sell_fill = trading_cost.apply_slippage(77000, 'sell')
+    sell_fill = paper_broker.fill_price(77000, 'sell')
     res = api.place_order("domestic", "sell", "005930", 10, 77000, "00")
     assert res['rt_cd'] == '0'
     assert paper.get_positions() == []
@@ -66,14 +66,50 @@ def test_buy_sell_roundtrip_updates_cash_and_positions(paper):
     assert fill['profit_amt'] == pytest.approx(expected)
 
 
+def test_limit_fill_matches_backtest_execution_price(paper):
+    """지정가 체결가가 **백테스트 체결가와 같은 자리**여야 한다 (슬리피지 이중 부과 금지).
+
+    [배경] 주문가는 호출부가 adjust_to_tick(현재가 × (1 ± SLIPPAGE_RATE))로 만든다
+     — '체결 확률 확보'용 버퍼이지 비용 모델이 아니다. 2026-08-10~08-20 사이의
+     가상 브로커는 그 위에 슬리피지를 한 번 더 얹어 편도 0.4%를 물렸고, 백테스트는
+     편도 0.2%였다. 관찰모드가 전략이 아니라 비용 모델 때문에 뒤처지면 mode 4로
+     실매매와 백테스트를 견주는 일 자체가 불가능해진다.
+    """
+    import utils
+    slip = config.SLIPPAGE_RATE
+    assert slip > 0, "슬리피지가 0이면 이 테스트가 아무것도 지키지 못한다"
+
+    for current, action in ((70000, 'buy'), (70000, 'sell')):
+        raw = current * (1 + slip) if action == 'buy' else current * (1 - slip)
+        order_price = int(utils.adjust_to_tick(raw, is_overseas=False))   # 실매매 주문가
+        backtest_px = int(utils.adjust_to_tick(raw, is_overseas=False))   # 백테스트 체결가
+        assert paper_broker.fill_price(order_price, action) == pytest.approx(backtest_px)
+
+
+def test_market_fill_applies_slippage_and_tick(paper):
+    """시장가만 슬리피지를 얹고, 그 결과는 실재하는 호가여야 한다."""
+    import utils
+    px = paper_broker.fill_price(70000, 'buy', market=True)
+    assert px == pytest.approx(
+        utils.adjust_to_tick(trading_cost.apply_slippage(70000, 'buy'), is_overseas=False))
+    tick = utils.get_tick_size(px, False)
+    assert px % tick == 0, f"호가 단위에 맞지 않는 체결가: {px} (호가 {tick})"
+
+
+def test_limit_order_is_not_slipped_twice(paper):
+    """주문 경로 전체(api.place_order → 원장)에서도 이중 부과가 없다."""
+    api.place_order("domestic", "buy", "005930", 1, 70140, "00")
+    assert paper.get_fills()[-1]['price'] == pytest.approx(70140)
+
+
 def test_reported_profit_nets_out_both_legs(paper):
     """보고 손익에서 매수 수수료도 빠져야 한다 — 한쪽만 빼면 근소한 손실이 '승'이 된다."""
     api.place_order("domestic", "buy", "005930", 10, 70000, "00")
     api.place_order("domestic", "sell", "005930", 10, 77000, "00")
     fill = paper.get_fills()[-1]
 
-    buy_fill = trading_cost.apply_slippage(70000, 'buy')
-    sell_fill = trading_cost.apply_slippage(77000, 'sell')
+    buy_fill = paper_broker.fill_price(70000, 'buy')
+    sell_fill = paper_broker.fill_price(77000, 'sell')
     gross = (sell_fill - buy_fill) * 10
     sell_only = gross - trading_cost.sell_fee(sell_fill * 10)
     assert fill['profit_amt'] < sell_only, "매수 수수료가 빠지지 않았다"
@@ -83,8 +119,8 @@ def test_pyramiding_updates_average_price(paper):
     """추가 매수 시 평단이 수량가중으로 갱신된다(피라미딩 경로)."""
     api.place_order("domestic", "buy", "005930", 10, 70000, "00")
     api.place_order("domestic", "buy", "005930", 5, 76000, "00")
-    b1 = trading_cost.apply_slippage(70000, 'buy')
-    b2 = trading_cost.apply_slippage(76000, 'buy')
+    b1 = paper_broker.fill_price(70000, 'buy')
+    b2 = paper_broker.fill_price(76000, 'buy')
     pos = paper.get_positions()[0]
     assert pos['qty'] == 15
     assert pos['avg_price'] == pytest.approx((b1 * 10 + b2 * 5) / 15)

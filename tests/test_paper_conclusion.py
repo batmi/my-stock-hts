@@ -114,9 +114,10 @@ def test_paper_fill_uses_ledger_price(paper, monitor, monkeypatch):
 
     monitor._check_conclusions()
 
-    # insert_trade(type, code, name, qty, price, ...) — 체결가에는 슬리피지가 붙는다(2026-08-10).
-    # 요점은 '원장에 적힌 체결가를 그대로 쓴다'이지 주문가와 같다는 것이 아니다.
-    assert inserted[0][0][4] == pytest.approx(trading_cost.apply_slippage(70000, 'buy'))
+    # insert_trade(type, code, name, qty, price, ...) — 시장가는 현재가에 슬리피지를
+    # 얹고 호가에 맞춘 값이 체결가다(2026-08-20). 요점은 '원장에 적힌 체결가를 그대로
+    # 쓴다'이지 주문가와 같다는 것이 아니다.
+    assert inserted[0][0][4] == pytest.approx(paper_broker.fill_price(70000, 'buy', market=True))
 
 
 def test_paper_fill_updates_order_row_price(paper, monitor, monkeypatch):
@@ -128,17 +129,17 @@ def test_paper_fill_updates_order_row_price(paper, monitor, monkeypatch):
      얹어 체결하므로 지정가 주문도 항상 어긋난다). 실체결 경로는 update_trade로 이미
      갱신하고 있었다 — 관찰모드만 빠져 있었던 파리티 결함이다.
     """
-    res = api.place_order("domestic", "buy", "005930", 1, 70000, "00")  # 지정가
+    res = api.place_order("domestic", "buy", "005930", 1, 0, "01")  # 시장가
     odno = res['output']['ODNO']
-    fill_price = trading_cost.apply_slippage(70000, 'buy')
-    assert fill_price != 70000, "슬리피지가 0이면 이 테스트가 아무것도 지키지 못한다"
+    expected = paper_broker.fill_price(70000, 'buy', market=True)
+    assert expected != 0, "체결가가 0이면 이 테스트가 아무것도 지키지 못한다"
 
     trader = _FakeTrader()
     trader.order_manager.pending_orders['005930'] = {odno: OrderStatus.ORDER_SENT}
     monkeypatch.setattr(auto_trade, 'AutoTrader', lambda: trader)
     monkeypatch.setattr(db_manager.db, 'get_trade_by_odno',
                         lambda o: {'type': 'buy(AUTO)', 'name': '삼성전자', 'qty': 1,
-                                   'price': 70000, 'reason': '조건 만족'})
+                                   'price': 0, 'reason': '조건 만족'})
     monkeypatch.setattr(db_manager.db, 'check_trade_exists', lambda *a, **k: False)
     monkeypatch.setattr(db_manager.db, 'insert_trade', lambda *a, **k: None)
     monkeypatch.setattr(api, 'send_telegram_message', lambda msg, **k: None)
@@ -151,7 +152,7 @@ def test_paper_fill_updates_order_row_price(paper, monitor, monkeypatch):
 
     assert updates, "접수 행의 단가가 갱신되지 않았다"
     assert updates[0][0] == odno
-    assert updates[0][1]['price'] == pytest.approx(fill_price)
+    assert updates[0][1]['price'] == pytest.approx(expected)
 
 
 def test_paper_pending_without_ledger_stays_open(paper, monitor, monkeypatch):
@@ -291,6 +292,6 @@ def test_get_fill_by_odno(paper):
     odno = res['output']['ODNO']
     fill = paper.get_fill_by_odno(odno)
     assert fill and fill['qty'] == 3 and fill['odno'] == odno
-    assert fill['price'] == pytest.approx(trading_cost.apply_slippage(70000, 'buy'))
+    assert fill['price'] == pytest.approx(paper_broker.fill_price(70000, 'buy'))
     assert paper.get_fill_by_odno("P_UNKNOWN") is None
     assert paper.get_fill_by_odno(None) is None

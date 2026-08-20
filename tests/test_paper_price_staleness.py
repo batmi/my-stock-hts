@@ -28,11 +28,11 @@ CRASH_PRICE = 56000  # 지정가 기준 -20%
 
 
 def _crash_rate():
-    """체결가 기준 하락률. 매수 체결가에는 슬리피지가 붙으므로(2026-08-10) 평단이
-    지정가보다 조금 높고, 같은 현재가에서도 하락률이 -20.00%보다 약간 깊어진다.
-    이 파일의 관심사는 '조회 실패 시 하락분이 장부에서 사라지는가'이지 특정 소수점이
-    아니므로, 기대값을 실제 체결가에서 도출한다."""
-    fill = trading_cost.apply_slippage(BUY_PRICE, 'buy')
+    """체결가 기준 하락률. 지정가 주문은 주문가 그대로 체결된다(2026-08-20 — 주문가에
+    이미 슬리피지 버퍼가 들어 있어 가상 브로커가 또 얹지 않는다). 이 파일의 관심사는
+    '조회 실패 시 하락분이 장부에서 사라지는가'이지 특정 소수점이 아니므로,
+    기대값을 실제 체결가에서 도출한다."""
+    fill = paper_broker.fill_price(BUY_PRICE, 'buy')
     return (CRASH_PRICE - fill) / fill * 100
 
 
@@ -131,8 +131,8 @@ def test_cost_fallback_only_when_no_known_price(paper):
     """
     _buy()
     row = _balance_row(Exception("Toss 401"))
-    # 폴백값은 '평단'이다. 평단은 지정가가 아니라 슬리피지가 붙은 체결가다(2026-08-10).
-    assert int(row['prpr']) == int(trading_cost.apply_slippage(BUY_PRICE, 'buy'))
+    # 폴백값은 '평단'이다 — 지정가 주문은 주문가가 곧 체결가다(2026-08-20).
+    assert int(row['prpr']) == int(paper_broker.fill_price(BUY_PRICE, 'buy'))
     assert row.get('_price_stale') is True
 
 

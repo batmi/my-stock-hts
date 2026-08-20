@@ -131,12 +131,20 @@ def test_slippage_can_be_disabled(monkeypatch):
     assert trading_cost.apply_slippage(10_000, 'buy') == 10_000
 
 
-def test_paper_fill_price_carries_slippage():
-    """관찰모드 체결가에 슬리피지가 실린다 — 종전에는 지정가 그대로였다."""
-    import inspect
+def test_paper_fill_price_slips_market_orders_only():
+    """관찰모드 체결가: 지정가는 주문가 그대로, 시장가만 슬리피지를 얹는다.
+
+    [2026-08-20 정정] 종전 이 테스트는 소스에 "apply_slippage" 문자열이 있는지만 봤고
+     문구는 '지정가 그대로면 안 된다'였다. 그 전제가 틀렸다 — 지정가 주문가는 호출부가
+     이미 현재가 × (1 ± SLIPPAGE_RATE)로 만든 값이라, 거기 또 얹으면 백테스트의 두 배를
+     문다. 문자열 검사로는 이중 부과를 잡을 수 없어 실제 값을 본다.
+    """
     from modules import paper_broker
-    src = inspect.getsource(paper_broker)
-    assert "apply_slippage" in src
+    assert config.SLIPPAGE_RATE > 0
+    assert paper_broker.fill_price(70_000, 'buy') == 70_000
+    assert paper_broker.fill_price(70_000, 'sell') == 70_000
+    assert paper_broker.fill_price(70_000, 'buy', market=True) > 70_000
+    assert paper_broker.fill_price(70_000, 'sell', market=True) < 70_000
 
 
 # ─────────────────────────────────────────────

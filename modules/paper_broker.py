@@ -23,6 +23,7 @@ import threading
 from datetime import datetime
 
 import config
+import utils
 from modules import trading_cost
 
 logger = logging.getLogger(__name__)
@@ -203,6 +204,28 @@ def get_deposit_balance():
             "d2_deposit": cash, "order_possible": cash, "d2_real": cash}
 
 
+def fill_price(price, action, market=False):
+    """가상 체결가 산출의 단일 지점. 지정가는 주문가 그대로, 시장가만 슬리피지+호가정렬.
+
+    [왜 지정가에 얹지 않나] 지정가로 들어온 price는 호출부가 이미 현재가에 슬리피지를
+     더해 만든 값이다(trader/예약주문/텔레그램 모두 adjust_to_tick(현재가 × (1 ±
+     SLIPPAGE_RATE)) — main.py 도움말의 '체결 확률 확보 (현재가 + 슬리피지)'가 그 버퍼다).
+     여기서 한 번 더 얹으면 편도 0.4%가 되어 백테스트(편도 0.2%)의 두 배를 문다.
+     실측(2026-08-20): 현재가 1,188,000 → 주문 1,190,000 → 가상체결 1,192,380(+0.37%),
+     백테스트 모델은 1,190,000(+0.17%). 왕복 0.4%p 초과 부담이라 관찰모드가 전략이
+     아니라 비용 모델 때문에 뒤처진다 — mode 4의 존재 이유를 깨뜨린다.
+    [2026-08-10 도입 당시의 오판] '지정가 그대로 체결이면 백테스트보다 유리하다'고 봤으나
+     그 지정가가 이미 현재가×(1±0.002)라 백테스트 체결가와 같은 자리다.
+    [호가 정렬] 시장가 체결가는 호가 단위에 맞춘다. 종전에는 맞추지 않아 101,796·
+     1,192,380처럼 **실재할 수 없는 가격**이 원장에 남았다(백테스트는 정렬한다).
+    """
+    price = float(price)
+    if not market:
+        return price
+    adj = trading_cost.apply_slippage(price, action)
+    return float(utils.adjust_to_tick(adj, is_overseas=False) or adj)
+
+
 def place_order(action, code, qty, price, name=None):
     """api.place_order 대체. 즉시 전량 체결로 처리하고 KIS 형식 응답을 만든다."""
     with _lock:
@@ -214,7 +237,8 @@ def place_order(action, code, qty, price, name=None):
         if qty <= 0:
             return _fail("주문 수량이 0입니다")
 
-        if price <= 0:  # 시장가 주문 → 현재가로 체결
+        is_market = price <= 0
+        if is_market:  # 시장가 주문 → 현재가로 체결
             price = _current_price(code)
             if price <= 0:
                 return _fail("현재가를 확인할 수 없어 체결 불가")
@@ -228,9 +252,7 @@ def place_order(action, code, qty, price, name=None):
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         odno = f"P{datetime.now().strftime('%y%m%d%H%M%S')}{code[-2:]}"
 
-        # [체결가] 실제로는 호가를 넘겨 잡아야 체결되므로 불리한 방향으로 슬리피지를 얹는다.
-        #  이것이 없으면 관찰모드만 '지정가 그대로 체결'이라 백테스트보다 구조적으로 유리했다.
-        price = trading_cost.apply_slippage(price, action)
+        price = fill_price(price, action, market=is_market)
 
         if action.lower() == 'buy':
             amount = price * qty
