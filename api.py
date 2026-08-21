@@ -280,8 +280,9 @@ def is_us_holiday_on(date_str):
     # [삭제 2026-08-22] KIS 해외 휴장일 TR(overseas-stock/.../chk-holiday, CTCA0904R)은
     #  실전 서버에서 404다(존재하지 않는 엔드포인트). 호출해봐야 항상 None을 돌려주면서
     #  화면에 HTTP 404 경고만 찍었다 → holidays 라이브러리 판정으로 일원화한다.
-    #  (연방공휴일 기준이라 NYSE 전용 휴장인 성금요일은 잡지 못한다)
-    is_holiday = get_holiday_name(date_str, country='US') is not None
+    #  달력은 연방공휴일이 아니라 NYSE(XNYS)를 쓴다 — 증시는 성금요일에 쉬고 콜럼버스데이·
+    #  재향군인의 날에는 열어서, 연방공휴일로 보면 양방향으로 틀렸다.
+    is_holiday = is_exchange_holiday(datetime.strptime(date_str, "%Y%m%d"), "XNYS")
     _HOLIDAY_CACHE[cache_key] = is_holiday
 
     return is_holiday
@@ -314,6 +315,62 @@ def get_holiday_name(date_str, country='KR'):
         logger.debug(f"get_holiday_name error: {e}")
         return None
     return None
+
+# ==========================================================
+# [추가] 거래소 휴장 달력 — 공휴일 ≠ 거래소 휴장이다.
+#  NYSE는 성금요일에 쉬고 콜럼버스데이·재향군인의 날에는 연다. Xetra는 독일 공휴일 중
+#  통일기념일·승천일에 열고 12/24·12/31에는 쉰다. 그래서 국가 공휴일 목록 대신
+#  holidays 라이브러리의 거래소(MIC) 달력을 쓴다.
+EXCHANGE_CALENDARS = {
+    "XNYS": {"financial": "XNYS"},   # 뉴욕증권거래소 — 미국 정규장 지수
+    "XCME": {"financial": "XCME"},   # CME 글로벡스 — 지수선물·원자재·금리·FX
+    "XJPX": {"financial": "XJPX"},   # 도쿄증권거래소
+    "XTAI": {"financial": "XTAI"},   # 타이완증권거래소
+    "XHKG": {"financial": "XHKG"},   # 홍콩거래소
+    "XSHG": {"financial": "XSHG"},   # 상하이증권거래소
+    "XETR": {"financial": "XETR"},   # 프랑크푸르트(Xetra) — Eurex·STOXX 달력과 같다
+    # 런던은 MIC 달력이 없다(IFEU는 ICE 선물용이라 3일뿐). LSE는 잉글랜드 뱅크홀리데이에
+    #  쉬므로 그 목록을 쓴다(2026년 9일 = 실제 LSE 휴장일과 일치).
+    "XLON": {"country": "GB", "subdiv": "ENG"},
+}
+
+# (거래소, 연도) -> 휴장일 date 집합. 지수 한 화면에 판정이 수십 번 불려 매번 달력을
+#  만들면 느리다. 연 단위라 상한 불필요.
+_EXCHANGE_HOLIDAY_CACHE = {}
+_EXCHANGE_CAL_WARNED = set()   # 달력 조회 실패 경고를 거래소당 한 번만 내기 위한 표시
+
+
+def _exchange_holiday_dates(exchange, year):
+    """해당 거래소·연도의 휴장일 date 집합. 조회 실패 시 빈 집합(=휴장 없음으로 본다)."""
+    key = (exchange, year)
+    if key in _EXCHANGE_HOLIDAY_CACHE:
+        return _EXCHANGE_HOLIDAY_CACHE[key]
+    dates = frozenset()
+    try:
+        import holidays
+        spec = EXCHANGE_CALENDARS[exchange]
+        if "financial" in spec:
+            cal = holidays.financial_holidays(spec["financial"], years=year)
+        else:
+            cal = holidays.country_holidays(spec["country"], subdiv=spec.get("subdiv"), years=year)
+        dates = frozenset(cal.keys())
+    except Exception as e:      # noqa: BLE001 - 달력이 없으면 '휴장 아님'으로 두고 계속한다
+        # 구버전 holidays 에는 일부 MIC 달력이 없다. 조용히 퇴화하면 휴장일에 개장 표기가
+        #  붙는 것으로만 드러나므로, 거래소당 한 번은 경고로 남긴다.
+        if exchange not in _EXCHANGE_CAL_WARNED:
+            _EXCHANGE_CAL_WARNED.add(exchange)
+            logger.warning(f"거래소 휴장 달력 조회 실패({exchange}): {e} — 휴장일 판정 없이 진행합니다")
+    _EXCHANGE_HOLIDAY_CACHE[key] = dates
+    return dates
+
+
+def is_exchange_holiday(dt, exchange):
+    """dt(그 거래소 '현지' 날짜)가 휴장일인가. 주말은 보지 않는다(호출부가 따로 본다)."""
+    try:
+        return dt.date() in _exchange_holiday_dates(exchange, dt.year)
+    except Exception:      # noqa: BLE001
+        return False
+
 
 # (계산일 YYYYMMDD, country) -> 직전 거래일 YYYYMMDD. 하루 2건 수준이라 상한 불필요.
 _TRADING_DAY_CACHE = {}

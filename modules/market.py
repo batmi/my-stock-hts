@@ -31,11 +31,18 @@ def clear_market_yf_cache():
         _MARKET_YF_CACHE.clear()
 
 def _us_futures_closed_now():
-    """CME 글로벡스 주말 휴장(금 17:00 ~ 일 18:00 ET) 여부."""
+    """CME 글로벡스 휴장 여부 — 주말(금 17:00 ~ 일 18:00 ET) + 거래소 휴장일.
+
+    휴장일(신정·성금요일·독립기념일·추수감사절·성탄절)은 종일 닫히거나 단축 운영이라
+    시세가 사실상 멈춘다. 표기(*)와 '전일 종가' 선택(_daily_prev_close_idx) 모두 이
+    판정을 쓰므로, 그날의 등락이 0%로 굳지 않게 휴장으로 본다.
+    """
     try:
         et = api.now_us_eastern()
         wd = et.weekday()  # 0=월
-        return wd == 5 or (wd == 6 and et.hour < 18) or (wd == 4 and et.hour >= 17)
+        if wd == 5 or (wd == 6 and et.hour < 18) or (wd == 4 and et.hour >= 17):
+            return True
+        return api.is_exchange_holiday(et, "XCME")
     except Exception:
         return False
 
@@ -87,9 +94,34 @@ US_FUTURES_INDICES = [
     "달러인덱스", "달러환율"
 ]
 CRYPTO_INDICES = ["비트코인", "이더리움", "솔라나", "리플"]
-ASIA_INDICES = ["Japan - 닛케이", "Taiwan - 대만가권", "Hong Kong - 항셍", "China - 상해종합"]
 EU_INDICES = ["UK - FTSE 100", "France - CAC 40", "Germany - DAX 40", "Europe - STOXX 50"]
 KRX_SPOT_INDICES = ["코스피", "코스피200", "코스닥", "코스닥150", "V코스피200"]
+
+# 아시아 지수의 KST 장 시간. 현지 시각대가 KST와 0~1시간 차(도쿄 UTC+9, 대만·홍콩·상해
+#  UTC+8)라 장이 KST 낮 안에 들어온다 — 자정을 넘지 않으므로 KST 날짜·요일로 판정해도
+#  어긋나지 않는다. (점심 휴장은 표기 목적상 무시한다)
+ASIA_SESSION_KST = {
+    "Japan - 닛케이":    (900, 1500),   # 도쿄 09:00~15:00
+    "Taiwan - 대만가권": (1000, 1430),  # 타이베이 09:00~13:30
+    "Hong Kong - 항셍":  (1030, 1700),  # 홍콩 09:30~16:00
+    "China - 상해종합":  (1030, 1600),  # 상하이 09:30~15:00
+}
+ASIA_INDICES = list(ASIA_SESSION_KST)
+
+# 지수 → 휴장 판정에 쓸 거래소 달력(api.EXCHANGE_CALENDARS). 공휴일이 아니라 '거래소가
+#  쉬는 날'을 봐야 한다 — 요일·시각만 보면 골든위크·춘절·뱅크홀리데이에도 개장으로 뜬다.
+INDEX_EXCHANGE = {
+    "Japan - 닛케이": "XJPX",
+    "Taiwan - 대만가권": "XTAI",
+    "Hong Kong - 항셍": "XHKG",
+    "China - 상해종합": "XSHG",
+    "UK - FTSE 100": "XLON",
+    "Germany - DAX 40": "XETR",
+    "Europe - STOXX 50": "XETR",   # STOXX·Eurex 달력은 Xetra와 같다
+    # 유로넥스트 파리는 MIC 달력이 없다. Xetra와 6일이 겹치고 12/24·12/31만 다른데
+    #  (파리는 반일 개장) 그 이틀을 휴장으로 봐도 표기 목적에는 충분하다.
+    "France - CAC 40": "XETR",
+}
 
 def is_market_open_for_index(name):
     """현재 시각 기준으로 해당 지수의 실시간 거래가 진행 중인지 판별한다."""
@@ -134,19 +166,12 @@ def is_market_open_for_index(name):
     if name in US_FUTURES_INDICES:
         return not _us_futures_closed_now()
 
-    if name == "Japan - 닛케이":
-        if wd < 5 and 900 <= t <= 1500: return True
-        return False
-    if name == "Taiwan - 대만가권":
-        if wd < 5 and 1000 <= t <= 1430: return True
-        return False
-    if name == "Hong Kong - 항셍":
-        if wd < 5 and 1030 <= t <= 1700: return True
-        return False
-    if name == "China - 상해종합":
-        if wd < 5 and 1030 <= t <= 1600: return True
-        return False
-    
+    if name in ASIA_SESSION_KST:
+        if wd >= 5 or api.is_exchange_holiday(kst_now, INDEX_EXCHANGE[name]):
+            return False
+        open_t, close_t = ASIA_SESSION_KST[name]
+        return open_t <= t <= close_t
+
     if name in EU_INDICES:
         # [Fix] 유럽 정규장은 KST 16:00~익일 00:30(서머타임 기준)이라 자정을 넘긴다 —
         #  KST 요일·시각으로 판정하면 토요일 00:00~00:30(=금요일장 막바지, 개장 중)이 주말로
@@ -155,7 +180,7 @@ def is_market_open_for_index(name):
         #  → 현지 시각·현지 요일로 판정한다(런던 08:00~16:30 / 중부유럽 09:00~17:30).
         is_london = (name == "UK - FTSE 100")
         eu_now = api.now_europe_london() if is_london else api.now_europe_central()
-        if eu_now.weekday() >= 5:
+        if eu_now.weekday() >= 5 or api.is_exchange_holiday(eu_now, INDEX_EXCHANGE[name]):
             return False
         eu_t = eu_now.hour * 100 + eu_now.minute
         return (800 <= eu_t < 1630) if is_london else (900 <= eu_t < 1730)

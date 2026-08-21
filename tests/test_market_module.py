@@ -223,3 +223,77 @@ def test_europe_dst_transition(monkeypatch):
     assert api_mod.now_europe_london().hour == 1
     _at("2026-10-25 01:00")
     assert api_mod.now_europe_london().hour == 1
+
+
+# ── 거래소 휴장 달력 (공휴일 ≠ 거래소 휴장) ──
+def test_exchange_holiday_calendars():
+    """거래소 달력이 '공휴일 목록'과 갈리는 지점을 옳게 가르는가?"""
+    from datetime import datetime as real_dt
+    import api as api_mod
+
+    def _hol(ex, ymd):
+        return api_mod.is_exchange_holiday(real_dt.strptime(ymd, "%Y%m%d"), ex)
+
+    # NYSE: 연방공휴일이 아닌 성금요일에 쉬고, 연방공휴일인 콜럼버스데이·재향군인의 날엔 연다
+    assert _hol("XNYS", "20260403") is True
+    assert _hol("XNYS", "20261012") is False
+    assert _hol("XNYS", "20261111") is False
+    # Xetra: 독일 공휴일인 통일기념일엔 열고, 공휴일이 아닌 12/24·12/31엔 쉰다
+    assert _hol("XETR", "20261003") is False
+    assert _hol("XETR", "20261224") is True
+    assert _hol("XETR", "20261231") is True
+    # 아시아 장기 휴장
+    assert _hol("XJPX", "20260504") is True    # 골든위크
+    assert _hol("XTAI", "20260217") is True    # 춘절
+    assert _hol("XSHG", "20261001") is True    # 국경절
+    assert _hol("XHKG", "20260403") is True    # 성금요일
+    # LSE(잉글랜드 뱅크홀리데이)
+    assert _hol("XLON", "20260831") is True
+    assert _hol("XLON", "20261002") is False
+    # 달력이 없는 거래소는 '휴장 아님'으로 두고 넘어간다(화면을 막지 않는다)
+    assert api_mod.is_exchange_holiday(real_dt(2026, 1, 1), "NOPE") is False
+
+
+def test_asia_closed_on_exchange_holiday(monkeypatch):
+    """아시아 지수가 장 시간 안이어도 거래소 휴장일이면 닫히는가?"""
+    _fake_now(monkeypatch, "2026-05-04 11:00")            # 월요일 11:00, 일본 골든위크
+    assert market.is_market_open_for_index("Japan - 닛케이") is False
+    _fake_now(monkeypatch, "2026-05-07 11:00")            # 목요일 11:00, 평일
+    assert market.is_market_open_for_index("Japan - 닛케이") is True
+    _fake_now(monkeypatch, "2026-10-01 12:00")            # 목요일 12:00, 중국 국경절
+    assert market.is_market_open_for_index("China - 상해종합") is False
+
+
+def test_europe_closed_on_exchange_holiday(monkeypatch):
+    """유럽 지수가 현지 장 시간 안이어도 거래소 휴장일이면 닫히는가?"""
+    from datetime import datetime as real_dt
+    _fake_now(monkeypatch, "2026-08-31 20:00")
+    monkeypatch.setattr(market.api, 'now_europe_london',
+                        lambda: real_dt(2026, 8, 31, 12, 0))   # 영국 서머 뱅크홀리데이
+    assert market.is_market_open_for_index("UK - FTSE 100") is False
+
+    _fake_now(monkeypatch, "2026-12-24 20:00")
+    monkeypatch.setattr(market.api, 'now_europe_central',
+                        lambda: real_dt(2026, 12, 24, 12, 0))  # Xetra 크리스마스이브 휴장
+    assert market.is_market_open_for_index("Germany - DAX 40") is False
+
+
+def test_us_regular_uses_nyse_calendar(monkeypatch):
+    """미국 정규장이 연방공휴일이 아닌 NYSE 달력으로 판정되는가?"""
+    from datetime import datetime as real_dt
+    _fake_now(monkeypatch, "2026-04-03 23:00")
+    monkeypatch.setattr(market.api, 'now_us_eastern', lambda: real_dt(2026, 4, 3, 10, 0))
+    assert market.is_market_open_for_index("나스닥") is False   # 성금요일 = NYSE 휴장
+
+    _fake_now(monkeypatch, "2026-10-12 23:00")
+    monkeypatch.setattr(market.api, 'now_us_eastern', lambda: real_dt(2026, 10, 12, 10, 0))
+    assert market.is_market_open_for_index("나스닥") is True    # 콜럼버스데이 = NYSE 개장
+
+
+def test_cme_closed_on_exchange_holiday(monkeypatch):
+    """CME 휴장일에는 선물·원자재·FX가 '멈춘 값'으로 판정되는가?"""
+    from datetime import datetime as real_dt
+    monkeypatch.setattr(market.api, 'now_us_eastern', lambda: real_dt(2026, 12, 25, 10, 0))
+    assert market._us_futures_closed_now() is True              # 성탄절(금요일)
+    monkeypatch.setattr(market.api, 'now_us_eastern', lambda: real_dt(2026, 12, 23, 10, 0))
+    assert market._us_futures_closed_now() is False             # 평일

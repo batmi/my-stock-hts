@@ -58,7 +58,9 @@ grpcio-tools
 gspread
 gunicorn
 h2
-holidays
+# 거래소(MIC) 휴장 달력(financial_holidays: XNYS·XCME·XETR·XJPX·XTAI·XHKG·XSHG)을
+#  쓴다 — 구버전은 해당 달력이 없어 지수 개장 표기가 조용히 '휴장 없음'으로 퇴화한다.
+holidays>=0.103
 html5lib
 httpx_aiohttp
 hypothesis
