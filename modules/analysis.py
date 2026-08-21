@@ -4777,9 +4777,11 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
             #  진입 순위에서 점수 동점을 가르는 값이라(후보 점수는 절반 넘게 동점이다)
             #  분류만 봐서는 왜 그 종목이 먼저 잡혔는지 알 수 없었다.
             #  색은 indicators.TREND_QUALITY_COLORS 단일 소스 — 도움말 표와 같은 밴드색이다.
-            #  데이터가 90봉에 못 미치면 None → '-'(흰색, 이력부족).
+            #  데이터가 90봉에 못 미치면 None → '(-)'. 이때는 밴드색이 아니라 dim으로 죽인다 —
+            #  값이 없다는 뜻이므로 같은 행의 분류 '-'와 같은 취급이어야 하고, 개별 분석 표의
+            #  추세품질 행도 이미 그렇게 찍는다(표기 규약 단일화).
             tq_val = indicators.get_trend_quality(chart_df)
-            tq_color = indicators.TREND_QUALITY_COLORS.get(
+            tq_color = "dim" if tq_val is None else indicators.TREND_QUALITY_COLORS.get(
                 indicators.describe_trend_quality(tq_val), "white")
             #  [정렬] 한 컬럼에 두 값을 담으면 분류 문구 길이(매수 4폭 / 강매수 6폭)에 따라
             #   TQ 위치가 들쭉날쭉해 분류도 TQ도 세로로 안 읽힌다. 컬럼을 쪼개는 대신
