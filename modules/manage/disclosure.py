@@ -102,17 +102,21 @@ def _task_done(progress, task):
     return int(t.completed) if t is not None else 0
 
 
-def _gather(codes, days, min_level, progress=None, task=None):
+def _gather(codes, days, min_level, progress=None, task=None, quiet=False):
     """관심종목 공시를 병렬 수집.
 
     progress/task를 받으면 그 진행바에 이어서 진행한다(호출측이 '조회 → 상세' 여러 단계를
     하나의 진행바로 합칠 수 있게 함). 없으면 자체 진행바를 만든다.
+
+    quiet=True면 진행바를 아예 만들지 않는다. 텔레그램 명령처럼 **운영자 콘솔이 아닌
+    곳에서 호출**되는 경로용이다 — 진행바는 config.console에 그려지므로, 백그라운드
+    스레드에서 띄우면 운용자가 보고 있던 화면 위에 남의 진행바가 끼어든다.
     """
     events = []
     if not codes:
         return events
     with contextlib.ExitStack() as stack:
-        if progress is None:
+        if progress is None and not quiet:
             progress = stack.enter_context(_make_progress())
             task = progress.add_task(_PROGRESS_LABEL, total=len(codes))
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
@@ -122,7 +126,8 @@ def _gather(codes, days, min_level, progress=None, task=None):
                     events.extend(fut.result())
                 except Exception:
                     pass
-                progress.advance(task)
+                if progress is not None:
+                    progress.advance(task)
     return events
 
 
@@ -399,7 +404,7 @@ def build_detail_note(e):
     return ""
 
 
-def _enrich_details(events, limit=_DETAIL_LIMIT, progress=None, task=None):
+def _enrich_details(events, limit=_DETAIL_LIMIT, progress=None, task=None, quiet=False):
     """표시 대상 공시 중 상세정보 대상만 병렬 조회해 e['note']를 채운다.
 
     progress/task를 받으면 새 진행바를 만들지 않고 그 막대를 이어서 채운다. 이때
@@ -407,15 +412,16 @@ def _enrich_details(events, limit=_DETAIL_LIMIT, progress=None, task=None):
     미리 예약해 두므로(_DETAIL_LIMIT) 퍼센트가 뒤로 되감기지 않고, 설명 문구도
     바꾸지 않아 하나의 막대로 보인다. (단계마다 라벨이 바뀌고 퍼센트가 되감기면
     사용자에게는 진행바가 두 개 뜬 것처럼 보인다.)
+    quiet=True면 진행바를 만들지 않는다 — _gather의 같은 인자와 뜻이 같다.
     """
     targets = [e for e in events if _detail_eligible(e)][:limit]
     if not targets:
         return
     with contextlib.ExitStack() as stack:
-        if progress is None:
+        if progress is None and not quiet:
             progress = stack.enter_context(_make_progress())
             task = progress.add_task(_PROGRESS_LABEL, total=len(targets))
-        else:
+        elif progress is not None:
             progress.update(task, total=_task_done(progress, task) + len(targets))
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
             futs = {ex.submit(build_detail_note, e): e for e in targets}
@@ -424,7 +430,8 @@ def _enrich_details(events, limit=_DETAIL_LIMIT, progress=None, task=None):
                     futs[fut]["note"] = fut.result()
                 except Exception:
                     futs[fut]["note"] = ""
-                progress.advance(task)
+                if progress is not None:
+                    progress.advance(task)
 
 
 def show_disclosures(days=14):
@@ -480,6 +487,55 @@ def show_disclosures(days=14):
     config.console.print("[dim]🔴 중대  🟠 증자/메자닌  🟢 호재성  🟡 이벤트  🔵 실적 · 원문: dart.fss.or.kr[/dim]")
 
     _maybe_ai_summary(events)
+
+
+# 한 번에 보낼 최대 건수. 전송 계층이 4000자마다 쪼개는데(telegram_notify), 본문 길이만으로
+#  잡으면 안 된다 — 종목코드가 <a href> 링크로 바뀌며 건당 60자 넘게 불어난다(실측 20건
+#  기준 본문 2,600자 → 전송 4,320자로 두 조각). 링크 팽창까지 넣어 한 통에 들어가게 잡는다.
+_TELEGRAM_LIMIT = 15
+
+
+def build_telegram_message(days=14, min_level=1, limit=_TELEGRAM_LIMIT):
+    """텔레그램 /disclosure 용 메시지 — 관심종목 최근 공시 (메뉴 6-6과 같은 소스).
+
+    화면 6-6과 같은 수집·분류·상세추출을 쓰되 표 대신 줄글로 낸다. 다른 점은 둘이다.
+      · 진행바를 만들지 않는다(quiet) — 운영자 콘솔에 남의 진행바가 끼어들면 안 된다.
+      · 건수를 limit으로 끊는다(_TELEGRAM_LIMIT 주석 참조). 40건을 그대로 보내면
+        조각 메시지가 줄줄이 오고, 정작 중요한 위쪽이 묻힌다.
+    AI 요약(_maybe_ai_summary)은 붙이지 않는다 — 대화형 확인 절차라 봇 경로와 맞지 않는다.
+    """
+    codes = _kr_watchlist()
+    if not codes:
+        return "📄 [공시 모니터링]\n등록된 국내 관심종목이 없습니다."
+    if not config.DART_API_KEY:
+        return ("📄 [공시 모니터링]\n⚠️ DART API 키가 설정되지 않았습니다. "
+                "(환경변수 DART_API_KEY)")
+
+    events = _gather(codes, days, min_level, quiet=True)
+    if not events:
+        return (f"📄 [공시 모니터링] 최근 {days}일\n"
+                f"주요 공시가 없습니다. (임원·지분 등 일반 공시는 제외)")
+
+    events.sort(key=lambda e: (e["level"], e["date"]), reverse=True)  # 중요도↓, 최신순
+    shown = events[:limit]
+    _enrich_details(shown, quiet=True)
+
+    lines = [f"📄 [공시 모니터링] 최근 {days}일 · {len(events)}건", ""]
+    for e in shown:
+        lines.append(f"{e['icon']} {_fmt_date(e['date'])} {e['name']} ({e['code']}) — {e['category']}")
+        lines.append(f"  {e['report_nm']}")
+        note = e.get("note", "")
+        if note:
+            lines.append(f"  · 상세: {note}")
+        rcept = e.get("rcept_no")
+        if rcept:
+            lines.append(f"  {DART_VIEWER_URL.format(rcept)}")
+        lines.append("")
+
+    if len(events) > len(shown):
+        lines.append(f"※ 중요도순 상위 {len(shown)}건만 표시했습니다 (전체 {len(events)}건).")
+    lines.append("🔴 중대  🟠 증자/메자닌  🟢 호재성  🟡 이벤트  🔵 실적")
+    return "\n".join(lines)
 
 
 def check_and_alert_disclosures(min_level=2, days=2):

@@ -119,7 +119,11 @@ def send_telegram_message(message, reply_markup=None, is_urgent=False, sync=Fals
 
     # [추가] rich 라이브러리 색상 태그 제거 (텔레그램 전송용)
     # 예: [red]텍스트[/] -> 텍스트. 소문자로 시작하는 태그만 제거하여 [시스템] 등은 유지
-    clean_message = re.sub(r'\[/?[a-z]+(?:[\s=][^\]]*)?\]', '', clean_message)
+    # [Fix] 닫기 태그는 이름이 없을 수 있다([/] = 가장 최근 태그 닫기). 종전 패턴은 이름을
+    #  1자 이상 요구해([a-z]+) '[/]'를 못 지웠고, 화면용 문자열을 그대로 보내는 경로에서
+    #  꼬리에 '[/]'가 그대로 노출됐다(공시 상세 '매출대비 5.4%[/]' 등 — 알림·조회 양쪽).
+    #  열기 태그는 이름을 계속 요구한다(그래야 '[시스템]' 같은 대괄호 표기가 살아남는다).
+    clean_message = re.sub(r'\[/[a-z]*\]|\[[a-z]+(?:[\s=][^\]]*)?\]', '', clean_message)
 
     # [추가] HTML 이스케이프 처리 (HTML 파싱 모드 사용 시 필수)
     clean_message = clean_message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -143,7 +147,9 @@ def send_telegram_message(message, reply_markup=None, is_urgent=False, sync=Fals
         code = match.group(1)
         
         # [추가] 일반 영문 단어나 보조지표명 등이 해외 티커로 오인되어 링크되는 현상 방지
-        exclude_words = {"ON", "OFF", "RSI", "MACD", "ATR", "SMA", "EMA", "CCI", "ADX", "SAR", "OBV", "ETF", "TS", "RUN", "STOP", "WAIT"}
+        #  IR: 공시 제목의 '기업설명회(IR)개최'가 매 건마다 걸린다 — 실제 티커(NYSE)이긴 하나
+        #   관심종목에 없고 오인 빈도가 압도적이라 ON(ON Semiconductor)과 같은 기준으로 제외한다.
+        exclude_words = {"ON", "OFF", "RSI", "MACD", "ATR", "SMA", "EMA", "CCI", "ADX", "SAR", "OBV", "ETF", "TS", "RUN", "STOP", "WAIT", "IR"}
         if code in exclude_words:
             return f"({code})"
 

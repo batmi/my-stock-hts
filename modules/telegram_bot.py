@@ -79,7 +79,8 @@ class TelegramCommander:
             "/delrestrict": self._cmd_delrestrict,   # [추가] 제한 종목 해제
             "/briefing": self._cmd_briefing,         # [추가] 온디맨드 시황 브리핑
             "/stats": self._cmd_stats,               # [추가] 종목별 성과 분석
-            "/calendar": self._cmd_calendar          # [추가] 투자 캘린더(경제 이벤트·배당/실적)
+            "/calendar": self._cmd_calendar,         # [추가] 투자 캘린더(경제 이벤트·배당/실적)
+            "/disclosure": self._cmd_disclosure       # [추가] 관심종목 공시 모니터링 (메뉴 6-6)
         }
 
     def start(self):
@@ -269,6 +270,29 @@ class TelegramCommander:
         except Exception as e:
             logger.error(f"[Telegram] 투자 캘린더 조회 실패: {e}")
             return "⚠️ 투자 캘린더 조회 중 오류가 발생했습니다."
+
+    def _cmd_disclosure(self, args):
+        """관심종목 공시 모니터링 — 메뉴 6-6과 같은 소스.
+
+        인자로 일수를 받는다(기본 14일). '전체'/'all'을 붙이면 중요도 하한을 낮춰
+        일반 공시까지 본다 — 화면 6-6은 노이즈를 줄이려고 level>=1만 보여주는데,
+        원문을 훑어야 할 때가 있어 그 경로도 남긴다.
+        """
+        days, min_level = 14, 1
+        for a in args or []:
+            if a.isdigit():
+                days = max(1, min(90, int(a)))   # 길게 잡아도 메시지만 길어진다
+            elif a.lower() in ("all", "전체"):
+                min_level = 0
+
+        scope = " (일반 공시 포함)" if min_level == 0 else ""
+        self._send_reply(f"⏳ [공시 모니터링] 최근 {days}일 관심종목 공시를 수집 중입니다{scope}...")
+        try:
+            from modules.manage import disclosure
+            return disclosure.build_telegram_message(days=days, min_level=min_level)
+        except Exception as e:
+            logger.error(f"[Telegram] 공시 조회 실패: {e}")
+            return "⚠️ 공시 조회 중 오류가 발생했습니다."
 
     def _get_stock_stats_message(self, keyword=None):
         """종목별 매매 성과 분석 조회"""
@@ -621,6 +645,7 @@ class TelegramCommander:
             "• /scan [시장] : 트레이딩뷰 종목 스캔 (k/u)\n"
             "• /news <종목> : AI 최신 뉴스 5개 및 링크\n"
             "• /calendar [일수] : 경제 이벤트·배당/실적 일정\n"
+            "• /disclosure [일수] [all] : 관심종목 공시 모니터링\n"
             "• /ask <질문> : AI 주식/경제 자유 질문\n\n"
             "📝 [관리 및 기타]\n"
             "• /stocks : 감시 중인 관심 종목 리스트\n"
