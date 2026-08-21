@@ -41,7 +41,7 @@ from modules.auto_trade.engine import (DefaultStrategy, NO_SELLABLE_ALERT_CYCLES
                                        UNMANAGED_BAD_PRICE, UNMANAGED_ETF,
                                        UNMANAGED_NO_SELLABLE, UNMANAGED_RESTRICTED,
                                        UNMANAGED_STALE_PRICE, UNMANAGED_STUCK_PENDING)
-from modules.auto_trade.common import (_enrich_rules_with_weights, _get_trade_account, get_mystock_log_tail, get_restricted_stocks, is_plausible_baseline, is_single_price_break, is_system_market_open, load_daily_initial_asset, save_daily_initial_asset)
+from modules.auto_trade.common import (_enrich_rules_with_weights, _get_trade_account, entry_open_delay_remaining, get_mystock_log_tail, get_restricted_stocks, is_plausible_baseline, is_single_price_break, is_system_market_open, load_daily_initial_asset, save_daily_initial_asset)
 
 console = config.console
 
@@ -5111,6 +5111,20 @@ class AutoTrader:
             if self.consecutive_errors == 0:  # 로그 도배 방지
                 self.log(f"매수 스킵: 방어 모드 — {self.buy_halt_reason or '신규 매수 중단'}")
             return
+
+        # [진입 게이트] 개장 직후 신규 진입 보류. 방어 모드와 같은 자리에 두는 이유는
+        #  '신규 매수만 막고 청산 감시는 그대로 둔다'는 성질이 같기 때문이다 —
+        #  _check_sell_conditions는 이 함수 밖에서 이미 수행된다.
+        #  [근거] 개장 첫 30분 진입은 스파이크를 고점에서 추격하고 되돌림을 맞는다.
+        #   tools/audit_time_of_day.py(30m·씨드5) 전체 136.7% vs 현행 131.1%(47-0-28),
+        #   같은 차단량 무작위 대조 5장 전승 — 상세는 config.SYSTEM_ENTRY_OPEN_DELAY_USE 주석.
+        if is_market_open:
+            delay_left = entry_open_delay_remaining()
+            if delay_left > 0:
+                if self.consecutive_errors == 0:  # 로그 도배 방지
+                    self.log(f"매수 스킵: 개장 직후 진입 보류 — {delay_left // 60}분 "
+                             f"{delay_left % 60}초 남음 (청산 감시는 계속됩니다)")
+                return
 
         # [안전장치] 미체결 주문 현황을 모르면 신규 매수를 보류한다. 재기동 직후 복구
         #  조회가 실패한 상태로 매수하면, 이미 거래소에 걸린 주문을 못 보고 같은 종목에

@@ -66,6 +66,8 @@ def _save_dynamic_config():
         "FILE_DEBUG_LEVEL": getattr(config.settings, 'FILE_DEBUG_LEVEL', "WARNING"),
         "SYSTEM_MAX_CONSECUTIVE_ERRORS": getattr(config.settings, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5),
         "SYSTEM_TRADING_START_TIME": getattr(config.settings, 'SYSTEM_TRADING_START_TIME', "0900"),
+        "SYSTEM_ENTRY_OPEN_DELAY_USE": getattr(config.settings, 'SYSTEM_ENTRY_OPEN_DELAY_USE', True),
+        "SYSTEM_ENTRY_OPEN_DELAY_MINUTES": getattr(config.settings, 'SYSTEM_ENTRY_OPEN_DELAY_MINUTES', 30),
         "SYSTEM_TRADING_END_TIME": getattr(config.settings, 'SYSTEM_TRADING_END_TIME', "1530"),
         "SYSTEM_RISK_PER_TRADE": getattr(config.settings, 'SYSTEM_RISK_PER_TRADE', 4.0),
         "SYSTEM_MAX_PORTFOLIO_RISK": getattr(config.settings, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0),
@@ -516,6 +518,11 @@ def view_system_config(group=None):
         row("거래 시작 시간", "매매 허용 시작 시각 (HHMM, 기본 KRX 개장 0900)", "SYSTEM_TRADING_START_TIME", f"{getattr(config.settings, 'SYSTEM_TRADING_START_TIME', '0900')}")
         row("거래 종료 시간", "매매 허용 종료 시각 (HHMM, 기본 KRX 마감 1530)", "SYSTEM_TRADING_END_TIME", f"{getattr(config.settings, 'SYSTEM_TRADING_END_TIME', '1530')}")
         row("모니터링 주기 (초)", "자동매매 루프 실행 간격", "SYSTEM_TRADING_INTERVAL", f"{getattr(config.settings, 'SYSTEM_TRADING_INTERVAL', 60)}")
+        # [백테스트 보호] 보류 '시간'(30분)은 실측으로 정한 값이라 조회·편집 모두에서 숨긴다
+        #  (BACKTESTED_HIDDEN_KEYS 주석 참조). 운영자에게는 ON/OFF만 남긴다.
+        _eod_use = getattr(config.settings, 'SYSTEM_ENTRY_OPEN_DELAY_USE', True)
+        _eod_min = getattr(config.settings, 'SYSTEM_ENTRY_OPEN_DELAY_MINUTES', 30)
+        row("개장 직후 진입 보류", f"개장 후 {_eod_min}분간 신규 매수만 보류 (손절·트레일링 감시는 계속)", "SYSTEM_ENTRY_OPEN_DELAY_USE", "ON" if _eod_use else "OFF")
 
         subheader("5-2. 주문·체결 감시")
         row("체결 감시 주기", "주문 직후 체결 확인 간격", "CONCLUSION_CHECK_INTERVAL", f"{getattr(config.settings, 'CONCLUSION_CHECK_INTERVAL', 5)}")
@@ -763,6 +770,11 @@ BACKTESTED_HIDDEN_KEYS = {
     "USE_WHIPSAW_RISK_SCALING", "WHIPSAW_LO", "WHIPSAW_HI", "WHIPSAW_MIN_SCALE",
     "USE_DRAWDOWN_RISK_SCALING", "DD_LEVEL_1", "DD_SCALE_1", "DD_LEVEL_2", "DD_SCALE_2",
     "DD_LOOKBACK_DAYS", "GAP_RISK_BUFFER",
+    # 5-1. 개장 직후 진입 보류 시간 — 30분은 실측으로 정한 값이다(tools/audit_time_of_day.py,
+    #  30m봉·씨드5). 60분(=첫 두 봉)으로 늘리면 오히려 기준선 수준으로 떨어지고, 짧게 줄이면
+    #  막으려던 개장 스파이크 구간이 그대로 남는다. '기능이 아니라 값이 문제'인 다이얼이라
+    #  사용 여부(SYSTEM_ENTRY_OPEN_DELAY_USE)만 노출하고 시간은 잠근다.
+    "SYSTEM_ENTRY_OPEN_DELAY_MINUTES",
 }
 
 # [추세추종 보호] 추세추종 원칙(이익은 달리게, 청산은 손절/샹들리에 TS/추세이탈로)에 위배될 수 있는
@@ -943,6 +955,7 @@ _RANGE_RULES = {
     "CHART_LOOKBACK_DAYS":        (373, 3650, "250봉(EMA120·52주 밴드)을 채우려면 373일 이상이 필요합니다"),
     "CHART_CACHE_TTL_MINUTES":    (0, 10080, None),
     "SYSTEM_TRADING_INTERVAL":    (5, 3600, None),
+    "SYSTEM_ENTRY_OPEN_DELAY_MINUTES": (0, 120, None),
     "CONCLUSION_CHECK_INTERVAL":  (1, 600, None),
     "CONCLUSION_CHECK_ACTIVE_DURATION": (1, 3600, None),
     "CONCLUSION_CHECK_IDLE_INTERVAL":   (1, 3600, None),
@@ -1564,13 +1577,18 @@ def _set_journal_sync_use(value):
 
 def _trading_cycle_items():
     """트레이딩 시간/주기/통신 항목 (섹션 5-1 ~ 5-3)"""
-    return [
+    items = [
         {"desc": "거래 시작 시간", "help": "매매 허용 시작 시각 (HHMM). 기본값은 KRX 정규장 개장(0900). NXT 프리마켓까지 운용하려면 0800", "name": "SYSTEM_TRADING_START_TIME", "type": "time", "section": "5-1. 거래 시간·주기",
          "get": lambda: getattr(config.settings, 'SYSTEM_TRADING_START_TIME', "0900"), "set": lambda v: setattr(config.settings, 'SYSTEM_TRADING_START_TIME', v)},
         {"desc": "거래 종료 시간", "help": "매매 허용 종료 시각 (HHMM). 기본값은 KRX 정규장 마감(1530)이며, 종가 단일가(동시호가) 15:20~15:30은 자동 회피하므로 실효 매매는 15:20까지다. NXT 애프터마켓까지 운용하려면 2000", "name": "SYSTEM_TRADING_END_TIME", "type": "time", "section": "5-1. 거래 시간·주기",
          "get": lambda: getattr(config.settings, 'SYSTEM_TRADING_END_TIME', "1530"), "set": lambda v: setattr(config.settings, 'SYSTEM_TRADING_END_TIME', v)},
         {"desc": "모니터링 주기 (초)", "help": "자동매매 루프 실행 간격", "name": "SYSTEM_TRADING_INTERVAL", "type": "int", "section": "5-1. 거래 시간·주기",
          "get": lambda: getattr(config.settings, 'SYSTEM_TRADING_INTERVAL', 60), "set": lambda v: setattr(config.settings, 'SYSTEM_TRADING_INTERVAL', v)},
+
+        {"desc": "개장 직후 진입 보류", "help": "개장(09:00) 후 30분간 신규 매수만 보류합니다(손절·트레일링 감시는 계속). 개장 첫 30분 진입은 스파이크를 고점에서 추격하고 되돌림을 맞는다는 실측 결과에 따른 것이며, 보류 시간 30분은 잠겨 있습니다. 거래 시작 시간을 늦추는 것과 다릅니다 — 그쪽은 청산까지 멈춥니다", "name": "SYSTEM_ENTRY_OPEN_DELAY_USE", "type": "bool", "choices": ["y", "n"], "section": "5-1. 거래 시간·주기",
+         "get": lambda: getattr(config.settings, 'SYSTEM_ENTRY_OPEN_DELAY_USE', True), "set": lambda v: setattr(config.settings, 'SYSTEM_ENTRY_OPEN_DELAY_USE', v)},
+        {"desc": "진입 보류 시간 (분)", "help": "개장(09:00) 후 신규 매수를 보류할 시간. 실측 30분이 최적이며 60분은 오히려 열위다. 0이면 미사용", "name": "SYSTEM_ENTRY_OPEN_DELAY_MINUTES", "type": "int", "section": "5-1. 거래 시간·주기",
+         "get": lambda: getattr(config.settings, 'SYSTEM_ENTRY_OPEN_DELAY_MINUTES', 30), "set": lambda v: setattr(config.settings, 'SYSTEM_ENTRY_OPEN_DELAY_MINUTES', v)},
 
         {"desc": "체결 감시 주기(초)", "help": "주문 직후 체결 확인 간격", "name": "CONCLUSION_CHECK_INTERVAL", "type": "int", "section": "5-2. 주문·체결 감시",
          "get": lambda: getattr(config.settings, 'CONCLUSION_CHECK_INTERVAL', 5), "set": lambda v: setattr(config.settings, 'CONCLUSION_CHECK_INTERVAL', v)},
@@ -1590,6 +1608,9 @@ def _trading_cycle_items():
         {"desc": "매매일지 웹서버 연동", "help": "체결 내역을 원격 매매일지 웹서버(stock-memo)로 자동 전송합니다. 켜려면 환경변수 JOURNAL_API_URL·JOURNAL_API_KEY 가 모두 필요하며(~/.htsrc 에 export 후 재시작), 둘 중 하나라도 없으면 켜도 동작하지 않습니다. 전송은 체결 기록과 같은 트랜잭션으로 대기열에 쌓고 백그라운드 워커가 배치로 보내므로 매매 루프가 네트워크에 지연되지 않습니다. 끄면 대기열 적재도 워커 기동도 하지 않습니다. (기본 OFF)", "name": "JOURNAL_SYNC_USE", "type": "bool", "choices": ["y", "n"], "section": "5-3. 데이터·통신",
          "get": lambda: getattr(config.settings, 'JOURNAL_SYNC_USE', False), "set": _set_journal_sync_use},
     ]
+    # [백테스트 보호] 진입 보류 '시간'은 편집 목록에서 제외 (BACKTESTED_HIDDEN_KEYS 주석 참조).
+    #  정의는 남겨 두어 dynamic_config.json 직접 편집 시의 타입·검증 규칙 근거로 삼는다.
+    return [it for it in items if it["name"] not in BACKTESTED_HIDDEN_KEYS]
 
 def modify_trading_cycle_settings():
     return _edit_config_table("트레이딩 시간 및 주기 (Time & Cycle)", _trading_cycle_items)
@@ -2094,6 +2115,8 @@ def manage_custom_settings():
             "VOLUME_MA_PERIOD": "거래량 이동평균 기간",
             "VOLUME_SPIKE_RATIO": "거래량 폭발 배수",
             "SYSTEM_TRADING_START_TIME": "거래 시작 시간",
+            "SYSTEM_ENTRY_OPEN_DELAY_USE": "개장 직후 진입 보류",
+            "SYSTEM_ENTRY_OPEN_DELAY_MINUTES": "진입 보류 시간 (분)",
             "SYSTEM_TRADING_END_TIME": "거래 종료 시간",
             "SYSTEM_TRADING_INTERVAL": "모니터링 주기 (초)",
             "CONCLUSION_CHECK_INTERVAL": "체결 감시 주기(초)",

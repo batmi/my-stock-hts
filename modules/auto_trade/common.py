@@ -540,6 +540,47 @@ def is_system_market_open():
         return True
     return False
 
+KRX_REGULAR_OPEN_TIME = "0900"   # KRX 정규장 개장 (프리마켓 설정과 무관한 고정 기준)
+
+
+# [진입 게이트] 개장 직후 신규 진입 보류 (청산에는 관여하지 않는다)
+def entry_open_delay_remaining(now=None):
+    """개장 직후 보류가 걸려 있으면 남은 초, 아니면 0을 돌려준다.
+
+    **신규 진입에만 쓴다.** 손절·트레일링은 이 함수를 보지 않는다 — 거래 시간
+    설정(SYSTEM_TRADING_START_TIME)을 늦춰 같은 효과를 내려 하면 매수와 청산이 함께
+    멈춰 개장 직후 갭 구간이 무방비가 된다(is_system_market_open 참조).
+
+    기준 시각은 KRX 정규장 개장(0900)과 거래 시작 시간 중 **늦은 쪽**이다. 프리마켓까지
+    운용하려고 START_TIME을 0800으로 넓힌 경우에도 막아야 하는 구간은 08:00~08:30이
+    아니라 09:00~09:30이다(tools/audit_time_of_day.py가 잰 것이 그것이다).
+    """
+    if not getattr(config, 'SYSTEM_ENTRY_OPEN_DELAY_USE', True):
+        return 0
+    try:
+        minutes = int(getattr(config, 'SYSTEM_ENTRY_OPEN_DELAY_MINUTES', 30) or 0)
+    except (TypeError, ValueError):
+        minutes = 30
+    if minutes <= 0:
+        return 0
+
+    now = now or datetime.now()
+    start = str(getattr(config, 'SYSTEM_TRADING_START_TIME', "0900") or "0900")
+    base = max(start, KRX_REGULAR_OPEN_TIME)
+    try:
+        open_at = now.replace(hour=int(base[:2]), minute=int(base[2:4]),
+                              second=0, microsecond=0)
+    except (ValueError, IndexError):
+        return 0
+
+    # 개장 전(예: 프리마켓 구간)에는 보류를 걸지 않는다 — is_system_market_open이
+    #  이미 판단한 '거래 가능 시간'에 대해서만 진입 시점을 미루는 게이트다.
+    if now < open_at:
+        return 0
+    remain = (open_at + timedelta(minutes=minutes) - now).total_seconds()
+    return int(remain) if remain > 0 else 0
+
+
 # [리팩토링] 단일가(동시호가) 휴게 구간 판단 (단일 진입점)
 #  - 상태 안내 문구들이 각자 시각 문자열만 비교하다 보니, 휴장일(주말·공휴일)에도 같은 시각대면
 #    "단일가 매매 동기화 대기"로 안내되는 문제가 있었다. 휴장일에는 단일가 구간 자체가 없다.
