@@ -72,9 +72,28 @@ def _k200_night_session(now=None):
     h = (now or datetime.now()).hour
     return h >= 18 or h < 8
 
+# 개장시간이 같은 지수 묶음 — 개폐 판정(is_market_open_for_index)과 제목의 세션 표기가
+#  같은 목록을 봐야 둘이 어긋나지 않는다.
+US_REGULAR_INDICES = [
+    "나스닥", "S&P500", "다우존스", "러셀2000",
+    "SOX (반도체)", "DRG (제약)", "NBI (바이오)", "BKX (은행)", "DJT (운송)",
+    "DJU (유틸/전력)", "XAL (항공)", "XOI (에너지)", "HUI (금광)", "VIX (변동성)",
+    "MSCI 전세계", "MSCI 선진국", "MSCI 신흥국"
+]
+US_FUTURES_INDICES = [
+    "나스닥 선물", "S&P500 선물", "다우존스 선물", "러셀2000 선물",
+    "금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "디젤 ULSD", "천연가스", "밀",
+    "미국채 2년물 금리", "미국채 5년물 금리", "미국채 10년물 금리", "미국채 30년물 금리",
+    "달러인덱스", "달러환율"
+]
+CRYPTO_INDICES = ["비트코인", "이더리움", "솔라나", "리플"]
+ASIA_INDICES = ["Japan - 닛케이", "Taiwan - 대만가권", "Hong Kong - 항셍", "China - 상해종합"]
+EU_INDICES = ["UK - FTSE 100", "France - CAC 40", "Germany - DAX 40", "Europe - STOXX 50"]
+KRX_SPOT_INDICES = ["코스피", "코스피200", "코스닥", "코스닥150", "V코스피200"]
+
 def is_market_open_for_index(name):
     """현재 시각 기준으로 해당 지수의 실시간 거래가 진행 중인지 판별한다."""
-    if name in ["비트코인", "이더리움", "솔라나", "리플"]:
+    if name in CRYPTO_INDICES:
         return True
     if name == "HY OAS (신용위험)":
         return False
@@ -86,40 +105,33 @@ def is_market_open_for_index(name):
     wd = kst_now.weekday()
     
     if name == "코스피200선물":
-        if api.is_holiday_today(): 
-            return False
-        if 845 <= t <= 1545: return True
-        if t >= 1800 or t <= 500: return True
+        # [Fix] 휴장 판정은 '오늘'이 아니라 그 세션이 속한 거래일로 해야 한다.
+        #  야간(CM)장은 18:00에 열려 익일 05:00에 닫히므로 00:00~05:00 구간의 거래일은
+        #  '전날'이다. 오늘(KST) 날짜로 보면 판정이 통째로 뒤집혔다 — 토요일 새벽(=금요일
+        #  야간장, 개장 중)은 주말이라 닫힘으로, 월요일 새벽(세션 없음)은 평일이라 열림으로.
+        if 845 <= t <= 1545 or t >= 1800:
+            return not api.is_holiday_on(kst_now.strftime("%Y%m%d"))
+        if t <= 500:
+            return not api.is_holiday_on((kst_now - timedelta(days=1)).strftime("%Y%m%d"))
         return False
 
-    if name in ["코스피", "코스닥", "코스피200", "코스닥150", "V코스피200"]:
+    if name in KRX_SPOT_INDICES:
         if api.is_holiday_today(): 
             return False
         if 900 <= t <= 1530: return True
         return False
 
-    us_regular = [
-        "나스닥", "S&P500", "다우존스", "러셀2000",
-        "SOX (반도체)", "DRG (제약)", "NBI (바이오)", "BKX (은행)", "DJT (운송)",
-        "DJU (유틸/전력)", "XAL (항공)", "XOI (에너지)", "HUI (금광)", "VIX (변동성)",
-        "MSCI 전세계", "MSCI 선진국", "MSCI 신흥국"
-    ]
-    if name in us_regular:
-        if api.is_us_holiday_today():
-            return False
+    if name in US_REGULAR_INDICES:
+        # [Fix] 휴장 판정은 '미국 동부 날짜'로 한다. 미국 정규장은 KST 22:30~익일 05:00이라
+        #  세션의 대부분이 한국 날짜로는 이튿날이다 — is_us_holiday_today()(한국 날짜 기준)를
+        #  쓰면 금요일 밤 장이 '토요일=주말'로 잡혀, 개장 중인데도 실시간 표기(*)가 사라졌다.
         et_now = api.now_us_eastern()
-        if et_now.weekday() < 5:
-            et_t = et_now.hour * 100 + et_now.minute
-            if 930 <= et_t < 1600: return True
-        return False
+        if api.is_us_holiday_on(et_now.strftime("%Y%m%d")):
+            return False
+        et_t = et_now.hour * 100 + et_now.minute
+        return 930 <= et_t < 1600
 
-    us_futures = [
-        "나스닥 선물", "S&P500 선물", "다우존스 선물", "러셀2000 선물",
-        "금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "디젤 ULSD", "천연가스", "밀",
-        "미국채 2년물 금리", "미국채 5년물 금리", "미국채 10년물 금리", "미국채 30년물 금리",
-        "달러인덱스", "달러환율"
-    ]
-    if name in us_futures:
+    if name in US_FUTURES_INDICES:
         return not _us_futures_closed_now()
 
     if name == "Japan - 닛케이":
@@ -135,13 +147,62 @@ def is_market_open_for_index(name):
         if wd < 5 and 1030 <= t <= 1600: return True
         return False
     
-    eu_markets = ["UK - FTSE 100", "France - CAC 40", "Germany - DAX 40", "Europe - STOXX 50"]
-    if name in eu_markets:
-        if wd < 5:
-            if t >= 1600 or t <= 130: return True
-        return False
+    if name in EU_INDICES:
+        # [Fix] 유럽 정규장은 KST 16:00~익일 00:30(서머타임 기준)이라 자정을 넘긴다 —
+        #  KST 요일·시각으로 판정하면 토요일 00:00~00:30(=금요일장 막바지, 개장 중)이 주말로
+        #  닫히고, 월요일 00:00~01:30(=일요일 저녁, 세션 없음)이 평일로 열린다. 게다가 종전의
+        #  16:00~01:30 창은 서머타임 유무를 한데 뭉뚱그려 양끝에서 각 1시간씩 과대 표기했다.
+        #  → 현지 시각·현지 요일로 판정한다(런던 08:00~16:30 / 중부유럽 09:00~17:30).
+        is_london = (name == "UK - FTSE 100")
+        eu_now = api.now_europe_london() if is_london else api.now_europe_central()
+        if eu_now.weekday() >= 5:
+            return False
+        eu_t = eu_now.hour * 100 + eu_now.minute
+        return (800 <= eu_t < 1630) if is_london else (900 <= eu_t < 1730)
         
     return False
+
+
+def _index_session_group(name):
+    """지수명 → 제목 표기용 시장 그룹명. 개장 시간이 같은 것끼리 묶는다(없으면 None)."""
+    if name in KRX_SPOT_INDICES:
+        return "KRX 정규장"
+    if name == "코스피200선물":
+        return "K200 야간선물" if _k200_night_session() else "K200 주간선물"
+    if name in US_REGULAR_INDICES:
+        return "미국 정규장"
+    if name in US_FUTURES_INDICES:
+        # 지수선물·원자재·금리·FX는 개폐를 CME 글로벡스 시간표 하나로 함께 판정한다
+        #  (미국채는 tvDatafeed 현물, 브렌트·달러인덱스는 ICE라 'CME 선물'로 뭉뚱그리지 않는다)
+        return "해외 선물·원자재·금리·FX"
+    if name in ASIA_INDICES:
+        return "아시아"
+    if name in EU_INDICES:
+        return "유럽"
+    if name in CRYPTO_INDICES:
+        return "암호화폐"
+    return None
+
+
+def open_sessions_tag(names):
+    """지수 표 제목 뒤에 붙일 '지금 실시간으로 움직이는 시장' 표기(rich 마크업).
+
+    종목 표(api.market_session_tag)는 국내/해외 중 하나의 세션만 다루면 되지만, 지수 표는
+    KRX·미국·유럽·CME를 한 장에 담아 세션이 하나로 정해지지 않는다. 그래서 표에 실린
+    지수를 시장 그룹으로 묶어, 열려 있는 그룹만 나열한다(개폐 판정은 행 옆 '*'와 같은 함수).
+    """
+    try:
+        groups = []
+        for name in names:
+            g = _index_session_group(name)
+            if g and g not in groups and is_market_open_for_index(name):
+                groups.append(g)
+        clock = f"[dim]KST {datetime.now().strftime('%H:%M')}[/dim]"
+        body = (f"[green]개장 중 · {', '.join(groups)}[/green]" if groups
+                else "[dim]실시간 개장 중인 시장 없음[/dim]")
+        return f"  [dim]│[/dim] {clock}  [dim]│[/dim] {body}"
+    except Exception:      # noqa: BLE001 - 표기는 부가정보이므로 실패해도 화면을 막지 않는다
+        return ""
 
 # [수정] 지수 리스트 통합 관리 (순서 유지)
 ALL_INDICES = [
@@ -1187,7 +1248,10 @@ def _show_market_indices_core(target_indices=None):
                 time.sleep(0.1)
 
         # 테이블 생성
-        table = Table(title="\n지수 기술적 분석", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
+        # [추가] 제목 옆에 '지금 열려 있는 시장' 표기 — 같은 표라도 시각에 따라 어느 행이
+        #  실시간이고 어느 행이 멈춘 값인지가 통째로 달라진다(행 옆 '*'와 같은 판정).
+        table = Table(title=f"\n지수 기술적 분석{open_sessions_tag(indices_map.keys())}",
+                      box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
         table.add_column("지수명", justify="left", style="white")
         table.add_column("지수", justify="right")
         table.add_column("등락폭 (등락률)", justify="right")

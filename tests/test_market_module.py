@@ -81,3 +81,145 @@ def test_crypto_prev_idx_unaffected(monkeypatch):
     yday = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y%m%d")
     df = _futures_daily_df(yday)
     assert market._daily_prev_close_idx(df, last_price=110.0, is_futures=False) == -1
+
+
+# ── 개장 판정의 '세션 귀속일' (is_market_open_for_index) ──
+#  야간선물은 18:00~익일 05:00, 미국 정규장은 KST 22:30~익일 05:00으로 자정을 넘긴다.
+#  두 세션 모두 '오늘(KST)' 날짜로 휴장을 판정하면 새벽 구간에서 결과가 뒤집힌다.
+def _fake_now(monkeypatch, kst_str):
+    """modules.market 안의 datetime.now()만 고정한다 (다른 모듈은 실제 시각 유지)."""
+    from datetime import datetime as real_dt
+
+    fixed = real_dt.strptime(kst_str, "%Y-%m-%d %H:%M")
+
+    class _DT(real_dt):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed if tz is None else real_dt.now(tz)
+
+    monkeypatch.setattr(market, 'datetime', _DT)
+    return fixed
+
+
+def test_k200_night_futures_open_after_midnight(monkeypatch):
+    """토요일 새벽(=금요일 야간장)에 야간선물이 개장으로 잡히는가?"""
+    _fake_now(monkeypatch, "2026-08-22 00:15")   # 토요일 00:15 = 금요일(08-21) 야간장
+    seen = []
+
+    def _holiday_on(d):
+        seen.append(d)
+        return False                              # 금요일(20260821)은 거래일
+
+    monkeypatch.setattr(market.api, 'is_holiday_on', _holiday_on)
+    assert market.is_market_open_for_index("코스피200선물") is True
+    assert seen == ["20260821"]                   # '오늘(토)'이 아니라 '전날(금)'로 물어야 한다
+
+
+def test_k200_night_futures_closed_when_prev_day_holiday(monkeypatch):
+    """월요일 새벽(전날=일요일)은 야간장 자체가 없으므로 휴장인가?"""
+    _fake_now(monkeypatch, "2026-08-24 03:00")   # 월요일 03:00 → 전날은 일요일
+    monkeypatch.setattr(market.api, 'is_holiday_on',
+                        lambda d: d == "20260823")   # 일요일만 휴장
+    assert market.is_market_open_for_index("코스피200선물") is False
+
+
+def test_us_regular_open_judged_by_eastern_date(monkeypatch):
+    """KST로는 토요일인 시각이라도 미국 동부가 금요일 정규장이면 개장인가?"""
+    from datetime import datetime as real_dt
+    _fake_now(monkeypatch, "2026-08-22 00:15")           # KST 토요일 00:15
+    monkeypatch.setattr(market.api, 'now_us_eastern',
+                        lambda: real_dt(2026, 8, 21, 11, 15))   # ET 금요일 11:15
+    seen = []
+
+    def _us_holiday_on(d):
+        seen.append(d)
+        return False
+
+    monkeypatch.setattr(market.api, 'is_us_holiday_on', _us_holiday_on)
+    assert market.is_market_open_for_index("나스닥") is True
+    assert seen == ["20260821"]                          # 동부 날짜로 물어야 한다
+
+
+def test_open_sessions_tag_lists_only_open_groups(monkeypatch):
+    """제목 표기는 열려 있는 시장 그룹만, 표에 실린 순서대로 나열하는가?"""
+    monkeypatch.setattr(market, 'is_market_open_for_index',
+                        lambda n: n in ("나스닥", "S&P500 선물", "비트코인"))
+    tag = market.open_sessions_tag(["코스피", "나스닥 선물", "나스닥", "S&P500 선물", "비트코인"])
+    assert "개장 중 · 미국 정규장, 해외 선물·원자재·금리·FX, 암호화폐" in tag
+    assert "KRX 정규장" not in tag
+
+
+def test_open_sessions_tag_when_everything_closed(monkeypatch):
+    """전부 닫혀 있으면 '개장 중' 대신 휴장 문구를 내는가?"""
+    monkeypatch.setattr(market, 'is_market_open_for_index', lambda n: False)
+    assert "실시간 개장 중인 시장 없음" in market.open_sessions_tag(["코스피", "나스닥"])
+
+
+def test_europe_open_judged_by_local_time(monkeypatch):
+    """KST로는 토요일 00:15여도 유럽 현지가 금요일 장중이면 개장인가?"""
+    from datetime import datetime as real_dt
+    _fake_now(monkeypatch, "2026-08-22 00:15")                       # KST 토요일 00:15
+    monkeypatch.setattr(market.api, 'now_europe_london',
+                        lambda: real_dt(2026, 8, 21, 16, 15))        # 런던 금 16:15 (마감 16:30 전)
+    monkeypatch.setattr(market.api, 'now_europe_central',
+                        lambda: real_dt(2026, 8, 21, 17, 15))        # 프랑크푸르트 금 17:15
+    assert market.is_market_open_for_index("UK - FTSE 100") is True
+    assert market.is_market_open_for_index("Germany - DAX 40") is True
+
+
+def test_europe_closed_after_local_bell(monkeypatch):
+    """현지 마감(런던 16:30 / 중부유럽 17:30)을 넘기면 닫히는가?"""
+    from datetime import datetime as real_dt
+    _fake_now(monkeypatch, "2026-08-22 00:35")
+    monkeypatch.setattr(market.api, 'now_europe_london',
+                        lambda: real_dt(2026, 8, 21, 16, 35))
+    monkeypatch.setattr(market.api, 'now_europe_central',
+                        lambda: real_dt(2026, 8, 21, 17, 35))
+    assert market.is_market_open_for_index("UK - FTSE 100") is False
+    assert market.is_market_open_for_index("Europe - STOXX 50") is False
+
+
+def test_europe_closed_on_sunday_evening(monkeypatch):
+    """월요일 새벽(=유럽 일요일 저녁, 세션 없음)이 개장으로 새지 않는가?"""
+    from datetime import datetime as real_dt
+    _fake_now(monkeypatch, "2026-08-24 01:00")                       # KST 월요일 01:00
+    monkeypatch.setattr(market.api, 'now_europe_london',
+                        lambda: real_dt(2026, 8, 23, 17, 0))         # 런던 일요일 17:00
+    monkeypatch.setattr(market.api, 'now_europe_central',
+                        lambda: real_dt(2026, 8, 23, 18, 0))
+    assert market.is_market_open_for_index("UK - FTSE 100") is False
+    assert market.is_market_open_for_index("France - CAC 40") is False
+
+
+def test_europe_dst_transition(monkeypatch):
+    """유럽 서머타임 전환(3월/10월 마지막 일요일 01:00 UTC)을 옳게 가르는가?"""
+    from datetime import datetime as real_dt, timezone as real_tz
+    import api as api_mod
+
+    def _at(utc_str):
+        fixed = real_dt.strptime(utc_str, "%Y-%m-%d %H:%M").replace(tzinfo=real_tz.utc)
+
+        class _DT(real_dt):
+            @classmethod
+            def now(cls, tz=None):
+                return fixed if tz is not None else fixed.replace(tzinfo=None)
+
+        monkeypatch.setattr(api_mod, 'datetime', _DT)
+
+    _at("2026-08-21 15:00")            # 서머타임 구간
+    assert api_mod.now_europe_london().hour == 16      # BST = UTC+1
+    assert api_mod.now_europe_central().hour == 17     # CEST = UTC+2
+
+    _at("2026-01-15 15:00")            # 표준시 구간
+    assert api_mod.now_europe_london().hour == 15      # GMT = UTC+0
+    assert api_mod.now_europe_central().hour == 16     # CET = UTC+1
+
+    # 2026년 전환일: 3월 29일 / 10월 25일 (각 01:00 UTC)
+    _at("2026-03-29 00:59")
+    assert api_mod.now_europe_london().hour == 0
+    _at("2026-03-29 01:00")
+    assert api_mod.now_europe_london().hour == 2
+    _at("2026-10-25 00:59")
+    assert api_mod.now_europe_london().hour == 1
+    _at("2026-10-25 01:00")
+    assert api_mod.now_europe_london().hour == 1

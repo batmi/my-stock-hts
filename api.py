@@ -203,73 +203,66 @@ def check_holiday(date_str):
                     return False
     return None
 
-def is_holiday_today():
-    """오늘이 주말 또는 공휴일(휴장일)인지 확인합니다."""
-    today_str = datetime.now().strftime("%Y%m%d")
-    if today_str in _HOLIDAY_CACHE: return _HOLIDAY_CACHE[today_str]
-    
-    if datetime.now().weekday() > 4:
-        _HOLIDAY_CACHE[today_str] = True
+def is_holiday_on(date_str):
+    """지정 일자(YYYYMMDD)가 주말 또는 공휴일(휴장일)인지 확인합니다.
+
+    '오늘'이 아닌 날짜도 물을 수 있어야 한다 — 코스피200 야간선물처럼 자정을 넘겨
+    이어지는 세션은 새벽(00:00~05:00)에 '전날'이 거래일이었는지가 개폐를 가른다.
+    (토스 market-calendar 는 조회일 기준 응답 해석이 오늘에만 확실하므로 오늘에만 쓴다)
+    """
+    if date_str in _HOLIDAY_CACHE: return _HOLIDAY_CACHE[date_str]
+
+    if datetime.strptime(date_str, "%Y%m%d").weekday() > 4:
+        _HOLIDAY_CACHE[date_str] = True
         return True
-        
+
     # [추가] 토스 모드일 경우 토스 API의 market-calendar 이용
-    if config.session.is_toss:
+    if config.session.is_toss and date_str == datetime.now().strftime("%Y%m%d"):
         import toss_api
         try:
             today_formatted = datetime.now().strftime("%Y-%m-%d")
             res = toss_api.get_market_calendar("KR", today_formatted)
             if res and res.get('today'):
                 is_holiday = not bool(res['today'].get('integrated'))
-                _HOLIDAY_CACHE[today_str] = is_holiday
+                _HOLIDAY_CACHE[date_str] = is_holiday
                 return is_holiday
         except Exception as e:
             logger.debug(f"Toss market-calendar error: {e}")
             pass
-            
+
     # 실전투자 모드일 경우에만 API 우선 조회 시도
     if not config.session.is_simulation and not config.session.is_toss:
-        res = check_holiday(today_str)
+        res = check_holiday(date_str)
         if res is not None:
-            _HOLIDAY_CACHE[today_str] = res
+            _HOLIDAY_CACHE[date_str] = res
             return res
-            
+
     # 모의투자이거나 API 호출이 실패(장애 등)한 경우 holidays 라이브러리로 자체 판단
-    is_holiday = get_holiday_name(today_str, country='KR') is not None
-    _HOLIDAY_CACHE[today_str] = is_holiday
-    
+    is_holiday = get_holiday_name(date_str, country='KR') is not None
+    _HOLIDAY_CACHE[date_str] = is_holiday
+
     return is_holiday
 
-def check_us_holiday(date_str):
-    """한국투자증권 해외주식(미국) 휴장일 조회 API 호출"""
-    url_path = "uapi/overseas-stock/v1/quotations/chk-holiday"
-    tr_id = "CTCA0904R"
-    params = {"BASS_DT": date_str, "CTX_AREA_NK": "", "CTX_AREA_FK": "", "NATN_CD": "840"}
-    
-    res = call_api(url_path, "overseas", "quotations", "chk_holiday", params=params, tr_id=tr_id, retries=1)
-    
-    if res and res.get('rt_cd') == '0':
-        output = res.get('output', [])
-        if output:
-            for day_info in output:
-                if day_info.get('bass_dt') == date_str:
-                    opnd_yn = day_info.get('opnd_yn', 'Y')
-                    bzdy_yn = day_info.get('bzdy_yn', 'Y')
-                    if opnd_yn == 'N' or bzdy_yn == 'N': return True
-                    return False
-    return None
+def is_holiday_today():
+    """오늘이 주말 또는 공휴일(휴장일)인지 확인합니다."""
+    return is_holiday_on(datetime.now().strftime("%Y%m%d"))
 
-def is_us_holiday_today():
-    """오늘이 주말 또는 미국 공휴일(휴장일)인지 확인합니다."""
-    today_str = datetime.now().strftime("%Y%m%d")
-    cache_key = f"US_{today_str}"
+def is_us_holiday_on(date_str):
+    """지정 일자(YYYYMMDD)가 주말 또는 미국 공휴일(휴장일)인지 확인합니다.
+
+    미국 정규장은 KST 22:30~익일 05:00이라 세션의 대부분이 '한국 날짜'로는 이튿날이다.
+    개장 여부를 물을 때는 반드시 '미국 동부 날짜'로 물어야 한다(now_us_eastern()).
+    (토스 market-calendar 는 조회일 기준 응답 해석이 오늘에만 확실하므로 오늘에만 쓴다)
+    """
+    cache_key = f"US_{date_str}"
     if cache_key in _HOLIDAY_CACHE: return _HOLIDAY_CACHE[cache_key]
-    
-    if datetime.now().weekday() > 4:
+
+    if datetime.strptime(date_str, "%Y%m%d").weekday() > 4:
         _HOLIDAY_CACHE[cache_key] = True
         return True
-            
+
     # [추가] 토스 모드일 경우 토스 API의 market-calendar 이용
-    if config.session.is_toss:
+    if config.session.is_toss and date_str == datetime.now().strftime("%Y%m%d"):
         import toss_api
         try:
             today_formatted = datetime.now().strftime("%Y-%m-%d")
@@ -283,19 +276,23 @@ def is_us_holiday_today():
         except Exception as e:
             logger.debug(f"Toss US market-calendar error: {e}")
             pass
-            
-    # 실전투자 모드일 경우에만 API 우선 조회 시도
-    if not config.session.is_simulation and not config.session.is_toss:
-        res = check_us_holiday(today_str)
-        if res is not None:
-            _HOLIDAY_CACHE[cache_key] = res
-            return res
-            
-    # 모의투자이거나 API 호출이 실패(장애 등)한 경우 holidays 라이브러리로 자체 판단
-    is_holiday = get_holiday_name(today_str, country='US') is not None
+
+    # [삭제 2026-08-22] KIS 해외 휴장일 TR(overseas-stock/.../chk-holiday, CTCA0904R)은
+    #  실전 서버에서 404다(존재하지 않는 엔드포인트). 호출해봐야 항상 None을 돌려주면서
+    #  화면에 HTTP 404 경고만 찍었다 → holidays 라이브러리 판정으로 일원화한다.
+    #  (연방공휴일 기준이라 NYSE 전용 휴장인 성금요일은 잡지 못한다)
+    is_holiday = get_holiday_name(date_str, country='US') is not None
     _HOLIDAY_CACHE[cache_key] = is_holiday
-    
+
     return is_holiday
+
+def is_us_holiday_today():
+    """오늘(한국 날짜)이 주말 또는 미국 공휴일(휴장일)인지 확인합니다.
+
+    '오늘 밤 열릴 미국장이 휴장인가'를 묻는 장전 알림(scheduler) 기준이라 한국 날짜를 쓴다.
+    실시간 개장 여부 판정에는 미국 동부 날짜로 is_us_holiday_on()을 직접 호출해야 한다.
+    """
+    return is_us_holiday_on(datetime.now().strftime("%Y%m%d"))
 
 def get_holiday_name(date_str, country='KR'):
     """holidays 라이브러리를 이용하여 공휴일 이름을 반환합니다."""
@@ -355,6 +352,34 @@ def now_us_eastern():
     dst_end_utc = nov_first_sunday.replace(hour=6, minute=0, second=0)
     is_dst = dst_start_utc <= now_utc < dst_end_utc
     return now_utc - timedelta(hours=4 if is_dst else 5)
+
+def _last_sunday(year, month):
+    """해당 연·월의 마지막 일요일(naive datetime, 00:00)."""
+    first_next = datetime(year + (month == 12), (month % 12) + 1, 1)
+    last_day = first_next - timedelta(days=1)
+    return last_day - timedelta(days=(last_day.weekday() + 1) % 7)
+
+
+def _is_europe_dst(now_utc):
+    """유럽 서머타임 구간인가 — 3월 마지막 일요일 01:00 UTC ~ 10월 마지막 일요일 01:00 UTC.
+    (영국·중부유럽이 같은 순간에 함께 전환하므로 플래그 하나로 둘 다 판정한다)"""
+    year = now_utc.year
+    start = _last_sunday(year, 3).replace(hour=1)
+    end = _last_sunday(year, 10).replace(hour=1)
+    return start <= now_utc < end
+
+
+def now_europe_london():
+    """영국 시간(GMT/BST) 현재 시각(naive datetime). 서머타임 자동 판별."""
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    return now_utc + timedelta(hours=1 if _is_europe_dst(now_utc) else 0)
+
+
+def now_europe_central():
+    """중부 유럽 시간(CET/CEST) 현재 시각(naive datetime). 서머타임 자동 판별."""
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    return now_utc + timedelta(hours=2 if _is_europe_dst(now_utc) else 1)
+
 
 # ==========================================================
 # [미국 주간거래(데이마켓)] 거래소 코드 매핑 및 세션 판정
