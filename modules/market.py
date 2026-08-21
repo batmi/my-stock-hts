@@ -97,6 +97,9 @@ CRYPTO_INDICES = ["비트코인", "이더리움", "솔라나", "리플"]
 EU_INDICES = ["UK - FTSE 100", "France - CAC 40", "Germany - DAX 40", "Europe - STOXX 50"]
 KRX_SPOT_INDICES = ["코스피", "코스피200", "코스닥", "코스닥150", "V코스피200"]
 
+# 개장 중인 지수 이름 뒤에 붙는 표시자(U+2219). 표 본문과 하단 범례가 같은 값을 봐야 한다.
+INDEX_OPEN_MARK = "∙"   # U+2219 BULLET OPERATOR
+
 # 아시아 지수의 KST 장 시간. 현지 시각대가 KST와 0~1시간 차(도쿄 UTC+9, 대만·홍콩·상해
 #  UTC+8)라 장이 KST 낮 안에 들어온다 — 자정을 넘지 않으므로 KST 날짜·요일로 판정해도
 #  어긋나지 않는다. (점심 휴장은 표기 목적상 무시한다)
@@ -1044,7 +1047,11 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             display_name += " [dim](F)[/dim]"
 
         if is_market_open_for_index(name):
-            display_name += "[dim]*[/dim]"
+            # [표기] 개장 중 표시자. '*'는 대문자 높이의 조밀한 글리프라 지수명 옆에서
+            #  과하게 튀었다. U+2219(BULLET OPERATOR)는 더 작고 조용하면서, East Asian
+            #  Width가 Neutral이라 한글 터미널에서도 폭 1이 확정된다(Ambiguous인 '·'·'•'는
+            #  CJK 폭 설정에 따라 폭 2로 그려져 표가 밀린다).
+            display_name += f"[dim]{INDEX_OPEN_MARK}[/dim]"
 
 
 
@@ -1401,7 +1408,7 @@ def _show_market_indices_core(target_indices=None):
         config.console.print(f"\n[bold red]지수 분석 중 오류 발생: {e}[/bold red]")
     
     # [하단 경고 출력]
-    config.console.print(" [dim]※ ( [/dim]*[dim] ) 현재 장이 열려 실시간으로 움직이는 지수[/dim]")
+    config.console.print(f" [dim]※ ( [/dim]{INDEX_OPEN_MARK}[dim] ) 현재 장이 열려 실시간으로 움직이는 지수[/dim]")
     
     if patched_tickers:
         targets = ", ".join(patched_tickers)
