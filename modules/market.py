@@ -924,7 +924,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
 
         sar_icon = "[dim]-[/dim]"
         if val_psar is not None:
-            sar_icon = "[red]⬆[/]" if eval_price > val_psar else "[blue]⬇[/]"
+            sar_icon = "[red]▲[/]" if eval_price > val_psar else "[blue]▼[/]"
         
         macd_icon = "[dim]-[/dim]"
         if val_macd is not None and val_macd_sig is not None:

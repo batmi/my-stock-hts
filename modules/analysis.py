@@ -3198,7 +3198,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                     
                     t_sar = "[dim]-[/dim]"
                     if ind.get('psar') is not None:
-                        t_sar = "[red]⬆[/]" if current_price > ind['psar'] else "[blue]⬇[/]"
+                        t_sar = "[red]▲[/]" if current_price > ind['psar'] else "[blue]▼[/]"
                     m_val = ind.get('macd')
                     s_val = ind.get('macd_signal')
                     t_macd = "[dim]-[/dim]"
@@ -4118,7 +4118,7 @@ def analyze_market_stocks(market_type):
             
             # SAR 상태
             sar_val = item.get('psar')
-            sar_icon = "[red]⬆[/]" if sar_val and item['price'] > sar_val else "[blue]⬇[/]"
+            sar_icon = "[red]▲[/]" if sar_val and item['price'] > sar_val else "[blue]▼[/]"
             
             # MACD 상태
             macd_val = item.get('macd')
@@ -5002,7 +5002,7 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
             # SAR 상태
             sar_val = ind.get('psar')
             if sar_val is not None and not math.isnan(sar_val):
-                sar_icon = "[red]⬆[/]" if curr > sar_val else "[blue]⬇[/]"
+                sar_icon = "[red]▲[/]" if curr > sar_val else "[blue]▼[/]"
             else:
                 sar_icon = "[dim]-[/dim]"
             

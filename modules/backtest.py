@@ -46,10 +46,10 @@ def _locked_setting_keys():
 
 
 def _trend_smo_str(close, psar, macd, macd_signal, obv_trend):
-    """추세SMO 셀 문자열 생성 (S: SAR ⬆/⬇, M: MACD 0선±/골든G·데드D, O: OBV ▲/▼) — 종목분석 표기와 동일"""
+    """추세SMO 셀 문자열 생성 (S: SAR ▲/▼, M: MACD 0선±/골든G·데드D, O: OBV ▲/▼) — 종목분석 표기와 동일"""
     sar_icon = "-"
     if close is not None and psar is not None and not (np.isnan(close) or np.isnan(psar)):
-        sar_icon = "[red]⬆[/]" if close > psar else "[blue]⬇[/]"
+        sar_icon = "[red]▲[/]" if close > psar else "[blue]▼[/]"
     macd_icon = "-"
     if macd is not None and macd_signal is not None and not (np.isnan(macd) or np.isnan(macd_signal)):
         zero_sign = "+" if macd > 0 else "-"

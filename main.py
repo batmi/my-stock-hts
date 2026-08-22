@@ -545,7 +545,7 @@ def show_help():
     table.add_row("", "주가 < SAR (SAR이 주가 위)", "[blue]파란색[/]", "하락 추세 (매도/청산)")
     table.add_section()
 
-    table.add_row("추세SMO", "S (SAR)", "[red]⬆[/] / [blue]⬇[/]", "상승 / 하락")
+    table.add_row("추세SMO", "S (SAR)", "[red]▲[/] / [blue]▼[/]", "상승 / 하락")
     table.add_row("", "M (MACD)", "[red]+G[/] / [blue]-D[/]", "골든/데드 (0선 위/아래)")
     table.add_row("", "O (OBV)", "[red]▲[/] / [blue]▼[/]", f"수급 양호 (OBV > EMA {obv_period}일) / 약세")
     table.add_section()
