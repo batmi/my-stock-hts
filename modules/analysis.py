@@ -39,6 +39,7 @@ import threading # [추가]
 import os
 import pandas as pd
 import numpy as np
+import requests
 import concurrent.futures
 import shutil
 import sqlite3
@@ -584,6 +585,175 @@ def get_fred_data(symbol, n_bars=300):
         logger.debug(f"[TVDATAFEED] FRED:{symbol} 스키마 변환 실패: {e}")
         ent["fail"] = now
         return cached
+
+# ==========================================================
+# [추가] KRX 금현물 (금 99.99_1Kg, 원/g) — 네이버 원자재 시세
+# ==========================================================
+#  국제 금(COMEX GC=F, USD/온스)과 달리 KRX 금시장 시세는 KIS·토스·yfinance·pykrx 어디에도
+#  없다(ETF 411060은 ETF 주가라 대용 불가). KRX 정보데이터시스템 JSON은 세션 쿠키를 심어도
+#  LOGOUT을 돌려준다 → 네이버 원자재 API가 유일한 실시간 소스다(delayTime=0, 거래소 KRX).
+#
+#  [캐시를 둘로 나누는 이유] 현재가는 장중 계속 바뀌지만 과거 종가는 불변이다. 한 덩어리로
+#  묶으면 60초마다 5페이지(300거래일)를 다시 받게 된다 → 현재가만 짧은 TTL로 갱신하고
+#  시계열은 6시간(날짜가 바뀌면 즉시) 캐시한다. 정상 구간의 반복 조회는 1콜이면 끝난다.
+#
+#  [종가만 있는 시계열] 네이버 일별 시세는 종가만 유효하고 시·고·저는 0으로 내려온다 →
+#  모든 봉을 종가로 평탄화한 OHLC로 만든다. EMA·RSI·CCI·MACD·ADX·SAR은 종가 기준으로
+#  정상 산출되며(고·저 대신 종가 차분이 True Range가 된다), 거래량 이력이 없어 OBV만
+#  '-'로 남는다(지수 화면이 vol_sum==0을 이미 그렇게 처리한다).
+_KRX_GOLD_URL = "https://api.stock.naver.com/marketindex/metals"
+_KRX_GOLD_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                  '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Referer': 'https://m.stock.naver.com/',
+}
+_KRX_GOLD_PAGE_SIZE = 60        # 네이버 상한 (초과하면 400)
+_KRX_GOLD_PAGES = 5             # 60 x 5 = 300거래일 — EMA120·52주(250봉)를 덮는다
+_KRX_GOLD_TIMEOUT = 5
+_KRX_GOLD_QUOTE_TTL_SEC = 60    # 다른 지수의 fast_info 캐시(60초)와 같은 신선도
+_KRX_GOLD_HIST_TTL_SEC = 21600  # 6시간 (과거 종가는 불변, 날짜가 바뀌면 아래에서 별도 무효화)
+_KRX_GOLD_NEG_TTL_SEC = 180     # 실패 음성 캐시 — 네이버 장애 시 매 렌더 재시도로 UI가 멈추는 것 방지
+_KRX_GOLD_CACHE = {}            # symbol -> {"hist","hist_time","hist_day","quote","quote_time","fail"}
+_KRX_GOLD_LOCK = threading.RLock()
+
+
+def reset_krx_gold_failures():
+    """KRX 금 음성 캐시를 해제한다(사용자가 지수 화면에서 명시적으로 재시도할 때)."""
+    with _KRX_GOLD_LOCK:
+        for ent in _KRX_GOLD_CACHE.values():
+            ent["fail"] = None
+
+
+def _krx_gold_entry(symbol):
+    with _KRX_GOLD_LOCK:
+        return _KRX_GOLD_CACHE.setdefault(symbol, {
+            "hist": None, "hist_time": None, "hist_day": None,
+            "quote": None, "quote_time": None, "fail": None,
+        })
+
+
+def _krx_gold_num(text):
+    """네이버 표기('203,410')를 수치로. 값이 없거나 0이면 None."""
+    try:
+        val = float(str(text).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+    return val if val > 0 else None
+
+
+def _fetch_krx_gold_history(symbol):
+    """일별 종가 시계열 [(date, close)] — 최근 것부터 페이지 단위로 받아 온다."""
+    rows = []
+    for page in range(1, _KRX_GOLD_PAGES + 1):
+        res = requests.get(f"{_KRX_GOLD_URL}/{symbol}/prices",
+                           params={'page': page, 'pageSize': _KRX_GOLD_PAGE_SIZE},
+                           headers=_KRX_GOLD_HEADERS, timeout=_KRX_GOLD_TIMEOUT)
+        page_rows = res.json()
+        if not isinstance(page_rows, list) or not page_rows:
+            break
+        for row in page_rows:
+            close = _krx_gold_num(row.get('closePrice'))
+            traded_at = row.get('localTradedAt')
+            if close is None or not traded_at:
+                continue
+            rows.append((pd.to_datetime(str(traded_at)[:10]), close))
+        if len(page_rows) < _KRX_GOLD_PAGE_SIZE:
+            break   # 마지막 페이지 — 더 받아도 빈 응답이다
+    return rows
+
+
+def _fetch_krx_gold_quote(symbol):
+    """현재가와 전일 종가 (current, prev). 장 종료 뒤에는 그날의 최종 종가가 내려온다."""
+    res = requests.get(f"{_KRX_GOLD_URL}/{symbol}", headers=_KRX_GOLD_HEADERS,
+                       timeout=_KRX_GOLD_TIMEOUT)
+    data = res.json()
+    current = _krx_gold_num(data.get('closePrice'))
+    if current is None:
+        return None
+    traded_at = data.get('localTradedAt')
+    day = pd.to_datetime(str(traded_at)[:10]) if traded_at else None
+    return {'date': day, 'close': current}
+
+
+def get_krx_gold_data(symbol=None):
+    """KRX 금현물(원/g) 일봉을 네이버에서 조회한다(현재가 60초 / 시계열 6시간 캐시).
+
+    반환 스키마는 다른 지수 전용 소스와 동일: ['date','open','high','low','close','volume']
+    (open/high/low=close 평탄화, volume=0 — 거래량 이력 미제공이라 OBV 불가,
+    attrs['source']='NAVER'). 실패 시 None(성공 캐시가 있으면 그것을 돌려준다).
+    """
+    symbol = symbol or config.KRX_GOLD_SYMBOL
+    now = datetime.now()
+    ent = _krx_gold_entry(symbol)
+    today = now.strftime("%Y%m%d")
+
+    hist = ent["hist"]
+    hist_fresh = (hist and ent["hist_time"] and ent["hist_day"] == today
+                  and (now - ent["hist_time"]).total_seconds() < _KRX_GOLD_HIST_TTL_SEC)
+    quote = ent["quote"]
+    quote_fresh = (quote and ent["quote_time"]
+                   and (now - ent["quote_time"]).total_seconds() < _KRX_GOLD_QUOTE_TTL_SEC)
+    if hist_fresh and quote_fresh:
+        return _krx_gold_frame(hist, quote)
+
+    if ent["fail"] and (now - ent["fail"]).total_seconds() < _KRX_GOLD_NEG_TTL_SEC:
+        # 음성 캐시 구간엔 만료된 성공 캐시라도 재사용한다(없으면 None)
+        return _krx_gold_frame(hist, quote) if hist else None
+
+    if not hist_fresh:
+        try:
+            fetched = _fetch_krx_gold_history(symbol)
+            if fetched:
+                hist = fetched
+                with _KRX_GOLD_LOCK:
+                    ent["hist"], ent["hist_time"], ent["hist_day"] = fetched, now, today
+        except Exception as e:
+            logger.debug(f"[NAVER] KRX 금 시계열 조회 실패: {e}")
+
+    if not quote_fresh:
+        try:
+            fetched_q = _fetch_krx_gold_quote(symbol)
+            if fetched_q:
+                quote = fetched_q
+                with _KRX_GOLD_LOCK:
+                    ent["quote"], ent["quote_time"] = fetched_q, now
+        except Exception as e:
+            logger.debug(f"[NAVER] KRX 금 현재가 조회 실패: {e}")
+
+    if not hist:
+        # 시계열이 없으면 지표도 등락률도 만들 수 없다 → 실패로 처리한다.
+        #  (현재가만 살아 있어도 한 점으로는 표를 채울 수 없다)
+        logger.warning("[NAVER] KRX 금 데이터 없음 — 시계열 조회 실패")
+        with _KRX_GOLD_LOCK:
+            ent["fail"] = now
+        return None
+    with _KRX_GOLD_LOCK:
+        ent["fail"] = None
+    return _krx_gold_frame(hist, quote)
+
+
+def _krx_gold_frame(hist, quote):
+    """[(date, close)] + 현재가 → 지수 소스 공통 스키마 DataFrame(오름차순).
+
+    현재가는 장중 갱신되므로 같은 날짜 봉이 있으면 덮어쓰고, 없으면(장중 첫 체결이 아직
+    시계열에 반영되기 전) 새 봉으로 덧붙인다.
+    """
+    if not hist:
+        return None
+    rows = dict(hist)                    # 같은 날짜가 중복 페이지로 들어와도 하나로 접힌다
+    if quote and quote.get('date') is not None and quote.get('close'):
+        rows[quote['date']] = quote['close']
+
+    out = pd.DataFrame({'date': list(rows.keys()), 'close': list(rows.values())})
+    out = out.sort_values('date', ascending=True).reset_index(drop=True)
+    # 시·고·저는 네이버가 주지 않는다(0으로 내려온다) → 종가로 평탄화한다.
+    for col in ['open', 'high', 'low']:
+        out[col] = out['close']
+    out['volume'] = 0.0
+    out = out[['date', 'open', 'high', 'low', 'close', 'volume']].copy()
+    out.attrs['source'] = 'NAVER'
+    return out
+
 
 # [추가] 해외 종목 tvDatafeed 조회 실패(빈 응답) 음성 캐시. 익명 웹소켓은 간헐 실패가 잦고
 #  실패한 종목은 대체로 계속 실패하므로, 표 렌더링마다 재시도(전역 락 직렬화)로 UI가 지연되는 것을

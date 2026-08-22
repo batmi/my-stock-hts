@@ -97,6 +97,9 @@ CRYPTO_INDICES = ["비트코인", "이더리움", "솔라나", "리플"]
 EU_INDICES = ["UK - FTSE 100", "France - CAC 40", "Germany - DAX 40", "Europe - STOXX 50"]
 KRX_SPOT_INDICES = ["코스피", "코스피200", "코스닥", "코스닥150", "V코스피200"]
 
+# KRX 금시장(금 99.99_1Kg 현물) — 주식 정규장과 개장 시간·휴장일이 같아 개폐 판정을 공유한다.
+KRX_GOLD_INDEX = "KRX 금현물"
+
 # 개장 중인 지수 이름 뒤에 붙는 표시자(U+2219). 표 본문과 하단 범례가 같은 값을 봐야 한다.
 INDEX_OPEN_MARK = "∙"   # U+2219 BULLET OPERATOR
 
@@ -150,7 +153,7 @@ def is_market_open_for_index(name):
             return not api.is_holiday_on((kst_now - timedelta(days=1)).strftime("%Y%m%d"))
         return False
 
-    if name in KRX_SPOT_INDICES:
+    if name in KRX_SPOT_INDICES or name == KRX_GOLD_INDEX:
         if api.is_holiday_today(): 
             return False
         if 900 <= t <= 1530: return True
@@ -193,7 +196,7 @@ def is_market_open_for_index(name):
 
 def _index_session_group(name):
     """지수명 → 제목 표기용 시장 그룹명. 개장 시간이 같은 것끼리 묶는다(없으면 None)."""
-    if name in KRX_SPOT_INDICES:
+    if name in KRX_SPOT_INDICES or name == KRX_GOLD_INDEX:
         return "KRX 정규장"
     if name == "코스피200선물":
         return "K200 야간선물" if _k200_night_session() else "K200 주간선물"
@@ -241,7 +244,10 @@ ALL_INDICES = [
     #  표시명이 '코스피200선물 F/CM'으로 바뀐다("^K200FUT"는 자리표시자).
     #  두 지수 모두 KIS '실전' 서버 전용(모드 2)이다: 모의서버는 해당 TR 미지원/불안정하고
     #  모의 모드에서 실전 서버는 사용하지 않으므로 토스(3)·모의(1)에서는 표시하지 않는다.
-    ("코스피", "^KS11"), ("코스피200", "^KS200"), ("코스피200선물", "^K200FUT"), ("V코스피200", "^VKOSPI"), ("코스닥", "^KQ11"), ("코스닥150", "^KQ150"),
+    #  KRX 금현물은 KRX 금시장 '금 99.99_1Kg'(원/g) 시세다. 지수는 아니지만 KRX 정규장에서
+    #  거래되는 국내 상품이라 국내 지수 뒤에 붙인다. KIS·토스·야후 모두 미제공이라 네이버
+    #  원자재 시세 전용이며 "^KRXGOLD"는 자리표시자다(yfinance 다운로드에서 제외).
+    ("코스피", "^KS11"), ("코스피200", "^KS200"), ("코스피200선물", "^K200FUT"), ("V코스피200", "^VKOSPI"), ("코스닥", "^KQ11"), ("코스닥150", "^KQ150"), ("KRX 금현물", "^KRXGOLD"),
     # 2. 미국 지수
     ("나스닥 선물", "NQ=F"), ("나스닥", "^IXIC"), ("S&P500 선물", "ES=F"), ("S&P500", "^GSPC"), ("다우존스 선물", "YM=F"), ("다우존스", "^DJI"), ("러셀2000 선물", "RTY=F"), ("러셀2000", "^RUT"),
     # 3. 섹터 및 지표
@@ -270,6 +276,31 @@ ALL_INDICES = [
 
 # 이름 -> 티커 매핑 (기존 호환성 유지)
 INDICES_MAP = dict(ALL_INDICES)
+
+# [추가] '종목 자리'에 넣을 수 있는 지수 목록 상품 — 입력 티커(대문자) → 지수명.
+#  KRX 금현물은 지수가 아니라 실제로 사고파는 상품이라, 포지션 분석([9]-5)에 보유분을
+#  넣어 시스템 매도 기준으로 볼 수 있어야 한다. 자리표시자 티커의 '^'는 화면 입력용이
+#  아니므로 붙이지 않아도 받는다.
+INDEX_PRODUCT_ALIASES = {
+    "KRXGOLD": KRX_GOLD_INDEX,
+    "^KRXGOLD": KRX_GOLD_INDEX,
+    "KRX금현물": KRX_GOLD_INDEX,
+    "금현물": KRX_GOLD_INDEX,
+}
+
+
+def resolve_index_product(raw):
+    """입력 티커 → (조회 코드, 표시명, is_overseas). 지수 목록 상품이 아니면 None.
+
+    조회 코드는 지수 목록의 티커(^KRXGOLD)라 api.get_chart_data·get_current_price가
+    지수 화면과 같은 전용 소스를 탄다(api.index_source_kind).
+    """
+    if not raw:
+        return None
+    name = INDEX_PRODUCT_ALIASES.get(str(raw).strip().upper().replace(" ", ""))
+    if not name:
+        return None
+    return INDICES_MAP[name], name, False
 
 # ==========================================================
 # [추가] 지수 소스 선정 규칙 (단일 소스)
@@ -320,7 +351,7 @@ def fetch_index_quote(name, code):
     """단일 지수의 경량 시세 (표시명, 현재값, 전일값)을 반환한다. 실패 시 (name, None, None).
 
     텔레그램 등 외부 표면용 — 소스 선택 규칙은 지수 화면(_process_index_worker)과 동일:
-    코스피200선물=KIS 선물 TR(주/야간 자동 전환), 국내 지수=KIS/tvDatafeed,
+    코스피200선물=KIS 선물 TR(주/야간 자동 전환), 국내 지수=KIS/tvDatafeed, KRX 금=네이버,
     미국채=tvDatafeed 현물(실패 시 5/10/30년만 야후 현물+아시아장 선물 프록시 '(선물적용)',
     2년물은 대체 소스가 없어 실패 반환), 그 외 해외=yfinance fast_info(실패 시 일봉 차트).
     """
@@ -341,6 +372,11 @@ def fetch_index_quote(name, code):
             if df is not None and not df.empty:
                 current = float(df.iloc[-1]['close'])
                 prev = float(df.iloc[-2]['close']) if len(df) > 1 else current
+        elif name == KRX_GOLD_INDEX:
+            gold_df = analysis.get_krx_gold_data()
+            if gold_df is not None and not gold_df.empty and len(gold_df) >= 2:
+                current = float(gold_df['close'].iloc[-1])
+                prev = float(gold_df['close'].iloc[-2])
         elif name in config.US_TREASURY_SPOT_SYMBOLS:
             tdf = analysis.get_us_treasury_spot_data(config.US_TREASURY_SPOT_SYMBOLS[name])
             if tdf is not None and not tdf.empty and len(tdf) >= 2:
@@ -501,7 +537,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         chart_calc_price = None # [추가] 지표 계산용 원본 가격 보존
         
         use_fast_info = False
-        is_treasury_spot = False  # [추가] 미국채 '현물' 금리(TVC:USxxY) 소스 적용 여부
+        is_spot_source = False  # [추가] 지수 전용 소스(국채 현물·FRED·네이버 금)로 값을 채웠는가
 
         # [추가] 미국채 금리: 현물(TVC:USxxY)을 tvDatafeed로 1차 조회한다. 현물 금리는
         #  아시아장에도 거의 24시간 갱신되어 선물 프록시 추정 없이 실제 호가를 표시할 수 있다.
@@ -523,10 +559,10 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                     hi_max = float(df_daily['high'].tail(250).max() or 0)
                     high_52 = hi_max if hi_max > 0 else float(df_daily['close'].tail(250).max())
                     use_fast_info = True
-                    is_treasury_spot = True
+                    is_spot_source = True
             except Exception as e:
                 logger.debug(f"{name} 현물(TV) 조회 실패: {e}")
-            if name == "미국채 2년물 금리" and not is_treasury_spot:
+            if name == "미국채 2년물 금리" and not is_spot_source:
                 return {'status': 'failed', 'name': name, 'src': 'TradingView'}
 
         if name == "HY OAS (신용위험)":
@@ -544,7 +580,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                     hi_max = float(df_daily['high'].tail(250).max() or 0)
                     high_52 = hi_max if hi_max > 0 else float(df_daily['close'].tail(250).max())
                     use_fast_info = True
-                    is_treasury_spot = True  # 동일한 플래그로 yfinance 폴백 생략
+                    is_spot_source = True  # 동일한 플래그로 yfinance 폴백 생략
             except Exception as e:
                 logger.debug(f"HY OAS 조회 실패: {e}")
             # [Fix] 야후는 ^HYOAS를 제공하지 않는다. 종전에는 실패 시 아래 yfinance 분기로
@@ -553,7 +589,31 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             if not got_fred:
                 return {'status': 'failed', 'name': name, 'src': 'TradingView'}
 
-        if not is_domestic_index and not is_treasury_spot:
+        if name == KRX_GOLD_INDEX:
+            got_gold = False
+            try:
+                gold_df = analysis.get_krx_gold_data()
+                if gold_df is not None and not gold_df.empty and len(gold_df) >= 2:
+                    got_gold = True
+                    df_daily = gold_df.copy()
+                    df_daily['date'] = pd.to_datetime(df_daily['date'])
+                    df_daily.set_index('date', inplace=True)
+                    current = float(df_daily['close'].iloc[-1])
+                    prev = float(df_daily['close'].iloc[-2])
+                    chart_calc_price = current
+                    # 네이버는 일중 고가를 주지 않는다 → 52주 고점도 종가 기준으로 잡는다
+                    #  (다른 지수의 '고가 미제공 시 종가' 폴백과 같은 처리)
+                    high_52 = float(df_daily['close'].tail(250).max())
+                    use_fast_info = True
+                    is_spot_source = True
+            except Exception as e:
+                logger.debug(f"KRX 금(네이버) 조회 실패: {e}")
+            # 야후는 KRX 금현물을 제공하지 않는다(^KRXGOLD는 자리표시자) → 폴백 없이 실패 표시.
+            #  국채 현물·HY OAS가 같은 이유로 early return 하는 것과 같다.
+            if not got_gold:
+                return {'status': 'failed', 'name': name, 'src': '네이버'}
+
+        if not is_domestic_index and not is_spot_source:
             try:
                 fi = api.get_yf_fast_info(ticker)
                 if fi:
@@ -807,6 +867,10 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             if "미국채" in name and "선물" not in name:
                 change_str = f"{diff_color}{diff:+.3f}p ({rate:+.2f}%)[/]"
                 curr_fmt = f"{current:,.3f}%"
+            elif name == KRX_GOLD_INDEX:
+                # 원/g은 20만원대 정수 호가라 소수 두 자리가 자리만 차지한다
+                change_str = f"{diff_color}{diff:+,.0f} ({rate:+.2f}%)[/]"
+                curr_fmt = f"{current:,.0f}"
             else:
                 change_str = f"{diff_color}{diff:+.2f} ({rate:+.2f}%)[/]"
                 curr_fmt = f"{current:,.2f}"
@@ -929,7 +993,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         #  (52주 낙폭 수치 자체는 '52주 고점' 컬럼에 그대로 표시되므로 정보 손실 없음)
         #  절대 밴드 자산(VIX·미국채·달러·유가/가스/밀)은 수준 자체가 매크로 의미라 제외.
         adaptive_targets = [
-            "코스피", "코스닥", "코스피200", "코스닥150", "코스피200선물",
+            "코스피", "코스닥", "코스피200", "코스닥150", "코스피200선물", "KRX 금현물",
             "나스닥 선물", "나스닥", "S&P500 선물", "S&P500", "다우존스 선물", "다우존스", "러셀2000 선물", "러셀2000",
             "Japan - 닛케이", "Hong Kong - 항셍", "China - 상해종합",
             "Taiwan - 대만가권", "UK - FTSE 100", "France - CAC 40",
@@ -1147,8 +1211,8 @@ def _show_market_indices_core(target_indices=None):
             for group_name, t_list in groups_to_fetch:
                 if not t_list: continue
 
-                # [추가] 코스닥150·V코스피200·코스피200선물·미국채2년·HYOAS는 yfinance를 호출하지 않도록 필터링 (야후 미제공 티커)
-                yf_t_list = [t for t in t_list if t not in ("^KQ150", "^VKOSPI", "^K200FUT", "^US02Y", "^HYOAS")]
+                # [추가] 코스닥150·V코스피200·코스피200선물·미국채2년·HYOAS·KRX 금은 yfinance를 호출하지 않도록 필터링 (야후 미제공 티커)
+                yf_t_list = [t for t in t_list if t not in ("^KQ150", "^VKOSPI", "^K200FUT", "^US02Y", "^HYOAS", "^KRXGOLD")]
                 if not yf_t_list:
                     continue
 
@@ -1563,6 +1627,9 @@ def show_market_indices(interval=0):
                                 # HY OAS도 같은 이유로 음성 캐시(180s)를 풀어야 재시도가 의미를 갖는다.
                                 if "HY OAS (신용위험)" in failed_list:
                                     analysis.reset_fred_failures()
+                                # KRX 금(네이버)도 같은 이유로 음성 캐시(180s)를 풀어 준다.
+                                if KRX_GOLD_INDEX in failed_list:
+                                    analysis.reset_krx_gold_failures()
                                 target_indices = failed_list
                                 continue
                         except StopIteration:

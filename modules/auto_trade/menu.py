@@ -49,8 +49,31 @@ def _pkg():
     return _at
 
 
-def _select_stock_for_rules():
-    """룰 설정을 위한 종목 선택 헬퍼"""
+def _confirm_index_product(code, name):
+    """지수 목록 상품(KRX 금현물 등) 선택 확인.
+
+    증권사 종목 시세 TR이 없어 utils.validate_and_confirm_stock을 쓸 수 없다 →
+    지수 화면과 같은 전용 소스의 현재가로 유효성을 확인한다.
+    """
+    price = api.get_current_price(code, False)
+    if not price or price <= 0:
+        console.print(f"[bold red]오류: 현재가를 조회할 수 없습니다. ({name})[/bold red]")
+        utils.pause()
+        return False
+
+    console.print(f"[bold green]검색 결과:[/bold green] [bold cyan]{name}[/bold cyan] ({code}) "
+                  f"[dim]· 현재가 {price:,.0f}[/dim]")
+    console.print()
+    return Prompt.ask("이 종목을 선택하시겠습니까?", choices=["y", "n"], default="y").lower() == 'y'
+
+
+def _select_stock_for_rules(allow_index_products=False):
+    """룰 설정을 위한 종목 선택 헬퍼.
+
+    allow_index_products=True면 직접 입력에서 지수 목록 상품(KRX 금현물 = KRXGOLD)도
+    받는다. 포지션 분석([9]-5)처럼 '보유분을 넣어 보는' 화면 전용이다 — 자동매매 룰
+    설정에는 열지 않는다(주문을 낼 수 없는 대상이라 룰이 성립하지 않는다).
+    """
     menu_items = [
         ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"),
         ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"), ("5", "직접 입력", "Direct Input")
@@ -65,10 +88,17 @@ def _select_stock_for_rules():
     
     if choice == '5':
         utils.print_breadcrumb()
-        raw_input = Prompt.ask("종목코드(6자리/티커) 입력 [dim](이전: b, 메인: q)[/dim]")
+        hint = " [dim](KRX 금현물: KRXGOLD)[/dim]" if allow_index_products else ""
+        raw_input = Prompt.ask(f"종목코드(6자리/티커) 입력{hint} [dim](이전: b, 메인: q)[/dim]")
         if raw_input and raw_input.lower() not in ['b', 'q']:
             context.USER_ACTION_BREADCRUMB.append(f"[직접입력] {raw_input}")
-            if raw_input.isdigit() and len(raw_input) == 6:
+            from modules import market
+            product = market.resolve_index_product(raw_input) if allow_index_products else None
+            if product:
+                code, name, is_overseas = product
+                if not _confirm_index_product(code, name):
+                    return None, None, False
+            elif raw_input.isdigit() and len(raw_input) == 6:
                 code = raw_input
                 name = api.get_stock_name_by_code(code, False) or code
                 is_overseas = False
@@ -76,8 +106,9 @@ def _select_stock_for_rules():
                 code = raw_input.upper()
                 name = api.get_stock_name_by_code(code, True) or code
                 is_overseas = True
-                
-            if not utils.validate_and_confirm_stock(code, name, is_overseas, "이 종목을 선택하시겠습니까?"):
+
+            if not product and not utils.validate_and_confirm_stock(
+                    code, name, is_overseas, "이 종목을 선택하시겠습니까?"):
                 return None, None, False
     elif choice in ["1", "2", "3", "4"]:
         key_map = {"1": "stocks_kr", "2": "etfs_kr", "3": "stocks_us", "4": "etfs_us"}

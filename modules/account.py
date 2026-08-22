@@ -710,15 +710,25 @@ def save_manual_positions(positions):
     } for p in positions]
     return jsonio.save_json(MANUAL_POSITIONS_FILE, rows)
 
+def _qty_unit(code):
+    """보유수량 단위 — KRX 금현물처럼 주식이 아닌 상품은 'g'로 센다."""
+    from modules import market
+    return "g" if market.resolve_index_product(code) else "주"
+
+
 def _collect_manual_position():
-    """포지션 분석용 포지션 정보를 입력받는다. 취소 시 None."""
+    """포지션 분석용 포지션 정보를 입력받는다. 취소 시 None.
+
+    직접 입력에서는 종목 코드·티커뿐 아니라 지수 목록 상품(KRX 금현물 = KRXGOLD)도 받는다.
+    """
     from modules import auto_trade
 
-    code, name, is_overseas = auto_trade._select_stock_for_rules()
+    code, name, is_overseas = auto_trade._select_stock_for_rules(allow_index_products=True)
     if not code:
         return None
 
     unit = "$" if is_overseas else "원"
+    qty_unit = _qty_unit(code)
     config.console.print()
     config.console.print(f"[bold cyan]{name}({code})[/bold cyan] 보유 정보를 입력하세요. [dim](취소: b)[/dim]")
 
@@ -726,7 +736,7 @@ def _collect_manual_position():
     if buy_price is None:
         return None
 
-    qty = _ask_positive_number("  보유수량 (주)", cast=int)
+    qty = _ask_positive_number(f"  보유수량 ({qty_unit})", cast=int)
     if qty is None:
         return None
 
@@ -756,7 +766,7 @@ def _print_saved_positions(positions):
         price = f"{p['buy_price']:,.2f}{unit}" if p['is_overseas'] else f"{p['buy_price']:,.0f}{unit}"
         table.add_row(
             str(i), p['name'], p['code'], "해외" if p['is_overseas'] else "국내",
-            price, f"{p['qty']:,}주",
+            price, f"{p['qty']:,}{_qty_unit(p['code'])}",
             p['buy_date'].strftime("%Y-%m-%d") if p.get('buy_date') else "[dim]-[/dim]",
         )
 
@@ -766,7 +776,8 @@ def _fmt_position_summary(pos):
     """포지션 한 줄 요약 (수정/삭제 대상 확인용)."""
     price = f"${pos['buy_price']:,.2f}" if pos['is_overseas'] else f"{pos['buy_price']:,.0f}원"
     date_str = pos['buy_date'].strftime("%Y-%m-%d") if pos.get('buy_date') else "매수일 없음"
-    return f"[bold]{pos['name']}[/bold]([dim]{pos['code']}[/dim]) {price} · {pos['qty']:,}주 · {date_str}"
+    return (f"[bold]{pos['name']}[/bold]([dim]{pos['code']}[/dim]) {price} · "
+            f"{pos['qty']:,}{_qty_unit(pos['code'])} · {date_str}")
 
 def _edit_position(pos):
     """저장된 포지션의 매수 정보를 수정한다. 취소하면 None (원본 유지).
@@ -785,7 +796,7 @@ def _edit_position(pos):
     if buy_price is None:
         return None
 
-    qty = _ask_positive_number("  보유수량 (주)", cast=int, default=str(pos['qty']))
+    qty = _ask_positive_number(f"  보유수량 ({_qty_unit(pos['code'])})", cast=int, default=str(pos['qty']))
     if qty is None:
         return None
 

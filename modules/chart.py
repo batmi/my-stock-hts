@@ -97,7 +97,7 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
             config.console.print("[yellow]토스증권은 시봉(시간봉) 차트를 제공하지 않습니다. 일봉 또는 분봉을 이용해주세요.[/yellow]")
         return
 
-    # [지수] 지수 전용 소스(국내 지수·미국채 현물·HY OAS)는 일봉만 제공한다.
+    # [지수] 지수 전용 소스(국내 지수·미국채 현물·HY OAS·KRX 금)는 일봉만 제공한다.
     #  같은 이유로 위 토스 시봉과 동일하게 그리기 전에 차단하고 안내한다.
     _index_src = api.index_source_kind(code)
     if _index_src and period_type in ('hourly', 'intraday'):

@@ -82,7 +82,7 @@ def block_side_effects_for_whole_session():
     _LIVE_HOSTS = ("koreainvestment.com", "tradingview.com", "finance.yahoo.com")
     _TOSS_HOSTS = ("tossinvest.com",)
     _DART_HOSTS = ("opendart.fss.or.kr", "dart.fss.or.kr")
-    _ETC_HOSTS = ("finance.naver.com", "news.google.com", "krx.co.kr")
+    _ETC_HOSTS = ("finance.naver.com", "stock.naver.com", "news.google.com", "krx.co.kr")
 
     class _BlockedResponse:
         """차단 응답의 공통 껍데기 — 본문만 호스트별로 갈아끼운다."""

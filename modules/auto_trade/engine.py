@@ -934,7 +934,9 @@ def analyze_holdings(entries, max_workers=None, restricted_codes=None):
 
             rule = rules_map.get(code)
             score_adj = 0.0
-            if not is_overseas:
+            # 지수 목록 상품(KRX 금현물)은 KOSPI/KOSDAQ 구분이 없다 — 증권사 시세 TR도 없어
+            #  조회하면 오류 로그와 TPS만 태우고, 시장 국면 가점도 성립하지 않는다.
+            if not is_overseas and not api.index_source_kind(code):
                 m_type = _pkg().resolve_market_type(code, market_cache)
                 score_adj = market_regime_adj.get(m_type, 0.0)
 

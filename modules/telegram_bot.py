@@ -1814,6 +1814,9 @@ class TelegramCommander:
                 if "미국채" in display_name:
                     # 지수 화면과 동일하게 소수점 3자리 (선물적용 폴백 표기 포함)
                     msg += f"\n• {display_name} {current:,.3f}% ({diff:+.3f}p)"
+                elif code == "^KRXGOLD":
+                    # KRX 금현물은 원/g 정수 호가 — 지수 화면과 같은 표기를 쓴다
+                    msg += f"\n• {display_name} {current:,.0f} ({rate:+.2f}%)"
                 else:
                     val_fmt = f"{current:,.2f}"
                     if code == "KRW=X": val_fmt += "원"

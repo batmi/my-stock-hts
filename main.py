@@ -309,7 +309,7 @@ def show_help():
     obv_period = config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 5)
 
     table.add_row("시장 지수명", f"EMA{ema_fast} > EMA{ema_slow} & 교차 후 {confirm_pct:+g}% 진행", "[red]빨간색[/]", "강세장 (Bull) - 확정 상승추세")
-    table.add_row("(국내/미국/유럽/아시아 지수,", f"EMA{ema_fast} > EMA{ema_slow} & {confirm_pct:g}% 미달", "[orange3]주황색[/]", "상승 미확정 (PendUp)")
+    table.add_row("(국내/미국/유럽/아시아 지수, KRX 금현물,", f"EMA{ema_fast} > EMA{ema_slow} & {confirm_pct:g}% 미달", "[orange3]주황색[/]", "상승 미확정 (PendUp)")
     table.add_row(" MSCI, 섹터지수 9종,", f"EMA{ema_fast} < EMA{ema_slow} & {confirm_pct:g}% 미달", "[sky_blue3]하늘색[/]", "하락 미확정 (PendDown) - 추세 붕괴 초기")
     table.add_row(" 금·은·구리, 암호화폐)", f"EMA{ema_fast} < EMA{ema_slow} & 교차 후 {-confirm_pct:+g}% 진행", "[blue]파란색[/]", "약세장 (Bear) - 확정 하락추세")
     table.add_row("", "데이터 부족으로 판정 불가", "[yellow]노란색[/]", "판정 보류 (Sideways)")
