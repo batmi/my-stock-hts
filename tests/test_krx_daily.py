@@ -571,7 +571,7 @@ def test_yfinance_importers_reregister_the_filter():
     import re
 
     root = pathlib.Path(__file__).resolve().parent.parent
-    targets = ['api.py', 'utils.py', 'modules/market.py',
+    targets = ['utils.py', 'modules/market.py',
                'modules/analysis.py', 'modules/manage/events.py']
     for rel in targets:
         src = (root / rel).read_text(encoding='utf-8')
@@ -580,6 +580,19 @@ def test_yfinance_importers_reregister_the_filter():
         assert 'silence_yfinance_numpy_warning()' in src, (
             f"{rel}: yfinance를 import하면서 config.silence_yfinance_numpy_warning() 재등록이 없다 "
             "— yfinance 자체 필터가 앞을 차지해 경고가 다시 출력된다")
+
+    # api 는 패키지다(2026-08-23 분해). 서브모듈이 각자 yfinance 를 import 하지만, 그중
+    #  무엇을 부르든 패키지 __init__ 이 먼저 실행된다 — 그래서 재등록은 __init__ 한 곳에서
+    #  하면 되고, 대신 **yfinance import 뒤·서브모듈 import 앞**이라는 순서를 지켜야 한다.
+    #  (순서가 뒤집히면 서브모듈이 먼저 yfinance 를 들여와 자기 필터를 앞세운다.)
+    init_src = (root / 'api' / '__init__.py').read_text(encoding='utf-8')
+    assert 'silence_yfinance_numpy_warning()' in init_src, (
+        "api/__init__.py: 패키지가 yfinance 를 들여오면서 재등록이 없다")
+    pos_import = init_src.index('import yfinance')
+    pos_silence = init_src.index('silence_yfinance_numpy_warning()')
+    pos_submodule = init_src.index('from . import')
+    assert pos_import < pos_silence < pos_submodule, (
+        "api/__init__.py: 재등록이 yfinance import 뒤·서브모듈 import 앞에 있어야 한다")
 
 
 def test_only_target_message_is_suppressed():

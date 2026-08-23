@@ -16,17 +16,44 @@ if [ -f "$HOME/.htsrc" ]; then
     set +a
 fi
 
+# 2. 운영체제 확인 (macOS vs Linux) — 아래 의존성 목록의 환경 마커 판정에 쓰인다.
+OS_NAME=$(uname -s)
+
 # ---------------------------------------------------------
-# 필수 라이브러리 목록
+# 필수 라이브러리 목록 — requirements.txt 가 단일 소스
 # ---------------------------------------------------------
-# pykrx / finance-datareader: 국내 일봉을 'KRX 정규장 기준'으로 조회한다(토스 캔들은 NXT 장전·장후
-#  체결이 섞여 ATR이 6~15% 부풀고 ADX가 최대 9.45 어긋난다). pykrx 1순위 / FDR 폴백으로 이중화한다.
-REQUIRED_LIBS="rich yfinance pandas matplotlib openpyxl requests beautifulsoup4 google-generativeai python-dotenv tradingview-screener tvdatafeed gnureadline holidays pykrx finance-datareader pytest pytest-xdist"
+# 종전에는 이 목록이 여기(REQUIRED_LIBS 하드코딩)와 requirements.txt 두 곳에 있었고,
+#  실제로 갈라져 있었다 — requirements.txt 쪽은 쓰지도 않는 패키지 목록이라 그걸로
+#  설치하면 실패했다. '기동이 확인하는 목록'과 '설치되는 목록'이 어긋나지 않도록
+#  이제 requirements.txt 하나만 읽는다. 의존성 추가는 그 파일만 고치면 된다.
+#  (PyPI 배포명과 import 이름이 다른 패키지만 아래 `_import_name()` 표에 한 줄 추가)
+REQ_FILE="$(pwd)/requirements.txt"
 MISSING_LIBS=""
 
-# tvdatafeed는 PyPI 미배포(git 전용)라 일반 pip install로 설치되지 않는다. git URL로 설치한다.
-# (토스 모드 코스피200·코스닥150 시세를 TradingView로 조회하는 데 사용)
-TVDATAFEED_GIT_URL="git+https://github.com/rongardF/tvdatafeed.git"
+# requirements.txt → 패키지 이름 목록.
+#  주석·빈 줄·-r 같은 지시자를 걷어내고, 환경 마커(; sys_platform == "darwin")는
+#  현재 OS에 해당하는 줄만 남긴다. 버전 지정자와 'pkg @ git+...' URL 은 이름만 남긴다.
+#  (tvdatafeed 는 PyPI 미배포라 git URL 로 적혀 있는데, 설치는 pip 가 requirements.txt
+#   를 통째로 읽어서 하므로 여기서는 이름만 뽑아 설치 여부 확인에만 쓴다.)
+_requirements_list() {
+    [ -f "$REQ_FILE" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        line=$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/^#.*$//' -e 's/[[:space:]]#.*$//' -e 's/[[:space:]]*$//')
+        [ -z "$line" ] && continue
+        case "$line" in -*) continue ;; esac
+        marker=""
+        case "$line" in *\;*) marker="${line#*;}"; line="${line%%;*}" ;; esac
+        if [ -n "$marker" ]; then
+            case "$marker" in
+                *darwin*) [ "$OS_NAME" = "Darwin" ] || continue ;;
+                *linux*)  [ "$OS_NAME" = "Linux" ]  || continue ;;
+            esac
+        fi
+        line="${line%% @ *}"
+        line=$(printf '%s' "$line" | sed -e 's/[<>=!~].*$//' -e 's/\[.*$//' -e 's/[[:space:]]*$//')
+        [ -n "$line" ] && printf '%s\n' "$line"
+    done < "$REQ_FILE"
+}
 
 # 1-2. 기동 기록 — cron @reboot 로 띄우면 표준출력이 어디에도 남지 않는다.
 #  기동 단계에서 죽으면 파이썬 로거(logs/mystock.log)가 아직 없으므로 여기서 따로 남긴다.
@@ -46,14 +73,11 @@ _import_name() {
         "tradingview-screener")  echo "tradingview_screener" ;;
         "tvdatafeed")            echo "tvDatafeed" ;;
         "gnureadline")           echo "gnureadline" ;;
-        "pytest-xdist")          echo "xdist" ;;
         "finance-datareader")    echo "FinanceDataReader" ;;
         *)                       echo "$1" ;;
     esac
 }
 
-# 2. 운영체제 확인 (macOS vs Linux)
-OS_NAME=$(uname -s)
 
 # [추가] macOS/Linux 환경에서 'Too many open files' (Errno 24) 네트워크 에러 방지를 위해 파일 개수 한도 증가
 ulimit -n 4096 2>/dev/null
@@ -119,7 +143,13 @@ if [[ "$PYTHON_PATH" != *"venv"* ]]; then
 fi
 
 echo "  - 필수 라이브러리 설치 상태 스캔 중..."
-# 6. 미설치 라이브러리 스캔
+# 6. 미설치 라이브러리 스캔 (목록은 requirements.txt 에서 뽑는다)
+REQUIRED_LIBS="$(_requirements_list | tr '\n' ' ')"
+if [ -z "$REQUIRED_LIBS" ]; then
+    # requirements.txt 가 없거나 비면 스캔이 통째로 무력화된다 — 조용히 넘어가면
+    #  '의존성 확인을 했다'는 착각만 남으므로 반드시 기록한다.
+    _boot_log "경고: requirements.txt 를 읽지 못했습니다($REQ_FILE) — 의존성 확인을 건너뜁니다."
+fi
 for lib in $REQUIRED_LIBS; do
     IMPORT_NAME=$(_import_name "$lib")
     $PYTHON_PATH -c "import $IMPORT_NAME" > /dev/null 2>&1
@@ -148,14 +178,11 @@ if [ -n "$MISSING_LIBS" ]; then
 
     if [[ "$confirm" == [yY] || "$confirm" == "yes" ]]; then
         echo "[진행] 설치를 시작합니다..."
-        for lib in $MISSING_LIBS; do
-            if [ "$lib" = "tvdatafeed" ]; then
-                # PyPI 미배포 → git URL로 설치
-                $PIP_PATH install "$TVDATAFEED_GIT_URL" $PIP_FLAGS
-            else
-                $PIP_PATH install $lib $PIP_FLAGS
-            fi
-        done
+        # requirements.txt 를 통째로 넘긴다 — 이미 만족한 패키지는 pip 가 건너뛰고,
+        #  버전 하한·환경 마커·git URL(tvdatafeed) 해석을 전부 pip 가 맡는다.
+        #  (종전에는 여기서 이름만 넘겨 버전 하한이 무시됐고, git 전용 패키지는
+        #   스크립트가 따로 특례를 들고 있어야 했다.)
+        $PIP_PATH install -r "$REQ_FILE" $PIP_FLAGS
         echo "[완료] 모든 라이브러리 설치가 끝났습니다."
 
         # 설치했다고 끝난 게 아니다 — 네트워크가 아직 안 올라왔거나 빌드가 실패하면
@@ -175,9 +202,12 @@ if [ -n "$MISSING_LIBS" ]; then
     fi
 fi
 
-# 8. holidays 패키지 자동 업데이트 (임시공휴일 최신화)
-echo "  - holidays 패키지 최신 버전 동기화 중..."
-$PIP_PATH install --upgrade holidays $PIP_FLAGS > /dev/null 2>&1
+# 8. (제거됨) holidays 자동 업그레이드
+#  종전에는 기동마다 `pip install --upgrade holidays` 를 돌렸다. 그러면 기동 경로가
+#  네트워크와 업스트림 릴리스에 묶이고, 무엇보다 **휴장일 판정 라이브러리가 매 기동
+#  조용히 바뀐다** — 매매 시간 판단이 사람 모르게 달라질 수 있다는 뜻이다.
+#  갱신 자체는 임시공휴일 반영에 필요하므로 버리지 않고 주기 작업으로 분리했다:
+#    tools/update_holidays.sh  (주 1회 cron 권장 — 사용법은 스크립트 상단 주석 참조)
 
 # 9. yfinance 캐시 자동 정리 (DB Lock 에러 사전 방지)
 echo "  - yfinance 캐시 데이터 정리 중..."

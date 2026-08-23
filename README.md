@@ -327,6 +327,16 @@
     *   라즈베리파이(1GB) 등 제약 환경의 장기 무중단 운영을 위해, 시세 마이크로 캐시와 차트 캐시에 **항목 수 상한**을 두고 초과 시 가장 오래된 항목부터 자동 제거(eviction)합니다. 전체 시장 스캔 시에도 메모리가 무제한으로 증가하지 않습니다.
 *   **인터럽트 안전 예외 처리 (Interrupt-safe Exceptions)**:
     *   광범위한 `except:`(bare) 구문을 `except Exception:`으로 정비하여 `KeyboardInterrupt`/`SystemExit`가 정상적으로 전파되도록 했습니다. (Ctrl+C 응답성 및 안전한 종료 보장)
+*   **프로세스 사망 감지 (Dead-man Switch) — 알리기만 하고 되살리지 않습니다**:
+    *   종전 감시는 전부 **프로세스 안**에 있었습니다(하트비트가 자동매매 *스레드*의 생존만 확인). 그래서 프로세스 자체가 사라지면 — 라즈베리파이 OOM 킬, SD 카드 오류, 전원 순단 — 알릴 주체가 함께 죽어 **텔레그램이 조용한 채로 손절·트레일링 감시가 멈춥니다.** 포지션을 든 상태라면 사람이 화면을 볼 때까지 무방비입니다.
+    *   구조를 뒤집었습니다. 살아 있는 프로세스가 1분마다 `logs/heartbeat.json`에 도장을 찍으면서 **"다음 도장을 언제까지 찍겠다"는 약속(deadline)** 을 함께 적습니다. 밖에서 cron으로 도는 감시자(`tools/hts_watchdog.py`)는 그 약속이 지났는지만 봅니다 — 장 시간도 설정도 계좌도 알 필요가 없어, 무거운 모듈을 import하지 않습니다(파이 메모리 고려).
+    *   **자동 재기동은 하지 않습니다.** 죽은 원인을 모르는 채 다시 띄우면 같은 원인으로 다시 죽거나, 더 나쁘게는 반쯤 살아 주문을 냅니다. 감시자가 하는 일은 '죽었다는 사실을 알리는 것' 하나뿐이고, 되살릴지 말지는 사람이 정합니다.
+    *   메뉴에서 종료하거나 `SIGTERM`을 받으면 '스스로 내려간다'는 표식을 남기므로 **정상 종료에는 알림이 가지 않습니다.** 반대로 `SIGKILL`(OOM)·전원 차단·처리되지 않은 예외로 끝난 경우에는 마지막 도장이 그대로 남아 약속 시각을 넘기고, 그때 알림이 나갑니다. 같은 사망 건으로 반복 발신하지 않으며, 다시 도장이 찍히기 시작하면 복구를 한 번 알립니다.
+    *   설치는 cron 한 줄입니다(사용법은 `tools/hts_watchdog.py` 상단 주석). 수동 확인은 `tools/hts_watchdog.py --status`.
+*   **모드별 설정 프로필 (Per-mode Config Profiles)**:
+    *   종전에는 `json/dynamic_config.json` 한 벌을 모든 모드가 공유했습니다. 관찰모드(mode 4)에서 매매를 강제로 발생시키려고 시장 필터를 끄면 **그 설정이 실전(mode 2)으로 그대로 넘어갔고**, 방어선은 기동 시 경고 하나뿐이었습니다(= '사람이 경고를 읽는가'에 걸린 설계).
+    *   실전은 기준 파일만 읽고 씁니다. 실전이 아닌 모드는 기준 위에 자기 프로필(`dynamic_config.sim/toss/paper.json`)을 얹으며, 그 파일에는 **기준과 다른 값만** 적힙니다. 그래서 (1) 실전 설정을 바꾸면 다른 모드도 따라오고, (2) 다른 모드에서 바꾼 값은 실전으로 새지 않으며, (3) 파일만 열어도 '이 모드가 실전과 무엇이 다른가'가 보입니다.
+    *   승격은 수동입니다 — 관찰모드에서 좋았던 값을 실전에 쓰려면 실전으로 띄워 다시 바꿔야 합니다. 검증용으로 끈 안전장치가 조용히 따라 올라오는 경로를 없애는 것이 이 구조의 목적입니다.
 *   **API 호출 효율·속도 최적화 (TPS 최적화)**:
     *   KIS/토스 OpenAPI는 초당 거래건수(TPS) 제한이 있어, 모든 시세/주문 호출이 단일 전역 TPS 게이트를 직렬 통과합니다. 따라서 분석 속도는 "총 호출 수 ÷ TPS"로 결정되며, 다음을 통해 양쪽을 함께 개선했습니다.
     *   **적응형 동적 TPS (AIMD)**: 고정 마진(실효 18 TPS) 대신, 시작 마진에서 출발해 성공이 누적되면 실효 TPS를 점진 상향하고 `EGW00201`(초당 한도 초과)이 발생하면 즉시 곱셈 감소(백오프)하여 **적정 TPS로 자가 수렴**합니다. (서버/네트워크 상태에 맞춰 처리량 극대화)
@@ -343,7 +353,23 @@ my-stock-hts/
 ├── run.bat               # [Windows] 실행 스크립트
 ├── main.py               # 메인 실행 파일 (메뉴 및 라우팅)
 ├── config.py             # 설정, 환경변수, 데이터 로드
-├── api.py                # KIS API 통신, yfinance 연동 및 시세/차트 데이터 조회
+├── api/                  # 시세·주문 API 계층 패키지 (구 api.py 7,596줄 분해)
+│   ├── __init__.py       #   ├ 이름 재수출 + patch 전파 (바깥에서는 예전처럼 api.함수())
+│   ├── instruments.py    #   ├ NXT 취급 여부·국내 ETF/ETN 판별
+│   ├── market_calendar.py#   ├ 휴장일(국내·미국·거래소 MIC)과 해외 시각
+│   ├── sessions.py       #   ├ 세션 판정(정규·프리·애프터·데이마켓)과 화면 표기
+│   ├── yf_quotes.py      #   ├ yfinance·TradingView 시세 + 초단기 마이크로 캐시
+│   ├── chart_cache.py    #   ├ 차트 메모리·디스크 캐시, 관심종목 예열
+│   ├── http.py           #   ├ TPS 게이트·재시도·커넥션 풀 (ThrottledSession)
+│   ├── auth.py           #   ├ 토큰 발급·갱신과 공용 호출 진입점 (call_api)
+│   ├── charts.py         #   ├ 일봉·주봉·분봉 조회
+│   ├── indices.py        #   ├ 지수·K200 선물
+│   ├── quotes/           #   ├ 시세 조회
+│   │   ├── nxt.py        #   │   ├ NXT 시세·멀티 시세 배치
+│   │   └── price.py      #   │   └ 현재가·호가·수급·해외 상세
+│   ├── toss.py           #   ├ 토스증권 계층 + 국내 일봉 폴백
+│   ├── account.py        #   ├ 잔고·체결내역·미체결
+│   └── orders.py         #   └ 주문 접수·정정·취소·예수금
 ├── toss_api.py           # 토스증권 Open API 클라이언트 (토스 모드 시세/자산/주문)
 ├── realtime.py           # KIS WebSocket 실시간 시세·체결통보 피드 (미커버 시 REST 폴백)
 ├── constants.py          # 상수 정의 (TR ID, 필드 매핑 등)
@@ -353,7 +379,8 @@ my-stock-hts/
 ├── caching.py            # 공용 인메모리 TTL 캐시 (항목 상한·자동 eviction)
 ├── session.py            # 세션 및 토큰 관리
 ├── context.py            # 스레드 전역 상태 및 락(Lock) 관리
-├── requirements.txt      # Python 의존성 패키지 목록
+├── requirements.txt      # 런타임 의존성 단일 소스 (run.sh 가 이 파일을 읽어 설치)
+├── requirements-dev.txt  # 개발·테스트 전용 의존성 (pytest 계열)
 ├── pytest.ini            # Pytest 테스트 설정 파일
 ├── .env.example          # 환경 변수 설정 예시 파일
 ├── LICENSE.md            # 라이선스 파일
@@ -362,14 +389,22 @@ my-stock-hts/
 │   ├── stock.json              # 관심/감시 종목 리스트
 │   ├── restricted_stocks.json  # 트레이딩 제한 종목 리스트
 │   ├── daily_asset_state.json  # 당일 최초 시작 자산 기록 (일일 손실 제한용)
-│   ├── dynamic_config.json     # 프로그램 실행 중 변경된 시스템 설정 백업
+│   ├── dynamic_config.json     # 실전 기준 설정 (프로그램 실행 중 변경된 시스템 설정)
+│   ├── dynamic_config.sim.json    # [모드별 프로필] 모의투자에서만 다른 값
+│   ├── dynamic_config.toss.json   # [모드별 프로필] 토스 모드에서만 다른 값
+│   ├── dynamic_config.paper.json  # [모드별 프로필] 관찰(가상투자) 모드에서만 다른 값
 │   ├── token_cache.json        # [자동 생성] API 접근 토큰 캐시
 │   └── dart_corp_map.json      # [자동 생성] DART 종목코드↔고유번호(corp_code) 매핑 캐시
 ├── logs/                 # [자동 생성] 로그 파일 저장소
+│   ├── mystock.log             # 프로그램 로그
+│   ├── startup.log             # 기동 기록 (cron @reboot 로 띄울 때의 유일한 단서)
+│   └── heartbeat.json          # 프로세스 생존 신호 — 외부 감시자가 읽는다
 ├── chart/                # [자동 생성] 차트 이미지 저장소
 ├── data/                 # [자동 생성] 엑셀/CSV 내보내기 저장소
 ├── tools/                # 각종 진단 및 유틸리티 도구
 │   ├── stock-hts               # [Linux 서버용] tmux 세션 자동 구성 스크립트
+│   ├── hts_watchdog.py         # 프로세스 사망 감시 (cron) — 텔레그램 알림만, 재기동 없음
+│   ├── update_holidays.sh      # holidays 패키지 주기 갱신 (기동 경로에서 분리)
 │   ├── get_telegram_chat_id.py # 텔레그램 Chat ID 확인 도구
 │   ├── clear_trade_history.py  # 거래 내역 및 DB 초기화 도구
 │   ├── check_execution.py      # 체결 내역 확인 도구
@@ -395,6 +430,7 @@ my-stock-hts/
     ├── telegram_notify.py# 텔레그램 발신(메시지/사진 전송) 계층
     ├── dart_api.py       # OpenDART(전자공시) API 연동 (배당/실적/공시 조회)
     ├── scheduler.py      # 백그라운드 스케줄링 및 타이머 전담 워커
+    ├── heartbeat.py      # 프로세스 생존 신호 기록·판정 (죽으면 알린다 / 되살리지 않는다)
     ├── market_halt.py    # 서킷브레이커(CB)/VI 시장 정지 감지 및 텔레그램 알림
     ├── executors.py      # 시스템 전역 스레드 풀(Thread Pool) 중앙 관리
     ├── prompts.py        # AI 어시스턴트용 프롬프트 템플릿 외부 관리
@@ -486,8 +522,13 @@ source .venv/bin/activate
 ```bash
 # (가상 환경이 활성화된 상태에서)
 pip install -r requirements.txt
+
+# 개발·테스트까지 할 경우 (pytest 계열 포함)
+pip install -r requirements-dev.txt
 ```
-*참고: `run.sh` 또는 `run.bat` 스크립트를 실행하면 이 과정의 일부가 자동으로 처리될 수 있습니다.*
+*참고: `run.sh` 를 실행하면 이 과정이 자동으로 처리됩니다. `requirements.txt` 가 **의존성의 단일 소스**이며, `run.sh` 는 기동 때 그 파일을 읽어 미설치 패키지를 스캔·설치합니다(목록을 두 곳에 두지 않습니다). 의존성을 추가할 때는 `requirements.txt` 만 고치면 되고, PyPI 배포명과 import 이름이 다른 패키지만 `run.sh` 의 `_import_name()` 표에 한 줄을 더합니다.*
+
+*`holidays` 패키지는 기동할 때마다 자동 업그레이드하지 **않습니다**. 휴장일 판정 라이브러리가 매 기동 조용히 바뀌면 매매 시간 판단이 사람 모르게 달라지기 때문입니다. 임시공휴일 반영을 위한 갱신은 주기 작업으로 분리해 두었습니다 — `tools/update_holidays.sh` (주 1회 cron 권장).*
 
 ### 4. 설정 (Configuration)
 보안을 위해 API Key 등 민감 정보는 **환경 변수**로 설정하는 것을 권장합니다.

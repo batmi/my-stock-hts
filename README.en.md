@@ -315,6 +315,16 @@ This system applies a robust backend architecture to solve concurrency issues an
     *   For long-running operation on constrained devices (e.g., Raspberry Pi 1GB), the quote micro-cache and chart cache enforce a **maximum item count** and evict the oldest entries when exceeded, so memory does not grow unbounded even during full-market scans.
 *   **Interrupt-safe Exceptions**: 
     *   Bare `except:` clauses were normalized to `except Exception:` so that `KeyboardInterrupt`/`SystemExit` propagate correctly (preserving Ctrl+C responsiveness and clean shutdown).
+*   **Process-death detection (dead-man switch) — it alerts, it never revives**:
+    *   All monitoring used to live **inside the process** (the heartbeat only checked that the auto-trading *thread* was alive). So when the process itself disappeared — a Raspberry Pi OOM kill, an SD-card fault, a power blip — whatever was supposed to raise the alarm died with it: **Telegram stays silent while stop-loss and trailing supervision are gone.** Holding a position, you are unprotected until a human happens to look at the screen.
+    *   The structure is inverted. The living process stamps `logs/heartbeat.json` every minute and writes down **when it promises to stamp again (a deadline)**. An external watchdog run by cron (`tools/hts_watchdog.py`) only checks whether that promise has expired — it needs no market calendar, no settings, no account, so it imports nothing heavy (the Pi's memory matters).
+    *   **It never restarts anything.** Relaunching without knowing why the process died either repeats the death or, worse, brings up a half-alive process that places orders. The watchdog's one job is to tell a human; whether to revive is the human's call.
+    *   Quitting from the menu or receiving `SIGTERM` leaves an "I am going down on purpose" marker, so **clean shutdowns raise no alert**. Conversely `SIGKILL` (OOM), a power cut, or an unhandled exception leaves the last stamp in place, the deadline passes, and the alert goes out. It never re-sends for the same death, and it sends one recovery notice when stamps resume.
+    *   Installation is a single cron line (usage is documented at the top of `tools/hts_watchdog.py`). For a manual check: `tools/hts_watchdog.py --status`.
+*   **Per-mode config profiles**:
+    *   A single `json/dynamic_config.json` used to be shared by every mode. Turning the market filter off in paper mode (mode 4) to force trades **carried straight over into live trading (mode 2)**, and the only defense was a warning at startup — a design that bet on a human reading it.
+    *   Live now reads and writes the baseline file only. Non-live modes overlay their own profile (`dynamic_config.sim/toss/paper.json`), and that file records **only the values that differ from the baseline**. As a result (1) changing live settings still propagates to the other modes, (2) changes made in another mode never leak into live, and (3) opening the file shows exactly how that mode differs from live.
+    *   Promotion is manual: to use a value you liked in paper mode, boot into live and change it there. Removing the path by which a safety switch disabled "just for testing" quietly follows you into production is the entire point.
 *   **API Call Efficiency & Speed (TPS Optimization)**:
     *   KIS/Toss OpenAPIs enforce a per-second transaction (TPS) limit, and every quote/order call passes serially through a single global TPS gate. Analysis time is therefore "total calls ÷ TPS", so the following improvements target both factors.
     *   **Adaptive Dynamic TPS (AIMD)**: Instead of a fixed margin (effective 18 TPS), the effective TPS starts from a margin and is additively raised as successes accumulate, then multiplicatively backed off the moment `EGW00201` (rate exceeded) occurs — **self-converging to the optimal TPS** for current server/network conditions.
@@ -331,7 +341,23 @@ my-stock-hts/
 ├── run.bat               # [Windows] Execution script
 ├── main.py               # Main execution file (Menu & Routing)
 ├── config.py             # Settings, Env vars, Data load
-├── api.py                # KIS API communication, yfinance integration, quote/chart data
+├── api/                  # Quote & order API layer package (split from the former 7,596-line api.py)
+│   ├── __init__.py       #   ├ Name re-export + patch propagation (callers still use api.func())
+│   ├── instruments.py    #   ├ NXT tradability & domestic ETF/ETN classification
+│   ├── market_calendar.py#   ├ Holidays (KR/US/exchange MIC) and overseas clocks
+│   ├── sessions.py       #   ├ Session detection (regular/pre/after/day market) & screen labels
+│   ├── yf_quotes.py      #   ├ yfinance/TradingView quotes + short-lived micro cache
+│   ├── chart_cache.py    #   ├ Chart memory/disk cache, watchlist prefetch
+│   ├── http.py           #   ├ TPS gate, retries, connection pool (ThrottledSession)
+│   ├── auth.py           #   ├ Token issue/refresh and the shared call entry point (call_api)
+│   ├── charts.py         #   ├ Daily/weekly/intraday chart fetch
+│   ├── indices.py        #   ├ Indices & KOSPI200 futures
+│   ├── quotes/           #   ├ Quote lookups
+│   │   ├── nxt.py        #   │   ├ NXT quotes & multi-quote batching
+│   │   └── price.py      #   │   └ Current price, order book, flows, overseas detail
+│   ├── toss.py           #   ├ Toss Securities layer + domestic daily-bar fallback
+│   ├── account.py        #   ├ Balances, fills, open orders
+│   └── orders.py         #   └ Order placement/amend/cancel, deposits
 ├── toss_api.py           # Toss Securities Open API client (quotes/assets/orders in Toss mode)
 ├── realtime.py           # KIS WebSocket real-time quote & execution-notice feed (REST fallback when uncovered)
 ├── constants.py          # Constant definitions (TR ID, field mapping, etc.)
@@ -341,7 +367,8 @@ my-stock-hts/
 ├── caching.py            # Shared in-memory TTL cache (size cap & auto-eviction)
 ├── session.py            # Session & Token management
 ├── context.py            # Global thread states & Lock management
-├── requirements.txt      # Python dependencies list
+├── requirements.txt      # Single source of runtime dependencies (run.sh installs from this file)
+├── requirements-dev.txt  # Development/test-only dependencies (pytest stack)
 ├── pytest.ini            # Pytest test configuration file
 ├── .env.example          # Env var setup example file
 ├── LICENSE.md            # License file
@@ -350,14 +377,22 @@ my-stock-hts/
 │   ├── stock.json              # Interest/monitoring stock list
 │   ├── restricted_stocks.json  # Trading restricted stock list
 │   ├── daily_asset_state.json  # Initial starting asset record for the day (for daily loss limit)
-│   ├── dynamic_config.json     # Backup of system settings changed during program execution
+│   ├── dynamic_config.json     # Live baseline settings (changed during program execution)
+│   ├── dynamic_config.sim.json    # [Mode profile] Values that differ only in simulation mode
+│   ├── dynamic_config.toss.json   # [Mode profile] Values that differ only in Toss mode
+│   ├── dynamic_config.paper.json  # [Mode profile] Values that differ only in paper-trading mode
 │   ├── token_cache.json        # [Auto-generated] API access token cache
 │   └── dart_corp_map.json      # [Auto-generated] DART stock code ↔ unique number (corp_code) mapping cache
 ├── logs/                 # [Auto-generated] Log file storage
+│   ├── mystock.log             # Program log
+│   ├── startup.log             # Boot record (the only clue when launched via cron @reboot)
+│   └── heartbeat.json          # Process liveness stamp — read by the external watchdog
 ├── chart/                # [Auto-generated] Chart image storage
 ├── data/                 # [Auto-generated] Excel/CSV export storage
 ├── tools/                # Various diagnostics & utility tools
 │   ├── stock-hts               # [Linux server] tmux session auto-configuration script
+│   ├── hts_watchdog.py         # Process-death watchdog (cron) — alerts only, never restarts
+│   ├── update_holidays.sh      # Periodic holidays-package refresh (removed from the boot path)
 │   ├── get_telegram_chat_id.py # Telegram Chat ID confirmation tool
 │   ├── clear_trade_history.py  # Trading history & DB initialization tool
 │   ├── check_execution.py      # Execution history confirmation tool
@@ -383,6 +418,7 @@ my-stock-hts/
     ├── telegram_notify.py# Telegram outbound layer (message/photo sending)
     ├── dart_api.py       # OpenDART (disclosure) API integration (dividends/earnings/disclosures)
     ├── scheduler.py      # Dedicated worker for background scheduling & timers
+    ├── heartbeat.py      # Process liveness stamp & verdict (alert on death; never auto-restart)
     ├── market_halt.py    # Circuit breaker (CB) / VI market-halt detection & Telegram alerts
     ├── executors.py      # Central management of system-wide Thread Pool
     ├── prompts.py        # External management of prompt templates for AI assistant
@@ -464,7 +500,13 @@ source .venv/bin/activate  # macOS/Linux
 ### 3. Install Libraries
 ```bash
 pip install -r requirements.txt
+
+# For development and testing as well (includes the pytest stack)
+pip install -r requirements-dev.txt
 ```
+*Note: running `run.sh` handles this automatically. `requirements.txt` is the **single source of truth** for dependencies — `run.sh` reads that file at startup to scan for and install anything missing, so the list is never kept in two places. To add a dependency, edit `requirements.txt` only; add a line to `run.sh`'s `_import_name()` table only when the PyPI name differs from the import name.*
+
+*The `holidays` package is **not** auto-upgraded on every startup. If the holiday-calendar library silently changes on each boot, market-hours decisions change without anyone knowing. Refreshing it (for ad-hoc public holidays) is split out into a periodic job instead — `tools/update_holidays.sh` (a weekly cron is recommended).*
 
 ### 4. Configuration
 Register sensitive information like API Keys as **environment variables**:

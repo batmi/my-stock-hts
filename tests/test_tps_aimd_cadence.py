@@ -174,7 +174,8 @@ def test_single_reject_backs_off_once(sess):
     """
     import os
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    src = open(os.path.join(root, "api.py"), encoding="utf-8").read()
+    #  구 api.py 는 2026-08-23 패키지로 분해됐다 — TPS 게이트는 api/http.py 로 옮겼다.
+    src = open(os.path.join(root, "api", "http.py"), encoding="utf-8").read()
     assert "rate_limited_handled = False" in src, "중복 백오프 방지 플래그가 없다"
     assert "not rate_limited_handled" in src, "msg_cd 분기가 플래그를 확인하지 않는다"
 

@@ -73,7 +73,7 @@ def main():
     targets = [(s["code"], s["name"])
                for s in config.session.stock_data.get("stocks_kr", [])][:args.stocks]
     print(f"[대조] {len(targets)}종목 · KIS(mode {args.mode}) vs pykrx/FDR")
-    print("  KIS는 250봉 고정(api.py tail(250)). 지표 비교는 앞 150봉(워밍업) 제외.\n")
+    print("  KIS는 250봉 고정(api/charts.py tail(250)). 지표 비교는 앞 150봉(워밍업) 제외.\n")
 
     hdr = (f"{'종목':<14}{'공통봉':>7}{'KIS만':>6}{'KRX만':>6}{'OHLC일치':>9}"
            f"{'종가불일치':>10}{'ATR괴리중앙':>12}{'ATR괴리최대':>12}{'RSI최대차':>10}")
@@ -102,7 +102,7 @@ def main():
                 == B[['open', 'high', 'low', 'close']].round(0)).all(axis=1)
         close_bad = int((A['close'].round(0) != B['close'].round(0)).sum())
 
-        # [워밍업 제외] KIS는 250봉만 준다(api.py:3174 tail(250)). KRX는 그보다 훨씬 길다.
+        # [워밍업 제외] KIS는 250봉만 준다(api/charts.py tail(250)). KRX는 그보다 훨씬 길다.
         #  공통 구간 앞부분에서는 KIS 쪽 Wilder EMA(ATR·RSI)가 아직 수렴하지 않아 큰 괴리가
         #  나는데, 이는 **데이터 차이가 아니라 이력 길이 차이**다. 두 소스가 같은 값인지
         #  묻는 이 대조에서는 잡음이므로, 앞 WARMUP봉을 빼고 잰다.

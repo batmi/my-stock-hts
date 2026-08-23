@@ -3764,35 +3764,149 @@ def get_autotrade_logger():
     logger.addHandler(handler)
     return logger
 
+# ===========================================================================
+# 모드별 설정 프로필
+# ===========================================================================
+# [문제] dynamic_config.json 은 한 벌뿐이라 모든 모드가 같은 파일을 읽고 썼다.
+#  관찰모드(mode 4)에서 검증하려고 시장 필터를 끄면 그 값이 그대로 남아, 다음에
+#  실전(mode 2)으로 띄울 때도 필터가 꺼진 채로 돈다. 방어선은 기동 시 경고 하나뿐이었고
+#  (main.py warn_if_safety_switches_off), 그건 '사람이 경고를 읽는가'에 기대는 장치다.
+#
+# [구조] 실전은 기준 파일(dynamic_config.json)만 읽고 쓴다. 실전이 아닌 모드는 자기
+#  프로필 파일(dynamic_config.<프로필>.json)을 하나 더 얹는다.
+#      실전(mode 2)      → dynamic_config.json
+#      모의(mode 1)      → dynamic_config.json + dynamic_config.sim.json
+#      토스(mode 3)      → dynamic_config.json + dynamic_config.toss.json
+#      관찰/가상(mode 4) → dynamic_config.json + dynamic_config.paper.json
+#  프로필 파일에는 **기준과 다른 값만** 적힌다. 그래서 (1) 실전 설정을 바꾸면 다른
+#  모드도 따라오고(검증 조건이 운용 조건에서 멀어지지 않는다), (2) 다른 모드에서 바꾼
+#  값은 그 파일에만 남아 실전으로 새지 않는다. 파일을 열어 보면 '이 모드가 실전과
+#  무엇이 다른가'가 그대로 보인다.
+#
+# [승격은 수동] 관찰모드에서 좋았던 값을 실전에 쓰려면 실전으로 띄워 다시 바꿔야 한다.
+#  자동으로 올려주지 않는 것이 요점이다 — 검증용으로 끈 안전장치가 조용히 따라 올라오는
+#  경로를 없애는 것이 이 구조의 목적이기 때문이다.
+_MODE_PROFILES = {
+    '1': 'sim',
+    '2': None,      # 실전 = 기준 파일 그 자체
+    '3': 'toss',
+    '4': 'paper',
+}
+#  프로필 파일에서 '얹는' 대상이 되는 중첩 딕셔너리 그룹(스칼라 키는 그대로 덮어쓴다)
+_CONFIG_GROUP_KEYS = ["ANALYSIS_THRESHOLDS", "SELL_STRATEGY", "INDICATOR_PARAMS",
+                      "SCORING_WEIGHTS", "MARKET_REGIME_PARAMS", "RISK_SCALING_PARAMS"]
+
+active_profile = None      # None = 실전(기준 파일). 모드 결정 시 set_config_profile()이 정한다.
+
+
+def profile_for_mode(mode):
+    """세션 모드 문자열('1'~'4') → 프로필 이름. 모르는 값은 실전으로 본다(보수적)."""
+    return _MODE_PROFILES.get(str(mode), None)
+
+
+def base_config_path():
+    return os.path.join(JSON_DIR, "dynamic_config.json")
+
+
+def profile_config_path(profile=None):
+    """현재(또는 지정) 프로필의 덮어쓰기 파일 경로. 실전이면 기준 파일 경로."""
+    profile = active_profile if profile is None else profile
+    if not profile:
+        return base_config_path()
+    return os.path.join(JSON_DIR, f"dynamic_config.{profile}.json")
+
+
+def set_config_profile(profile):
+    """모드가 정해진 직후 호출 — 프로필을 걸고 설정을 다시 읽는다."""
+    global active_profile, settings
+    active_profile = profile or None
+    with _settings_lock:
+        settings = GlobalSettings()      # 지난 프로필의 잔재를 남기지 않는다
+    load_dynamic_config()
+
+
+def _apply_config_data(data):
+    """읽어 들인 설정 딕셔너리 한 벌을 현재 settings 위에 적용한다."""
+    global settings
+    with _settings_lock:
+        current_dict = getattr(settings, 'model_dump', settings.dict)()
+
+        for key in _CONFIG_GROUP_KEYS:
+            if key in data:
+                current_dict[key].update(data[key])
+                del data[key]
+
+        # [마이그레이션] 구버전 가격모멘텀(MOMENTUM_PRICE) 가중치는 제거하고 추세(TREND)로 흡수
+        #   (총점 10점 유지: 추세4/모멘텀2.5/강도1.5/시너지2.0 체계로 복귀)
+        sw = current_dict.get("SCORING_WEIGHTS", {})
+        if "MOMENTUM_PRICE" in sw:
+            sw["TREND"] = round(sw.get("TREND", 4.0) + sw.pop("MOMENTUM_PRICE", 0.0), 2)
+
+        current_dict.update(data)
+        settings = GlobalSettings(**current_dict)
+
+
+def _read_config_file(path):
+    import json
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"[Config] 설정 파일 로드 실패({os.path.basename(path)}): {e}")
+        return None
+
+
+def diff_against_base(data, base=None):
+    """현재 설정 한 벌에서 기준 파일과 다른 부분만 추린다(프로필 파일에 적을 내용).
+
+    중첩 그룹은 키 단위로 비교한다 — 그룹 하나가 통째로 복사되면 그 뒤 실전 쪽 변경이
+    프로필에 반영되지 않아, 프로필이 기준에서 조용히 굳어 버린다.
+    """
+    if base is None:
+        base = _read_config_file(base_config_path()) or {}
+    defaults = getattr(GlobalSettings(), 'model_dump', GlobalSettings().dict)()
+
+    out = {}
+    for key, value in data.items():
+        if key in _CONFIG_GROUP_KEYS and isinstance(value, dict):
+            base_group = dict(defaults.get(key) or {})
+            base_group.update(base.get(key) or {})
+            sub = {k: v for k, v in value.items() if base_group.get(k) != v}
+            if sub:
+                out[key] = sub
+            continue
+        base_value = base[key] if key in base else defaults.get(key)
+        if base_value != value:
+            out[key] = value
+    return out
+
+
+def save_dynamic_config(data):
+    """설정 저장 — 실전이면 기준 파일에 전부, 그 외 모드면 프로필 파일에 차이만 쓴다.
+
+    저장 경로를 이 한 곳으로 모은다. 메뉴(modules/settings.py)도 이 함수를 부른다 —
+    '어느 파일에 무엇을 쓸지'가 두 곳에 있으면 한쪽만 고쳐져 모드 분리가 조용히 샌다.
+    반환값은 실제로 쓴 경로이며, 실패하면 None 이다.
+    """
+    import jsonio
+    path = profile_config_path()
+    payload = data if not active_profile else diff_against_base(data)
+    return path if jsonio.save_json(path, payload) else None
+
+
 # [추가] 동적 설정 로드 함수 (사용자가 변경한 설정을 덮어씌움)
 def load_dynamic_config():
-    global settings
-    import json
-    config_path = os.path.join(JSON_DIR, "dynamic_config.json")
-    
-    if os.path.exists(config_path):
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            with _settings_lock:
-                current_dict = getattr(settings, 'model_dump', settings.dict)()
-                
-                for key in ["ANALYSIS_THRESHOLDS", "SELL_STRATEGY", "INDICATOR_PARAMS", "SCORING_WEIGHTS", "MARKET_REGIME_PARAMS", "RISK_SCALING_PARAMS"]:
-                    if key in data:
-                        current_dict[key].update(data[key])
-                        del data[key]
+    """기준 파일을 먼저 적용하고, 프로필이 걸려 있으면 그 위에 덮어쓴다."""
+    base = _read_config_file(base_config_path())
+    if base is not None:
+        _apply_config_data(base)
+    if active_profile:
+        overlay = _read_config_file(profile_config_path())
+        if overlay is not None:
+            _apply_config_data(overlay)
 
-                # [마이그레이션] 구버전 가격모멘텀(MOMENTUM_PRICE) 가중치는 제거하고 추세(TREND)로 흡수
-                #   (총점 10점 유지: 추세4/모멘텀2.5/강도1.5/시너지2.0 체계로 복귀)
-                sw = current_dict.get("SCORING_WEIGHTS", {})
-                if "MOMENTUM_PRICE" in sw:
-                    sw["TREND"] = round(sw.get("TREND", 4.0) + sw.pop("MOMENTUM_PRICE", 0.0), 2)
-
-                current_dict.update(data)
-                settings = GlobalSettings(**current_dict)
-        except Exception as e:
-            print(f"[Config] 동적 설정 로드 실패: {e}")
 
 # [추가] 커스텀 변경된 설정 내역 추출
 def get_custom_settings():
@@ -3817,7 +3931,9 @@ def get_custom_settings():
 def reset_custom_settings(keys_to_reset):
     global settings
     import json
-    config_path = os.path.join(JSON_DIR, "dynamic_config.json")
+    #  지금 쓰고 있는 파일에서 지운다 — 관찰모드에서 되돌린 값이 실전 기준 파일을
+    #  건드리면 안 되고, 그 반대도 마찬가지다.
+    config_path = profile_config_path()
     
     if not os.path.exists(config_path):
         return
@@ -3843,101 +3959,52 @@ def reset_custom_settings(keys_to_reset):
             
             # 초기 상태를 베이스로 새 설정 덮어씌우기
             settings = GlobalSettings()
-            load_dynamic_config()
-            setup_logging() # 초기화된 파일 로그 레벨 즉시 적용
         except Exception as e:
             print(f"[Config] 설정 초기화 중 오류: {e}")
+            return
+    load_dynamic_config()
+    setup_logging()  # 초기화된 파일 로그 레벨 즉시 적용
 
 # [추가] 모든 커스텀 설정 삭제 및 시스템 기본값으로 완전 초기화
 def reset_all_settings():
+    """현재 프로필의 설정 파일을 지우고 클래스 기본값으로 되돌린다.
+
+    [단일 소스] 종전에는 여기서 ANALYSIS_THRESHOLDS·SELL_STRATEGY·SCORING_WEIGHTS·
+     MARKET_REGIME_PARAMS·RISK_SCALING_PARAMS·INDICATOR_PARAMS 여섯 딕셔너리를 통째로
+     다시 타이핑했다. 그 결과 기본값이 (1) GlobalSettings 클래스 (2) 이 초기화 딕셔너리
+     (3) json/dynamic_config.json 세 곳에 있었고, 실제로 한쪽만 고쳐지는 사고가 두 번
+     났다 — 2026-08-05 RISK_SCALING 의 DD_SCALE 이 기각된 구 값(0.75/0.5)으로 되돌아갔고,
+     2026-08-09 동적 ATR 캡 8키가 이 경로에서만 빠져 '전체 초기화'를 누르면 설정 파일이
+     조용히 퇴화했다. 둘 다 '초기화를 눌렀더니 옛날 전략으로 돌아간다'는 형태의 사고다.
+     지금은 클래스 기본값 한 곳만 진실이고, 초기화는 그것을 새로 읽어 온다.
+
+    [왜 이제 안전한가] 하드코딩의 명목은 '클래스 딕셔너리 메모리 참조 오염 방지'였다.
+     pydantic 은 v1·v2 모두 인스턴스마다 가변 기본값을 복사해 준다 — GlobalSettings()를
+     새로 만들면 이전 인스턴스에서 제자리 수정(config.ANALYSIS_THRESHOLDS['X']=1)한
+     내용이 따라오지 않는다. tests/test_config_defaults.py 가 이 성질을 고정한다.
+    """
     global settings
     import os
-    config_path = os.path.join(JSON_DIR, "dynamic_config.json")
+    #  실전에서 누르면 기준 파일이, 관찰모드에서 누르면 관찰 프로필만 지워진다.
+    config_path = profile_config_path()
     if os.path.exists(config_path):
         try: os.remove(config_path)
         except Exception: pass
 
     with _settings_lock:
         settings = GlobalSettings()
-        
-        # [추가] 파이썬 클래스 딕셔너리의 메모리 참조 오염을 방지하기 위해 
-        # 초기화 시 하드코딩된 순수 기본값으로 강제 복원
-        # [동기화] 아래 값들은 GlobalSettings 클래스 기본값(추세추종 정합화 기준)과 반드시 일치해야 함
-        settings.ANALYSIS_THRESHOLDS = {
-            "BUY_SCORE": 7.0, "RISE_SCORE": 6.0, "INTEREST_SIGNAL_MIN": 3, "INTEREST_MA60_NEAR": 0.97,
-            "BUY_RSI_MAX": 70, "TREND_QUALITY_MAX": 300.0, "BUY_VOL_STRENGTH": 100.0,
-            "BUY_ASK_BID_RATIO": 1.0, "AUTO_ADJUST_ASK_BID_RATIO": True, "USE_MEAN_REVERSION": False,
-            "MR_RSI_MAX": 40.0, "MR_DISPARITY_MAX": 90.0, "MR_VOL_STRENGTH": 120.0,
-            "DISPARITY_UPPER": 110, "DISPARITY_LOWER": 90, "SUPER_MOMENTUM_USE": True,
-            "SUPER_MOMENTUM_SCORE": 8.0, "SUPER_MOMENTUM_W52_POS": 90.0, "SUPER_BUY_RSI_MAX": 80.0,
-            "PYRAMIDING_USE": True, "PYRAMIDING_PROFIT_TRIGGER": 10.0, "PYRAMIDING_RATIO": 0.5, "PYRAMIDING_MAX_COUNT": 3,
-            "PYRAMIDING_REQUIRE_HEALTHY_MARKET": True
-        }
-        settings.SELL_STRATEGY = {
-            "TAKE_PROFIT_RATE": 0.0, "HALF_TAKE_PROFIT_USE": False, "DEFENSIVE_HALF_SELL_USE": False,
-            "STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True, "ATR_STOP_MULTIPLIER": 2.0,
-            "MAX_ATR_STOP_LOSS_RATE": -15.0,
-            # [Fix 2026-08-09] 동적 ATR 캡 8키가 이 초기화 경로에만 빠져 있었다. 키를
-            #  추가할 때 위 [동기화] 주석이 요구하는 불변식을 지키지 못한 것으로,
-            #  2026-08-05 RISK_SCALING_PARAMS와 같은 계열의 누락이다.
-            #  '전체 설정 초기화'를 누르면 이 키들이 SELL_STRATEGY에서 사라지고
-            #  _save_dynamic_config()가 그대로 파일에 써서 dynamic_config.json이 조용히
-            #  퇴화한다(읽는 쪽 폴백이 맞아 동작은 유지되지만, 폴백이 한 번이라도
-            #  어긋나면 그때부터 설정과 실제 동작이 갈린다).
-            "ATR_CAP_DYNAMIC": True, "ATR_CAP_VOL_WINDOW": 60, "ATR_CAP_VOL_REF_MIN": 250,
-            "ATR_CAP_VOL_POWER": 0.5, "ATR_CAP_RATIO_MIN": 0.4, "ATR_CAP_RATIO_MAX": 3.0,
-            "ATR_CAP_FLOOR": -35.0, "ATR_CAP_CEIL": -6.0,
-            "BREAK_EVEN_PROFIT_RATE": 5.0, "BREAK_EVEN_STOP_RATE": 0.5,
-            "USE_BREAK_EVEN_STOP": False,
-            "TIME_STOP_USE": True, "TIME_STOP_DAYS": 15, "TIME_STOP_MIN_PROFIT_RATE": 0.0,
-            "MR_GRACE_LOSS_RATE": -7.0, "SELL_SCORE": 4.0, "TAKE_PROFIT_RSI": 0.0,
-            "SUPER_TAKE_PROFIT_RSI": 90.0, "TRAILING_STOP_ACTIVATION_RATE": 10.0, "TRAILING_STOP_CALLBACK_RATE": 5.0,
-            "TRAILING_ATR_MULTIPLIER": 3.5, "TS_MAX_GIVEBACK_RATIO": 0.0, "TS_ACTIVATION_MODE": "breakeven",
-            "TS_ACTIVATION_ATR_MULTIPLIER": 3.0, "TS_ACTIVATION_MAX_RATE": 0.0,
-            "TRAILING_STOP_CALLBACK_MAX": 0.0,
-            "PROFIT_LOCK_USE": False, "PROFIT_LOCK_MIN_MFE": 25.0, "PROFIT_LOCK_GIVEBACK": 0.5
-        }
-        settings.SCORING_WEIGHTS = {
-            "TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0
-        }
-        settings.MARKET_REGIME_PARAMS = {
-            "USE_ADAPTIVE_THRESHOLD": False, "BULL_SCORE_ADJ": -0.5,
-            "PENDING_UP_SCORE_ADJ": 0.0, "PENDING_DOWN_SCORE_ADJ": 0.5, "BEAR_SCORE_ADJ": 0.5,
-            "SIDEWAYS_SCORE_ADJ": 0.0, "REGIME_EMA_FAST": 9, "REGIME_EMA_SLOW": 41,
-            "REGIME_CONFIRM_PCT": 5.0, "REGIME_WHIPSAW_LOOKBACK": 8,
-            "REGIME_MA_PERIOD": 5, "REGIME_ADX_THRESHOLD": 20
-        }
-        settings.RISK_SCALING_PARAMS = {
-            "USE_REGIME_RISK_SCALING": True, "PENDING_DOWN_RISK_SCALE": 0.6, "BEAR_RISK_SCALE": 1.0,
-            "USE_WHIPSAW_RISK_SCALING": True, "WHIPSAW_LO": 0.40, "WHIPSAW_HI": 0.75,
-            "WHIPSAW_MIN_SCALE": 0.85,
-            # [Fix 2026-08-05] 0.75/0.5는 2026-08-04 실증으로 0.90/0.80에 밀려난 구 값인데
-            #  이 초기화 경로에만 남아 있었다. '전체 설정 초기화'를 누르면 기각된 값으로
-            #  되돌아갔다(위 [동기화] 주석이 요구하는 불변식 위반).
-            "USE_DRAWDOWN_RISK_SCALING": True, "DD_LEVEL_1": 5.0, "DD_SCALE_1": 0.90,
-            "DD_LEVEL_2": 10.0, "DD_SCALE_2": 0.80, "DD_LOOKBACK_DAYS": 90,
-            "GAP_RISK_BUFFER": 1.2
-        }
-        settings.INDICATOR_PARAMS = {
-            "CHART_LOOKBACK_DAYS": 730, "SAR_AF_START": 0.02, "SAR_AF_STEP": 0.02, "SAR_AF_MAX": 0.2,
-            "ADX_PERIOD": 14, "CCI_WINDOW": 20, "CCI_UPPER": 100, "CCI_LOWER": -100,
-            "MACD_FAST": 12, "MACD_SLOW": 26, "MACD_SIGNAL": 9, "OBV_MA_PERIOD": 10,
-            "RSI_PERIOD": 14, "RSI_SIGNAL": 14, "RSI_UPPER": 70, "RSI_MID": 50, "RSI_LOWER": 30,
-            "ATR_PERIOD": 14, "TREND_PERIOD": 60, "BOX_PERIOD": 30, "BOX_VALUE_AREA_PCT": 50.0,
-            "MOMENTUM_LOOKBACK": 126, "MOMENTUM_W52_NEAR": 80, "TREND_QUALITY_LOOKBACK": 90,
-            "MOMENTUM_LOOKBACK_1M": 21, "MOMENTUM_LOOKBACK_3M": 63, "TREND_PERSIST_LOOKBACK": 120, "TREND_PERSIST_MIN": 70,
-            "EMA_SHORT": 5, "VOLUME_MA_PERIOD": 20, "VOLUME_SPIKE_RATIO": 2.0,
-            "SCORE_RSI_MID": 50, "SCORE_RSI_STRONG": 60, "SCORE_RSI_OVERHEAT": 80, "SCORE_RSI_REBOUND": 40,
-            "SCORE_ADX_MIN": 20, "SCORE_CCI_STRONG": 0
-        }
-        
+
         import sys
         current_module = sys.modules[__name__]
         settings_keys = getattr(settings, 'model_dump', settings.dict)().keys()
-        
+
         for key in settings_keys:
             if key in current_module.__dict__:
                 del current_module.__dict__[key]
+
+    #  프로필을 지운 경우 기준 파일은 그대로다 — 다시 읽어 기준 설정으로 복귀시킨다.
+    if active_profile:
+        load_dynamic_config()
 
 # [추가] 설정 항목에 대한 한글 설명 매핑 (UI 출력용)
 CONFIG_DESCRIPTIONS = {

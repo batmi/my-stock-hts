@@ -1,178 +1,97 @@
-adbc_driver_manager
-adbc_driver_postgresql
-adbc_driver_sqlite
-aiohttp_wsgi
-aiomysql
-aiosqlite
-anywidget
-api_client
-apsw
-argcomplete
-asyncpg
-attr
-beautifulsoup4
+# ============================================================================
+# my-stock-hts 런타임 의존성 (단일 소스)
+# ============================================================================
+# 이 파일이 '무엇을 설치해야 프로그램이 도는가'의 유일한 정의다.
+#  run.sh 가 기동 시 이 파일을 읽어 미설치 라이브러리를 스캔·설치하므로,
+#  의존성을 추가할 때는 여기만 고치면 된다(run.sh 의 목록을 따로 고치지 않는다).
+#  단, PyPI 배포명과 import 이름이 다른 패키지는 run.sh 의 `_import_name()` 표에
+#  한 줄을 함께 추가해야 스캔이 올바로 동작한다.
+#
+# [작성 기준] 2026-08-23 전수 재작성. 코드베이스의 모든 import 문을 AST 로 훑어
+#  실제로 참조되는 서드파티만 남겼다. 종전 파일은 pipreqs 류의 출력이 그대로 남아
+#  있어 실제 의존성(rich·pandas·yfinance·requests·pykrx ...)이 전부 빠지고,
+#  코드에서 한 번도 import 하지 않는 것들(PyQt6·PySide6·pyspark·selenium·Flask ...)이
+#  들어 있었다 — 라즈베리파이에서 이 파일로 설치하면 쓰지도 않는 GUI 툴킷을
+#  빌드하려다 시간과 SD 수명을 태우고 실패한다.
+#
+# [버전 정책] 상한은 두지 않고 하한만 둔다. 운영기(라즈베리파이3)에서 재설치가
+#  강제 업그레이드로 이어지지 않게 하되, 코드가 요구하는 API 가 없는 구버전은 막는다.
+#  개발기에서 실제로 검증된 조합은 파일 끝의 '검증 조합' 주석을 참조.
+#
+# [테스트 의존성] pytest 계열은 requirements-dev.txt 로 분리했다. 기동 경로가
+#  테스트 도구 설치를 기다릴 이유가 없다.  →  pip install -r requirements-dev.txt
+# ============================================================================
 
-bokeh
+# --- 화면·설정 -------------------------------------------------------------
+# rich: CLI 전체 출력(테이블·색·프롬프트). config.console 이 여기서 나온다.
+rich>=13.0
+# python-dotenv: config.py 가 .env 를 읽는다(API 키는 ~/.htsrc 경유가 기본).
+python-dotenv>=1.0
+# pydantic: config.py 의 설정 스키마(BaseModel/Field) 정의.
+pydantic>=2.0
 
-brotli
-brotlicffi
-ca_certs_locater
-cairocffi
+# --- 데이터 처리 -----------------------------------------------------------
+# pandas / numpy: 시세 캔들과 지표 계산의 기본 자료구조. 사실상 전 모듈이 쓴다.
+#  numpy 2.x 와 함께 쓰려면 pandas 2.2 이상이어야 한다.
+pandas>=2.2
+numpy>=1.26
 
-
-cffi
-chardet
-checks
-cheroot
-cherrypy
-choreographer
-click
-clr
-colorama
-
-curio
-cysqlite
-Cython
-dask_expr
-defcon
-defusedxml
-
-docutils
-duckdb
-email_validator
-eval_type_backport
-eventlet
-exceptiongroup
-fastparquet
-filelock
-Flask
-flup
-freetype_py
-fs
-fsspec
-glyphsLib
-gnureadline
-greenlet
-grpcio-reflection
-grpcio-tools
-gspread
-gunicorn
-h2
-# 거래소(MIC) 휴장 달력(financial_holidays: XNYS·XCME·XETR·XJPX·XTAI·XHKG·XSHG)을
-#  쓴다 — 구버전은 해당 달력이 없어 지수 개장 표기가 조용히 '휴장 없음'으로 퇴화한다.
-holidays>=0.103
-html5lib
-httpx_aiohttp
-hypothesis
-ibis
-importlib_resources
-inflect
-ini2toml
-inspect2
-ipykernel
-ipython
-ipywidgets
-Jinja2
-
-keyring
-lxml_html_clean
-lz4
-Mako
-
-markdownify
-MarkupSafe
-
-Microsoft
-modin
-
-multidict
-munkres
-mysql_connector_repackaged
-numexpr
-oauth2client
-odfpy
-olefile
-orjson
-outcome
-PasteScript
-pexpect
-
-polars
-psutil
-
-PyInstaller
-pymysql
-pyOpenSSL
-PyQt6
-PySide6
-pyspark
-
-
-pytest
-pytest-cov
-pytest-sugar
-pytest-xdist
-python_bcrypt
-python_calamine
-python_socks
-pyu2f
-pyxlsb
-PyYAML
-qtpy
-railroad
-readability_lxml
-redis
-reportlab
-
-
-scikit_learn
-scipy
-selenium
-sentencepiece
-setuptools_scm
-
-shiboken6
-simplejson
-sip
-scikit-image
-slack_sdk
-socksio
-speedups
-sphinx_gallery
-SQLAlchemy
-sqlcipher3
-sqlframe
-sqlparse
-statsmodels
-sympy
-
-threadpoolctl
-toml
-tornado
-traitlets
-trove_classifiers
-Twisted
-ufoLib2
-uharfbuzz
-ujson
-unicodedata2
-urllib3_secure_extra
-usercustomize
-uvloop
-vincent
-waitress
-Werkzeug
-winloop
-xarray
-xattr
-xlrd
-xlsxwriter
-
-xx
-
-zopfli
-zstandard
-tradingview-screener
-# 토스 모드 국내지수(코스피200·코스닥150) TradingView 보강용. PyPI 미배포 → git 설치 필요.
+# --- 시세·데이터 소스 ------------------------------------------------------
+# requests: KIS REST·토스·DART·텔레그램·네이버 등 모든 HTTP 호출.
+requests>=2.28
+# urllib3: 재시도(Retry)·풀 설정을 api.py 가 직접 만진다.
+urllib3>=2.0
+# websockets: KIS 실시간 시세/체결통보 피드(realtime.py). 없으면 REST 폴백으로 퇴화한다.
+websockets>=12.0
+# cryptography: KIS 체결통보 AES256-CBC 복호화(realtime.py).
+#  '표준 라이브러리'가 아니라 서드파티다 — 빠지면 체결통보만 조용히 실패한다.
+cryptography>=41.0
+# yfinance: 해외 시세·기준가 폴백, 배당/실적 캘린더.
+yfinance>=0.2.40
+# pykrx / finance-datareader: 국내 일봉을 'KRX 정규장 기준'으로 조회한다.
+#  토스 캔들은 NXT 장전·장후 체결이 섞여 ATR 이 6~15% 부풀고 ADX 가 최대 9.45 어긋난다.
+#  pykrx 1순위 / FDR 폴백으로 이중화한다.
+pykrx>=1.0.45
+finance-datareader>=0.9.90
+# beautifulsoup4: 테마·뉴스 HTML 파싱(modules/theme_analysis.py).
+beautifulsoup4>=4.11
+# tradingview-screener: 해외 종목 스크리닝·시세 보강.
+tradingview-screener>=2.5
+# tvdatafeed: 토스 모드 국내지수(코스피200·코스닥150)와 60분봉, 미국채 4개 테너.
+#  PyPI 미배포 → git 설치가 유일한 경로다(run.sh 가 이 줄을 그대로 pip 에 넘긴다).
 tvdatafeed @ git+https://github.com/rongardF/tvdatafeed.git
-google-generativeai
+
+# --- 휴장일·시간 -----------------------------------------------------------
+# holidays: 거래소(MIC) 휴장 달력(financial_holidays: XNYS·XCME·XETR·XJPX·XTAI·XHKG·XSHG)을
+#  쓴다 — 구버전은 해당 달력이 없어 지수 개장 표기가 조용히 '휴장 없음'으로 퇴화한다.
+#  [주의] 임시공휴일 반영을 위해 갱신이 필요하지만, 기동 경로에서 자동 업그레이드하지
+#  않는다(휴장 판정 라이브러리가 기동 때마다 조용히 바뀌면 매매 시간 판단이 바뀐다).
+#  갱신은 tools/update_holidays.sh 를 주기 작업(주 1회 등)으로 돌려 분리한다.
+holidays>=0.103
+
+# --- 리포트·차트 -----------------------------------------------------------
+# matplotlib: 차트 이미지 생성(modules/chart.py) → 텔레그램 전송.
+matplotlib>=3.7
+# openpyxl: 계좌·매매내역 엑셀 내보내기(modules/account.py).
+openpyxl>=3.1
+
+# --- AI ---------------------------------------------------------------------
+# google-generativeai: 장전 브리핑·테마 분석·AI 종목 코멘트(Gemini).
+google-generativeai>=0.8
+
+# --- 플랫폼 보조 (선택) ----------------------------------------------------
+# gnureadline: macOS 기본 파이썬의 libedit readline 이 입력 편집을 망가뜨리는 것을 피한다.
+#  리눅스는 표준 readline 이 있으므로 불필요하다.
+gnureadline>=8.0; sys_platform == "darwin"
+
+# ============================================================================
+# [검증 조합] 2026-08-23 개발기(macOS, Python 3.13)에서 실제로 돌던 버전.
+#  하한만 걸어 두었으므로 설치 결과가 이보다 높을 수 있다. 문제가 생기면
+#  이 조합으로 되돌려 재현하면 된다.
+#   rich 15.0.0 · pandas 2.3.3 · numpy 2.4.6 · yfinance 1.4.1 · requests 2.34.2
+#   urllib3 2.7.0 · beautifulsoup4 4.15.0 · matplotlib 3.11.0 · openpyxl 3.1.5
+#   python-dotenv 1.2.2 · pydantic 2.13.4 · holidays 0.103 · pykrx 1.2.8
+#   finance-datareader 0.9.202 · tradingview-screener 3.2.0 · tvdatafeed 2.1.0
+#   google-generativeai 0.8.6 · websockets 16.0 · cryptography 49.0.0
+#   gnureadline 8.3.3
+# ============================================================================

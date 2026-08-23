@@ -19,7 +19,18 @@ import os
 
 import pytest
 
-API_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "api.py")
+#  api 는 2026-08-23 부터 패키지다(구 api.py 분해). 계좌를 건드리는 함수가 어느 계층으로
+#  옮겨가도 계약이 따라가도록 파일 하나가 아니라 패키지 전체를 훑는다.
+API_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "api")
+
+
+def _api_source_files():
+    out = []
+    for root, _dirs, files in os.walk(API_DIR):
+        for f in files:
+            if f.endswith(".py"):
+                out.append(os.path.join(root, f))
+    return sorted(out)
 
 # 가드가 없어도 되는 함수. 이유를 반드시 함께 적는다.
 EXEMPT = {
@@ -31,16 +42,17 @@ EXEMPT = {
 
 def _account_touching_functions():
     """CANO 파라미터를 실제로 만들어 보내는 최상위 함수 목록."""
-    tree = ast.parse(open(API_PATH, encoding="utf-8").read())
     out = []
-    for node in tree.body:
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        src = ast.dump(node)
-        touches = ("'CANO'" in src or '"CANO"' in src
-                   or "_prepare_account_params" in src)
-        if touches:
-            out.append(node)
+    for path in _api_source_files():
+        tree = ast.parse(open(path, encoding="utf-8").read())
+        for node in tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            src = ast.dump(node)
+            touches = ("'CANO'" in src or '"CANO"' in src
+                       or "_prepare_account_params" in src)
+            if touches:
+                out.append(node)
     return out
 
 

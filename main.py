@@ -951,6 +951,14 @@ def _install_journal_sigterm_handler():
             journal_sync.notify_shutdown('stopped', message=f'signal {signum}')
         except Exception:
             pass
+        # [프로세스 감시] 외부에서 내린 종료는 사고사가 아니다 — 표식을 남겨
+        #  감시자가 '죽었다' 알림을 보내지 않게 한다. (SIGKILL·OOM 은 여기 못 오므로
+        #  그 경우에는 마지막 도장이 그대로 남아 정상적으로 사망 알림이 나간다.)
+        try:
+            from modules import heartbeat
+            heartbeat.stopped(reason=f"signal {signum}")
+        except Exception:
+            pass
         signal.signal(signum, signal.SIG_DFL)
         os.kill(os.getpid(), signum)
 
@@ -1103,6 +1111,19 @@ def main():
         telegram_cmd = telegram_bot.TelegramCommander()
         telegram_cmd.start()
 
+        # [프로세스 감시] 프로세스가 살아 있다는 도장(logs/heartbeat.json)은 스케줄러
+        #  스레드가 1분마다 찍는다. 그런데 그 스레드는 텔레그램이 켜져 있을 때만 뜬다.
+        #  꺼진 구성으로 기동하면 지난 기동의 도장이 그대로 남아, 밖에서 도는 감시자가
+        #  '죽었다'고 오해한다. 그래서 감시가 성립하지 않는 구성임을 파일에 명시해 둔다
+        #  (감시자는 이 표식을 보면 침묵한다). 어차피 알림 경로가 없으므로 손실은 없다.
+        try:
+            from modules import heartbeat as _heartbeat
+            from modules.scheduler import SystemScheduler as _SystemScheduler
+            if not _SystemScheduler().is_running:
+                _heartbeat.stopped(reason="하트비트 미가동(텔레그램 알림 비활성)")
+        except Exception as _hb_e:
+            logging.debug(f"[Heartbeat] 초기 상태 표시 실패(무시): {_hb_e}")
+
     trader = auto_trade.AutoTrader()
     last_choice = "1"
 
@@ -1143,9 +1164,12 @@ def main():
         except Exception as _ws_e:
             logging.getLogger("hts").debug(f"[WS] 실시간 피드 시작 실패(REST 폴백): {_ws_e}")
 
-    # [안전장치] 실계좌만 — 가상 검증용으로 껐던 설정이 그대로 넘어오지 않았는지 알린다.
-    #  dynamic_config.json은 모드별로 나뉘지 않아 mode 4에서 끈 시장 필터가 mode 2에도 그대로
-    #  적용된다. 시작을 막거나 값을 되돌리지는 않는다 — 의도적으로 끄는 경우도 있으므로
+    # [안전장치] 실계좌만 — 안전장치가 꺼진 채로 시작하는 것을 알린다.
+    #  종전에는 dynamic_config.json이 모드별로 나뉘지 않아 mode 4에서 끈 시장 필터가
+    #  mode 2에도 그대로 적용됐고, 이 경고가 유일한 방어선이었다. 2026-08-23 설정 파일을
+    #  모드별 프로필로 분리해 그 유입 경로 자체를 없앴다(config.set_config_profile).
+    #  그래도 실전에서 직접 끄는 경로는 남아 있으므로 최종 확인으로 유지한다.
+    #  시작을 막거나 값을 되돌리지는 않는다 — 의도적으로 끄는 경우도 있으므로
     #  판단은 사용자에게 두고, '모르는 채로 시작하는' 경우만 없앤다.
     if not (getattr(config.session, 'is_paper', False)
             or config.session.is_toss or config.session.is_simulation):

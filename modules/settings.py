@@ -20,6 +20,81 @@ import context # [추가]
 logger = logging.getLogger(__name__)
 console = config.console
 
+
+# ==========================================================
+# 설정 변수명 표기 통일
+# ==========================================================
+# [문제] 메뉴 0 안에서 같은 설정이 화면마다 다른 이름으로 보였다. 열 제목은 셋 다
+#  "변수명 (Config Name)"인데 내용이 셋이었다:
+#     설정 조회      ANALYSIS_THRESHOLDS['BUY_SCORE']   (파이썬 첨자 표기)
+#     설정 편집      BUY_SCORE                          (그룹 없이 키만)
+#     커스텀 조회    ANALYSIS_THRESHOLDS.BUY_SCORE      (점 표기)
+#  게다가 조회 화면에는 한 칸에 키를 여러 개 묶은 표기가 있었다
+#  (INDICATOR_PARAMS['SAR_AF_START', 'SAR_AF_STEP', 'SAR_AF_MAX']) — 보기엔 코드 같지만
+#  실제로 그렇게 쓰면 KeyError 가 난다. 즉 '변수명'이라면서 변수명이 아니었다.
+#
+# [정한 표기] 점 표기(GROUP.KEY, 최상위 값은 KEY)로 통일한다. 이유는 취향이 아니라
+#  이미 코드가 그 표기를 정식 키로 쓰고 있어서다 — config.get_custom_settings() 가
+#  f"{그룹}.{키}" 로 만들고 reset_custom_settings() 가 '.' 로 쪼개 되돌린다. 그리고
+#  json/dynamic_config.json 의 중첩 구조와 1:1로 맞아떨어져, 화면에서 본 이름을 그대로
+#  설정 파일에서 찾을 수 있다.
+#
+# [자동 보정] 아래 정규화 함수가 세 표기를 모두 받아 정규 표기로 바꾼다. 그래서 새 항목을
+#  어느 표기로 적어도 화면은 한 가지로 나온다 — 표기 통일이 사람의 주의력에 기대지 않는다.
+_CONFIG_GROUPS = ("ANALYSIS_THRESHOLDS", "SELL_STRATEGY", "INDICATOR_PARAMS",
+                  "SCORING_WEIGHTS", "MARKET_REGIME_PARAMS", "RISK_SCALING_PARAMS")
+
+_key_owner_cache = None
+
+
+def _key_owner_map():
+    """설정 키 → 소속 그룹. 그룹 간 키 이름은 겹치지 않으므로 키만으로 그룹이 정해진다
+    (tests/test_settings_var_names.py 가 이 전제를 고정한다)."""
+    global _key_owner_cache
+    if _key_owner_cache is None:
+        defaults = getattr(config.GlobalSettings(), 'model_dump', None)
+        data = defaults() if defaults else config.GlobalSettings().dict()
+        owner = {}
+        for group in _CONFIG_GROUPS:
+            for key in (data.get(group) or {}):
+                owner[key] = group
+        _key_owner_cache = owner
+    return _key_owner_cache
+
+
+def qualified_var_name(name):
+    """어떤 표기로 들어와도 정규 표기로 바꿔 준다.
+
+        ANALYSIS_THRESHOLDS['BUY_SCORE']              → ANALYSIS_THRESHOLDS.BUY_SCORE
+        BUY_SCORE                                     → ANALYSIS_THRESHOLDS.BUY_SCORE
+        SYSTEM_MAX_CONSECUTIVE_ERRORS                 → SYSTEM_MAX_CONSECUTIVE_ERRORS (최상위)
+        INDICATOR_PARAMS['RSI_PERIOD', 'RSI_SIGNAL']  → 두 줄로 나눠 각각 정규 표기
+
+    설정 키가 아닌 문자열(잠금 표시 등)은 손대지 않고 그대로 돌려준다.
+    """
+    if not name or not isinstance(name, str):
+        return name
+    text = name.strip()
+
+    #  첨자 표기: GROUP['KEY'] · GROUP['A', 'B', ...]
+    if text.endswith(']') and '[' in text:
+        group, _, inner = text.partition('[')
+        group = group.strip()
+        keys = [k.strip().strip("'\"") for k in inner[:-1].split(',')]
+        keys = [k for k in keys if k]
+        if group in _CONFIG_GROUPS and keys:
+            #  키가 여럿이면 줄을 나눈다 — 한 줄에 묶으면 어느 것도 그대로 쓸 수 없는
+            #  가짜 표현이 된다(종전 표기가 그랬다).
+            return "\n".join(f"{group}.{k}" for k in keys)
+        return text
+
+    if '.' in text:                      # 이미 정규 표기
+        return text
+
+    group = _key_owner_map().get(text)
+    return f"{group}.{text}" if group else text
+
+
 def _save_dynamic_config():
     """현재 메모리 상의 설정을 파일로 저장 (영구 반영)"""
     try:
@@ -80,19 +155,32 @@ def _save_dynamic_config():
         "CORRELATION_THRESHOLD": getattr(config.settings, 'CORRELATION_THRESHOLD', 0.7)
     }
     
-    path = os.path.join(config.JSON_DIR, "dynamic_config.json")
-    if jsonio.save_json(path, data):
+    # [모드별 프로필] 실전이면 기준 파일에 전부 쓰고, 실전이 아닌 모드(모의·토스·관찰)면
+    #  기준과 다른 값만 그 모드의 파일에 쓴다. 관찰모드에서 검증하려고 끈 안전장치가
+    #  실전 기동에 따라붙던 경로를 여기서 끊는다. 어느 파일에 무엇을 쓸지는 config 가
+    #  정한다 — 그 판단이 두 곳에 있으면 한쪽만 고쳐져 모드 분리가 조용히 샌다.
+    path = config.save_dynamic_config(data)
+    if path:
         console.print(f"\n[green]설정이 저장되었습니다. (재시작 시에도 유지됨)[/green]")
         console.print(f"[dim]저장 경로: {path}[/dim]")
+        if config.active_profile:
+            console.print(f"[dim]이 모드({config.active_profile}) 전용 설정입니다 — "
+                          f"실전 설정(dynamic_config.json)은 바뀌지 않습니다.[/dim]")
     else:
         console.print("\n[bold red]설정 저장 실패 (상세는 로그 참조)[/bold red]")
 
 # ==========================================================
 # 실계좌 안전장치 점검
 #  [왜 필요한가] 가상계좌 검증 중에는 매매를 강제로 발생시키려고 시장 필터를 끄는 일이
-#  실제로 있다. 그런데 dynamic_config.json은 모드별로 분리되지 않은 단일 파일이라, 그
-#  설정이 실전(mode 2)으로 그대로 넘어간다. 감사 도구 주석에 '끝나면 다시 켤 것'이라고
-#  적어 둔들 주석은 가드가 아니다 — 잊는 쪽에 걸린 설계였다.
+#  실제로 있다. 종전에는 dynamic_config.json이 모드별로 나뉘지 않아 그 설정이 실전
+#  (mode 2)으로 그대로 넘어갔고, 방어선이 이 경고 하나뿐이었다 — 즉 '사람이 경고를
+#  읽는가'에 걸린 설계였다.
+#
+#  [2026-08-23] 설정 파일을 모드별 프로필로 분리해 그 경로 자체를 끊었다. 관찰·모의·
+#  토스 모드에서 바꾼 값은 dynamic_config.<프로필>.json 에만 남고 실전은 기준 파일만
+#  읽는다(config.py 모드별 설정 프로필 주석). 그래서 이 경고의 역할이 바뀌었다:
+#  '다른 모드에서 새어 들어온 설정' 탐지가 아니라, **실전 설정 자체가 안전장치를 끈
+#  상태인지**를 알리는 최종 확인이다. 실전에서 직접 끄는 경로는 여전히 있으므로 남긴다.
 #
 #  값은 되돌리지 않는다. 의도적으로 끄는 경우도 있으므로 판단은 사용자 몫으로 두고,
 #  '모르는 채로 시작하는' 경우만 없앤다.
@@ -233,6 +321,13 @@ def view_system_config(group=None):
     # 좌측 2칸 들여쓰기 — caption_justify="left"라 표 왼쪽 끝에 붙는데, 표 테두리와
     #  붙어 보여 읽기 어렵다. 앞의 '※'로 본문이 아닌 범례임을 구분한다.
     caption = "  ※ 그룹 번호(n-m)는 시스템 설정 메뉴의 편집 경로와 동일 (예: 5-5 → 메뉴 5 → 5)"
+    # [모드별 프로필] 지금 보고 고치는 값이 어느 파일로 가는지 화면에 드러낸다.
+    #  실전이 아닌 모드에서는 기준(실전) 설정 위에 이 모드의 차이만 얹힌 상태이므로,
+    #  그 사실을 모르면 '실전 설정을 바꿨다'고 오해한다.
+    _profile = getattr(config, 'active_profile', None)
+    if _profile:
+        caption += (f"\n  ※ 현재 모드 전용 설정 프로필: dynamic_config.{_profile}.json "
+                    f"— 여기서 바꾼 값은 실전 설정에 반영되지 않습니다")
 
     console.print()
     table = Table(
@@ -248,7 +343,9 @@ def view_system_config(group=None):
     )
 
     table.add_column("설정 항목 (Description)", justify="left", style="white")
-    table.add_column("변수명 (Config Name)", justify="left", style="dim")
+    #  overflow="fold": 터미널이 좁아도 이름을 자르지 않고 접는다. 이 칸의 쓸모는
+    #   '설정 파일에서 그대로 찾을 수 있는 이름'인데, 말줄임표로 잘리면 그 쓸모가 사라진다.
+    table.add_column("변수명 (Config Name)", justify="left", style="dim", overflow="fold")
     table.add_column("설정값 (Value)", justify="right", style="cyan")
 
     # [PRESET_RETIRED] 프리셋 폐지로 '*'(프리셋 연동) 표시는 더 이상 붙이지 않는다.
@@ -256,6 +353,7 @@ def view_system_config(group=None):
 
     def row(desc, help_text, var_name, value, key=None, indent=False):
         mark = " [cyan]*[/cyan]" if key in preset_keys else ""
+        var_name = qualified_var_name(var_name)   # 화면 표기는 한 가지로 통일
         if indent:
             table.add_row(f"  └ {desc}{mark}\n    [dim]{help_text}[/dim]", var_name, value)
         else:
@@ -570,7 +668,9 @@ def _edit_config_table(title_source, items_source, check_preset=True):
         table = Table(title=title, box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim", expand=False)
         table.add_column("No.", justify="right", style="dim", width=4)
         table.add_column("설정 항목 (Description)", justify="left", style="white")
-        table.add_column("변수명 (Config Name)", justify="left", style="dim")
+        #  overflow="fold": 터미널이 좁아도 이름을 자르지 않고 접는다. 이 칸의 쓸모는
+        #   '설정 파일에서 그대로 찾을 수 있는 이름'인데, 말줄임표로 잘리면 그 쓸모가 사라진다.
+        table.add_column("변수명 (Config Name)", justify="left", style="dim", overflow="fold")
         table.add_column("설정값 (Value)", justify="right", style="cyan")
 
         # 섹션이 2개 이상일 때만 섹션 제목 표시 (단일 섹션은 테이블 제목과 중복)
@@ -587,7 +687,7 @@ def _edit_config_table(title_source, items_source, check_preset=True):
             table.add_row(
                 str(i + 1),
                 f"{item['desc']}\n[dim]{item['help']}[/dim]",
-                item['name'],
+                qualified_var_name(item['name']),   # 조회·커스텀 화면과 같은 표기
                 str(val)
             )
         
@@ -2004,7 +2104,9 @@ def manage_custom_settings():
         )
         table.add_column("No.", justify="right", style="dim")
         table.add_column("설정 항목 (Description)", justify="left", style="white")
-        table.add_column("변수명 (Config Name)", justify="left", style="dim")
+        #  overflow="fold": 터미널이 좁아도 이름을 자르지 않고 접는다. 이 칸의 쓸모는
+        #   '설정 파일에서 그대로 찾을 수 있는 이름'인데, 말줄임표로 잘리면 그 쓸모가 사라진다.
+        table.add_column("변수명 (Config Name)", justify="left", style="dim", overflow="fold")
         table.add_column("기본값 (Default)", justify="right", style="dim")
         table.add_column("현재값 (Custom)", justify="right", style="cyan")
 

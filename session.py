@@ -148,6 +148,12 @@ class SessionManager:
             mode = Prompt.ask("\n선택 (종료: q)", choices=["1", "2", "3", "4", "q"], default="1")
             if mode == 'q': sys.exit()
 
+        # [모드별 설정 프로필] 모드가 정해지는 즉시 설정 파일을 다시 건다.
+        #  실전은 dynamic_config.json 만, 그 외 모드는 거기에 자기 프로필 파일을 얹는다.
+        #  이 한 줄이 '관찰모드에서 끈 안전장치가 실전으로 넘어오는' 경로를 끊는다
+        #  (config.py 모드별 설정 프로필 주석 참조).
+        config.set_config_profile(config.profile_for_mode(mode))
+
         if mode == '1':
             self.is_simulation = True
             self.url_base = config.SIM_URL

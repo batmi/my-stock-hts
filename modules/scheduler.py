@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import config
 import api
-from modules import theme_analysis, account
+from modules import theme_analysis, account, heartbeat
 from modules.auto_trade import AutoTrader
 import utils
 
@@ -45,6 +45,9 @@ class SystemScheduler:
         self.is_running = False
         if self.thread:
             self.thread.join(timeout=2)
+        # 도장을 찍던 스레드가 내려간다 — '앞으로 신호가 없는 건 정상'임을 남겨야
+        #  밖의 감시자가 사망으로 오해하지 않는다.
+        heartbeat.stopped(reason="스케줄러 종료")
         logger.debug("[Scheduler] 스케줄러 종료 완료")
 
     def _run_loop(self):
@@ -173,11 +176,44 @@ class SystemScheduler:
         except Exception as e:
             logger.error(f"Morning briefing check error: {e}")
 
+    def _heartbeat_context(self):
+        """사망 알림에 실을 상황 정보. 조회 비용이 있는 것은 넣지 않는다
+        (이미 들고 있는 캐시값만 읽는다 — 하트비트가 API를 부르면 본말이 전도된다)."""
+        try:
+            if getattr(config.session, 'is_paper', False):
+                mode = "관찰(가상)"
+            elif config.session.is_toss:
+                mode = "토스"
+            elif config.session.is_simulation:
+                mode = "모의"
+            else:
+                mode = "실전"
+        except Exception:
+            mode = None
+        return {
+            "mode": mode,
+            "instance": getattr(config.settings, 'TELEGRAM_INSTANCE_NAME', None),
+            "running": bool(getattr(self.trader, 'is_running', False)),
+            "holdings": getattr(self.trader, 'last_holdings_count', None),
+        }
+
     def _check_heartbeat(self):
-        """1분 주기 하트비트 점검"""
+        """1분 주기 하트비트 점검.
+
+        두 층이다.
+         (1) **프로세스 안** — 자동매매 스레드가 죽었는지·연속 에러가 한계인지 보고 알린다.
+             프로세스가 살아 있어야 동작하므로, 프로세스 자체의 죽음은 볼 수 없다.
+         (2) **프로세스 밖** — logs/heartbeat.json 에 '다음 도장을 언제까지 찍겠다'는
+             약속을 남긴다. OOM 킬처럼 프로세스가 통째로 사라지면 이 약속이 지나가고,
+             밖에서 도는 감시자(tools/hts_watchdog.py, cron)가 그때 알린다.
+             되살리지는 않는다 — 알리기만 한다(modules/heartbeat.py 주석 참조).
+        """
         now = time.time()
         if now - self.last_heartbeat_time > 60:
             self.last_heartbeat_time = now
+            ctx = self._heartbeat_context()
+            heartbeat.beat(interval_sec=60, running=ctx["running"], mode=ctx["mode"],
+                           instance=ctx["instance"], holdings=ctx["holdings"])
             is_problem = False
             msg = ""
             

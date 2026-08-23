@@ -262,7 +262,7 @@ def test_simulation_unfilled_orders():
                     console.print(f"[bold green]👉 '02'(미체결) 옵션으로 주문 발견![/bold green]")
                     console.print(f"  - 주문번호: {target.get('odno')}")
                     console.print(f"  - 잔량: {target.get('rmn_qty')}")
-                    console.print(f"[bold cyan]💡 해결책: api.py의 get_unfilled_orders() 함수에서 CCLD_DVSN 파라미터를 '02'로 수정해야 합니다.[/bold cyan]")
+                    console.print(f"[bold cyan]💡 해결책: api/account.py의 get_unfilled_orders() 함수에서 CCLD_DVSN 파라미터를 '02'로 수정해야 합니다.[/bold cyan]")
                 else:
                     console.print(f"[red]'02' 옵션으로도 주문을 찾을 수 없습니다.[/red]")
         except Exception as e:
