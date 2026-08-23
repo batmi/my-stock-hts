@@ -282,7 +282,7 @@ def show_menu(title, menu_items, default_choice="1", cancel_choice="b", text_bef
         config.console.print(f"[bold]{title}[/bold]")
 
     grid = Table.grid(padding=(0, 2))
-    grid.add_column(justify="left")
+    grid.add_column(justify="left", style="menu")
     grid.add_column(justify="left", style="dim")
     
     valid_choices = []

@@ -61,8 +61,15 @@ silence_yfinance_numpy_warning()
 #  Console(style=)은 '색을 지정하지 않은 글자'(표 제목·종목명 등 기본 전경색)의
 #  바닥색이다. 이걸 안 주면 그 부분만 터미널 기본 전경색(cmux는 순백)으로 남아
 #  혼자 튄다. 명시적 색이 붙은 글자는 그대로 이긴다.
+#  글자 밝기는 네 단계다 — 메뉴(#ffffff) > 본문/흰색(#c0c0c0) > DMI 중립(#a8a8a8)
+#  > 회색(#808080). 셋 다 이름으로만 쓰고 호출부에 hex를 박지 않는다.
 CONSOLE_TEXT_COLOR = "#c0c0c0"   # 어두운 배경 기준 — 밝기를 조절하려면 여기만 고친다
-CONSOLE_THEME = Theme({"white": CONSOLE_TEXT_COLOR, "dim": "grey50"})
+CONSOLE_THEME = Theme({
+    "white": CONSOLE_TEXT_COLOR,
+    "dim": "grey50",             # #808080 — '회색'(판정 불가·부가 설명)
+    "menu": "bright_white",      # #ffffff — 메뉴 항목. 입력 프롬프트와 같은 밝기로 앞세운다
+    "dmi.neutral": "grey66",     # #a8a8a8 — 중립 ●. 흰색보다 죽이되 회색보다는 밝게
+})
 
 console = Console(theme=CONSOLE_THEME, style=CONSOLE_TEXT_COLOR)
 

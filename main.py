@@ -570,7 +570,7 @@ def show_help():
     # ADX 셀 뒤에 붙는 DMI 방향 아이콘 (표 폭을 늘리지 않기 위해 ADX는 정수 표기)
     table.add_row("DMI (ADX 뒤 기호)", "+DI > -DI", "[red]▲ 빨간색[/]", "상승 방향 우위")
     table.add_row("", "-DI > +DI", "[blue]▼ 파란색[/]", "하락 방향 우위")
-    table.add_row("", f"DX < {analysis.DMI_NEUTRAL_DX:.0f} (격차 미미)", "[white]● 흰색[/]", "중립 (방향성 없음)")
+    table.add_row("", f"DX < {analysis.DMI_NEUTRAL_DX:.0f} (격차 미미)", "[dmi.neutral]● 회백색[/]", "중립 (방향성 없음)")
     table.add_section()
 
     cci_upper = config.INDICATOR_PARAMS["CCI_UPPER"]
@@ -1202,7 +1202,7 @@ def main():
                     trader_status = " [bold yellow](WAITING)[/]"
                 
             grid = Table.grid(padding=(0, 2))
-            grid.add_column(justify="left")
+            grid.add_column(justify="left", style="menu")
             grid.add_column(justify="left", style="dim")
             grid.add_row("[0] 시스템 설정", "(Settings)")
             grid.add_row("[1] 시장 지수 조회", "(Market Indices)")

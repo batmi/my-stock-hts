@@ -537,7 +537,7 @@ def get_current_price(mode='add'):
             config.console.print()
             config.console.print("[bold]어떤 그룹에 추가할까요?[/bold]")
             grid = Table.grid(padding=(0, 2))
-            grid.add_column(justify="left")
+            grid.add_column(justify="left", style="menu")
             grid.add_column(justify="left", style="dim")
             grid.add_row("[1] 국내 주식", "(Domestic Stock)")
             grid.add_row("[2] 국내 ETF", "(Domestic ETF)")

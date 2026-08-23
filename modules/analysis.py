@@ -1588,7 +1588,7 @@ DMI_NEUTRAL_DX = 10.0
 
 
 def dmi_direction_icon(plus_di, minus_di):
-    """DMI 우위 방향 아이콘. +DI 우위 ▲(빨강) / -DI 우위 ▼(파랑) / 중립 ●(흰색).
+    """DMI 우위 방향 아이콘. +DI 우위 ▲(빨강) / -DI 우위 ▼(파랑) / 중립 ●(회백색).
 
     데이터가 없으면 빈 문자열을 돌려 ADX 셀이 기존 표기를 유지하게 한다.
     """
@@ -1602,10 +1602,10 @@ def dmi_direction_icon(plus_di, minus_di):
 
     di_sum = plus_di + minus_di
     if di_sum <= 0:
-        return "[white]●[/]"
+        return "[dmi.neutral]●[/]"
     dx = 100 * abs(plus_di - minus_di) / di_sum
     if dx < DMI_NEUTRAL_DX:
-        return "[white]●[/]"
+        return "[dmi.neutral]●[/]"
     return "[red]▲[/]" if plus_di > minus_di else "[blue]▼[/]"
 
 
