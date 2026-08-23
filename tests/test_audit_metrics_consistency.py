@@ -55,6 +55,16 @@ def _synth_result(with_rotation=False):
                            "profit": 18.0 + j, "profit_amt": (18 + j) * 1000,
                            "days": 40 + j, "mfe": 26.0 + j, "armed": True, "bep": False,
                            "qty": 10, "price": 1000.0, "amount": 10000.0})
+    # 점수매도는 사유가 '점수하락'이 아니라 **상태 사유 문자열**로 기록될 수 있다
+    #  (decide_sell: sell_check == 0 and raw_score > 0 이면 state_reason 을 그대로 쓴다).
+    #  손으로 나열한 어휘는 이걸 통째로 흘린다 — 실측 20종목·1200일에서 표본의 3.8%가
+    #  이 형태였고 **6건 전부 손실**이라, 빠지면 승률이 낙관적으로 치우친다.
+    trades.append({"code": "S001", "date": "20240620",
+                   "reason": "이평선 완전 이탈(60&120)", "profit": -5.7,
+                   "profit_amt": -5700, "days": 12, "mfe": 3.0,
+                   "armed": False, "bep": False,
+                   "qty": 10, "price": 1000.0, "amount": 10000.0})
+
     # 증액은 청산이 아니다 — profit_amt 가 정확히 0이라 어느 규칙으로도 걸리지 않아야 한다.
     trades.append({"code": "P001", "date": "20240310", "reason": "증액", "profit": 0.0,
                    "profit_amt": 0, "days": 0, "mfe": 0.0, "armed": False, "bep": False,
@@ -153,6 +163,29 @@ def test_no_tool_redefines_the_exit_vocabulary():
     assert not offenders, (
         "청산 사유 어휘는 audit_common.SELL_REASONS 하나뿐이어야 한다. 사본: "
         + ", ".join(offenders))
+
+
+def test_exits_includes_state_reason_exits(tool=None):
+    """점수매도가 상태 사유 문자열로 기록돼도 표본에 들어가야 한다.
+
+    decide_sell 은 sell_check == 0 이고 raw_score > 0 이면 사유로 '점수하락' 대신
+    상태 사유('이평선 완전 이탈(60&120)' 등)를 그대로 쓴다. 어휘를 손으로 나열한
+    필터는 이걸 전부 흘렸다 — 실측(20종목·1200일)에서 표본의 3.8%가 이 형태였고
+    **6건 전부 손실**이었다. 빠지면 승률이 부풀고 보유일 중앙값이 늘어난다.
+    (수익·MDD·PF는 시뮬레이터가 직접 내므로 무손상이다.)
+    """
+    r = _synth_result()
+    sample = exits(r)
+    assert any(t["reason"] == "이평선 완전 이탈(60&120)" for t in sample), \
+        "상태 사유로 기록된 청산이 표본에서 빠졌다 — 어휘를 손으로 나열하지 말 것"
+    hand_rolled = [t for t in r["trades"] if t["reason"] in EXIT_VOCAB_ONLY]
+    assert len(sample) > len(hand_rolled), \
+        "이 합성 표본이 '어휘만으로 거르기'의 누락을 재현하지 못한다 — 회귀를 잡을 수 없다"
+
+
+# 어휘만 나열한 옛 필터(회귀 재현용). 실제 코드에는 더 이상 없어야 한다.
+EXIT_VOCAB_ONLY = ("ATR손절", "손절", "본전청산", "시간청산",
+                   "트레일링스탑", "점수하락", "이익보호", "교체")
 
 
 def test_exit_vocabulary_comes_from_the_simulator():
