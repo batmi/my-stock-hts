@@ -3,6 +3,7 @@ import os
 import re
 import warnings
 from rich.console import Console
+from rich.theme import Theme
 import logging
 from datetime import datetime, timedelta
 from logging.handlers import TimedRotatingFileHandler
@@ -45,7 +46,25 @@ def silence_yfinance_numpy_warning():
 # 기본선(yfinance 미로드 경로 대비). 실제 억제는 각 import 지점의 재호출이 담당한다.
 silence_yfinance_numpy_warning()
 
-console = Console()
+# [터미널 호환] '흰색'·'회색'을 터미널 팔레트·속성에 맡기지 않고 절대색으로 고정한다.
+#  - rich의 [white]는 ANSI 색 7이라 실제 색을 터미널 팔레트가 정한다. cmux(Ghostty
+#    코어)는 이 값을 어둡게 그려서 '눌림목(흰색)'이 회색으로 보이고 '판정 불가
+#    (회색)'와 섞였다. 색 7의 표준값 #c0c0c0을 직접 박아 팔레트 의존을 끊는다.
+#    순백(#ffffff, bright_white)은 cmux에서 지나치게 튀어 쓰지 않는다 — 눈에 편한
+#    '살짝 어두운 흰색'이 기준이고, 회색(#808080)과는 충분히 벌어져 있다.
+#  - [dim]은 색이 아니라 SGR 2(faint) '속성'이라 감쇠 정도가 터미널마다 다르다.
+#    실제 회색(grey50)으로 바꿔 어느 터미널에서든 흰색과 벌어지게 한다.
+#  이름을 테마에서 재정의하므로 [white]/[dim] 마크업, style=, border_style,
+#  header_style이 모두 자동 적용된다 — 호출부(92곳)는 손대지 않는다.
+#  (조합 스타일 [dim cyan]·[bold bright_white on yellow] 등은 rich가 속성으로 직접
+#   파싱해 테마를 타지 않는다. 배경색 위 배너는 순백이 맞아 그대로 둔다.)
+#  Console(style=)은 '색을 지정하지 않은 글자'(표 제목·종목명 등 기본 전경색)의
+#  바닥색이다. 이걸 안 주면 그 부분만 터미널 기본 전경색(cmux는 순백)으로 남아
+#  혼자 튄다. 명시적 색이 붙은 글자는 그대로 이긴다.
+CONSOLE_TEXT_COLOR = "#c0c0c0"   # 어두운 배경 기준 — 밝기를 조절하려면 여기만 고친다
+CONSOLE_THEME = Theme({"white": CONSOLE_TEXT_COLOR, "dim": "grey50"})
+
+console = Console(theme=CONSOLE_THEME, style=CONSOLE_TEXT_COLOR)
 
 class GlobalSettings(BaseModel):
     """동적으로 변경 가능한 전역 설정값들을 관리하는 Pydantic 모델"""

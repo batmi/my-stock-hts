@@ -1141,7 +1141,7 @@ def send_order(order_type):
             except Exception: pass
 
         confirm_msg = (
-            f"\n[bold white on {title_color}] [ {market_label} {title_text} 주문 최종 확인 ] [/]\n"
+            f"\n[bold bright_white on {title_color}] [ {market_label} {title_text} 주문 최종 확인 ] [/]\n"
             f" 종목: [bold]{stock_name} ({stock_code})[/bold]{excd_info}\n"
             f" 수량: [bold]{qty}주[/bold]\n"
             f" 단가: [bold]{display_price}[/bold]\n"
@@ -1442,7 +1442,7 @@ def modify_order():
     excd_info = f" (거래소: {target_excd})" if is_overseas and target_excd else ""
     
     confirm_msg = (
-        f"\n[bold white on magenta] [ {nation_str} 주문 {action_name} 최종 확인 ] [/]\n"
+        f"\n[bold bright_white on magenta] [ {nation_str} 주문 {action_name} 최종 확인 ] [/]\n"
         f" 원주문번호: [bold]{org_odno}[/bold]\n"
         f" 종목: [bold]{prdt_name} ({pdno})[/bold]{excd_info}\n"
         f" {action_name} 수량: [bold]{final_qty}주[/bold]\n"
@@ -2189,7 +2189,7 @@ def _register_oco_orders(cano, acnt, acc_label):
     stop_gap = (stop_price - current_price) / current_price * 100
     take_gap = (take_price - current_price) / current_price * 100
     config.console.print(Panel(
-        f"\n[bold white on yellow] [ 손절 + 익절 동시 예약 (OCO) 최종 확인 ] [/]\n"
+        f"\n[bold bright_white on yellow] [ 손절 + 익절 동시 예약 (OCO) 최종 확인 ] [/]\n"
         f" 계좌: {_fmt_account(cano, acnt)} ({acc_label})\n"
         f" 종목: {name} ({code})\n"
         f" 현재가: {_fmt_price(current_price, is_overseas)}\n"
@@ -2597,7 +2597,7 @@ def register_reserved_order():
             amt_line = f" 예상 금액: {_fmt_price(est_amt, is_overseas)}" + (" (시장가 추정)" if state['order_price'] == 0 else "")
 
             confirm_msg = (
-                f"\n[bold white on yellow] [ 예약 {t_type_plain} 주문 최종 확인 ] [/]\n"
+                f"\n[bold bright_white on yellow] [ 예약 {t_type_plain} 주문 최종 확인 ] [/]\n"
                 f" 계좌: {_fmt_account(state['cano'], state['acnt'])} ({state['acc_label']})\n"
                 f" 종목: {state['name']} ({state['code']})\n"
                 f"{cur_line}\n"
