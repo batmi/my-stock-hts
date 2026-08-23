@@ -137,3 +137,74 @@ def test_buy_path_reserves_before_sending_not_after():
     assert send < release, "반납은 주문 실패를 확인한 뒤여야 한다"
     assert "with self._lock" in src[reserve - 60:reserve], "선점이 락 밖이다"
     assert "with self._lock" in src[release - 60:release], "반납이 락 밖이다"
+
+
+# ---------------------------------------------------------------------------
+# 종목 하나가 계산 불가일 때 (compute_portfolio_heat 내부)
+# ---------------------------------------------------------------------------
+class _BrokenTrades:
+    """매수 기록을 훑는 순간 터지는 객체 — 손절률 유도 단계의 실패를 흉내낸다."""
+    def __iter__(self):
+        raise RuntimeError("매수 기록 파손")
+
+
+class _FlakyHolding(dict):
+    """두 번째 조회부터 터지는 잔고 행 — 폴백 계산조차 불가능한 상황을 만든다."""
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self._reads = 0
+
+    def get(self, key, *default):
+        if key == "hldg_qty":
+            self._reads += 1
+            if self._reads > 1:
+                raise RuntimeError("잔고 필드 파손")
+        return super().get(key, *default)
+
+
+def _holding(**over):
+    h = {"pdno": "005930", "hldg_qty": "10", "pchs_avg_pric": "70000", "prpr": "80000"}
+    h.update(over)
+    return h
+
+
+def test_broken_holding_is_counted_conservatively_not_as_zero(rm, caplog):
+    """한 종목의 리스크 산출이 실패해도 **0으로 세면 안 된다.**
+
+    0이면 총 히트가 과소평가되고 히트 캡이 그만큼 느슨해진다 — compute_portfolio_heat 이
+    독스트링에서 표방하는 '보수적(과대평가)' 방향의 정반대다. 기본 손절폭을 가정해
+    보수적으로 채우고, 조용히 넘어가지 않도록 경고를 남긴다.
+    """
+    r, _t = rm
+    h = _holding()
+    with caplog.at_level("WARNING"):
+        heat = r.compute_portfolio_heat([h], {"005930": _BrokenTrades()})
+
+    default_sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
+    expected = 10 * 80000 * abs(default_sl) / 100.0
+    assert heat == pytest.approx(expected), "실패한 종목이 0원으로 계상됐다 — 캡이 느슨해진다"
+    assert heat > 0
+    assert any("오픈 리스크 산출 실패" in rec.message for rec in caplog.records), \
+        "조용히 넘어갔다 — 실패는 로그에 남아야 한다"
+
+
+def test_uncomputable_holding_propagates_to_failclosed_path(rm):
+    """폴백조차 불가능하면 예외를 올려 호출부의 fail-closed 경로에 닿아야 한다.
+
+    종전에는 `except Exception: continue` 가 예외를 삼켜, trader 가 준비해 둔
+    portfolio_heat_unknown 처리에 **도달하지 못했다.** 못 센 것이 없는 것으로 둔갑했다.
+    """
+    r, _t = rm
+    h = _FlakyHolding(_holding())
+    with pytest.raises(Exception):
+        r.compute_portfolio_heat([h], {"005930": _BrokenTrades()})
+
+
+def test_repeated_failure_logs_once_per_code(rm, caplog):
+    """같은 종목의 실패가 주기(60초)마다 경고를 쌓지 않아야 한다."""
+    r, _t = rm
+    with caplog.at_level("WARNING"):
+        for _ in range(3):
+            r.compute_portfolio_heat([_holding()], {"005930": _BrokenTrades()})
+    hits = [rec for rec in caplog.records if "오픈 리스크 산출 실패" in rec.message]
+    assert len(hits) == 1, f"같은 종목 경고가 {len(hits)}번 — 로그가 주기마다 쌓인다"

@@ -27,11 +27,13 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from tools.audit_common import SELL_REASONS  # noqa: E402
+
 import config  # noqa: E402
 import indicators  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 from tools.audit_defensive_sector import (  # noqa: E402
-    INITIAL_CAPITAL, SELL_REASONS, new_scale_fn_factory,
+    INITIAL_CAPITAL, new_scale_fn_factory,
 )
 from tools.audit_universe import dead_targets, extend_targets  # noqa: E402
 

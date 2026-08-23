@@ -498,7 +498,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     ts_activation = ts_activation_rate if ts_activation_rate is not None else config.SELL_STRATEGY.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
     ts_callback = ts_callback_rate if ts_callback_rate is not None else config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
     # [샹들리에 엑시트] TS 동적 콜백 전용 ATR 배수 (손절용 ATR_STOP_MULTIPLIER와 분리)
-    ts_atr_mult = config.SELL_STRATEGY.get("TRAILING_ATR_MULTIPLIER", 3.0)
+    ts_atr_mult = config.SELL_STRATEGY.get("TRAILING_ATR_MULTIPLIER", 3.5)   # [SSOT] 정본 3.5
 
     # [동기화] 피라미딩 (수익 포지션 증액) 설정 - 실매매 trader._try_pyramid_buy / engine.analyze_pyramid와 동일 조건
     pyr_use = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_USE", True)

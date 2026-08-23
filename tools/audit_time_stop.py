@@ -31,10 +31,12 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from tools.audit_common import exits  # noqa: E402
+
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 from tools.audit_defensive_sector import (  # noqa: E402
-    INITIAL_CAPITAL, SELL_REASONS, metrics, new_scale_fn_factory,
+    INITIAL_CAPITAL, metrics, new_scale_fn_factory,
 )
 
 DAYS_ARMS = [5, 8, 10, 12, 15, 20, 25, 30]
@@ -97,7 +99,7 @@ def main():
         for d in DAYS_ARMS + [0]:
             with sell_cfg(TIME_STOP_DAYS=d, TIME_STOP_USE=bool(d)):
                 r = run(codes_all, list(dates))
-            sells = [t for t in r["trades"] if t["reason"] in SELL_REASONS]
+            sells = exits(r)
             print(f"\n  --- {d if d else 'OFF'}일 | 수익 {r['total_return']:.1f}% · 청산 {len(sells)}건 "
                   f"· 평균슬롯 {r['avg_slots']:.2f} ---")
             print(f"  {'사유':<12}{'건수':>6}{'비중%':>7}{'평균%':>8}{'중앙%':>8}"

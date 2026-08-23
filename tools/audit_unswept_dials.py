@@ -32,6 +32,8 @@ import pandas as pd  # noqa: F401  (CorrGate가 쓴다)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from tools.audit_common import windows as audit_windows  # noqa: E402
+
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 from tools.audit_defensive_sector import (  # noqa: E402
@@ -121,11 +123,7 @@ def main():
     status = pb.precompute_status(dfs, thr)
     new_scale = new_scale_fn_factory(dates, args.days)
 
-    k = max(1, args.subperiods)
-    size = max(1, len(dates) // k)
-    W = [("전체", list(dates))]
-    W += [(f"구간{i + 1}", dates[i * size:(i + 1) * size if i < k - 1 else len(dates)])
-          for i in range(k)]
+    W = audit_windows(dates, args.subperiods, whole=True)
 
     codes = list(dfs)
     picks = {sd: [random.Random(sd * 29 + i).sample(codes, min(args.sample, len(codes)))

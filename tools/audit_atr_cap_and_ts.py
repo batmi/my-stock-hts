@@ -43,6 +43,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from tools.audit_common import exits, windows as audit_windows  # noqa: E402
+
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 from modules.auto_trade import engine  # noqa: E402
@@ -77,11 +79,10 @@ def dial_sets():
     ]
 
 
-SELL_REASONS = ("ATR손절", "손절", "본전청산", "시간청산", "트레일링스탑", "점수하락", "이익보호")
 
 
 def metrics(r):
-    sells = [t for t in r["trades"] if t["reason"] in SELL_REASONS]
+    sells = exits(r)
     profits = sorted((t["profit"] for t in sells), reverse=True)
     top10 = profits[:max(1, len(profits) // 10)]
     gross_gain = sum(t["profit_amt"] for t in sells if t["profit_amt"] > 0)
@@ -211,10 +212,7 @@ def main():
     saved = dict(config.SELL_STRATEGY)
     codes = list(dfs.keys())
 
-    k = max(1, args.subperiods)
-    size = len(dates) // k
-    windows = [(f"구간{i + 1}", dates[i * size:(i + 1) * size if i < k - 1 else len(dates)])
-               for i in range(k)] if k > 1 else [("전체", dates)]
+    windows = audit_windows(dates, args.subperiods)
 
     all_results = {}
     for wname, wdates in windows:

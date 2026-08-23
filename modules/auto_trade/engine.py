@@ -2146,6 +2146,8 @@ class RiskManager:
     """리스크 관리 및 자산 배분 전담 클래스"""
     def __init__(self, trader):
         self.trader = trader
+        # 오픈 리스크 산출에 실패한 종목 — 주기마다(60초) 같은 경고가 쌓이지 않게 한 번만 남긴다.
+        self._heat_failed_codes = set()
 
     def compute_portfolio_heat(self, holdings, buy_trades_map=None):
         """포트폴리오 히트(총 오픈 리스크, 원) 계산
@@ -2246,8 +2248,30 @@ class RiskManager:
                         stop_price = max(stop_price, highest * (1 - ts_cb / 100.0))
 
                 total_risk += qty * max(0.0, cur - stop_price)
-            except Exception:
-                continue
+            except Exception as e:
+                # [fail-closed] 여기서 조용히 continue 하면 그 종목의 오픈 리스크가 **0으로**
+                #  계상된다. 총 히트가 과소평가되고 캡이 그만큼 느슨해진다 — 이 함수가
+                #  독스트링에서 표방하는 '보수적(리스크 과대평가)' 방향의 정반대다.
+                #  게다가 예외를 삼키면 호출부(trader의 portfolio_heat_unknown)가 준비해 둔
+                #  fail-closed 경로에 **도달하지 못한다.** 못 센 것이 없는 것으로 둔갑한다.
+                #
+                #  수량·현재가만 살아 있으면 기본 손절폭을 가정해 보수적으로 채우고(과대 계상
+                #  방향), 그것조차 불가능하면 예외를 그대로 올려 호출부가 '산출 실패'로
+                #  처리하게 한다.
+                code = h.get('pdno', '?')
+                try:
+                    q = api.safe_int(h.get('hldg_qty', 0))
+                    c = float(h.get('prpr') or 0)
+                except Exception:
+                    q, c = 0, 0.0
+                if q <= 0 or c <= 0:
+                    raise
+                fallback = q * c * abs(default_sl) / 100.0
+                total_risk += fallback
+                if code not in self._heat_failed_codes:
+                    self._heat_failed_codes.add(code)
+                    logger.warning(f"[히트] {code} 오픈 리스크 산출 실패 — 기본 손절폭으로 "
+                                   f"보수 계상({fallback:,.0f}원): {e}")
 
         return total_risk
 

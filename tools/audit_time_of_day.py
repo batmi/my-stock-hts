@@ -30,6 +30,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from tools.audit_common import windows as audit_windows  # noqa: E402
+
 import config  # noqa: E402
 from modules import intraday_bars as ib  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
@@ -123,11 +125,7 @@ def main():
     arms = build_arms(st, times)
     placebo = build_placebo_arms(times) if args.placebo else []
 
-    k = max(1, args.subperiods)
-    size = max(1, len(dates) // k)
-    W = [("전체", list(dates))]
-    W += [(f"구간{i + 1}", dates[i * size:(i + 1) * size if i < k - 1 else len(dates)])
-          for i in range(k)]
+    W = audit_windows(dates, args.subperiods, whole=True)
 
     codes = list(dfs)
     picks = {sd: [random.Random(sd * 19 + i).sample(codes, min(args.sample, len(codes)))

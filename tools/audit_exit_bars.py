@@ -43,12 +43,13 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from tools.audit_common import exits  # noqa: E402
+
 import config  # noqa: E402
 from modules import intraday_bars as ib  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 
 INITIAL_CAPITAL = 10_000_000
-SELL_REASONS = ("ATR손절", "손절", "본전청산", "시간청산", "트레일링스탑", "점수하락", "이익보호")
 BASE = "B. 매 봉 판정(실매매)"
 AT_1500 = {"1400"}   # 14:00 봉의 종가 = 15:00 가격
 AT_CLOSE = {"1500"}  # 15:00 봉의 종가 = 15:30 종가
@@ -75,7 +76,7 @@ def arms(bars, st):
 
 
 def metrics(r):
-    sells = [t for t in r["trades"] if t["reason"] in SELL_REASONS]
+    sells = exits(r)
     profits = sorted((t["profit"] for t in sells), reverse=True)
     top10 = profits[:max(1, len(profits) // 10)]
     return {

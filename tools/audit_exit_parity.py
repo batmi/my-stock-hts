@@ -70,22 +70,13 @@ def categorize(reason):
 
 
 def _cfg():
-    s = config.SELL_STRATEGY
-    return {
-        "use_atr": s.get("USE_ATR_STOP", True),
-        "use_time_stop": s.get("TIME_STOP_USE", True) and s.get("TIME_STOP_DAYS", 20) > 0,
-        "time_stop_days": s.get("TIME_STOP_DAYS", 20),
-        "ts_act": s.get("TRAILING_STOP_ACTIVATION_RATE", 10.0),
-        "ts_callback": s.get("TRAILING_STOP_CALLBACK_RATE", 5.0),
-        "ts_atr_mult": s.get("TRAILING_ATR_MULTIPLIER", 3.0),
-        "sell_score_limit": s.get("SELL_SCORE", 4.0),
-        # [주의] 여기 키가 빠지면 백테스트만 옛 규칙으로 돌아 전부 거짓 불일치가 난다.
-        #  청산 규칙에 스위치를 추가할 때는 이 dict도 함께 갱신할 것.
-        "ts_breakeven": str(s.get("TS_ACTIVATION_MODE", "fixed")).lower() == "breakeven",
-        "profit_lock_use": s.get("PROFIT_LOCK_USE", False),
-        "profit_lock_min_mfe": s.get("PROFIT_LOCK_MIN_MFE", 25.0),
-        "profit_lock_giveback": s.get("PROFIT_LOCK_GIVEBACK", 0.5),
-    }
+    """[SSOT] 조립은 portfolio_backtest.build_sell_cfg 가 단독으로 한다.
+
+    종전에는 여기서 dict를 손으로 다시 썼고 time_stop_min 이 빠져 있었다 — 백테스트만
+    옛 규칙(문턱 0)으로 돌아 TIME_STOP_MIN_PROFIT_RATE 를 켠 대조가 통째로 거짓
+    불일치가 됐다(기본값 0.0이라 지금까지 드러나지 않았다).
+    """
+    return pbt.build_sell_cfg()
 
 
 def _effective_sl(sl_rate, high, avg, applied):

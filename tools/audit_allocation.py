@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 
-from tools.audit_common import exits  # noqa: E402
+from tools.audit_common import exits, windows as audit_windows  # noqa: E402
 from tools.audit_defensive_sector import (  # noqa: E402
     INITIAL_CAPITAL, metrics, new_scale_fn_factory,
 )
@@ -207,11 +207,7 @@ def main():
     picks = {sd: [random.Random(sd * 31 + i).sample(codes, min(args.sample, len(codes)))
                   for i in range(args.trials)] for sd in seeds}
 
-    k = max(1, args.subperiods)
-    size = max(1, len(dates) // k)
-    W = [("전체", list(dates))]
-    W += [(f"구간{i + 1}", dates[i * size:(i + 1) * size if i < k - 1 else len(dates)])
-          for i in range(k)]
+    W = audit_windows(dates, args.subperiods, whole=True)
 
     for ax in args.axis.split(","):
         ax = ax.strip()

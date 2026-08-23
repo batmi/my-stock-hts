@@ -49,12 +49,13 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from tools.audit_common import exits  # noqa: E402
+
 import config  # noqa: E402
 import indicators  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 
 INITIAL_CAPITAL = 10_000_000
-SELL_REASONS = ("ATR손절", "손절", "본전청산", "시간청산", "트레일링스탑", "점수하락", "이익보호")
 BASE_W = {"TREND": 4.0, "MOMENTUM": 2.5, "STRENGTH": 1.5, "SYNERGY": 2.0}
 
 
@@ -206,7 +207,7 @@ def verify_tq_parity(dfs, tq_by_code, lookback, sample=8):
 
 
 def metrics(r, cand_mean=0.0, cand_comp=0.0, tie_pct=0.0):
-    sells = [t for t in r["trades"] if t["reason"] in SELL_REASONS]
+    sells = exits(r)
     profits = sorted((t["profit"] for t in sells), reverse=True)
     top10 = profits[:max(1, len(profits) // 10)]
     wins = [p for p in profits if p > 0]

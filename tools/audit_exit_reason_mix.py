@@ -35,12 +35,13 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from tools.audit_common import exits  # noqa: E402
+
 import config  # noqa: E402
 from modules import intraday_bars as ib  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 
 INITIAL_CAPITAL = 10_000_000
-SELL_REASONS = ("ATR손절", "손절", "본전청산", "시간청산", "트레일링스탑", "점수하락", "이익보호")
 # 표시 순서 — 판단 기반(TS·점수하락)을 앞에, 무판단(시간청산)·방어(손절)를 뒤에 둔다.
 ORDER = ("트레일링스탑", "점수하락", "시간청산", "ATR손절", "손절", "본전청산", "이익보호")
 SHORT = {"트레일링스탑": "TS", "점수하락": "점수하락", "시간청산": "시간청산",
@@ -51,7 +52,7 @@ BASE = 3.5
 
 def decompose(r):
     """1회 실행 → 사유별 기여도. 비중은 실행 내부에서 정규화한다(실행 간 규모 차이 제거)."""
-    sells = [t for t in r["trades"] if t["reason"] in SELL_REASONS]
+    sells = exits(r)
     gross_gain = sum(t["profit_amt"] for t in sells if t["profit_amt"] > 0)
     net_all = sum(t["profit_amt"] for t in sells)
     by = defaultdict(list)

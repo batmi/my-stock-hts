@@ -108,7 +108,10 @@ def decide_sell(*, price, high, avg, sl_rate, atr_applied, is_bep, holding_days,
     time_stop_min = c.get("time_stop_min", 0.0)
     ts_act = c.get("ts_act", 10.0)
     ts_callback = c.get("ts_callback", 5.0)
-    ts_atr_mult = c.get("ts_atr_mult", 3.0)
+    # [SSOT] 폴백 리터럴은 config 정본(3.5)·실매매(engine.analyze_sell)와 맞춘다.
+    #  종전 3.0은 키가 빠진 호출에서만 조용히 발현해, 백테스트만 더 좁은 콜백으로
+    #  돌게 만든다(청산이 빨라져 fat-tail이 잘린다).
+    ts_atr_mult = c.get("ts_atr_mult", 3.5)
     ts_breakeven = c.get("ts_breakeven", False)
     sell_score_limit = c.get("sell_score_limit", 4.0)
 
@@ -170,6 +173,36 @@ def decide_sell(*, price, high, avg, sl_rate, atr_applied, is_bep, holding_days,
             sell = True
             reason = state_reason if (sell_check == 0 and raw_score > 0) else "점수하락"
     return sell, reason
+
+
+def build_sell_cfg(sell_cfg=None):
+    """decide_sell 에 넘길 청산 설정 dict — config 에서 읽는 **단일 조립 지점**.
+
+    [왜] 이 dict의 키가 하나라도 빠지면 decide_sell 은 조용히 자기 기본값으로 돌아간다.
+    실매매(engine.analyze_sell)는 config 를 직접 읽으므로 그쪽만 새 값으로 돌고, 결과는
+    '코드가 아니라 하네스 때문에 생긴 불일치'다. 실제로 tools/audit_exit_parity.py 가
+    time_stop_min 을 빠뜨리고 있었고, TIME_STOP_MIN_PROFIT_RATE 를 0이 아닌 값으로 두면
+    거짓 불일치가 났다(기본값이 0.0이라 드러나지 않았을 뿐이다).
+
+    조립부가 둘이면 같은 실수가 반복되므로 여기 하나만 둔다. 청산 규칙에 스위치를 추가할
+    때는 이 함수만 고치면 된다 — 빠뜨리면 tests/test_exit_parity.py 가 잡는다.
+    """
+    s = sell_cfg if sell_cfg is not None else config.SELL_STRATEGY
+    time_stop_days = s.get("TIME_STOP_DAYS", 20)
+    return {
+        "use_atr": s.get("USE_ATR_STOP", True),
+        "use_time_stop": s.get("TIME_STOP_USE", True) and time_stop_days > 0,
+        "time_stop_days": time_stop_days,
+        "time_stop_min": s.get("TIME_STOP_MIN_PROFIT_RATE", 0.0),
+        "ts_act": s.get("TRAILING_STOP_ACTIVATION_RATE", 10.0),
+        "ts_callback": s.get("TRAILING_STOP_CALLBACK_RATE", 5.0),
+        "ts_atr_mult": s.get("TRAILING_ATR_MULTIPLIER", 3.5),
+        "ts_breakeven": str(s.get("TS_ACTIVATION_MODE", "fixed")).lower() == "breakeven",
+        "sell_score_limit": s.get("SELL_SCORE", 4.0),
+        "profit_lock_use": s.get("PROFIT_LOCK_USE", False),
+        "profit_lock_min_mfe": s.get("PROFIT_LOCK_MIN_MFE", 25.0),
+        "profit_lock_giveback": s.get("PROFIT_LOCK_GIVEBACK", 0.5),
+    }
 
 
 def _weighted_sl(position, default_sl):
@@ -464,7 +497,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     lock_min_mfe = sell_cfg.get("PROFIT_LOCK_MIN_MFE", 25.0)
     lock_giveback = sell_cfg.get("PROFIT_LOCK_GIVEBACK", 0.5)
     ts_callback = sell_cfg.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
-    ts_atr_mult = sell_cfg.get("TRAILING_ATR_MULTIPLIER", 3.0)
+    ts_atr_mult = sell_cfg.get("TRAILING_ATR_MULTIPLIER", 3.5)   # [SSOT] 정본 3.5
     time_stop_days = sell_cfg["TIME_STOP_DAYS"]
     use_time_stop = sell_cfg.get("TIME_STOP_USE", True) and time_stop_days > 0
     bep_stop = sell_cfg.get("BREAK_EVEN_STOP_RATE", 0.5)

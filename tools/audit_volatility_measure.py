@@ -39,11 +39,12 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+
 import config  # noqa: E402
 import indicators  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 
-from tools.audit_atr_cap_and_ts import SELL_REASONS, metrics  # noqa: E402
+from tools.audit_atr_cap_and_ts import metrics  # noqa: E402
 
 INITIAL_CAPITAL = 10_000_000
 
