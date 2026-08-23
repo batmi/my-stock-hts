@@ -155,6 +155,25 @@ def test_no_tool_redefines_the_exit_vocabulary():
         + ", ".join(offenders))
 
 
+def test_exit_vocabulary_comes_from_the_simulator():
+    """청산 사유 어휘는 **사유를 만들어 내는 쪽**이 정한다.
+
+    감사 도구가 어휘를 따로 들고 있으면 시뮬레이터에 사유가 하나 늘 때 감사 표본만
+    옛 어휘로 남는다. 실제로 run_portfolio 의 sells 조립부에는 "이익보호"가 빠져
+    있었고(뒤따르는 profit_amt 절이 가려 표본 자체는 온전했다), 감사 사본 17벌에는
+    "교체"가 빠져 있었다.
+    """
+    from modules.portfolio_backtest import EXIT_REASONS, PRICE_EXIT_REASONS
+    from tools import audit_common
+
+    assert audit_common.SELL_REASONS is EXIT_REASONS, \
+        "audit_common 이 어휘를 따로 들고 있다 — 시뮬레이터 것을 그대로 써야 한다"
+    missing = set(PRICE_EXIT_REASONS) - set(EXIT_REASONS)
+    assert not missing, f"가격성 청산 사유가 전체 어휘에서 빠졌다: {sorted(missing)}"
+    for must in ("이익보호", "교체"):
+        assert must in EXIT_REASONS, f"'{must}' 가 청산 어휘에서 빠졌다"
+
+
 def test_exits_excludes_pyramid_rows():
     """증액(피라미딩) 행은 청산 표본이 아니다 — 꼬리 지표를 무너뜨린다."""
     r = _synth_result()

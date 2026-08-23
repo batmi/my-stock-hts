@@ -93,7 +93,6 @@ def metrics(r):
     }
 
 
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--trials", type=int, default=15)

@@ -79,8 +79,6 @@ def dial_sets():
     ]
 
 
-
-
 def metrics(r):
     sells = exits(r)
     profits = sorted((t["profit"] for t in sells), reverse=True)

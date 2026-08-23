@@ -87,6 +87,14 @@ def _atr_stop_rate(atr, price, atr_mult, day=None):
 # 시간청산·점수하락은 판정 자체가 하루 단위다.
 PRICE_EXIT_REASONS = ("손절", "ATR손절", "본전청산", "이익보호", "트레일링스탑")
 
+# 청산으로 세는 사유 **전부**. 시뮬레이터의 승률·PF 분모(`sells`)와 감사 도구의 표본이
+#  같은 어휘를 봐야 한다 — tools/audit_common.SELL_REASONS 가 이 값을 그대로 쓴다.
+#  [2026-08-23] 종전에는 이 목록이 아래 sells 조립부에 리터럴로 박혀 있었고 "이익보호"가
+#   빠져 있었다. 뒤따르는 `profit_amt != 0` 절이 가려 실제 표본은 온전했지만(그리고
+#   PROFIT_LOCK_USE 는 기본 OFF다), 사유가 늘 때마다 갈라지는 자리였다.
+EXIT_REASONS = ("ATR손절", "손절", "본전청산", "이익보호", "시간청산",
+                "트레일링스탑", "점수하락", "교체")
+
 
 def decide_sell(*, price, high, avg, sl_rate, atr_applied, is_bep, holding_days,
                 state, state_reason, raw_score, sell_check, ema60, atr,
@@ -1294,9 +1302,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     final_asset = _equity(dates[-1]) if dates else initial_capital
     # '교체'도 실현손익이 있는 청산이다. profit_amt != 0 조건에 대부분 걸리지만,
     # 손익이 정확히 0인 교체가 빠져 승률·PF 분모가 흔들리지 않게 명시한다.
-    sells = [t for t in trades if t["reason"] in
-             ("ATR손절", "손절", "본전청산", "시간청산", "트레일링스탑", "점수하락", "교체")
-             or t["profit_amt"] != 0]
+    sells = [t for t in trades
+             if t["reason"] in EXIT_REASONS or t["profit_amt"] != 0]
     gross_profit = sum(t["profit_amt"] for t in sells if t["profit_amt"] > 0)
     gross_loss = abs(sum(t["profit_amt"] for t in sells if t["profit_amt"] < 0))
     return {

@@ -30,8 +30,9 @@
 
 # 시뮬레이터가 청산으로 세는 사유. 표시·분류용으로만 쓰고, 표본을 거르는 데는
 #  exits(r)를 쓴다 — 사유를 손으로 나열하는 순간 새 사유가 조용히 빠진다.
-SELL_REASONS = ("ATR손절", "손절", "본전청산", "이익보호", "시간청산",
-                "트레일링스탑", "점수하락", "교체")
+#  [SSOT] 어휘를 정하는 것은 **사유를 만들어 내는 쪽**이다. 여기서 다시 적으면
+#   시뮬레이터에 사유가 하나 늘 때 감사 표본만 옛 어휘로 남는다.
+from modules.portfolio_backtest import EXIT_REASONS as SELL_REASONS  # noqa: E402
 
 
 def exits(r):
