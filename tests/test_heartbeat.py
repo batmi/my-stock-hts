@@ -119,3 +119,18 @@ def test_module_has_no_restart_path():
     src = open(heartbeat.__file__, encoding="utf-8").read()
     for banned in ("subprocess", "os.system", "os.execv", "Popen"):
         assert banned not in src, f"하트비트 모듈에 재기동 경로로 쓰일 수 있는 {banned} 가 있다"
+
+
+def test_tests_never_touch_the_operational_heartbeat():
+    """테스트가 운영용 하트비트 파일을 건드리지 않는지 — 가짜 사망 경보 방지.
+
+    스케줄러를 다루는 테스트는 _check_heartbeat 를 지나며 도장을 찍는다. 그 경로가
+    실제 logs/heartbeat.json 을 가리키면, 테스트가 끝난 뒤 죽은 pid 의 'alive' 도장이
+    남아 크론 감시자가 사망 경보를 보낸다. 한 번이라도 그러면 사람은 다음 경보를
+    믿지 않는다 — 감시가 없는 것보다 나쁘다. (conftest 가 tmp 경로로 돌린다.)
+    """
+    operational = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "heartbeat.json")
+    assert heartbeat.HEARTBEAT_PATH != operational, "하트비트 경로가 격리되지 않았다"
+    assert heartbeat.ALERT_STATE_PATH != os.path.join(
+        os.path.dirname(operational), "heartbeat_alert.json")

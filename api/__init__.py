@@ -65,13 +65,22 @@ _LAYER_NAMES = ('instruments', 'market_calendar', 'sessions', 'yf_quotes', 'char
                 'toss', 'account', 'orders')
 
 
-def __getattr__(name):
-    """패키지 네임스페이스에 아직(또는 끝내) 없는 이름은 서브모듈에서 찾는다.
+#  이름 색인. 서브모듈을 다 읽은 뒤 아래에서 채운다 — 여기서 미리 비워 두는 이유는
+#  __getattr__ 가 **import 도중에도** 불리기 때문이다(auth 의 _token_session 생성이
+#  http 의 GatedRetry 를 쓴다). 그 시점에는 색인이 비어 있고 sys.modules 경로로 찾는다.
+_NAME_INDEX = {}
 
-    아래 import 문들보다 **먼저** 정의해 둔다 — 서브모듈이 import 시점에 다른 계층의
-    이름을 부르는 경우가 있는데(auth 의 _token_session 생성이 http 의 GatedRetry 를 쓴다),
-    그때는 이름 끌어올리기가 아직 끝나지 않은 상태라 이 경로로만 찾을 수 있다.
+
+def __getattr__(name):
+    """패키지에 없는 이름은 서브모듈에서 찾는다 — 이 패키지의 유일한 이름 해석 경로다.
+
+    **import 문들보다 먼저** 정의해 둔다. 서브모듈이 import 시점에 다른 계층의 이름을
+    부르는 경우가 있는데(위 _NAME_INDEX 주석 참조), 그때는 아직 색인이 없으므로
+    sys.modules 를 직접 훑는 두 번째 경로로만 찾을 수 있다.
     """
+    layers = _NAME_INDEX.get(name)
+    if layers:
+        return getattr(layers[0], name)
     import sys
     for _n in _LAYER_NAMES:
         _m = sys.modules.get(f"{__name__}.{_n}")
@@ -131,32 +140,12 @@ from modules.dart_api import (DART_BASE_URL, call_dart, get_dart_corp_map,      
 _LAYERS = (instruments, market_calendar, sessions, yf_quotes, chart_cache, http, auth,
            charts, indices, quotes_nxt, quotes_price, toss, account, orders)
 
-_NAME_INDEX = {}
 for _layer in _LAYERS:
     for _name in vars(_layer):
         if _name.startswith('__') or _name == '_api':
             continue
         _NAME_INDEX.setdefault(_name, []).append(_layer)
 del _layer, _name
-
-
-def __getattr__(name):
-    """패키지에 없는 이름은 서브모듈에서 찾는다.
-
-    아래 import 문들보다 먼저 읽히도록 모듈 하단에 두지만, 파이썬은 모듈 전체를 실행한
-    뒤에야 이 함수를 쓰므로 순서 문제는 없다. 다만 서브모듈이 **import 시점에** 다른
-    계층의 이름을 부르는 경우(auth 의 _token_session 생성이 http 의 GatedRetry 를 쓴다)
-    에는 색인이 아직 없으므로, 그때는 sys.modules 를 직접 훑는다.
-    """
-    layers = _NAME_INDEX.get(name)
-    if layers:
-        return getattr(layers[0], name)
-    import sys
-    for _n in _LAYER_NAMES:
-        _m = sys.modules.get(f"{__name__}.{_n}")
-        if _m is not None and hasattr(_m, name):
-            return getattr(_m, name)
-    raise AttributeError(f"module 'api' has no attribute '{name}'")
 
 
 def __dir__():

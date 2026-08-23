@@ -304,6 +304,14 @@ def isolate_test_files(tmp_path, monkeypatch):
     monkeypatch.setattr("modules.auto_trade.common.DAILY_STATE_FILE", str(tmp_path / "daily_asset_state.json"))
     monkeypatch.setattr("modules.auto_trade.DAILY_STATE_FILE", str(tmp_path / "daily_asset_state.json"), raising=False)
 
+    # [격리] 프로세스 생존 신호(logs/heartbeat.json)도 운영 파일이다.
+    #  스케줄러를 다루는 테스트가 _check_heartbeat 를 지나면 실제 파일에 'alive' 도장이
+    #  찍히고, 테스트가 끝나면 그 pid 는 사라진다 — 크론 감시자가 5분 뒤 **가짜 사망
+    #  경보**를 보낸다. 사람이 경보를 무시하게 만드는, 이 장치에서 가장 나쁜 실패다.
+    #  (실측 2026-08-23: 전체 스위트 실행 후 감시자가 'dead' 를 보고했다.)
+    monkeypatch.setattr("modules.heartbeat.HEARTBEAT_PATH", str(tmp_path / "heartbeat.json"))
+    monkeypatch.setattr("modules.heartbeat.ALERT_STATE_PATH", str(tmp_path / "heartbeat_alert.json"))
+
     # [추가] 테스트 중 생성되는 파일(차트, 엑셀, 로그) 격리
     test_chart_dir = tmp_path / "chart"
     test_data_dir = tmp_path / "data"

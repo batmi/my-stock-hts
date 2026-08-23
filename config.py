@@ -3817,12 +3817,16 @@ def profile_config_path(profile=None):
 
 
 def set_config_profile(profile):
-    """모드가 정해진 직후 호출 — 프로필을 걸고 설정을 다시 읽는다."""
+    """모드가 정해진 직후 호출 — 프로필을 걸고 설정을 다시 읽는다.
+
+    초기화와 재적용을 한 잠금 안에서 끝낸다(_settings_lock 은 RLock 이라 중첩 획득이
+    가능하다). 나누면 그 사이에 다른 스레드가 '기본값만 적용된 중간 상태'를 읽는다.
+    """
     global active_profile, settings
-    active_profile = profile or None
     with _settings_lock:
+        active_profile = profile or None
         settings = GlobalSettings()      # 지난 프로필의 잔재를 남기지 않는다
-    load_dynamic_config()
+        load_dynamic_config()
 
 
 def _apply_config_data(data):
@@ -3958,12 +3962,13 @@ def reset_custom_settings(keys_to_reset):
                 json.dump(data, f, indent=4, ensure_ascii=False)
             
             # 초기 상태를 베이스로 새 설정 덮어씌우기
+            #  (재적용까지 한 잠금 안에서 끝낸다 — 나누면 그 사이에 다른 스레드가
+            #   '기본값만 적용된 중간 상태'를 읽는다. RLock 이라 중첩 획득은 안전하다.)
             settings = GlobalSettings()
+            load_dynamic_config()
+            setup_logging()  # 초기화된 파일 로그 레벨 즉시 적용
         except Exception as e:
             print(f"[Config] 설정 초기화 중 오류: {e}")
-            return
-    load_dynamic_config()
-    setup_logging()  # 초기화된 파일 로그 레벨 즉시 적용
 
 # [추가] 모든 커스텀 설정 삭제 및 시스템 기본값으로 완전 초기화
 def reset_all_settings():
@@ -4002,9 +4007,9 @@ def reset_all_settings():
             if key in current_module.__dict__:
                 del current_module.__dict__[key]
 
-    #  프로필을 지운 경우 기준 파일은 그대로다 — 다시 읽어 기준 설정으로 복귀시킨다.
-    if active_profile:
-        load_dynamic_config()
+        #  프로필을 지운 경우 기준 파일은 그대로다 — 다시 읽어 기준 설정으로 복귀시킨다.
+        if active_profile:
+            load_dynamic_config()
 
 # [추가] 설정 항목에 대한 한글 설명 매핑 (UI 출력용)
 CONFIG_DESCRIPTIONS = {

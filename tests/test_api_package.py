@@ -39,21 +39,53 @@ def test_every_submodule_has_the_accessor():
 
 
 def test_submodules_do_not_import_each_other_directly():
-    """서브모듈끼리 직접 import 하면 patch 가 닿지 않는다 — _api() 를 쓰라는 규약."""
+    """서브모듈끼리 직접 import 하면 patch 가 닿지 않는다 — _api() 를 쓰라는 규약.
+
+    허용되는 유일한 api import 는 `_api()` 안의 지연 import 다. 모듈 최상단에서 하면
+    순환 import 가 되고, 다른 함수에서 하면 규약을 우회하는 샛길이 된다.
+    """
     offenders = []
     for path in _submodule_files():
         tree = ast.parse(open(path, encoding="utf-8").read())
+        # _api() 본문에 있는 import 노드는 미리 걸러 낸다
+        allowed = set()
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == "_api":
+                allowed = {id(n) for n in ast.walk(node)}
+
         for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)) and id(node) in allowed:
+                continue
             if isinstance(node, ast.ImportFrom):
                 mod = node.module or ""
                 if node.level > 0 or mod == "api" or mod.startswith("api."):
-                    offenders.append(f"{os.path.basename(path)}: from {'.' * node.level}{mod}")
+                    offenders.append(f"{os.path.basename(path)}: from {'.' * node.level}{mod} import ...")
             elif isinstance(node, ast.Import):
                 for a in node.names:
                     if a.name == "api" or a.name.startswith("api."):
-                        # _api() 안의 지연 import 는 예외 — 함수 이름으로 구분한다
-                        continue
-    assert not offenders, "서브모듈 간 직접 import:\n" + "\n".join(offenders)
+                        offenders.append(f"{os.path.basename(path)}: import {a.name}")
+    assert not offenders, "서브모듈 간 직접 import (대신 _api() 를 쓸 것):\n" + "\n".join(offenders)
+
+
+def test_the_contract_test_actually_catches_a_violation(tmp_path):
+    """위 검사가 헛돌지 않는지 — 위반 파일을 만들어 실제로 잡히는지 본다.
+
+    (계약 테스트가 아무것도 걸러내지 못하는 상태로 통과하는 일이 실제로 있었다.)
+    """
+    bad = tmp_path / "bad_layer.py"
+    bad.write_text("import api\nfrom api.toss import _toss_float\n", encoding="utf-8")
+    tree = ast.parse(bad.read_text(encoding="utf-8"))
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            mod = node.module or ""
+            if node.level > 0 or mod == "api" or mod.startswith("api."):
+                found.append(mod)
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name == "api" or a.name.startswith("api."):
+                    found.append(a.name)
+    assert found == ["api", "api.toss"]
 
 
 def test_patch_on_the_package_reaches_the_layer_that_owns_it():
