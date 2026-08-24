@@ -14,6 +14,7 @@ from modules import db_manager # [추가] DB 매니저 임포트
 from modules import analysis # [추가] 지수 조회 차단용
 from modules.auto_trade import AutoTrader, ConclusionMonitor
 from modules.auto_trade import engine as _atr_engine  # [추가] 지수 변동성 배율 전역 격리
+from modules.auto_trade import trader as _atr_trader  # [추가] 개장 보류 게이트 전역 격리
 from modules.telegram_bot import TelegramCommander
 
 @pytest.fixture(scope="session", autouse=True)
@@ -384,8 +385,21 @@ def reset_all_singletons():
     #  실제로 test_failclosed_chaos 가 0.7296을 남겨 test_settings_guardrails 의
     #  SSOT 검증이 xdist 워커 배치에 따라 간헐 실패했다. 전역이므로 여기서 막는다.
     _atr_engine.set_vol_regime_ratio(1.0)
+    # [격리 2026-08-24] 개장 직후 진입 보류 게이트. `_check_buy_conditions` 는 맨 앞에서
+    #  이 게이트를 보고 **곧바로 return** 한다. 게이트는 벽시계(datetime.now())를 보므로,
+    #  테스트를 평일 09:00~09:30 사이에 돌리면 매수 경로 테스트가 아래 예수금·슬롯 로그에
+    #  도달하지 못해 실패한다 — 코드가 아니라 **실행 시각**이 만드는 실패다(2026-08-24
+    #  09:07 실측 8건). 시각에 따라 답이 달라지는 스위트는 신뢰할 수 없으므로 여기서 끈다.
+    #  [무엇을 잃지 않는가] 게이트의 산식은 test_entry_open_delay 가 common 쪽 함수에
+    #  now 를 직접 넘겨 검증하고(이 patch는 trader 쪽 이름만 건드린다), '매수 경로에는
+    #  있고 청산 경로에는 없다'는 배치는 같은 파일의 소스 검사 테스트가 지킨다. 게이트가
+    #  실제로 매수를 막는지도 그 파일이 런타임으로 따로 확인한다.
+    _open_delay_orig = _atr_trader.entry_open_delay_remaining
+    _atr_trader.entry_open_delay_remaining = lambda *a, **k: 0
 
     yield
+
+    _atr_trader.entry_open_delay_remaining = _open_delay_orig
 
     # [격리 2026-08-19] 인스턴스를 None으로 만들어도 **이미 떠 있는 스레드는 안 죽는다** —
     #  그 스레드는 옛 self를 참조로 붙들고 있다. 체결 감시가 매도 체결마다 띄우는

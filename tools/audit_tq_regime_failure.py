@@ -50,6 +50,17 @@ def main():
     ap.add_argument("--pool", type=int, default=500)
     ap.add_argument("--dead-frac", type=float, default=0.2)
     ap.add_argument("--subperiods", type=int, default=3)
+    # [비교 가능성] TREND_QUALITY_MAX 가 켜져 있으면 상한 위 진입이 아예 없으므로
+    #  이 도구의 "강함(60+)" 밴드는 실제로는 **60~상한** 이다(config.py 의 경고 그대로).
+    #  상한 도입 전 기록과 나란히 놓으려면 --tq-cap 0 으로 껐다가 잰다. 켠 채로 잰
+    #  값은 "지금 실제로 도는 운용"의 진단이고, 끈 값은 "TQ 자체의 성질" 진단이다.
+    ap.add_argument("--tq-cap", type=float, default=None,
+                    help="TREND_QUALITY_MAX 을 덮어쓴다. 0=해제(상한 도입 전 기록과 비교용)")
+    # [동점가름] 엔진 기본값은 2026-08-18부터 실매매식(점수→추세품질→…)이다. 그 이전에
+    #  찍힌 기록은 **옛 기본 정렬**(점수만·동점은 딕셔너리 등록 순서)의 산물이므로, 옛
+    #  기록과 원인을 가르려면 이 통로로 되돌려 재 본다([[backtest-tiebreak-parity]]).
+    ap.add_argument("--legacy-rank", action="store_true",
+                    help="옛 기본 정렬(점수만·동점은 등록 순서)로 되돌려 잰다")
     args = ap.parse_args()
     seed_notice(len(args.seeds.split(",")), example="--seeds 20260816,7,101")
     seeds = [int(x) for x in args.seeds.split(",")]
@@ -89,8 +100,16 @@ def main():
         for d in dates[i * step:(i + 1) * step if i < k - 1 else len(dates)]:
             seg_of[d] = f"구간{i + 1}"
 
+    cap = (config.ANALYSIS_THRESHOLDS.get("TREND_QUALITY_MAX", 0)
+           if args.tq_cap is None else args.tq_cap)
+    config.ANALYSIS_THRESHOLDS["TREND_QUALITY_MAX"] = cap
     print(f"[준비] {len(dfs)}종목(폐지 {len(dead_c)}) · 거래일 {len(dates)} · "
-          f"TQ 룩백 {lb}일 · 슬롯 {slots}", flush=True)
+          f"TQ 룩백 {lb}일 · 슬롯 {slots} · TQ 상한 {cap or '해제'} · "
+          f"동점가름 {'옛 기본값(등록 순서)' if args.legacy_rank else '실매매식'}", flush=True)
+    if cap:
+        print(f"  ※ 상한이 켜져 있다 — 아래 '강함(60+)'은 실제로 **60~{cap:.0f}** 이다. "
+              f"상한 도입(2026-08-18) 이전 기록과 비교하려면 --tq-cap 0 으로 다시 잴 것.",
+              flush=True)
 
     recs = []      # (구간, TQ, 손익%, 청산사유, 보유일)
     for sd in seeds:
@@ -102,14 +121,22 @@ def main():
                 {c: dfs[c] for c in pick}, {c: status[c] for c in pick}, dates,
                 initial_capital=INITIAL_CAPITAL, slots=slots,
                 market_filter_dates={c: mf.get(c, set()) for c in pick},
-                risk_scale_by_date=new_scale())
+                risk_scale_by_date=new_scale(),
+                rank_fn="legacy" if args.legacy_rank else None)
+            # [무엇이 청산인가] 사유 어휘로 가르면 **상태 사유로 기록된 점수매도**
+            #  ('이평선 완전 이탈(60&120)' 등)가 어휘에 없어 '매수'로 분류된다.
+            #  그러면 그 청산은 표본에서 빠지고, 뒤따르는 진입의 청산이 **묵은 open_day**
+            #  에 붙어 TQ·구간·보유일을 통째로 잘못 읽는다(표본이 조용히 어긋난다).
+            #  시뮬레이터가 이미 청산 집합 r["sells"]를 만들어 준다 — trades 와 **같은
+            #  dict 객체**라 id 로 가른다. 어휘를 다시 나열하지 않는 것이 요점이다.
+            exit_ids = {id(t) for t in r["sells"]}
             seq = {}
             for t in r["trades"]:
                 seq.setdefault(t["code"], []).append(t)
             for code, ts in seq.items():
                 open_day = None
                 for t in ts:
-                    if t["reason"] not in SELL_REASONS:
+                    if id(t) not in exit_ids:
                         if open_day is None:
                             open_day = t["date"]
                     elif open_day is not None:
@@ -140,14 +167,24 @@ def main():
                   f"{np.mean([r[4] for r in seg]):>11.1f}")
 
     print("\n[2] 구간2에서 TQ 강함은 '잘리는가' 아니면 '마르는가' — 청산 사유 분포(%)")
-    reasons = ["ATR손절", "손절", "본전청산", "시간청산", "트레일링스탑", "점수하락"]
+    # [사유를 손으로 나열하지 말 것] 종전에는 6개를 박아 두어 '이익보호'·'교체'와
+    #  **상태 사유 문자열**(점수매도가 raw_score>0 일 때 쓰는 '이평선 완전 이탈(60&120)'
+    #  등)이 통째로 빠졌다 — 행 합이 100%가 아니었고, 빠진 쪽이 전부 손실 청산이었다.
+    #  실제로 나온 사유를 세고, 어휘 밖은 '기타'로 모아 **합이 100%가 되게** 한다.
+    seen = Counter(r[3] for r in recs)
+    reasons = [x for x in SELL_REASONS if seen.get(x)]
+    n_other = sum(v for k, v in seen.items() if k not in SELL_REASONS)
+    if n_other:
+        reasons = reasons + ["기타(상태사유)"]
+        print(f"  ※ 어휘 밖 사유 {n_other:,}건({n_other / max(1, len(recs)) * 100:.1f}%) — "
+              f"점수매도가 상태 문자열로 기록된 것이다. '기타'로 모은다.")
     print(f"  {'구간·밴드':<22}" + "".join(f"{r:>10}" for r in reasons))
     for sg in segs:
         for lo, hi, lab in ((30, 60, "양호"), (60, 1e9, "강함")):
             seg = [r for r in recs if r[0] == sg and lo <= r[1] < hi]
             if len(seg) < 20:
                 continue
-            cnt = Counter(r[3] for r in seg)
+            cnt = Counter(r[3] if r[3] in SELL_REASONS else "기타(상태사유)" for r in seg)
             row = "".join(f"{cnt.get(r, 0) / len(seg) * 100:>10.1f}" for r in reasons)
             print(f"  {f'{sg} TQ {lab}({len(seg)})':<22}{row}")
 

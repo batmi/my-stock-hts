@@ -151,3 +151,52 @@ def test_ON_OFF_안내에_보류_시간이_적힌다():
     item = next(it for it in settings_mod._trading_cycle_items()
                 if it["name"] == "SYSTEM_ENTRY_OPEN_DELAY_USE")
     assert "30분" in item["help"]
+
+
+def test_보류중이면_매수_경로가_실제로_멈춘다(monkeypatch):
+    """게이트가 켜져 있으면 `_check_buy_conditions` 가 곧바로 돌아온다 — **런타임 확인**.
+
+    [왜 필요한가] 배치는 위의 소스 검사 테스트가 지키지만, 그것은 '호출이 그 자리에 있다'
+    까지다. 게이트가 실제로 매수를 멈추는지는 아무도 런타임으로 보고 있지 않았다.
+    게다가 2026-08-24부터 tests/conftest.py 가 스위트 전역에서 이 게이트를 0으로 끈다
+    (벽시계 09:00~09:30에 매수 경로 테스트가 실패하기 때문). 그 격리가 **동작 자체의
+    유일한 런타임 근거까지 지워 버리지 않도록** 여기서 명시적으로 되살려 확인한다.
+    """
+    from unittest.mock import patch
+    from modules.auto_trade import trader as trader_mod
+
+    trader = trader_mod.AutoTrader()
+    trader.is_running = True
+    trader.consecutive_errors = 0
+    config.session.stock_data = {"stocks_kr": [{"code": "005930", "name": "Samsung"}]}
+
+    monkeypatch.setattr(trader_mod, "entry_open_delay_remaining", lambda *a, **k: 12 * 60 + 5)
+    monkeypatch.setattr(trader_mod, "is_system_market_open", lambda *a, **k: True)
+
+    with patch.object(trader, 'log') as mock_log:
+        # 예수금 부족 상황을 주고도 그 로그에 도달하지 못해야 한다 — 그 전에 돌아온다.
+        trader._check_buy_conditions([], {'d2_deposit': 500})
+
+    logged = " ".join(str(c) for c in mock_log.call_args_list)
+    assert "예수금 부족" not in logged, "보류 중인데 매수 판정까지 내려갔다"
+    assert "보류" in logged, f"보류 사유를 남기지 않는다: {logged}"
+
+
+def test_보류가_풀리면_매수_판정으로_내려간다(monkeypatch):
+    """대조군 — 위 테스트가 '무조건 아무것도 안 한다'로 통과하지 않게 한다."""
+    from unittest.mock import patch
+    from modules.auto_trade import trader as trader_mod
+
+    trader = trader_mod.AutoTrader()
+    trader.is_running = True
+    trader.consecutive_errors = 0
+    config.session.stock_data = {"stocks_kr": [{"code": "005930", "name": "Samsung"}]}
+
+    monkeypatch.setattr(trader_mod, "entry_open_delay_remaining", lambda *a, **k: 0)
+    monkeypatch.setattr(trader_mod, "is_system_market_open", lambda *a, **k: True)
+
+    with patch.object(trader, 'log') as mock_log:
+        trader._check_buy_conditions([], {'d2_deposit': 500})
+
+    logged = " ".join(str(c) for c in mock_log.call_args_list)
+    assert "예수금 부족" in logged, f"보류가 없는데도 매수 판정에 못 갔다: {logged}"
