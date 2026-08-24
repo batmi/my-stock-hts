@@ -102,33 +102,45 @@ def test_fetch_naver_themes_failure():
         
         assert themes == []
 
-@pytest.mark.skipif(getattr(theme_analysis, 'genai', None) is None, reason="google-generativeai not installed")
-@patch('modules.theme_analysis.genai.GenerativeModel')
-def test_analyze_market_trends_success(mock_model_cls):
-    """Gemini API 호출 성공 테스트"""
+def test_analyze_market_trends_success():
+    """Gemini API 호출 성공 테스트
+
+    [주의] 게이트를 **테스트 안에서** 건다. 예전에는
+        @pytest.mark.skipif(getattr(theme_analysis, 'genai', None) is None, ...)
+    였는데, theme_analysis.genai 는 _ensure_genai() 가 채우는 지연 로드 변수이고
+    그 호출은 conftest 의 세션 fixture 가 한다 — **fixture 는 수집(collection) 이후에
+    돈다.** 그래서 마커가 평가되는 시점의 genai 는 언제나 None 이었고, 패키지가 깔려
+    있어도 이 테스트는 한 번도 실행되지 않았다(스위트의 유일한 skip 이 이것이었다).
+    아래 _run_fallback_scenario 계열이 쓰는 방식과 같게 맞춘다.
+    """
+    pytest.importorskip("google.generativeai")
+    theme_analysis._ensure_genai()
+
     # API 키 설정 (테스트용)
     original_key = config.GEMINI_API_KEY
     config.GEMINI_API_KEY = "TEST_KEY"
-    
-    # Mock Client 및 Response 설정
-    mock_model = mock_model_cls.return_value
-    mock_response = MagicMock()
-    mock_candidate = MagicMock()
-    mock_part = MagicMock()
-    
-    # 응답 구조 모킹 (candidates[0].content.parts 존재 여부 확인용)
-    mock_response.text = "시장 분석 결과입니다."
-    mock_response.candidates = [mock_candidate]
-    mock_candidate.content.parts = [mock_part]
-    
-    mock_model.generate_content.return_value = mock_response
-    
-    result = theme_analysis.analyze_market_trends_with_gemini()
-    
-    assert result == "시장 분석 결과입니다."
-    mock_model.generate_content.assert_called_once()
-    
-    config.GEMINI_API_KEY = original_key
+
+    with patch('modules.theme_analysis.genai.GenerativeModel') as mock_model_cls:
+        # Mock Client 및 Response 설정
+        mock_model = mock_model_cls.return_value
+        mock_response = MagicMock()
+        mock_candidate = MagicMock()
+        mock_part = MagicMock()
+
+        # 응답 구조 모킹 (candidates[0].content.parts 존재 여부 확인용)
+        mock_response.text = "시장 분석 결과입니다."
+        mock_response.candidates = [mock_candidate]
+        mock_candidate.content.parts = [mock_part]
+
+        mock_model.generate_content.return_value = mock_response
+
+        try:
+            result = theme_analysis.analyze_market_trends_with_gemini()
+
+            assert result == "시장 분석 결과입니다."
+            mock_model.generate_content.assert_called_once()
+        finally:
+            config.GEMINI_API_KEY = original_key
 
 def test_gemini_generate_503_fallback():
     """기본 모델 503(서버 과부하) 시 폴백 모델로 자동 전환 테스트"""
