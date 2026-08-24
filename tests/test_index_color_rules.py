@@ -18,13 +18,13 @@ from modules import analysis, market
 def test_price_trend_color_basic():
     """추세(EMA20 vs EMA60) × 위치(현재가 vs EMA20) 4구간 — 자산 종류와 무관하게 동일."""
     assert analysis.price_trend_color(110, 100, 90) == "[red]"      # 강세
-    assert analysis.price_trend_color(95, 100, 90) == "[white]"     # 눌림목
+    assert analysis.price_trend_color(95, 100, 90) == "[yellow]"    # 눌림목
     assert analysis.price_trend_color(105, 100, 110) == "[orange3]" # 반등 시도
     assert analysis.price_trend_color(95, 100, 110) == "[blue]"     # 약세
 
 
 def test_price_trend_color_unavailable_is_dim():
-    """산출 불가는 눌림목(흰색)과 구분되는 dim이어야 한다."""
+    """산출 불가는 눌림목(노란색)과 구분되는 dim이어야 한다."""
     assert analysis.price_trend_color(None, 100, 90) == "[dim]"
     assert analysis.price_trend_color(100, None, 90) == "[dim]"
     assert analysis.price_trend_color(100, 100, None) == "[dim]"

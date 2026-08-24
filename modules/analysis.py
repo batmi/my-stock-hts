@@ -1642,10 +1642,10 @@ def price_trend_color(price, ema20, ema60):
       혼조(ema20 == ema60)는 "[white]", 산출 불가(값 없음)는 "[dim]"로 구분한다.
     """
     if price is None or ema20 is None or ema60 is None:
-        return "[dim]"  # 데이터 부족 — 눌림목(흰색)과 구분한다
+        return "[dim]"  # 데이터 부족 — 눌림목(노란색)과 구분한다
     if ema20 > ema60:
         # 상승 추세: 20일선 위면 강세, 아래면 눌림목 조정
-        color = "[red]" if price > ema20 else "[white]"
+        color = "[red]" if price > ema20 else "[yellow]"
     elif ema20 < ema60:
         # 하락 추세: 20일선 아래면 약세, 위면 반등 시도
         color = "[blue]" if price < ema20 else "[orange3]"
