@@ -17,7 +17,7 @@ import json
 import pytest
 
 import config
-from session import SessionManager
+from core.session import SessionManager
 
 
 @pytest.fixture
@@ -105,7 +105,7 @@ def test_rotating_the_app_key_invalidates_the_cache(store):
 
 def test_legacy_entry_without_fingerprint_is_reissued(store):
     """지문이 없는 구버전 캐시는 어느 앱키 것인지 알 수 없으므로 재발급시킨다."""
-    from jsonio import save_json
+    from core.jsonio import save_json
     save_json(config.TOKEN_CACHE_FILE, {
         "REAL": {"access_token": "legacy", "token_expired": _expiry(),
                  "issued_at": "2026-01-01 00:00:00"}

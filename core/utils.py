@@ -4,10 +4,8 @@ import yfinance as yf
 import logging
 import config
 config.silence_yfinance_numpy_warning()  # yfinance import 뒤에 걸어야 억제 유효(아래 함수 주석 참조)
-import context # [추가]
-import api
-import constants
-from modules import market # [추가] 통합 지수 리스트 참조용
+from core import context # [추가]
+from core import constants
 import math
 import functools
 from contextlib import closing
@@ -28,6 +26,7 @@ def market_today(is_overseas=False):
     직전 거래일을 반환한다. indicators.apply_realtime_price()에 넘겨, 당일 일봉이 아직 없을 때만
     당일 봉을 새로 추가하고 비거래일엔 마지막 거래일 봉을 덮어쓰게 한다(가짜 봉 방지).
     """
+    import api      # 지연 임포트 — core 는 상위 계층을 import 시점에 끌어오지 않는다
     return api.market_today(is_overseas)
 
 def get_common_headers(tr_id):
@@ -46,6 +45,7 @@ def get_common_headers(tr_id):
             app_key = config.session.real_app_key
             app_secret = config.session.real_app_secret
 
+    import api      # 지연 임포트 — core 는 상위 계층을 import 시점에 끌어오지 않는다
     return {
         "Content-Type": "application/json",
         "authorization": f"Bearer {api.get_current_token()}",
@@ -415,6 +415,7 @@ def validate_and_confirm_stock(code, name, is_overseas, action_text="진행하�
         transient=True
     ) as progress:
         progress.add_task("[cyan]종목 유효성 확인 중 (API)...[/cyan]", total=None)
+        import api      # 지연 임포트 — core 는 상위 계층을 import 시점에 끌어오지 않는다
         res = api.get_current_price_data(code, is_overseas)
         
         is_valid = False
@@ -454,6 +455,7 @@ def select_stock_for_chart():
     context.USER_ACTION_BREADCRUMB.append(f"[{group_choice}] {group_map.get(group_choice, '')}")
 
     if group_choice == "6":
+        from modules import market   # 지연 임포트 — 통합 지수 목록은 도메인 계층 소유다
         indices_list = market.ALL_INDICES
         dict_list = [{'name': n, 'code': c} for n, c in indices_list]
         idx, item = search_stock_in_list(dict_list, title="시장 지수 목록", display_func=lambda i, s: f"[{i+1}] {s.get('name', 'Unknown')}")
@@ -475,6 +477,7 @@ def select_stock_for_chart():
         guessed_name = " ".join(parts[:-1])
         is_overseas = not (code.isdigit() or (len(code) == 6 and code.startswith('0')))
         
+        import api      # 지연 임포트 — core 는 상위 계층을 import 시점에 끌어오지 않는다
         name = guessed_name if guessed_name else api.get_stock_name_by_code(code, is_overseas)
         
         if not name:
@@ -533,6 +536,7 @@ def select_target_stock():
                 return None, None, None
                 
             context.USER_ACTION_BREADCRUMB.append(f"[직접입력] {code}")
+            import api      # 지연 임포트 — core 는 상위 계층을 import 시점에 끌어오지 않는다
             name = api.get_stock_name_by_code(code, is_overseas)
             if not name or name in ["Npay 증권", "네이버 페이 증권", "증권"]: name = code
             
@@ -672,6 +676,7 @@ def print_krx_fallback_warning(name_map=None):
     name_map: {종목코드: 종목명} — 있으면 이름을 함께 보여준다(없으면 코드만).
     """
     try:
+        import api  # 지연 임포트 — core 는 상위 계층을 import 시점에 끌어오지 않는다
         fallback = api.get_krx_fallback()
     except Exception:
         return

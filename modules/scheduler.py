@@ -8,7 +8,7 @@ import config
 import api
 from modules import theme_analysis, account, heartbeat
 from modules.auto_trade import AutoTrader
-import utils
+from core import utils
 
 logger = logging.getLogger(__name__)
 

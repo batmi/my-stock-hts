@@ -10,7 +10,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 import config
-import toss_api
+from brokers import toss_api
 
 
 class FakeResponse:
@@ -39,7 +39,7 @@ def test_get_access_token_success():
 
     with patch.object(config.session, "get_valid_token", return_value=None), \
          patch.object(config.session, "set_token", side_effect=fake_set_token), \
-         patch("toss_api.requests.post",
+         patch("brokers.toss_api.requests.post",
                return_value=FakeResponse(200, {"access_token": "TOK123", "token_type": "Bearer", "expires_in": 86400})) as mp:
         token = toss_api.get_access_token(force_refresh=True)
 
@@ -53,7 +53,7 @@ def test_get_access_token_success():
 
 def test_get_access_token_uses_cache():
     with patch.object(config.session, "get_valid_token", return_value="CACHED"), \
-         patch("toss_api.requests.post") as mp:
+         patch("brokers.toss_api.requests.post") as mp:
         token = toss_api.get_access_token(force_refresh=False)
     assert token == "CACHED"
     mp.assert_not_called()
@@ -71,8 +71,8 @@ def test_request_retries_once_after_401_invalid_token():
         issued.append((force_refresh, stale_token))
         return "NEW" if force_refresh else "DEAD"
 
-    with patch("toss_api.get_access_token", side_effect=fake_token), \
-         patch("toss_api.requests.get", side_effect=responses) as mg:
+    with patch("brokers.toss_api.get_access_token", side_effect=fake_token), \
+         patch("brokers.toss_api.requests.get", side_effect=responses) as mg:
         result = toss_api.get_price("005930")
 
     assert result["lastPrice"] == "72000"          # 재시도로 복구
@@ -90,8 +90,8 @@ def test_request_401_refresh_only_once():
         calls["n"] += 1
         return f"TOK{calls['n']}"
 
-    with patch("toss_api.get_access_token", side_effect=fake_token), \
-         patch("toss_api.requests.get", return_value=FakeResponse(401, err)):
+    with patch("brokers.toss_api.get_access_token", side_effect=fake_token), \
+         patch("brokers.toss_api.requests.get", return_value=FakeResponse(401, err)):
         try:
             toss_api.get_price("005930")
             assert False, "TossApiError가 발생해야 함"
@@ -103,7 +103,7 @@ def test_request_401_refresh_only_once():
 def test_get_access_token_skips_refresh_when_peer_already_renewed():
     """동시 401에서 다른 스레드가 이미 갱신했으면 재발급하지 않고 새 토큰을 그대로 쓴다."""
     with patch.object(config.session, "get_valid_token", return_value="FRESH"), \
-         patch("toss_api.requests.post") as mp:
+         patch("brokers.toss_api.requests.post") as mp:
         token = toss_api.get_access_token(force_refresh=True, stale_token="DEAD")
     assert token == "FRESH"
     mp.assert_not_called()
@@ -133,7 +133,7 @@ def test_concurrent_401_issues_token_only_once():
     config.session.toss_app_secret = "S"
     results = []
 
-    with patch("toss_api.requests.post", side_effect=fake_post), \
+    with patch("brokers.toss_api.requests.post", side_effect=fake_post), \
          patch.object(config.session, "get_valid_token", side_effect=lambda _p: store["tok"]), \
          patch.object(config.session, "set_token",
                       side_effect=lambda _p, t, _e: store.__setitem__("tok", t)):
@@ -159,7 +159,7 @@ def test_resolve_account_seq_matches_acc_num():
         {"accountNo": "99999999999", "accountSeq": 7, "accountType": "BROKERAGE"},
         {"accountNo": "12345678901", "accountSeq": 3, "accountType": "BROKERAGE"},
     ]
-    with patch("toss_api.get_accounts", return_value=accounts):
+    with patch("brokers.toss_api.get_accounts", return_value=accounts):
         seq = toss_api.resolve_account_seq(force=True)
     assert seq == 3
     assert config.session.toss_account_seq == 3
@@ -170,14 +170,14 @@ def test_resolve_account_seq_fallback_first():
     config.session.toss_acc_num = ""
     config.session.cano = ""
     accounts = [{"accountNo": "55555555555", "accountSeq": 1, "accountType": "BROKERAGE"}]
-    with patch("toss_api.get_accounts", return_value=accounts):
+    with patch("brokers.toss_api.get_accounts", return_value=accounts):
         seq = toss_api.resolve_account_seq(force=True)
     assert seq == 1
 
 
 def test_get_price_returns_first_row():
     rows = [{"symbol": "005930", "lastPrice": "72000", "currency": "KRW"}]
-    with patch("toss_api._request", return_value=rows) as mp:
+    with patch("brokers.toss_api._request", return_value=rows) as mp:
         result = toss_api.get_price("005930")
     assert result["lastPrice"] == "72000"
     # prices 엔드포인트로 라우팅되는지 확인
@@ -188,8 +188,8 @@ def test_get_price_returns_first_row():
 def test_request_error_envelope_raises():
     config.session.toss_account_seq = 1
     err_body = {"error": {"requestId": "R1", "code": "stock-not-found", "message": "없음"}}
-    with patch("toss_api.get_access_token", return_value="TOK"), \
-         patch("toss_api.requests.get", return_value=FakeResponse(404, err_body)):
+    with patch("brokers.toss_api.get_access_token", return_value="TOK"), \
+         patch("brokers.toss_api.requests.get", return_value=FakeResponse(404, err_body)):
         try:
             toss_api.get_orderbook("000000")
             assert False, "TossApiError가 발생해야 함"
@@ -214,8 +214,8 @@ def test_domestic_balance_adapter_kr_shape():
     }
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_holdings", return_value=holdings), \
-             patch("toss_api.get_buying_power", return_value={"currency": "KRW", "cashBuyingPower": "5000000"}):
+        with patch("brokers.toss_api.get_holdings", return_value=holdings), \
+             patch("brokers.toss_api.get_buying_power", return_value={"currency": "KRW", "cashBuyingPower": "5000000"}):
             output1, output2 = api.get_domestic_balance()
     finally:
         config.session.is_toss = False
@@ -247,7 +247,7 @@ def test_overseas_balance_adapter_us_only():
     }
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_holdings", return_value=holdings):
+        with patch("brokers.toss_api.get_holdings", return_value=holdings):
             out = api.get_overseas_balance()
     finally:
         config.session.is_toss = False
@@ -261,7 +261,7 @@ def test_deposit_balance_adapter():
     import api
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_buying_power", return_value={"currency": "KRW", "cashBuyingPower": "1234567"}):
+        with patch("brokers.toss_api.get_buying_power", return_value={"currency": "KRW", "cashBuyingPower": "1234567"}):
             res = api.get_deposit_balance()
     finally:
         config.session.is_toss = False
@@ -286,8 +286,8 @@ def test_chart_data_adapter_daily():
         # 국내 일봉은 KRX 소스(pykrx/FDR)가 1순위다. 이 테스트는 '토스 캔들 어댑터'를 검증하므로
         # KRX 경로를 비활성화해 폴백을 강제한다(네트워크 격리 목적도 겸함).
         with patch("api._krx_daily_chart", return_value=None), \
-             patch("toss_api.get_candles", return_value=res), \
-             patch("toss_api.get_price_limit",
+             patch("brokers.toss_api.get_candles", return_value=res), \
+             patch("brokers.toss_api.get_price_limit",
                    side_effect=toss_api.TossApiError("network-error", "mock")):  # 기준가 보정 경로 차단(네트워크 격리)
             df = api.get_chart_data("005930", is_overseas=False, period_type='daily')
     finally:
@@ -331,8 +331,8 @@ def test_chart_data_adapter_daily_paginates_to_250():
     config.session.is_toss = True
     try:
         # 어댑터의 페이징만 검증한다(get_chart_data는 일봉 캐시 레이어를 덧대므로 직접 호출).
-        with patch("toss_api.get_candles", side_effect=fake_candles), \
-             patch("toss_api.get_price_limit",
+        with patch("brokers.toss_api.get_candles", side_effect=fake_candles), \
+             patch("brokers.toss_api.get_price_limit",
                    side_effect=toss_api.TossApiError("network-error", "mock")):  # 기준가 보정 경로 차단(네트워크 격리)
             df = api._toss_chart_data("005930", period_type='daily', is_overseas=False)
     finally:
@@ -408,7 +408,7 @@ def test_toss_ranking_base_builds_map_and_caches():
     ]}
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_rankings", return_value=resp) as m:
+        with patch("brokers.toss_api.get_rankings", return_value=resp) as m:
             assert api._toss_ranking_base("005930") == 71600.0
             assert api._toss_ranking_base("000660") == 178000.0
             assert api._toss_ranking_base("999999") is None  # 랭킹 밖 → None(하위순위로)
@@ -425,7 +425,7 @@ def test_toss_base_price_falls_back_to_prev_nxt_candle():
     _reset_krx_store({})  # 저장분 없음
     _inject_daily_chart("TSTA", PAST_CHART)  # 마지막 캔들 20260713 < 오늘 → 그 종가
     try:
-        with patch("toss_api.get_price_limit") as m_pl, \
+        with patch("brokers.toss_api.get_price_limit") as m_pl, \
              patch.object(api, "_toss_krx_lib_close", return_value=None), \
              patch.object(api, "_toss_yf_krx_close", return_value=None):  # 3순위(KRX·yfinance) 미스
             assert api._toss_base_price("TSTA") == 285000.0  # NXT 캔들 종가
@@ -530,7 +530,7 @@ def test_daily_sanitize_drops_isolated_low_outlier():
     res = _daily_candles([(1, 52300, 53000, 52100, 52700),
                           (2, 36500, 53700, 36500, 52500),
                           (3, 53200, 53200, 51400, 52200)])
-    with patch("toss_api.get_candles", return_value=res):
+    with patch("brokers.toss_api.get_candles", return_value=res):
         df = api._toss_chart_data("030200", period_type='daily', is_overseas=False)
     bar = df.iloc[-2]
     assert float(bar['low']) == 51400.0     # 이웃 저가 수준으로 복원(가짜 하한가 제거)
@@ -545,7 +545,7 @@ def test_daily_sanitize_keeps_real_limit_down_day():
     res = _daily_candles([(1, 30100, 30500, 30000, 30200),
                           (2, 30050, 30050, 30050, 30050),   # -29.95% 하한가 마감
                           (3, 43000, 43500, 42800, 42900)])
-    with patch("toss_api.get_candles", return_value=res):
+    with patch("brokers.toss_api.get_candles", return_value=res):
         df = api._toss_chart_data("950160", period_type='daily', is_overseas=False)
     bar = df.iloc[-2]
     assert float(bar['low']) == 30050.0 and float(bar['open']) == 30050.0
@@ -557,7 +557,7 @@ def test_daily_sanitize_keeps_normal_spike_high():
     res = _daily_candles([(1, 96000, 99000, 95000, 97000),
                           (2, 78000, 129000, 77000, 98000),  # 전일 종가 100,000 대비 고가 +29%
                           (3, 99000, 101000, 96000, 100000)])
-    with patch("toss_api.get_candles", return_value=res):
+    with patch("brokers.toss_api.get_candles", return_value=res):
         df = api._toss_chart_data("079550", period_type='daily', is_overseas=False)
     bar = df.iloc[-2]
     assert float(bar['high']) == 129000.0   # 진짜 급등 고가 보존
@@ -570,7 +570,7 @@ def test_daily_sanitize_skips_overseas():
     res = _daily_candles([(1, 52.3, 53.0, 52.1, 52.7),
                           (2, 36.5, 53.7, 36.5, 52.5),
                           (3, 53.2, 53.2, 51.4, 52.2)])
-    with patch("toss_api.get_candles", return_value=res):
+    with patch("brokers.toss_api.get_candles", return_value=res):
         df = api._toss_chart_data("TSLA", period_type='daily', is_overseas=True)
     assert float(df.iloc[-2]['low']) == 36.5
 
@@ -588,7 +588,7 @@ def test_chart_data_adapter_daily_keeps_nxt_close():
         {"timestamp": ts_prev, "openPrice": "285000", "highPrice": "298000",
          "lowPrice": "282000", "closePrice": "286500", "volume": "100"},  # NXT 20:00 연장 종가
     ], "nextBefore": None}
-    with patch("toss_api.get_candles", return_value=res), \
+    with patch("brokers.toss_api.get_candles", return_value=res), \
          patch.object(api, "market_today", return_value=today.strftime("%Y%m%d")):
         df = api._toss_chart_data("005930", period_type='daily', is_overseas=False)
     assert float(df.iloc[-2]['close']) == 286500.0  # NXT 종가 그대로(더 이상 285000으로 보정 안 함)
@@ -629,7 +629,7 @@ def test_chart_data_adapter_intraday_session_window():
 
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_candles", side_effect=fake_candles):
+        with patch("brokers.toss_api.get_candles", side_effect=fake_candles):
             df = api.get_chart_data("005930", period_type='intraday')
     finally:
         config.session.is_toss = False
@@ -678,7 +678,7 @@ def test_chart_data_adapter_intraday_paginates_when_nextbefore_missing():
 
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_candles", side_effect=fake_candles):
+        with patch("brokers.toss_api.get_candles", side_effect=fake_candles):
             df = api.get_chart_data("005930", period_type='intraday')
     finally:
         config.session.is_toss = False
@@ -717,7 +717,7 @@ def test_chart_data_adapter_intraday_today_session_only():
 
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_candles", side_effect=fake_candles):
+        with patch("brokers.toss_api.get_candles", side_effect=fake_candles):
             df = api.get_chart_data("005930", period_type='intraday')
     finally:
         config.session.is_toss = False
@@ -754,7 +754,7 @@ def test_chart_data_adapter_intraday_premarket_returns_empty():
 
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_candles", side_effect=fake_candles):
+        with patch("brokers.toss_api.get_candles", side_effect=fake_candles):
             df = api.get_chart_data("005930", period_type='intraday')
     finally:
         config.session.is_toss = False
@@ -787,7 +787,7 @@ def test_chart_data_adapter_intraday_date_is_timestamp():
     }
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_candles", return_value=res):
+        with patch("brokers.toss_api.get_candles", return_value=res):
             df = api.get_chart_data("005930", is_overseas=False, period_type='intraday')
     finally:
         config.session.is_toss = False
@@ -808,7 +808,7 @@ def test_current_price_data_adapter():
     _inject_daily_chart("005930", [{'date': '20260710', 'close': 71000.0},
                                    {'date': '20260713', 'close': 71600.0}])
     try:
-        with patch("toss_api.get_price",
+        with patch("brokers.toss_api.get_price",
                    return_value={"symbol": "005930", "lastPrice": "72000", "currency": "KRW"}), \
              patch.object(api, "_toss_capture_krx_close"), \
              patch.object(api, "_toss_krx_lib_close", return_value=None), \
@@ -837,7 +837,7 @@ def test_current_price_data_keeps_last_session_rate_before_nxt_open():
     _inject_daily_chart("005930", [{'date': '20260713', 'close': 280000.0},
                                    {'date': '20260714', 'close': 285000.0}])
     try:
-        with patch("toss_api.get_price",
+        with patch("brokers.toss_api.get_price",
                    return_value={"symbol": "005930", "lastPrice": "285000", "currency": "KRW"}), \
              patch.object(api, "_toss_capture_krx_close"), \
              patch.object(api, "_toss_before_nxt_open", return_value=True):
@@ -861,7 +861,7 @@ def test_current_price_data_zero_rate_after_nxt_open():
     _inject_daily_chart("005930", [{'date': '20260713', 'close': 280000.0},
                                    {'date': '20260714', 'close': 285000.0}])
     try:
-        with patch("toss_api.get_price",
+        with patch("brokers.toss_api.get_price",
                    return_value={"symbol": "005930", "lastPrice": "285000", "currency": "KRW"}), \
              patch.object(api, "_toss_capture_krx_close"), \
              patch.object(api, "_toss_before_nxt_open", return_value=False):
@@ -921,7 +921,7 @@ def test_order_book_adapter_totals():
     }
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_orderbook", return_value=ob):
+        with patch("brokers.toss_api.get_orderbook", return_value=ob):
             res = api.get_order_book("005930", False)
     finally:
         config.session.is_toss = False
@@ -949,7 +949,7 @@ def test_vol_strength_na_but_foreign_rate_supported_for_toss():
     config.session.is_toss = True
     try:
         assert api.get_realtime_vol_strength("005930") is None
-        with patch("toss_api.get_investor_trend", return_value=trend):
+        with patch("brokers.toss_api.get_investor_trend", return_value=trend):
             res = api.get_daily_foreign_rate("005930")
     finally:
         config.session.is_toss = False
@@ -979,7 +979,7 @@ def test_print_table_worker_toss_enriches_change_and_52w():
     })
     # 실제 토스 일봉은 장중/장후 마지막 봉이 '당일'이다 → 현재가가 당일 봉을 덮어쓰고
     # 등락은 직전 봉(전일) 대비로 계산된다. (마지막 봉이 과거면 프리마켓 보정이 당일봉을 새로 추가)
-    import utils
+    from core import utils
     df.loc[df.index[-1], 'date'] = utils.market_today(False)
     curr = {'rt_cd': '0', 'output': {'stck_prpr': str(closes[-1])}}
 
@@ -1181,7 +1181,7 @@ def test_create_order_builds_body():
         captured["body"] = json_body
         return {"orderId": "OID", "clientOrderId": None}
 
-    with patch("toss_api._request", side_effect=fake_request):
+    with patch("brokers.toss_api._request", side_effect=fake_request):
         res = toss_api.create_order("005930", "BUY", order_type="LIMIT", quantity=10, price=70000)
 
     assert res["orderId"] == "OID"
@@ -1215,8 +1215,8 @@ def test_open_orders_domestic_adapter():
     import api
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_orders", return_value=_orders_envelope()), \
-             patch("toss_api.get_stocks", return_value=[{"symbol": "005930", "name": "삼성전자"}]):
+        with patch("brokers.toss_api.get_orders", return_value=_orders_envelope()), \
+             patch("brokers.toss_api.get_stocks", return_value=[{"symbol": "005930", "name": "삼성전자"}]):
             out = api.get_domestic_open_orders()
     finally:
         config.session.is_toss = False
@@ -1236,8 +1236,8 @@ def test_open_orders_overseas_adapter():
     import api
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_orders", return_value=_orders_envelope()), \
-             patch("toss_api.get_stocks", return_value=[{"symbol": "AAPL", "name": "Apple"}]):
+        with patch("brokers.toss_api.get_orders", return_value=_orders_envelope()), \
+             patch("brokers.toss_api.get_stocks", return_value=[{"symbol": "AAPL", "name": "Apple"}]):
             out = api.get_overseas_open_orders()
     finally:
         config.session.is_toss = False
@@ -1262,7 +1262,7 @@ def test_place_order_limit_adapter():
         return {"orderId": "NEWID"}
 
     try:
-        with patch("toss_api.create_order", side_effect=fake_create):
+        with patch("brokers.toss_api.create_order", side_effect=fake_create):
             res = api.place_order("domestic", "buy", "005930", 10, 70000, "00")
     finally:
         config.session.is_toss = False
@@ -1284,7 +1284,7 @@ def test_place_order_market_adapter():
         return {"orderId": "MKT"}
 
     try:
-        with patch("toss_api.create_order", side_effect=fake_create):
+        with patch("brokers.toss_api.create_order", side_effect=fake_create):
             res = api.place_order("domestic", "sell", "005930", 3, 0, "01")
     finally:
         config.session.is_toss = False
@@ -1297,7 +1297,7 @@ def test_place_order_error_adapter():
     import api
     config.session.is_toss = True
     try:
-        with patch("toss_api.create_order",
+        with patch("brokers.toss_api.create_order",
                    side_effect=toss_api.TossApiError("INSUFFICIENT_CASH", "잔액부족", status=400)):
             res = api.place_order("domestic", "buy", "005930", 10, 70000, "00")
     finally:
@@ -1317,7 +1317,7 @@ def test_cancel_order_adapter():
         return {"orderId": "CXL"}
 
     try:
-        with patch("toss_api.cancel_order", side_effect=fake_cancel):
+        with patch("brokers.toss_api.cancel_order", side_effect=fake_cancel):
             res = api.revise_cancel_order("domestic", "cancel", "KR1", "005930", 0, "0", "02", "00")
     finally:
         config.session.is_toss = False
@@ -1340,8 +1340,8 @@ def test_modify_order_adapter():
     order_detail = {"quantity": "5", "execution": {"filledQuantity": "2"}}
 
     try:
-        with patch("toss_api.modify_order", side_effect=fake_modify), \
-             patch("toss_api.get_order", return_value=order_detail):
+        with patch("brokers.toss_api.modify_order", side_effect=fake_modify), \
+             patch("brokers.toss_api.get_order", return_value=order_detail):
             res = api.revise_cancel_order("domestic", "revise", "KR1", "005930", 0, 71000, "01", "00")
     finally:
         config.session.is_toss = False
@@ -1363,7 +1363,7 @@ def test_modify_order_adapter_explicit_qty():
         return {"orderId": "MOD"}
 
     try:
-        with patch("toss_api.modify_order", side_effect=fake_modify):
+        with patch("brokers.toss_api.modify_order", side_effect=fake_modify):
             res = api.revise_cancel_order("domestic", "revise", "KR1", "005930", 2, 71000, "01", "00")
     finally:
         config.session.is_toss = False
@@ -1376,7 +1376,7 @@ def test_buyable_quantity_adapter():
     import api
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_buying_power",
+        with patch("brokers.toss_api.get_buying_power",
                    return_value={"currency": "KRW", "cashBuyingPower": "1000000"}):
             qty = api.fetch_buyable_quantity("005930", 70000)
     finally:
@@ -1388,7 +1388,7 @@ def test_sellable_quantity_adapter():
     import api
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_sellable_quantity", return_value={"sellableQuantity": "8"}):
+        with patch("brokers.toss_api.get_sellable_quantity", return_value={"sellableQuantity": "8"}):
             qty = api.fetch_sellable_quantity("005930")
     finally:
         config.session.is_toss = False
@@ -1412,7 +1412,7 @@ def test_index_chart_toss_uses_market_indicator_for_kospi():
     api.clear_chart_cache()
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_market_indicator_candles", return_value=res) as mock_ind, \
+        with patch("brokers.toss_api.get_market_indicator_candles", return_value=res) as mock_ind, \
              patch("api.get_chart_data") as mock_yf, \
              patch("api.call_api") as mock_call:
             df = api.get_domestic_index_chart("0001")  # KOSPI
@@ -1444,7 +1444,7 @@ def test_index_chart_toss_kospi200_still_uses_yfinance():
     config.session.is_toss = True
     try:
         with patch("api.get_chart_data", side_effect=fake_chart), \
-             patch("toss_api.get_market_indicator_candles") as mock_ind, \
+             patch("brokers.toss_api.get_market_indicator_candles") as mock_ind, \
              patch("api.call_api") as mock_call:
             df = api.get_domestic_index_chart("2001")  # KOSPI200
     finally:
@@ -1478,7 +1478,7 @@ def test_toss_index_chart_paginates_with_next_before():
         calls["n"] += 1
         return pages[idx] if idx < len(pages) else {"candles": [], "nextBefore": None}
 
-    with patch("toss_api.get_market_indicator_candles", side_effect=fake_candles):
+    with patch("brokers.toss_api.get_market_indicator_candles", side_effect=fake_candles):
         df = api._toss_index_chart_data("KOSPI")
 
     assert calls["n"] == 2      # 2페이지(>=260) 확보 후 중단
@@ -1505,8 +1505,8 @@ def test_index_chart_toss_overlays_today_with_market_indicator_price(monkeypatch
     api._MICRO_CACHE.clear()
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_market_indicator_candles", return_value=res), \
-             patch("toss_api.get_market_indicator_price",
+        with patch("brokers.toss_api.get_market_indicator_candles", return_value=res), \
+             patch("brokers.toss_api.get_market_indicator_price",
                    return_value={"symbol": "KOSPI", "lastPrice": "2812.45"}):
             api.get_domestic_index_chart("0001")          # 캐시 적재
             df = api.get_domestic_index_chart("0001")     # 캐시 적중 + 오버레이
@@ -1522,7 +1522,7 @@ def test_index_chart_toss_overlays_today_with_market_indicator_price(monkeypatch
 def test_toss_index_chart_empty_on_api_error():
     """토스 시장지표 오류 시 빈 DF(상위 폴백 체인으로 넘어감)."""
     import api
-    with patch("toss_api.get_market_indicator_candles",
+    with patch("brokers.toss_api.get_market_indicator_candles",
                side_effect=toss_api.TossApiError("internal-error", "mock", status=500)):
         df = api._toss_index_chart_data("KOSDAQ")
     assert df.empty
@@ -1537,7 +1537,7 @@ def test_index_price_toss_uses_market_indicator():
     api._MICRO_CACHE.clear()
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_market_indicator_price",
+        with patch("brokers.toss_api.get_market_indicator_price",
                    return_value={"symbol": "KOSDAQ", "lastPrice": "845.32"}) as mock_ind, \
              patch("api.get_yf_fast_info") as mock_yf, \
              patch("api.call_api") as mock_call:
@@ -1559,7 +1559,7 @@ def test_index_price_toss_falls_back_to_fast_info():
     api._MICRO_CACHE.clear()
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_market_indicator_price",
+        with patch("brokers.toss_api.get_market_indicator_price",
                    side_effect=toss_api.TossApiError("internal-error", "mock", status=500)), \
              patch("api.get_yf_fast_info",
                    return_value={"last_price": 850.5, "regular_market_previous_close": 845.0}), \
@@ -1595,13 +1595,13 @@ def test_krx_only_uses_nxt_supported_field():
     config.session.is_toss = True
     try:
         rows = [{"symbol": "069500", "koreanMarketDetail": {"nxtSupported": False}}]
-        with patch("toss_api.get_stocks", return_value=rows) as mock_st:
+        with patch("brokers.toss_api.get_stocks", return_value=rows) as mock_st:
             assert api._toss_krx_only("069500") is True
             assert api._toss_krx_only("069500") is True   # 캐시 적중
         mock_st.assert_called_once()                      # 종목당 1회만 조회
 
         rows2 = [{"symbol": "005930", "koreanMarketDetail": {"nxtSupported": True}}]
-        with patch("toss_api.get_stocks", return_value=rows2):
+        with patch("brokers.toss_api.get_stocks", return_value=rows2):
             assert api._toss_krx_only("005930") is False  # NXT 병행 체결 → 신뢰 불가
     finally:
         config.session.is_toss = False
@@ -1615,7 +1615,7 @@ def test_krx_only_falls_back_to_etf_heuristic(monkeypatch):
     monkeypatch.setattr(api, "is_domestic_etf_etn", lambda code, name="": True)
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_stocks",
+        with patch("brokers.toss_api.get_stocks",
                    side_effect=toss_api.TossApiError("internal-error", "mock", status=500)) as mock_st:
             assert api._toss_krx_only("069500") is True   # 휴리스틱 폴백
             assert api._toss_krx_only("069500") is True
@@ -1631,11 +1631,11 @@ def test_krx_close_trusted_by_nxt_support():
     _reset_nxt_cache()
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_stocks",
+        with patch("brokers.toss_api.get_stocks",
                    return_value=[{"symbol": "069500", "koreanMarketDetail": {"nxtSupported": False}}]):
             assert api._toss_krx_close_trusted("069500", "cap") is True
         _reset_nxt_cache()
-        with patch("toss_api.get_stocks",
+        with patch("brokers.toss_api.get_stocks",
                    return_value=[{"symbol": "005930", "koreanMarketDetail": {"nxtSupported": True}}]):
             assert api._toss_krx_close_trusted("005930", "cap") is False
             assert api._toss_krx_close_trusted("005930", "yf") is True   # 일봉 검증값은 항상 신뢰
@@ -1662,7 +1662,7 @@ def test_krx_regular_bounds_from_calendar():
     _reset_cal_cache()
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_market_calendar",
+        with patch("brokers.toss_api.get_market_calendar",
                    return_value=_cal_payload(start="10:00:00", end="16:00:00")) as mock_cal:
             assert api._toss_krx_regular_bounds("20260325") == ((10, 0), (16, 0))  # 지연·연장 개장
             assert api._toss_krx_regular_bounds("20260324") == ((9, 0), (15, 30))  # 전 영업일도 함께 캐시
@@ -1680,7 +1680,7 @@ def test_krx_regular_bounds_default_on_failure():
     _reset_cal_cache()
     config.session.is_toss = True
     try:
-        with patch("toss_api.get_market_calendar",
+        with patch("brokers.toss_api.get_market_calendar",
                    side_effect=toss_api.TossApiError("internal-error", "mock", status=500)) as mock_cal:
             assert api._toss_krx_regular_bounds() == ((9, 0), (15, 30))
             assert api._toss_krx_regular_bounds() == ((9, 0), (15, 30))
@@ -1703,9 +1703,9 @@ def test_intraday_filter_follows_calendar_bounds():
     config.session.is_toss = True
     try:
         # 단축장(09:00~14:00) → 14:00 초과 봉 제외, NXT 프리(08:30)·애프터(15:30/16:00) 제거
-        with patch("toss_api.get_market_calendar",
+        with patch("brokers.toss_api.get_market_calendar",
                    return_value=_cal_payload(end="14:00:00")), \
-             patch("toss_api.get_candles", return_value={"candles": candles, "nextBefore": None}):
+             patch("brokers.toss_api.get_candles", return_value={"candles": candles, "nextBefore": None}):
             df = api._toss_chart_data("005930", period_type='intraday', is_overseas=False)
         assert [t.strftime('%H:%M') for t in df['date']] == ['09:00', '10:00', '13:00', '14:00']
     finally:
@@ -1721,7 +1721,7 @@ def test_market_indicator_endpoints_paths_and_groups():
         seen.append((path, group, params, account))
         return [] if path.endswith("/prices") else {}
 
-    with patch("toss_api._request", side_effect=fake_request):
+    with patch("brokers.toss_api._request", side_effect=fake_request):
         toss_api.get_market_indicator_prices(["KOSPI", "KOSDAQ"])
         toss_api.get_market_indicator_candles("KOSPI", interval="1d", count=200)
         toss_api.get_market_indicator_investor_trading("KOSPI", interval="1d", count=5)
@@ -1812,7 +1812,7 @@ def test_non_toss_buy_gate_unchanged():
 def test_toss_mode_syncs_auto_account():
     """토스 모드: 시스템 트레이딩 계좌(auto_cano)가 거래 계좌(cano)와 동기화된다."""
     import os
-    from session import SessionManager
+    from core.session import SessionManager
     sm = SessionManager()
     with patch.dict(os.environ, {"TOSS_ACC_NUM": "18901501685",
                                  "TOSS_APP_KEY": "k", "TOSS_APP_SECRET": "s"}):
@@ -1860,8 +1860,8 @@ def test_today_history_domestic_adapter():
     config.session.is_toss = True
     try:
         api._MICRO_CACHE.clear()
-        with patch("toss_api.get_orders", return_value=_closed_orders_today()), \
-             patch("toss_api.get_stocks", return_value=[
+        with patch("brokers.toss_api.get_orders", return_value=_closed_orders_today()), \
+             patch("brokers.toss_api.get_stocks", return_value=[
                  {"symbol": "005930", "name": "삼성전자"},
                  {"symbol": "000660", "name": "SK하이닉스"}]):
             res = api.get_today_history()
@@ -1887,8 +1887,8 @@ def test_today_history_overseas_adapter():
     config.session.is_toss = True
     try:
         api._MICRO_CACHE.clear()
-        with patch("toss_api.get_orders", return_value=_closed_orders_today()), \
-             patch("toss_api.get_stocks", return_value=[{"symbol": "AAPL", "name": "Apple"}]):
+        with patch("brokers.toss_api.get_orders", return_value=_closed_orders_today()), \
+             patch("brokers.toss_api.get_stocks", return_value=[{"symbol": "AAPL", "name": "Apple"}]):
             res = api.get_overseas_today_history()
     finally:
         config.session.is_toss = False
@@ -1913,8 +1913,8 @@ def test_today_history_filters_other_days():
     ], "hasNext": False}
     try:
         api._MICRO_CACHE.clear()
-        with patch("toss_api.get_orders", return_value=env), \
-             patch("toss_api.get_stocks", return_value=[]):
+        with patch("brokers.toss_api.get_orders", return_value=env), \
+             patch("brokers.toss_api.get_stocks", return_value=[]):
             res = api.get_today_history()
     finally:
         config.session.is_toss = False
@@ -2085,7 +2085,7 @@ def test_kis_mode_index_fallback_chain_kis_then_tvdatafeed_then_yfinance():
 
 def test_format_order_no_toss_last_10():
     """토스 모드: 긴 주문번호는 뒤 10자리만. 비토스(KIS): 그대로."""
-    import utils
+    from core import utils
     long_odno = "mJerK-dVKoU-sVb1D84BERbn9k-APR21uQi9Jj3JFBl70_mMjmGvqAANmrmhQdxQ9XgMjhiEsudGuoGZZUGf4g"
 
     config.session.is_toss = True

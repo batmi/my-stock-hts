@@ -113,7 +113,7 @@ def main():
     args = ap.parse_args()
 
     config.session.initialize(mode="3")
-    import toss_api  # session 초기화 후 임포트 (토큰 경로 의존)
+    from brokers import toss_api  # session 초기화 후 임포트 (토큰 경로 의존)
 
     token = toss_api.get_access_token()
     if not token:

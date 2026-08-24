@@ -7,10 +7,10 @@ import yfinance as yf
 import pandas as pd
 import config
 config.silence_yfinance_numpy_warning()  # yfinance import 뒤에 걸어야 억제 유효
-import context # [추가] 상태 관리 모듈
-import indicators
+from core import context # [추가] 상태 관리 모듈
+from core import indicators
 import api
-import utils
+from core import utils
 from modules import analysis # [추가] 분석 모듈 임포트
 from datetime import datetime, timedelta, timezone
 import math

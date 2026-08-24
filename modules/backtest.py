@@ -10,10 +10,10 @@ from rich import box
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
 from datetime import datetime, timedelta
 import config
-import context
+from core import context
 import api
-import utils
-import indicators
+from core import utils
+from core import indicators
 from modules import analysis
 from modules import trading_cost
 from modules import chart

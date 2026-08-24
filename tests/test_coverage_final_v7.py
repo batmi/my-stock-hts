@@ -6,8 +6,8 @@ import numpy as np
 from modules import auto_trade, analysis, backtest, account, market, db_manager
 import api
 import config
-import utils
-import context
+from core import utils
+from core import context
 from datetime import datetime
 
 @pytest.fixture(autouse=True)

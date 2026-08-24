@@ -7,7 +7,7 @@ from rich.theme import Theme
 import logging
 from datetime import datetime, timedelta
 from logging.handlers import TimedRotatingFileHandler
-from session import SessionManager
+from core.session import SessionManager
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 import threading
@@ -3898,7 +3898,7 @@ def save_dynamic_config(data):
     '어느 파일에 무엇을 쓸지'가 두 곳에 있으면 한쪽만 고쳐져 모드 분리가 조용히 샌다.
     반환값은 실제로 쓴 경로이며, 실패하면 None 이다.
     """
-    import jsonio
+    from core import jsonio
     path = profile_config_path()
     payload = data if not active_profile else diff_against_base(data)
     return path if jsonio.save_json(path, payload) else None

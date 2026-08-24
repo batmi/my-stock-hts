@@ -32,9 +32,9 @@ from rich.prompt import Prompt
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
 
 import config
-import context
-import indicators
-import utils
+from core import context
+from core import indicators
+from core import utils
 from modules import backtest
 from modules import trading_cost
 

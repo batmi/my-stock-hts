@@ -177,7 +177,7 @@ def test_apply_does_not_rewrite_existing_records(monkeypatch):
 
 def test_apply_pins_the_account_context(monkeypatch):
     """계좌 귀속이 어긋나면 복원 자체가 무의미하다 — 계좌를 명시 고정해야 한다."""
-    import context
+    from core import context
     seen = []
     monkeypatch.setattr(hb, '_exists', lambda odno: False)
     monkeypatch.setattr(hb.db_manager.db, 'insert_trade',

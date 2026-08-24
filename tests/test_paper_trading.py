@@ -75,7 +75,7 @@ def test_limit_fill_matches_backtest_execution_price(paper):
      편도 0.2%였다. 관찰모드가 전략이 아니라 비용 모델 때문에 뒤처지면 mode 4로
      실매매와 백테스트를 견주는 일 자체가 불가능해진다.
     """
-    import utils
+    from core import utils
     slip = config.SLIPPAGE_RATE
     assert slip > 0, "슬리피지가 0이면 이 테스트가 아무것도 지키지 못한다"
 
@@ -88,7 +88,7 @@ def test_limit_fill_matches_backtest_execution_price(paper):
 
 def test_market_fill_applies_slippage_and_tick(paper):
     """시장가만 슬리피지를 얹고, 그 결과는 실재하는 호가여야 한다."""
-    import utils
+    from core import utils
     px = paper_broker.fill_price(70000, 'buy', market=True)
     assert px == pytest.approx(
         utils.adjust_to_tick(trading_cost.apply_slippage(70000, 'buy'), is_overseas=False))
@@ -329,7 +329,7 @@ def test_paper_footer_shows_virt_account(paper, monkeypatch):
     VIRT_ACC_NUM 을 따로 읽으며, 스레드(자동/수동)에 따라 달라지지 않아야 한다 —
     꼬리말은 주문 출처가 아니라 계좌를 가리키는 자리다.
     """
-    import context
+    from core import context
     from modules import telegram_notify
 
     monkeypatch.setattr(config, 'TELEGRAM_BOT_TOKEN', "test_token", raising=False)

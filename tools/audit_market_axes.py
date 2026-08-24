@@ -34,7 +34,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config  # noqa: E402
-import indicators  # noqa: E402
+from core import indicators  # noqa: E402
 from modules import analysis  # noqa: E402
 
 FWD_DAYS = 20          # 향후 수익률 관측 구간(거래일) — 국면 검증 때와 동일 기준

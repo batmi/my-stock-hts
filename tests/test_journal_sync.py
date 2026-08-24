@@ -33,7 +33,7 @@ def db(tmp_path, monkeypatch):
     manager = DBManager()
     # journal_sync 는 전역 db 핸들을 쓰므로 같은 인스턴스를 바라보게 한다.
     from modules import db_manager as db_manager_module
-    import context
+    from core import context
     monkeypatch.setattr(db_manager_module, 'db', manager)
     monkeypatch.setattr(context.trade_context, 'use_auto_account', False, raising=False)
 

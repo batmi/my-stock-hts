@@ -28,7 +28,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config  # noqa: E402
-import indicators  # noqa: E402
+from core import indicators  # noqa: E402
 from modules import analysis  # noqa: E402
 from tools.audit_live_backtest_parity import judge_live, load_daily  # noqa: E402
 

@@ -370,7 +370,7 @@ def test_fallback_cleared_on_recovery():
 
 def test_warning_silent_when_no_fallback():
     import api
-    import utils
+    from core import utils
     api.clear_krx_fallback()
     with patch.object(config.console, 'print') as p:
         utils.print_krx_fallback_warning()
@@ -379,7 +379,7 @@ def test_warning_silent_when_no_fallback():
 
 def test_warning_lists_affected_symbols_with_names():
     import api
-    import utils
+    from core import utils
     api.note_krx_fallback('005930', 'pykrx·FDR 모두 실패')
     with patch.object(config.console, 'print') as p:
         utils.print_krx_fallback_warning({'005930': '삼성전자'})
@@ -391,7 +391,7 @@ def test_warning_lists_affected_symbols_with_names():
 
 def test_warning_truncates_long_symbol_list():
     import api
-    import utils
+    from core import utils
     for i in range(12):
         api.note_krx_fallback(f'00000{i}', '실패')
     with patch.object(config.console, 'print') as p:
@@ -403,7 +403,7 @@ def test_warning_truncates_long_symbol_list():
 def test_warning_survives_api_error():
     """경고 렌더링 실패가 결과 출력 자체를 막지 않는다."""
     import api
-    import utils
+    from core import utils
     with patch.object(api, 'get_krx_fallback', side_effect=RuntimeError('boom')):
         utils.print_krx_fallback_warning()   # 예외가 새어나오지 않아야 한다
 
@@ -571,7 +571,7 @@ def test_yfinance_importers_reregister_the_filter():
     import re
 
     root = pathlib.Path(__file__).resolve().parent.parent
-    targets = ['utils.py', 'modules/market.py',
+    targets = ['core/utils.py', 'modules/market.py',
                'modules/analysis.py', 'modules/manage/events.py']
     for rel in targets:
         src = (root / rel).read_text(encoding='utf-8')

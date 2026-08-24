@@ -117,7 +117,7 @@ class TestTossTvFallback:
 
     def test_overseas_falls_back_to_tv_on_api_error(self):
         """토스 get_price가 TossApiError면 해외는 TV(src='tv')로 폴백한다"""
-        import toss_api
+        from brokers import toss_api
         fi = {'last_price': 50.5, 'regular_market_previous_close': 50.0,
               'src': 'tv', 'is_extended': True}
         with patch.object(toss_api, 'get_price', side_effect=toss_api.TossApiError("ERR", "boom")), \
@@ -131,7 +131,7 @@ class TestTossTvFallback:
         """토스가 lastPrice=0(무효)을 주면 해외는 TV로 폴백한다"""
         fi = {'last_price': 12.3, 'regular_market_previous_close': 12.0,
               'src': 'tv', 'is_extended': False}
-        with patch('toss_api.get_price', return_value={'lastPrice': '0'}), \
+        with patch('brokers.toss_api.get_price', return_value={'lastPrice': '0'}), \
              patch.object(api, 'get_yf_fast_info', return_value=fi):
             res = api.get_current_price_data('TSTTOSSZERO', True)
         assert res['rt_cd'] == '0'
@@ -139,7 +139,7 @@ class TestTossTvFallback:
 
     def test_overseas_no_tv_available_returns_fail(self):
         """토스도 TV도 없으면 실패 코드를 반환한다"""
-        with patch('toss_api.get_price', return_value=None), \
+        with patch('brokers.toss_api.get_price', return_value=None), \
              patch.object(api, 'get_yf_fast_info', return_value=None):
             res = api.get_current_price_data('TSTTOSSNONE', True)
         assert res['rt_cd'] == '9999'
@@ -147,7 +147,7 @@ class TestTossTvFallback:
     def test_domestic_does_not_fall_back_to_tv(self):
         """국내는 KRX/NXT 전용 → TV 폴백하지 않고 실패 코드를 반환한다"""
         m_fi = patch.object(api, 'get_yf_fast_info')
-        with patch('toss_api.get_price', return_value=None), m_fi as mock_fi:
+        with patch('brokers.toss_api.get_price', return_value=None), m_fi as mock_fi:
             res = api.get_current_price_data('005930', False)
         assert res['rt_cd'] == '9999'
         mock_fi.assert_not_called()

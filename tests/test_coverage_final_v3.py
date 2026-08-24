@@ -4,7 +4,7 @@ import api
 import config
 from modules import analysis, auto_trade, market, account, db_manager
 import pandas as pd
-import utils
+from core import utils
 import os
 
 # --- API ---

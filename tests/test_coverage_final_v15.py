@@ -6,7 +6,7 @@ from datetime import datetime
 
 import api
 import config
-import utils
+from core import utils
 from modules import analysis, auto_trade, market, theme_analysis, db_manager, manage, account
 from modules.telegram_bot import TelegramCommander
 
@@ -165,7 +165,7 @@ def test_analyze_stock_ui_direct_input(mock_gemini, mock_chart, mock_ask, mock_p
     with patch('api.get_stock_name_by_code', return_value="삼성전자"), \
          patch('modules.analysis.classify_stock_state', return_value=("매수", "[red]", "이유")), \
          patch('modules.analysis.calculate_score', return_value=(9.0, [])), \
-         patch('indicators.calculate_indicators', return_value={'ema_20': 100, 'ema_60': 100, 'ema_120': 100, 'psar': 90, 'rsi': 50, 'adx': 20, 'cci': 0}), \
+         patch('core.indicators.calculate_indicators', return_value={'ema_20': 100, 'ema_60': 100, 'ema_120': 100, 'psar': 90, 'rsi': 50, 'adx': 20, 'cci': 0}), \
          patch('config.console.print'):
              
         theme_analysis._analyze_stock_ui()

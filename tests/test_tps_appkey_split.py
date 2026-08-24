@@ -14,7 +14,7 @@ import pytest
 
 import api
 import config
-import context
+from core import context
 from api import ThrottledSession
 
 

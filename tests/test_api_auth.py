@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 import api
 import config
-import context
+from core import context
 
 @patch('api._token_session.post')
 def test_get_access_token_success(mock_post):

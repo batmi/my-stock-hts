@@ -4,9 +4,9 @@ from datetime import datetime, timedelta
 import pandas as pd
 
 import config
-import context
-import session
-import utils
+from core import context
+from core import session
+from core import utils
 import api
 from modules import account, telegram_bot, theme_analysis, db_manager
 
@@ -96,7 +96,7 @@ def test_get_common_headers(mock_token, restore_account_context):
     assert h2['appKey'] == "real_k"
 
 @patch.dict('sys.modules', {'tradingview_screener': None})
-@patch('utils.yf.Ticker')
+@patch('core.utils.yf.Ticker')
 def test_get_exchange_rate_fallback(mock_ticker):
     """TradingView 없을 때 yfinance fallback 및 에러 무시 테스트"""
     # yfinance 정상
@@ -112,7 +112,7 @@ def test_get_exchange_rate_fallback(mock_ticker):
         rate2 = utils.get_exchange_rate()
         assert rate2 == config.DEFAULT_EXCHANGE_RATE
 
-@patch('utils.sqlite3.connect', side_effect=Exception("DB Error"))
+@patch('core.utils.sqlite3.connect', side_effect=Exception("DB Error"))
 def test_utils_memo_db_errors(mock_connect):
     """메모 DB 함수 예외 처리 커버리지"""
     assert utils.get_stock_memos("005930") == []

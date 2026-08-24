@@ -23,7 +23,7 @@ import logging
 
 import api
 import config
-import utils
+from core import utils
 from modules import db_manager, trading_cost
 
 logger = logging.getLogger(__name__)

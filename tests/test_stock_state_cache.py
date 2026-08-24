@@ -15,7 +15,7 @@ import pandas as pd
 import pytest
 
 import api
-import context
+from core import context
 from modules.auto_trade import AutoTrader
 
 

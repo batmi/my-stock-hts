@@ -16,7 +16,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 
 import config
 import api
-import utils
+from core import utils
 
 def _show_fake_progress(desc, count=1):
     """테이블 출력 전 짧은 시각적 분리를 위한 프로그래스바 애니메이션."""

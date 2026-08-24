@@ -112,7 +112,7 @@ def test_view_watchlist():
     
     with patch('modules.auto_trade.load_restricted_stocks', return_value={"005930": {}}), \
          patch('modules.db_manager.db.get_all_stock_strategies', return_value=[{"code": "AAPL"}]), \
-         patch('utils.get_memo_codes', return_value=["005930"]):
+         patch('core.utils.get_memo_codes', return_value=["005930"]):
              
         with patch('config.console.print') as mock_print:
             manage.view_watchlist()
@@ -149,7 +149,7 @@ def test_add_new_stock_memo(mock_ask, mock_input):
     mock_input.side_effect = ["Buy target 60k", "Good company", ":q"]
     
     with patch('api.get_stock_name_by_code', return_value="삼성전자"):
-        with patch('utils.add_stock_memo', return_value=True) as mock_add_memo:
+        with patch('core.utils.add_stock_memo', return_value=True) as mock_add_memo:
             manage.add_new_stock_memo()
             
     mock_add_memo.assert_called_once_with("005930", "삼성전자", "Buy target 60k\nGood company")
@@ -199,25 +199,25 @@ def test_telegram_cmd_memo():
     cmd = TelegramCommander()
     
     # 1. 전체 조회 (데이터 없음)
-    with patch('utils.get_all_stock_memos', return_value=[]):
+    with patch('core.utils.get_all_stock_memos', return_value=[]):
         res = cmd._cmd_memo([])
         assert "없습니다" in res
         
     # 2. 개별 종목 메모 추가
-    with patch('utils.add_stock_memo', return_value=True):
+    with patch('core.utils.add_stock_memo', return_value=True):
         with patch('api.get_stock_name_by_code', return_value="삼성전자"):
             res = cmd._cmd_memo(["a", "005930", "테스트", "메모입니다"])
             assert "추가되었습니다" in res
             
     # 3. ID로 삭제
-    with patch('utils.delete_stock_memo_by_id', return_value=True):
+    with patch('core.utils.delete_stock_memo_by_id', return_value=True):
         res = cmd._cmd_memo(["d", "5"])
         assert "삭제되었습니다" in res
         
     # 4. 종목 코드로 전체 삭제
     # 한글 종목명 해석을 위해 세션 데이터 주입
     config.session.stock_data = {"stocks_kr": [{"code": "005930", "name": "삼성전자"}]}
-    with patch('utils.delete_all_stock_memos'):
+    with patch('core.utils.delete_all_stock_memos'):
         with patch('api.get_stock_name_by_code', return_value="삼성전자"):
             res = cmd._cmd_memo(["d", "삼성전자"])
             assert "모든 메모가 삭제" in res
@@ -245,7 +245,7 @@ def test_telegram_get_market_status_branches(mock_dom_idx, mock_yf_info):
     mock_yf_info.side_effect = mock_yf_side_effect
     
     # 시장 국면 지표(ADX) 모킹
-    with patch('indicators.calculate_indicators', return_value={'adx': 40.0}):
+    with patch('core.indicators.calculate_indicators', return_value={'adx': 40.0}):
         res = cmd._get_market_status(["국내 지수 (Domestic Indices)", "금리 및 환율 (Rates & FX)", "원자재 (Commodities)"])
         
     assert "코스피" in res

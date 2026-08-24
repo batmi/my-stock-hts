@@ -20,7 +20,7 @@ import time
 import pytest
 
 import config
-import context
+from core import context
 
 MAIN = ("MAIN0001", "01")
 AUTO = ("AUTO9999", "01")

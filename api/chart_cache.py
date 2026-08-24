@@ -575,7 +575,7 @@ def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=
         _ws_feed = None
         if prefer_ws and getattr(config, 'USE_WEBSOCKET', True) and not config.session.is_toss:
             try:
-                import realtime
+                from brokers import realtime
                 _ws_feed = realtime.get_feed()
             except Exception:
                 _ws_feed = None

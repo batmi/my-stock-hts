@@ -24,7 +24,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 
 import api
 import config
-import jsonio
+from core import jsonio
 
 logger = logging.getLogger(__name__)
 

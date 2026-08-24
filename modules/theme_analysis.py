@@ -16,9 +16,9 @@ from rich.table import Table
 from rich import box
 from rich.prompt import Prompt
 from rich.padding import Padding
-import utils
+from core import utils
 import json
-import context # [추가]
+from core import context # [추가]
 from modules import prompts # [추가] 외부 프롬프트 템플릿 로드
 from modules.executors import ai_executor, io_executor
 from modules import db_manager
@@ -1118,7 +1118,7 @@ def _analyze_with_custom_prompt_ui():
 def _analyze_stock_ui():
     """개별 종목 AI 심층 진단 UI"""
     import api
-    import indicators
+    from core import indicators
     from modules import analysis
     
     menu_items = [

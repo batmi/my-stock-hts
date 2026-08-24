@@ -332,7 +332,7 @@ def test_breadcrumb_does_not_accumulate_when_going_back(mock_ask, mock_menu, moc
     "[2] 계좌: 자동투자 > [1] 계좌: 한투증권"처럼 두 번 찍혔다. 단계 이동을
     넣으면서 생긴 문제다.
     """
-    import context as ctx
+    from core import context as ctx
 
     saved = list(ctx.USER_ACTION_BREADCRUMB)
     ctx.USER_ACTION_BREADCRUMB = ["[8] 종목 주문 관리", "[4] 예약 주문 등록"]
@@ -357,7 +357,7 @@ def test_breadcrumb_does_not_accumulate_when_going_back(mock_ask, mock_menu, moc
 @patch('modules.trading.Prompt.ask')
 def test_breadcrumb_records_the_order_side(mock_ask, mock_menu, mock_insert, reserve_env):
     """경로에 매수/매도가 남는다 (재작성 과정에서 빠졌던 항목)."""
-    import context as ctx
+    from core import context as ctx
 
     saved = list(ctx.USER_ACTION_BREADCRUMB)
     ctx.USER_ACTION_BREADCRUMB = ["[8] 종목 주문 관리", "[4] 예약 주문 등록"]
@@ -437,12 +437,12 @@ def test_sell_signal_registers_holding_exit(mock_bal, mock_ask, mock_menu, mock_
 
 def test_disabled_menu_keys_are_not_selectable():
     """회색 항목은 입력 자체가 거부된다 (보이기만 하고 고를 수 없다)."""
-    import utils as u
+    from core import utils as u
 
     items = [("1", "가능", ""), ("2", "잠김", ""), ("3", "가능", "")]
-    with patch('utils.clear_screen'), patch('utils.print_breadcrumb'), \
+    with patch('core.utils.clear_screen'), patch('core.utils.print_breadcrumb'), \
          patch('config.console.print'), \
-         patch('utils.Prompt.ask', return_value="1") as mock_ask:
+         patch('core.utils.Prompt.ask', return_value="1") as mock_ask:
         u.show_menu("테스트", items, disabled={"2"})
 
     allowed = mock_ask.call_args.kwargs['choices']

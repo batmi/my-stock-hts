@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import indicators
+from core import indicators
 from modules.auto_trade.trader import candidate_priority_key
 
 

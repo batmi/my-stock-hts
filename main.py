@@ -25,15 +25,15 @@ from rich.markup import escape
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
 import argparse
 import config
-import context # [추가]
+from core import context # [추가]
 
 # [추가] config(rich.console) 로드 후 추가 진행 상태 출력
 config.console.print("  - 네트워크 및 코어 모듈(API, DB) 로딩 중...")
 
 import api
-import toss_api  # [추가] 토스증권 클라이언트 (mode 3)
-import utils
-import indicators
+from brokers import toss_api  # [추가] 토스증권 클라이언트 (mode 3)
+from core import utils
+from core import indicators
 from modules import market, analysis, chart, account, manage, trading, backtest, settings, db_manager
 from modules import auto_trade, telegram_bot, theme_analysis, db_queue # [추가]
 from modules.reserved_order_monitor import ReservedOrderMonitor # [추가] 예약주문 모니터
@@ -1149,7 +1149,7 @@ def main():
         #  시스템 트레이딩 대상(국내주식)을 우선순위로, 국내 ETF를 그 외로 둔다.
         #  (보유종목은 자동매매 루프가 매 사이클 최우선으로 갱신한다.)
         try:
-            import realtime
+            from brokers import realtime
             sd = config.session.stock_data or {}
             pri = [s['code'] for s in sd.get('stocks_kr', [])]
             etf = [s['code'] for s in sd.get('etfs_kr', [])]

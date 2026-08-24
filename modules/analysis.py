@@ -22,14 +22,14 @@ def _class_tq_cell(left):
     """
     return " " * max(0, _CLASS_W - cell_len(left))
 import config
-import context
+from core import context
 import api
 import json
 import logging
 import contextlib
-import indicators
-import utils
-import caching
+from core import indicators
+from core import utils
+from core import caching
 import time
 from datetime import datetime, timedelta
 import urllib.request

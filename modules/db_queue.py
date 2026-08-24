@@ -4,7 +4,7 @@ import threading
 import logging
 import time
 
-import context
+from core import context
 
 logger = logging.getLogger(__name__)
 

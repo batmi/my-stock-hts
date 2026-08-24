@@ -2,9 +2,9 @@ import pytest
 from unittest.mock import patch, MagicMock
 import pandas as pd
 import config
-import utils
+from core import utils
 import api
-import context
+from core import context
 from modules import market, trading, account, manage, db_manager
 from modules.telegram_bot import TelegramCommander
 
@@ -18,7 +18,7 @@ def setup_and_teardown():
 # ==========================================
 # 1. utils.py UI 및 메모 유틸리티 테스트 (58% -> Target 80%)
 # ==========================================
-@patch('utils.os.system')
+@patch('core.utils.os.system')
 def test_utils_clear_screen(mock_sys):
     with patch.object(config, 'CLEAR_SCREEN_ON_MENU', True):
         context.USER_ACTION_BREADCRUMB = ["Test"]
@@ -46,7 +46,7 @@ def test_utils_show_menu(mock_ask):
 
 def test_utils_memo_db():
     """메모 관리 DB 로직 통합 테스트"""
-    with patch('utils.sqlite3.connect') as mock_connect:
+    with patch('core.utils.sqlite3.connect') as mock_connect:
         mock_cursor = MagicMock()
         # utils의 메모 DB 함수는 `with closing(sqlite3.connect()) as conn, conn:` 패턴이라
         # conn = sqlite3.connect() 반환값(mock_connect.return_value)이다. (closing.__enter__가 원본 반환)

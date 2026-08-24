@@ -96,7 +96,7 @@ def test_cmd_market_invalid_key(commander):
 
 @patch('api.get_current_price_data', return_value={'rt_cd': '0', 'output': {'stck_prpr': '60000', 'prdy_ctrt': '1.5'}})
 @patch('api.get_chart_data')
-@patch('indicators.calculate_indicators')
+@patch('core.indicators.calculate_indicators')
 @patch('modules.telegram_bot.analysis.check_smart_money_turnaround', return_value=(False, ""))
 def test_telegram_cmd_signal_tv_rating(mock_sm, mock_calc, mock_chart, mock_cp, commander):
     """/signal 명령어 실행 시 TradingView 의견 항목이 예외 없이 정상적으로 렌더링되는지 테스트"""

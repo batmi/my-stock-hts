@@ -44,7 +44,7 @@ def _dump(label, obj):
 
 
 def dump_toss(code):
-    import toss_api
+    from brokers import toss_api
     console.rule(f"[bold]TOSS {code}")
 
     # 1) 원본 API 응답 (전일종가/등락률 필드 존재 여부 확인이 핵심)
@@ -105,7 +105,7 @@ def dump_toss(code):
 
 def _kis_price_raw(code, market_div):
     """KIS inquire-price 원본 주요필드 (market_div='J'=KRX, 'NX'=NXT)."""
-    import constants
+    from core import constants
     raw = api.call_api(constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["PRICE"],
                        "domestic", "quotations", "price",
                        params={"fid_cond_mrkt_div_code": market_div, "fid_input_iscd": code},
@@ -121,7 +121,7 @@ def _kis_price_raw(code, market_div):
 
 def _kis_vol_raw(code, market_div):
     """KIS inquire-ccnl(체결강도) 원본 tday_rltv (market_div='J'/'NX')."""
-    import constants
+    from core import constants
     raw = api.call_api(constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["VOL_STRENGTH"],
                        "domestic", "quotations", "vol_strength",
                        params={"FID_COND_MRKT_DIV_CODE": market_div, "FID_INPUT_ISCD": code},

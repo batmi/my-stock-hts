@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import utils
+from core import utils
 from modules.auto_trade import AutoTrader
 
 CODE = "005930"

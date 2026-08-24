@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import threading
 
 import config
-import context
+from core import context
 import api
 from modules import market, auto_trade, analysis, account, settings, theme_analysis, db_manager
 

@@ -6,7 +6,7 @@ import re
 import config
 import api
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
-import indicators
+from core import indicators
 from datetime import datetime
 from contextlib import nullcontext
 

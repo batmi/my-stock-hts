@@ -153,7 +153,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from unittest.mock import patch  # noqa: E402
 
-import indicators  # noqa: E402
+from core import indicators  # noqa: E402
 from modules.auto_trade import AutoTrader  # noqa: E402
 
 

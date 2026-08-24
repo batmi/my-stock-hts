@@ -3,7 +3,7 @@ import json
 import os
 from unittest.mock import patch, mock_open
 import config
-from session import SessionManager
+from core.session import SessionManager
 from modules import db_manager
 
 @pytest.fixture(autouse=True)

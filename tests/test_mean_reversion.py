@@ -62,7 +62,7 @@ def test_mr_state_fail_disparity():
     )
     assert state != "역매수"
 
-@patch('indicators.calculate_indicators')
+@patch('core.indicators.calculate_indicators')
 @patch('modules.analysis.classify_stock_state')
 @patch('modules.analysis.calculate_score')
 def test_mr_grace_period_hold(mock_score, mock_classify, mock_ind):
@@ -84,7 +84,7 @@ def test_mr_grace_period_hold(mock_score, mock_classify, mock_ind):
     )
     assert res['action'] == 'hold'
 
-@patch('indicators.calculate_indicators')
+@patch('core.indicators.calculate_indicators')
 @patch('modules.analysis.classify_stock_state')
 @patch('modules.analysis.calculate_score')
 def test_mr_grace_period_time_over(mock_score, mock_classify, mock_ind):

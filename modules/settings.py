@@ -1,5 +1,5 @@
 import json
-import jsonio
+from core import jsonio
 import logging
 import os
 from rich.prompt import Prompt
@@ -14,8 +14,8 @@ def _ts_act_label():
     from modules.auto_trade.engine import ts_activation_label
     return ts_activation_label()
 
-import utils # [추가]
-import context # [추가]
+from core import utils # [추가]
+from core import context # [추가]
 
 logger = logging.getLogger(__name__)
 console = config.console

@@ -41,8 +41,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
 import api
-import constants
-import utils
+from core import constants
+from core import utils
 
 console = Console()
 

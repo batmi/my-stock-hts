@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import api  # noqa: E402
 import config  # noqa: E402
-import utils  # noqa: E402
+from core import utils  # noqa: E402
 from modules import holdings_backfill as hb  # noqa: E402
 
 console = config.console

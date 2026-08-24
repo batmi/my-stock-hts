@@ -358,15 +358,19 @@ my-stock-hts/
 │   ├── toss.py           #   ├ Toss Securities layer + domestic daily-bar fallback
 │   ├── account.py        #   ├ Balances, fills, open orders
 │   └── orders.py         #   └ Order placement/amend/cancel, deposits
-├── toss_api.py           # Toss Securities Open API client (quotes/assets/orders in Toss mode)
-├── realtime.py           # KIS WebSocket real-time quote & execution-notice feed (REST fallback when uncovered)
-├── constants.py          # Constant definitions (TR ID, field mapping, etc.)
-├── indicators.py         # Technical indicators calculation (RSI, ADX, MACD, etc.)
-├── utils.py              # Common utilities (dates, formatting, etc.)
-├── jsonio.py             # Shared JSON file load/save helper (lowest-level utility)
-├── caching.py            # Shared in-memory TTL cache (size cap & auto-eviction)
-├── session.py            # Session & Token management
-├── context.py            # Global thread states & Lock management
+├── brokers/              # Raw broker clients - they speak the broker's own wire format
+│   ├── __init__.py       #   ├ Layer contract (why these are not flattened into the api namespace)
+│   ├── toss_api.py       #   ├ Toss Securities Open API client (quotes/assets/orders in Toss mode)
+│   └── realtime.py       #   └ KIS WebSocket real-time quote & execution-notice feed (REST fallback)
+├── core/                 # Lowest-level shared layer - only code that knows nothing about the domain
+│   ├── __init__.py       #   ├ Layer contract (never imports an upper layer at import time)
+│   ├── constants.py      #   ├ Constant definitions (TR ID, field mapping, etc.)
+│   ├── indicators.py     #   ├ Technical indicators calculation (RSI, ADX, MACD, etc.)
+│   ├── utils.py          #   ├ Common utilities (dates, formatting, etc.)
+│   ├── jsonio.py         #   ├ Shared JSON file load/save helper
+│   ├── caching.py        #   ├ Shared in-memory TTL cache (size cap & auto-eviction)
+│   ├── session.py        #   ├ Session & token management (config resolved lazily via `_config()`)
+│   └── context.py        #   └ Global thread states & Lock management
 ├── requirements.txt      # Single source of runtime dependencies (run.sh installs from this file)
 ├── requirements-dev.txt  # Development/test-only dependencies (pytest stack)
 ├── pytest.ini            # Pytest test configuration file

@@ -17,7 +17,7 @@ import pandas as pd
 import pytest
 
 import config
-import indicators
+from core import indicators
 from modules import backtest, portfolio_backtest as pbt
 from modules.auto_trade import engine
 

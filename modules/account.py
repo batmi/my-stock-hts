@@ -10,10 +10,10 @@ from datetime import datetime, timedelta
 import os
 import time
 import config
-import context # [추가]
-import utils
+from core import context # [추가]
+from core import utils
 import api
-import jsonio
+from core import jsonio
 from modules import db_manager
 import json
 import pandas as pd

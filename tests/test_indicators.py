@@ -1,4 +1,4 @@
-import indicators
+from core import indicators
 import pandas as pd
 import numpy as np
 

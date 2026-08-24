@@ -370,15 +370,19 @@ my-stock-hts/
 │   ├── toss.py           #   ├ 토스증권 계층 + 국내 일봉 폴백
 │   ├── account.py        #   ├ 잔고·체결내역·미체결
 │   └── orders.py         #   └ 주문 접수·정정·취소·예수금
-├── toss_api.py           # 토스증권 Open API 클라이언트 (토스 모드 시세/자산/주문)
-├── realtime.py           # KIS WebSocket 실시간 시세·체결통보 피드 (미커버 시 REST 폴백)
-├── constants.py          # 상수 정의 (TR ID, 필드 매핑 등)
-├── indicators.py         # 보조지표 계산 (RSI, ADX, MACD 등)
-├── utils.py              # 공통 유틸리티 (날짜, 포맷팅 등)
-├── jsonio.py             # JSON 파일 로드/저장 공용 헬퍼 (최하위 유틸)
-├── caching.py            # 공용 인메모리 TTL 캐시 (항목 상한·자동 eviction)
-├── session.py            # 세션 및 토큰 관리
-├── context.py            # 스레드 전역 상태 및 락(Lock) 관리
+├── brokers/              # 증권사 직결 원시 클라이언트 — 저쪽이 정한 규격을 그대로 말한다
+│   ├── __init__.py       #   ├ 계층 규약(api 의 이름 평탄화 대상이 아닌 이유)
+│   ├── toss_api.py       #   ├ 토스증권 Open API 클라이언트 (토스 모드 시세/자산/주문)
+│   └── realtime.py       #   └ KIS WebSocket 실시간 시세·체결통보 (미커버 시 REST 폴백)
+├── core/                 # 최하위 공통 계층 — 도메인을 모르는 코드만 둔다
+│   ├── __init__.py       #   ├ 계층 규약(상위 계층을 import 시점에 끌어오지 않는다)
+│   ├── constants.py      #   ├ 상수 정의 (TR ID, 필드 매핑 등)
+│   ├── indicators.py     #   ├ 보조지표 계산 (RSI, ADX, MACD 등)
+│   ├── utils.py          #   ├ 공통 유틸리티 (날짜, 포맷팅 등)
+│   ├── jsonio.py         #   ├ JSON 파일 로드/저장 공용 헬퍼
+│   ├── caching.py        #   ├ 공용 인메모리 TTL 캐시 (항목 상한·자동 eviction)
+│   ├── session.py        #   ├ 세션 및 토큰 관리 (config 는 `_config()` 로 지연 참조)
+│   └── context.py        #   └ 스레드 전역 상태 및 락(Lock) 관리
 ├── requirements.txt      # 런타임 의존성 단일 소스 (run.sh 가 이 파일을 읽어 설치)
 ├── requirements-dev.txt  # 개발·테스트 전용 의존성 (pytest 계열)
 ├── pytest.ini            # Pytest 테스트 설정 파일

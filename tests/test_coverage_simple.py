@@ -5,7 +5,7 @@ import os
 import json
 from modules import manage, analysis, auto_trade, market, settings
 import api
-import utils
+from core import utils
 import config
 
 # --- modules/manage.py ---

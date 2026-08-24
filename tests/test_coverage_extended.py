@@ -115,7 +115,7 @@ def test_run_tradingview_screener_import_error():
         assert any("설치되지 않았습니다" in str(call) for call in mock_print.call_args_list)
         assert res is None
 
-@patch('utils.show_menu', return_value='q')
+@patch('core.utils.show_menu', return_value='q')
 def test_run_theme_analysis_menu_quit(mock_menu):
     """테마 분석 메인 메뉴에서 q 입력 시 정상 종료 검증"""
     res = theme_analysis.run_theme_analysis()

@@ -4,9 +4,9 @@ from unittest.mock import patch, MagicMock, ANY
 import pandas as pd
 import api
 import config
-import context
+from core import context
 from modules import analysis, auto_trade, market, account, db_manager, manage, backtest, settings
-import utils
+from core import utils
 import json
 import os
 import sqlite3

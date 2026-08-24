@@ -7,8 +7,8 @@
 import logging
 from datetime import datetime, timedelta, timezone
 import config
-import constants
-import toss_api
+from core import constants
+from brokers import toss_api
 
 #  로거 이름은 분해 전(api.py)과 같은 'api' 로 둔다 — 로그 필터·레벨 설정이 이름을 보므로
 #  서브모듈마다 다른 이름을 쓰면 기존 설정이 조용히 빗나간다.
@@ -450,7 +450,7 @@ def check_server_health():
     """서버 상태 점검 (삼성전자 현재가 조회)"""
     if config.session.is_toss:
         try:
-            import toss_api
+            from brokers import toss_api
             res = toss_api.get_price("005930")
             if res is not None:
                 return True

@@ -106,7 +106,7 @@ def test_시장시간_설정은_건드리지_않았다():
 
 def test_설정_저장에_포함된다(monkeypatch, dials):
     """메뉴 0에서 바꾼 값이 dynamic_config.json에 남아 재기동 후에도 유지되는가."""
-    import jsonio
+    from core import jsonio
     from modules import settings as settings_mod
 
     captured = {}

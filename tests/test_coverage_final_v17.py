@@ -6,7 +6,7 @@ from datetime import datetime
 
 import api
 import config
-import utils
+from core import utils
 from modules import analysis, auto_trade, market, theme_analysis, db_manager, manage, account, backtest
 from modules.telegram_bot import TelegramCommander
 

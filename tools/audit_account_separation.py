@@ -28,7 +28,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
-import context
+from core import context
 from rich.console import Console
 from rich.table import Table
 
@@ -66,7 +66,7 @@ def audit_config():
 def audit_routing(acc_split):
     section("B. 라우팅 — 워커 스레드에서도 자동 계좌로 가는가")
     import api
-    import utils
+    from core import utils
 
     def resolved():
         return api._prepare_account_params(None, None)[0]
@@ -152,7 +152,7 @@ def audit_tps(key_split):
 def audit_live():
     section("D. 실계좌 — 두 계좌를 읽기 전용으로 대조 (주문 없음)")
     import api
-    import utils
+    from core import utils
 
     s = config.session
     rows = []

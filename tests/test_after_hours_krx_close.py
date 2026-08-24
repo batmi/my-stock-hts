@@ -21,7 +21,7 @@ import pytest
 
 import api
 import config
-import indicators
+from core import indicators
 
 
 def _at(dt, holiday=False):

@@ -39,7 +39,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config  # noqa: E402
-import indicators  # noqa: E402
+from core import indicators  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 from modules.auto_trade import engine  # noqa: E402
 

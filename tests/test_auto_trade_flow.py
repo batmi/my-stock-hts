@@ -36,7 +36,7 @@ def mock_chart_df():
 @patch('api.get_order_book')
 @patch('api.fetch_buyable_quantity')
 @patch('api.place_order')
-@patch('indicators.calculate_indicators')
+@patch('core.indicators.calculate_indicators')
 @patch('modules.auto_trade.db_manager.db.get_all_stock_strategies', return_value=[])
 def test_check_buy_conditions(mock_get_rules, mock_calc, mock_place, mock_qty, mock_ob, mock_vol, mock_get_chart, mock_restricted, mock_prefetch, mock_regime, mock_cp, mock_inv, mock_sleep, mock_score, mock_classify, trader, mock_chart_df):
     """매수 조건 점검 및 주문 실행 테스트"""
@@ -94,7 +94,7 @@ def test_check_buy_conditions(mock_get_rules, mock_calc, mock_place, mock_qty, m
 @patch('modules.auto_trade.load_restricted_stocks', return_value={})
 @patch('api.get_chart_data')
 @patch('api.place_order')
-@patch('indicators.calculate_indicators')
+@patch('core.indicators.calculate_indicators')
 @patch('api.fetch_sellable_quantity', return_value=10)
 @patch('modules.auto_trade.db_manager.db.get_all_stock_strategies', return_value=[])
 def test_check_sell_conditions(mock_get_rules, mock_sell_qty, mock_calc, mock_place, mock_get_chart, mock_restricted, mock_prefetch, mock_regime, trader, mock_chart_df):

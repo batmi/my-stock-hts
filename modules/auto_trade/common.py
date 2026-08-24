@@ -9,7 +9,7 @@ import logging
 import time
 import requests
 import json
-import jsonio
+from core import jsonio
 import os
 import sqlite3 # [추가] DB 직접 접근용
 from datetime import datetime, timedelta
@@ -20,10 +20,10 @@ from rich.table import Table
 from rich import box
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
 import config
-import context # [추가]
+from core import context # [추가]
 import api
-import utils
-import indicators
+from core import utils
+from core import indicators
 from modules import analysis, account # [수정] account 모듈 재사용
 import math # [추가] math 모듈
 from modules import db_manager # [추가] DB 매니저

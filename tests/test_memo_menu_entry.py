@@ -24,11 +24,11 @@ def no_sleep():
 
 def test_empty_memo_list_still_offers_add(no_sleep):
     """메모가 0건이어도 '추가'로 들어갈 수 있어야 한다 (첫 메모를 만들 길)."""
-    with patch('utils.get_all_stock_memos', return_value=[]), \
+    with patch('core.utils.get_all_stock_memos', return_value=[]), \
          patch('modules.manage.watchlist.add_new_stock_memo') as mock_add, \
          patch('rich.prompt.Prompt.ask', side_effect=["1", "b"]), \
          patch('config.console.print'), \
-         patch('utils.clear_screen'):
+         patch('core.utils.clear_screen'):
         watchlist.manage_stock_memos_by_mode('view')
 
     mock_add.assert_called_once()
@@ -36,11 +36,11 @@ def test_empty_memo_list_still_offers_add(no_sleep):
 
 def test_empty_memo_list_can_leave_without_adding(no_sleep):
     """추가하지 않고 그냥 나가는 길도 있어야 한다 (메뉴를 잘못 눌렀을 때)."""
-    with patch('utils.get_all_stock_memos', return_value=[]), \
+    with patch('core.utils.get_all_stock_memos', return_value=[]), \
          patch('modules.manage.watchlist.add_new_stock_memo') as mock_add, \
          patch('rich.prompt.Prompt.ask', side_effect=["b"]), \
          patch('config.console.print'), \
-         patch('utils.clear_screen'):
+         patch('core.utils.clear_screen'):
         res = watchlist.manage_stock_memos_by_mode('view')
 
     assert res == 'back'
@@ -49,10 +49,10 @@ def test_empty_memo_list_can_leave_without_adding(no_sleep):
 
 def test_delete_mode_leaves_immediately_when_empty(no_sleep):
     """삭제 모드는 지울 대상이 없으면 그대로 나간다 (작업 메뉴를 띄우지 않는다)."""
-    with patch('utils.get_all_stock_memos', return_value=[]), \
+    with patch('core.utils.get_all_stock_memos', return_value=[]), \
          patch('rich.prompt.Prompt.ask') as mock_ask, \
          patch('config.console.print'), \
-         patch('utils.clear_screen'):
+         patch('core.utils.clear_screen'):
         res = watchlist.manage_stock_memos_by_mode('delete')
 
     assert res == 'back'
@@ -63,11 +63,11 @@ def test_add_is_reachable_when_memos_exist(no_sleep):
     """메모가 있을 때도 추가 경로는 살아 있어야 한다 (1번)."""
     memos = [{'id': 1, 'code': '005930', 'name': '삼성전자',
               'memo': 'Test', 'updated_at': '2026-08-10 10:00:00'}]
-    with patch('utils.get_all_stock_memos', return_value=memos), \
+    with patch('core.utils.get_all_stock_memos', return_value=memos), \
          patch('modules.manage.watchlist.add_new_stock_memo') as mock_add, \
          patch('rich.prompt.Prompt.ask', side_effect=["1", "b"]), \
          patch('config.console.print'), \
-         patch('utils.clear_screen'):
+         patch('core.utils.clear_screen'):
         watchlist.manage_stock_memos_by_mode('view')
 
     mock_add.assert_called_once()
@@ -77,12 +77,12 @@ def test_view_selects_stock_by_number(no_sleep):
     """조회(0)를 고르면 그 다음에 종목 번호를 묻는다."""
     memos = [{'id': 1, 'code': '005930', 'name': '삼성전자',
               'memo': 'Test', 'updated_at': '2026-08-10 10:00:00'}]
-    with patch('utils.get_all_stock_memos', return_value=memos), \
+    with patch('core.utils.get_all_stock_memos', return_value=memos), \
          patch('modules.manage.watchlist._manage_specific_stock_memos',
                return_value='quit_to_menu') as mock_detail, \
          patch('rich.prompt.Prompt.ask', side_effect=["0", "1"]), \
          patch('config.console.print'), \
-         patch('utils.clear_screen'):
+         patch('core.utils.clear_screen'):
         watchlist.manage_stock_memos_by_mode('view')
 
     mock_detail.assert_called_once_with('005930', '삼성전자', 'view')
@@ -92,12 +92,12 @@ def test_delete_action_enters_delete_mode(no_sleep):
     """삭제(2)를 고르면 삭제 모드 목록으로 들어간다."""
     memos = [{'id': 1, 'code': '005930', 'name': '삼성전자',
               'memo': 'Test', 'updated_at': '2026-08-10 10:00:00'}]
-    with patch('utils.get_all_stock_memos', return_value=memos), \
+    with patch('core.utils.get_all_stock_memos', return_value=memos), \
          patch('modules.manage.watchlist._manage_specific_stock_memos',
                return_value='deleted') as mock_detail, \
          patch('rich.prompt.Prompt.ask', side_effect=["2", "1", "b"]), \
          patch('config.console.print'), \
-         patch('utils.clear_screen'):
+         patch('core.utils.clear_screen'):
         watchlist.manage_stock_memos_by_mode('view')
 
     mock_detail.assert_called_once_with('005930', '삼성전자', 'delete')

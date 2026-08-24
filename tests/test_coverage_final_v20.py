@@ -5,7 +5,7 @@ import os
 
 import api
 import config
-import context
+from core import context
 import main
 from modules import auto_trade, telegram_bot, trading, account
 

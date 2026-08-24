@@ -23,7 +23,7 @@ from unittest.mock import patch
 
 import api
 import config
-from session import SessionManager
+from core.session import SessionManager
 
 
 @pytest.fixture

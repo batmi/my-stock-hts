@@ -1,7 +1,7 @@
 from unittest.mock import patch
-import utils
+from core import utils
 import config
-import context
+from core import context
 
 
 def test_get_tick_size_domestic():
@@ -55,7 +55,7 @@ def test_account_context():
     assert context.trade_context.use_auto_account is True
 
 
-@patch("utils.yf.Ticker")
+@patch("core.utils.yf.Ticker")
 def test_get_exchange_rate_failure(mock_ticker):
     """환율 조회 실패 시 기본 환율 반환 테스트"""
     mock_ticker.side_effect = Exception("Connection Error")

@@ -23,7 +23,7 @@ import threading
 from datetime import datetime
 
 import config
-import utils
+from core import utils
 from modules import trading_cost
 
 logger = logging.getLogger(__name__)
@@ -459,7 +459,7 @@ def _clear_daily_baseline():
     key = _account_key()
 
     try:
-        import jsonio
+        from core import jsonio
         from modules.auto_trade.common import DAILY_STATE_FILE
         data = jsonio.load_json(DAILY_STATE_FILE, default={}) or {}
         accounts = data.get("accounts") or {}

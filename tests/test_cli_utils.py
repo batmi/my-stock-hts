@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch
-import utils
+from core import utils
 import config
 
 @patch('rich.prompt.Prompt.ask')

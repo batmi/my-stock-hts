@@ -25,8 +25,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import indicators
-from indicators import TREND_MIN_LEG_BARS, get_trend_lines
+from core import indicators
+from core.indicators import TREND_MIN_LEG_BARS, get_trend_lines
 
 
 def _df(closes, wiggle=0.01):

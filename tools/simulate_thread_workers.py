@@ -12,7 +12,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 import api
 from modules import analysis
-import indicators
+from core import indicators
 
 console = Console()
 

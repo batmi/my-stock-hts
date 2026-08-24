@@ -24,8 +24,8 @@ from rich.prompt import Prompt
 from rich.table import Table
 
 import config
-import context
-import utils
+from core import context
+from core import utils
 
 logger = logging.getLogger(__name__)
 

@@ -1,8 +1,8 @@
 import pytest
 from unittest.mock import patch, MagicMock
-import utils
+from core import utils
 import config
-import context
+from core import context
 import api
 
 def test_get_common_headers_simulation():
@@ -48,7 +48,7 @@ def test_get_common_headers_auto():
 def test_get_tr_id_valid():
     """유효한 TR_ID 조회 테스트"""
     config.session.is_simulation = True
-    with patch("utils.constants.TR_ID_CONFIG", {
+    with patch("core.utils.constants.TR_ID_CONFIG", {
         "domestic": {"trade": {"buy": {"sim": "VTTC0802U"}}}
     }):
         tr_id = utils.get_tr_id("domestic", "trade", "buy")
@@ -59,7 +59,7 @@ def test_get_tr_id_invalid():
     tr_id = utils.get_tr_id("invalid", "path", "here")
     assert tr_id == ""
 
-@patch("utils.yf.Ticker")
+@patch("core.utils.yf.Ticker")
 def test_get_exchange_rate_success(mock_ticker):
     """환율 조회 성공 테스트"""
     mock_instance = MagicMock()

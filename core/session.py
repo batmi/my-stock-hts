@@ -2,10 +2,24 @@ import os
 import sys
 import json
 import hashlib
-import jsonio
+from core import jsonio
 from datetime import datetime, timedelta
 from rich.prompt import Prompt
-import config
+
+
+def _config():
+    """설정 모듈. **호출 시점에** 해석한다 — 최상단에서 import 하면 안 된다.
+
+    config 는 이 모듈의 SessionManager 로 전역 세션 객체를 만든다(`config.session = SessionManager()`).
+    그래서 session 이 최상단에서 config 를 부르면 두 모듈이 서로를 물고, 어느 쪽을 먼저
+    import 하느냐가 성패를 가른다 — 실제로 `import session` 을 단독 실행하면
+    `ImportError: cannot import name 'SessionManager'` 로 죽었다(config 가 먼저 로드되는
+    실행 경로에서만 우연히 살아 있었다). 접근자로 미루면 import 순서와 무관해진다.
+    (api 패키지의 `_api()`, auto_trade 의 `_pkg()` 와 같은 규약이다.)
+    """
+    import config
+    return config
+
 
 class SessionManager:
     def __init__(self):
@@ -125,26 +139,26 @@ class SessionManager:
         
         # 텔레그램 설정
         tg_token = os.environ.get("TELEGRAM_BOT_TOKEN")
-        if tg_token: config.TELEGRAM_BOT_TOKEN = tg_token
+        if tg_token: _config().TELEGRAM_BOT_TOKEN = tg_token
 
         tg_chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-        if tg_chat_id: config.TELEGRAM_CHAT_ID = tg_chat_id
+        if tg_chat_id: _config().TELEGRAM_CHAT_ID = tg_chat_id
 
         tg_inst = os.environ.get("TELEGRAM_INSTANCE_NAME")
-        if tg_inst: config.TELEGRAM_INSTANCE_NAME = tg_inst
+        if tg_inst: _config().TELEGRAM_INSTANCE_NAME = tg_inst
 
         # OpenDART(전자공시) 설정 - KIS/텔레그램 키와 동일하게 런타임 환경변수에서 로드
         # (config.py import 시점뿐 아니라 세션 초기화 시점에도 재로딩하여 일관성 확보)
         dart_key = os.environ.get("DART_API_KEY")
-        if dart_key: config.DART_API_KEY = dart_key
+        if dart_key: _config().DART_API_KEY = dart_key
 
         # 2. 모드 설정 (CLI 인자 -> 사용자 입력)
         if mode is None:
-            config.console.print("\n접속할 서버를 선택하세요:")
-            config.console.print("[1] 모의투자 (Simulation)")
-            config.console.print("[2] 한투증권 (KIS, 실전)")
-            config.console.print("[3] 토스증권 (Toss, 실전)")
-            config.console.print("[4] 가상투자 (Paper Trading)")
+            _config().console.print("\n접속할 서버를 선택하세요:")
+            _config().console.print("[1] 모의투자 (Simulation)")
+            _config().console.print("[2] 한투증권 (KIS, 실전)")
+            _config().console.print("[3] 토스증권 (Toss, 실전)")
+            _config().console.print("[4] 가상투자 (Paper Trading)")
             mode = Prompt.ask("\n선택 (종료: q)", choices=["1", "2", "3", "4", "q"], default="1")
             if mode == 'q': sys.exit()
 
@@ -152,11 +166,11 @@ class SessionManager:
         #  실전은 dynamic_config.json 만, 그 외 모드는 거기에 자기 프로필 파일을 얹는다.
         #  이 한 줄이 '관찰모드에서 끈 안전장치가 실전으로 넘어오는' 경로를 끊는다
         #  (config.py 모드별 설정 프로필 주석 참조).
-        config.set_config_profile(config.profile_for_mode(mode))
+        _config().set_config_profile(_config().profile_for_mode(mode))
 
         if mode == '1':
             self.is_simulation = True
-            self.url_base = config.SIM_URL
+            self.url_base = _config().SIM_URL
             
             # 모의투자 키 적용
             if self.sim_app_key:
@@ -175,11 +189,11 @@ class SessionManager:
             self.auto_app_secret = self.app_secret
             self.hts_id = sim_hts or common_hts  # 체결통보 WS 구독키
 
-            config.console.print("\n[green]모의투자 서버 환경을 로드했습니다.[/green]")
+            _config().console.print("\n[green]모의투자 서버 환경을 로드했습니다.[/green]")
             
             # [추가] 모의투자 키 누락 확인 (환경변수)
             if not self.app_key or not self.app_secret:
-                config.console.print("[bold red]⚠️ 경고: 모의투자용 API Key(SIM_APP_KEY) 또는 Secret이 환경변수에 설정되지 않았습니다.[/bold red]")
+                _config().console.print("[bold red]⚠️ 경고: 모의투자용 API Key(SIM_APP_KEY) 또는 Secret이 환경변수에 설정되지 않았습니다.[/bold red]")
         elif mode == '4':
             # [가상투자] KIS 실전 서버에서 '시세만' 받고, 잔고·예수금·주문은 paper_broker의
             #  가상 계좌로 대체한다. 실주문은 api.place_order 최상단 하드 가드가 원천 차단한다.
@@ -196,7 +210,7 @@ class SessionManager:
             self.is_simulation = False
             self.is_toss = False
             self.is_paper = True
-            self.url_base = config.REAL_URL
+            self.url_base = _config().REAL_URL
 
             # 시세 조회용 키 = VIRT_. 토큰 종류는 'REAL'을 쓰므로 real_* 슬롯에도 넣는다
             #  (get_current_token → get_real_access_token → real_app_key 경로).
@@ -219,29 +233,29 @@ class SessionManager:
             self._activate_paper_mode()
 
             if not self.virt_app_key or not self.virt_app_secret:
-                config.console.print(
+                _config().console.print(
                     "[bold red]⚠️ 경고: 가상투자용 API Key(VIRT_APP_KEY/VIRT_APP_SECRET)가 "
                     "환경변수에 설정되지 않았습니다. 시세 조회가 실패합니다.[/bold red]")
             elif self.real_app_key and self.virt_app_key == os.environ.get("REAL_APP_KEY", ""):
                 # 분리의 목적이 사라지는 설정이라 조용히 넘기지 않는다.
-                config.console.print(
+                _config().console.print(
                     "[bold yellow]⚠️ 경고: VIRT_APP_KEY가 REAL_APP_KEY와 같습니다. "
                     "실전 인스턴스와 TPS·웹소켓·토큰을 공유하게 되어 양쪽 모두 불안정해집니다.[/bold yellow]")
 
             key_status = "OK" if self.virt_app_key and self.virt_app_secret else "MISSING"
-            config.console.print("\n[dim cyan][가상투자 · 시세 소스 한국투자증권(실전)] 설정 로드 확인[/dim cyan]")
-            config.console.print(f"[dim]   - VIRT_APP_KEY 상태: {key_status}[/dim]")
+            _config().console.print("\n[dim cyan][가상투자 · 시세 소스 한국투자증권(실전)] 설정 로드 확인[/dim cyan]")
+            _config().console.print(f"[dim]   - VIRT_APP_KEY 상태: {key_status}[/dim]")
             acc_disp = (f"{self.virt_cano}-{self.virt_acnt_prdt_cd}" if self.virt_acnt_prdt_cd
                         else self.virt_cano) if self.virt_cano else "미설정(VIRT_ACC_NUM)"
-            config.console.print("[dim]   - 계좌: 가상(PAPER) — 실계좌 조회·주문 없음[/dim]")
-            config.console.print(f"[dim]   - 표시용 계좌번호: {acc_disp} (알림 꼬리말 식별용)[/dim]")
+            _config().console.print("[dim]   - 계좌: 가상(PAPER) — 실계좌 조회·주문 없음[/dim]")
+            _config().console.print(f"[dim]   - 표시용 계좌번호: {acc_disp} (알림 꼬리말 식별용)[/dim]")
             return
         elif mode == '3':
             # [추가] 토스증권 모드 (실전). 토스 API가 제공하는 기능만 사용한다.
             self.is_simulation = False
             self.is_toss = True
             self.is_paper = False
-            self.url_base = config.TOSS_URL
+            self.url_base = _config().TOSS_URL
 
             # 화면 표시용 계좌번호 (accountSeq는 preflight에서 토큰 발급 후 /accounts로 해석)
             self.cano = self.toss_acc_num
@@ -257,13 +271,13 @@ class SessionManager:
             self.auto_app_key = ""
             self.auto_app_secret = ""
 
-            config.console.print("\n[bold magenta]토스증권 환경을 로드했습니다. (실제 자산 거래 주의)[/bold magenta]")
+            _config().console.print("\n[bold magenta]토스증권 환경을 로드했습니다. (실제 자산 거래 주의)[/bold magenta]")
 
             if not self.toss_app_key or not self.toss_app_secret:
-                config.console.print("[bold red]⚠️ 경고: 토스 API Key(TOSS_APP_KEY) 또는 Secret이 환경변수에 설정되지 않았습니다.[/bold red]")
+                _config().console.print("[bold red]⚠️ 경고: 토스 API Key(TOSS_APP_KEY) 또는 Secret이 환경변수에 설정되지 않았습니다.[/bold red]")
         else:
             self.is_simulation = False
-            self.url_base = config.REAL_URL
+            self.url_base = _config().REAL_URL
             # 실전 모드일 경우 기본 키를 실전용으로 교체
             if self.real_app_key:
                 self.app_key = self.real_app_key
@@ -276,24 +290,24 @@ class SessionManager:
 
             self.hts_id = real_hts or common_hts  # 체결통보 WS 구독키
 
-            config.console.print("\n[bold red]한투증권 서버 환경을 로드했습니다. (실제 자산 거래 주의)[/bold red]")
+            _config().console.print("\n[bold red]한투증권 서버 환경을 로드했습니다. (실제 자산 거래 주의)[/bold red]")
             
             # [추가] 실전투자 키 누락 확인 (환경변수)
             if not self.app_key or not self.app_secret:
-                config.console.print("[bold red]⚠️ 경고: 한투증권용 API Key(REAL_APP_KEY)가 환경변수에 설정되지 않았습니다.[/bold red]")
+                _config().console.print("[bold red]⚠️ 경고: 한투증권용 API Key(REAL_APP_KEY)가 환경변수에 설정되지 않았습니다.[/bold red]")
             
         # [추가] 토스 모드: KIS식 계좌 입력/표시를 건너뛰고 별도 안내
         if self.is_toss:
             key_status = "OK" if self.toss_app_key and self.toss_app_secret else "MISSING"
             # mode 4(가상투자)는 KIS 실전 시세를 쓰므로 이 분기에 들어오지 않는다(is_toss=False).
-            config.console.print("\n[dim magenta][토스증권] 설정 로드 확인[/dim magenta]")
-            config.console.print(f"[dim]   - TOSS_APP_KEY 상태: {key_status}[/dim]")
-            config.console.print(f"[dim]   - 계좌번호(TOSS_ACC_NUM): {self.toss_acc_num or '(미지정 → 첫 계좌 사용)'}[/dim]")
+            _config().console.print("\n[dim magenta][토스증권] 설정 로드 확인[/dim magenta]")
+            _config().console.print(f"[dim]   - TOSS_APP_KEY 상태: {key_status}[/dim]")
+            _config().console.print(f"[dim]   - 계좌번호(TOSS_ACC_NUM): {self.toss_acc_num or '(미지정 → 첫 계좌 사용)'}[/dim]")
             return
 
         # [추가] 계좌 정보 누락 시 사용자 입력 요청
         if not self.cano:
-            config.console.print("\n[bold yellow]⚠️ 계좌번호(CANO)가 설정되지 않았습니다.[/bold yellow]")
+            _config().console.print("\n[bold yellow]⚠️ 계좌번호(CANO)가 설정되지 않았습니다.[/bold yellow]")
             self.cano = Prompt.ask("계좌번호 앞 8자리 입력")
 
         if not self.acnt_prdt_cd and self.cano:
@@ -302,11 +316,11 @@ class SessionManager:
         # [추가] 로드된 설정 정보 확인 메시지 출력
         key_status = "OK" if self.app_key and self.app_secret else "MISSING"
         env_label = "모의투자" if self.is_simulation else "한투증권"
-        config.console.print(f"\n[dim cyan][{env_label}] 설정 로드 확인[/dim cyan]")
-        config.console.print(f"[dim]   - APP_KEY 상태: {key_status}[/dim]")
-        config.console.print(f"[dim]   - 적용 계좌번호: {self.cano}-{self.acnt_prdt_cd}[/dim]")
+        _config().console.print(f"\n[dim cyan][{env_label}] 설정 로드 확인[/dim cyan]")
+        _config().console.print(f"[dim]   - APP_KEY 상태: {key_status}[/dim]")
+        _config().console.print(f"[dim]   - 적용 계좌번호: {self.cano}-{self.acnt_prdt_cd}[/dim]")
         if self.auto_cano:
-            config.console.print(f"[dim]   - 자동매매 계좌: {self.auto_cano}-{self.auto_acnt_prdt_cd}[/dim]")
+            _config().console.print(f"[dim]   - 자동매매 계좌: {self.auto_cano}-{self.auto_acnt_prdt_cd}[/dim]")
 
     def _activate_paper_mode(self):
         """관찰 모드 활성화 — DB 분리 · 가상 계좌 개설 · 외부 연동 차단.
@@ -318,29 +332,29 @@ class SessionManager:
         from modules import db_manager, paper_broker
 
         # 1) 실계좌 DB와 파일 분리 (trailing_stops·half_tp_status 오염 방지)
-        db_manager.db.switch_path(config.PAPER_DB_FILE_PATH)
+        db_manager.db.switch_path(_config().PAPER_DB_FILE_PATH)
         paper_broker.init_tables()
 
         # 2) 매매일지 웹 연동 차단 — 가상 체결이 실제 매매 기록에 섞이면 안 된다.
-        config.settings.JOURNAL_SYNC_USE = False
+        _config().settings.JOURNAL_SYNC_USE = False
 
         seed = paper_broker.get_seed()
         cash = paper_broker.get_cash()
         started = paper_broker._get_state('started_at', '-')
-        config.console.print("\n[bold cyan]가상투자(Paper Trading) 환경을 로드했습니다.[/bold cyan]")
-        config.console.print("[dim]   - 시세·지표: 토스증권 실전과 동일[/dim]")
-        config.console.print("[dim]   - 주문: 가상 체결 (실주문 원천 차단)[/dim]")
-        config.console.print(f"[dim]   - 가상 시드: {seed:,.0f}원 / 현재 현금: {cash:,.0f}원 (개설 {started})[/dim]")
-        config.console.print(f"[dim]   - 데이터: {config.PAPER_DB_FILE_PATH} (실계좌 DB와 분리)[/dim]")
-        config.console.print("[dim]   - 매매일지 웹 연동: 자동 차단[/dim]")
+        _config().console.print("\n[bold cyan]가상투자(Paper Trading) 환경을 로드했습니다.[/bold cyan]")
+        _config().console.print("[dim]   - 시세·지표: 토스증권 실전과 동일[/dim]")
+        _config().console.print("[dim]   - 주문: 가상 체결 (실주문 원천 차단)[/dim]")
+        _config().console.print(f"[dim]   - 가상 시드: {seed:,.0f}원 / 현재 현금: {cash:,.0f}원 (개설 {started})[/dim]")
+        _config().console.print(f"[dim]   - 데이터: {_config().PAPER_DB_FILE_PATH} (실계좌 DB와 분리)[/dim]")
+        _config().console.print("[dim]   - 매매일지 웹 연동: 자동 차단[/dim]")
 
     def load_stock_config(self):
-        if os.path.exists(config.STOCK_DATA_FILE):
+        if os.path.exists(_config().STOCK_DATA_FILE):
             try:
-                with open(config.STOCK_DATA_FILE, 'r', encoding='utf-8') as f:
+                with open(_config().STOCK_DATA_FILE, 'r', encoding='utf-8') as f:
                     self.stock_data = json.load(f)
             except Exception as e:
-                config.console.print(f"[red]종목 설정 로드 실패: {e}[/red]")
+                _config().console.print(f"[red]종목 설정 로드 실패: {e}[/red]")
                 self.stock_data = {"stocks_kr": [], "etfs_kr": [], "stocks_us": [], "etfs_us": []}
         else:
             self.stock_data = {"stocks_kr": [], "etfs_kr": [], "stocks_us": [], "etfs_us": []}
@@ -355,10 +369,10 @@ class SessionManager:
     def save_stock_config(self, data):
         self.stock_data = data
         try:
-            with open(config.STOCK_DATA_FILE, 'w', encoding='utf-8') as f:
+            with open(_config().STOCK_DATA_FILE, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
         except Exception as e:
-            config.console.print(f"[red]종목 설정 저장 실패: {e}[/red]")
+            _config().console.print(f"[red]종목 설정 저장 실패: {e}[/red]")
 
     def update_cache_and_save(self, code, exchange):
         self.exchange_cache[code] = exchange
@@ -375,10 +389,10 @@ class SessionManager:
 
     # [추가] 토큰 캐시 관리 메서드
     def _load_token_cache(self):
-        return jsonio.load_json(config.TOKEN_CACHE_FILE, default={}) or {}
+        return jsonio.load_json(_config().TOKEN_CACHE_FILE, default={}) or {}
 
     def _save_token_cache(self, cache_data):
-        jsonio.save_json(config.TOKEN_CACHE_FILE, cache_data, indent=2)
+        jsonio.save_json(_config().TOKEN_CACHE_FILE, cache_data, indent=2)
 
     def _token_app_key(self, key):
         """토큰 슬롯을 발급한 앱키. 앱키 개념이 없는 슬롯(TOSS)은 None."""

@@ -9,9 +9,9 @@ import time
 from datetime import datetime, timedelta, timezone
 import pandas as pd
 import config
-import constants
-import context
-import toss_api
+from core import constants
+from core import context
+from brokers import toss_api
 
 #  로거 이름은 분해 전(api.py)과 같은 'api' 로 둔다 — 로그 필터·레벨 설정이 이름을 보므로
 #  서브모듈마다 다른 이름을 쓰면 기존 설정이 조용히 빗나간다.
@@ -175,7 +175,7 @@ def get_current_price(code, is_overseas):
     #  미구독/끊김/정규장 외(KRX 정지)면 None → 아래 REST 경로로 자동 폴백한다.
     if not is_overseas and getattr(config, 'USE_WEBSOCKET', True) and not config.session.is_toss:
         try:
-            import realtime
+            from brokers import realtime
             p = realtime.get_feed().get_price(code, max_age=getattr(config, 'WS_DATA_TTL_SEC', 3.0))
             if p and p > 0:
                 return p
@@ -287,7 +287,7 @@ def get_ask_bid_ratio(code, is_overseas=False):
     # [WS] 국내주식 실시간 호가 총잔량 우선 사용(REST 절감)
     if not is_overseas and getattr(config, 'USE_WEBSOCKET', True) and not config.session.is_toss:
         try:
-            import realtime
+            from brokers import realtime
             ob = realtime.get_feed().get_orderbook(code, max_age=getattr(config, 'WS_DATA_TTL_SEC', 3.0))
             if ob:
                 ta = ob.get('total_ask') or 0
@@ -316,7 +316,7 @@ def get_ask_bid_ratio(code, is_overseas=False):
 def get_daily_short_selling(code: str, limit: int = 30):
     """국내 주식 기간별 공매도 추이 조회 (최근 limit일치)"""
     if config.session.is_toss:
-        import toss_api
+        from brokers import toss_api
         return toss_api.get_short_selling(code, count=limit)
 
     url_path = "/uapi/domestic-stock/v1/quotations/daily-short-sale"
@@ -344,7 +344,7 @@ def get_investor_trend(code, market_div="J"):
 
     # [추가] 토스 수급 연동 (1.2.14)
     if config.session.is_toss and market_div == "J":
-        import toss_api
+        from brokers import toss_api
         try:
             toss_res = toss_api.get_investor_trend(code, count=30)
             records = toss_res.get('records', [])
@@ -430,7 +430,7 @@ def get_daily_foreign_rate(code):
     """주식 일자별 시세 (최근 30일, 외인소진율 포함) 조회"""
     # [추가] 토스 수급 연동 (1.2.14) - 외국인 소진율
     if config.session.is_toss:
-        import toss_api
+        from brokers import toss_api
         try:
             toss_res = toss_api.get_investor_trend(code, count=30)
             records = toss_res.get('records', [])
@@ -475,7 +475,7 @@ def get_realtime_vol_strength(code, is_overseas=False, exchange_code=None, inclu
     # [WS] 실시간 피드에 신선한 체결강도(H0STCNT0)가 있으면 REST 호출 없이 즉시 반환(TPS 절감).
     if getattr(config, 'USE_WEBSOCKET', True):
         try:
-            import realtime
+            from brokers import realtime
             v = realtime.get_feed().get_vol_strength(code, max_age=getattr(config, 'WS_DATA_TTL_SEC', 3.0))
             if v is not None and v > 0:
                 return v

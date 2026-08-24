@@ -8,7 +8,7 @@ import shutil
 import time
 from datetime import datetime, timedelta
 import config
-import context
+from core import context
 import atexit
 
 logger = logging.getLogger(__name__)

@@ -7,7 +7,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 import config
-import toss_api
+from brokers import toss_api
 
 #  로거 이름은 분해 전(api.py)과 같은 'api' 로 둔다 — 로그 필터·레벨 설정이 이름을 보므로
 #  서브모듈마다 다른 이름을 쓰면 기존 설정이 조용히 빗나간다.
@@ -60,7 +60,7 @@ def is_holiday_on(date_str):
 
     # [추가] 토스 모드일 경우 토스 API의 market-calendar 이용
     if config.session.is_toss and date_str == datetime.now().strftime("%Y%m%d"):
-        import toss_api
+        from brokers import toss_api
         try:
             today_formatted = datetime.now().strftime("%Y-%m-%d")
             res = toss_api.get_market_calendar("KR", today_formatted)
@@ -105,7 +105,7 @@ def is_us_holiday_on(date_str):
 
     # [추가] 토스 모드일 경우 토스 API의 market-calendar 이용
     if config.session.is_toss and date_str == datetime.now().strftime("%Y%m%d"):
-        import toss_api
+        from brokers import toss_api
         try:
             today_formatted = datetime.now().strftime("%Y-%m-%d")
             res = toss_api.get_market_calendar("US", today_formatted)

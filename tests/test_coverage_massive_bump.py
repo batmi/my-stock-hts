@@ -9,7 +9,7 @@ import threading
 import requests
 
 import config
-import context
+from core import context
 import api
 from modules import market, auto_trade, analysis, account, settings, telegram_bot, backtest, theme_analysis, db_manager, trading
 

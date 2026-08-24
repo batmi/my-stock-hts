@@ -149,7 +149,7 @@ def test_get_ask_bid_ratio_rest_fallback(mock_call):
 @patch('api.call_api')
 def test_get_ask_bid_ratio_ws_first_skips_rest(mock_call):
     """WS에 신선한 호가 총잔량이 있으면 REST(call_api) 없이 즉시 계산"""
-    import realtime
+    from brokers import realtime
 
     class _StubFeed:
         def get_orderbook(self, code, max_age=3.0):

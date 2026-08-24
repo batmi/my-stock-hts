@@ -228,7 +228,7 @@ class MarketHaltMonitor:
     def _check_vi_toss(self):
         current = {}
         try:
-            import toss_api
+            from brokers import toss_api
         except Exception as e:
             logger.debug(f"[MarketHalt] toss_api 임포트 실패: {e}")
             return current

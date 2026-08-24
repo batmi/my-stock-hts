@@ -4,9 +4,9 @@ import logging
 from datetime import datetime
 import json
 import api
-import utils
+from core import utils
 from modules import analysis
-import indicators
+from core import indicators
 from modules import db_manager
 import config
 

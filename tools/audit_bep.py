@@ -29,7 +29,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config  # noqa: E402
-import utils  # noqa: E402
+from core import utils  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 
 MAX_HOLD = 400   # 한 포지션을 최대 이만큼 굴린다(추세를 끝까지 보기 위해 넉넉히)

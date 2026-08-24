@@ -17,7 +17,7 @@ from unittest.mock import patch
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config  # noqa: E402
-import indicators  # noqa: E402
+from core import indicators  # noqa: E402
 from modules.auto_trade import AutoTrader  # noqa: E402
 
 

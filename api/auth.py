@@ -10,9 +10,9 @@ import time
 import requests
 from requests.adapters import HTTPAdapter
 import config
-import constants
-import context
-import toss_api
+from core import constants
+from core import context
+from brokers import toss_api
 
 #  로거 이름은 분해 전(api.py)과 같은 'api' 로 둔다 — 로그 필터·레벨 설정이 이름을 보므로
 #  서브모듈마다 다른 이름을 쓰면 기존 설정이 조용히 빗나간다.
@@ -84,7 +84,7 @@ def check_and_refresh_token_if_expired():
 
         try:
             if config.session.is_toss:
-                import toss_api
+                from brokers import toss_api
                 if not toss_api.get_access_token(force_refresh=True):
                     success = False
                     fail_reason = "토스 API 토큰 발급 실패"

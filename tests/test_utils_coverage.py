@@ -1,8 +1,8 @@
 import pytest
 from unittest.mock import patch
-import utils
+from core import utils
 import config
-import context
+from core import context
 
 def test_get_common_headers_auto_account():
     """자동매매 계좌 컨텍스트에서 헤더 생성 테스트"""
@@ -17,7 +17,7 @@ def test_get_common_headers_auto_account():
         assert headers['appKey'] == "auto_key"
         assert headers['appSecret'] == "auto_secret"
 
-@patch('utils.yf.Ticker')
+@patch('core.utils.yf.Ticker')
 def test_get_exchange_rate_failure(mock_ticker):
     """환율 조회 실패 시 기본값 반환 테스트"""
     mock_ticker.side_effect = Exception("YFinance API Error")

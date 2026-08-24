@@ -103,7 +103,7 @@ def _run_show_disclosures(n_codes=20):
          patch.object(disclosure, "build_detail_note", return_value="예정금액 100억"), \
          patch.object(disclosure, "_maybe_ai_summary"), \
          patch.object(config, "DART_API_KEY", "x" * 40), \
-         patch("utils.clear_screen"), patch.object(config.console, "print"):
+         patch("core.utils.clear_screen"), patch.object(config.console, "print"):
         disclosure.show_disclosures(days=14)
     return created, len(codes)
 

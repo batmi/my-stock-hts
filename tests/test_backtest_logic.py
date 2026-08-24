@@ -306,7 +306,7 @@ def test_prepare_market_filter_band_hysteresis(monkeypatch):
 
 def test_market_filter_band_zero_matches_legacy():
     """밴드 0%면 종전 판정('지수 종가 < SMA')과 완전히 동일해야 한다(하위 호환)."""
-    import indicators
+    from core import indicators
     import numpy as np
 
     rng = np.random.default_rng(11)

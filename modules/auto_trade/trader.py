@@ -9,7 +9,7 @@ import logging
 import time
 import requests
 import json
-import jsonio
+from core import jsonio
 import os
 import sqlite3 # [추가] DB 직접 접근용
 from datetime import datetime, timedelta
@@ -20,10 +20,10 @@ from rich.table import Table
 from rich import box
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
 import config
-import context # [추가]
+from core import context # [추가]
 import api
-import utils
-import indicators
+from core import utils
+from core import indicators
 from modules import analysis, account # [수정] account 모듈 재사용
 import math # [추가] math 모듈
 from modules import db_manager # [추가] DB 매니저
@@ -1525,7 +1525,7 @@ class AutoTrader:
 
         feed_text = "REST 폴링"
         try:
-            import realtime
+            from brokers import realtime
             feed = realtime.get_feed()
             if getattr(config.session, "is_toss", False):
                 feed_text = "토스: REST 폴링 (공식 WS 미지원)"
@@ -4615,7 +4615,7 @@ class AutoTrader:
         #  보유종목(포지션, 최우선) → 매수후보 순서로 priority. 매수후보는 국내주식 + (ETF 포함 설정 시)국내 ETF.
         #  ETF 미포함 설정이면 ETF는 시스템 대상이 아니므로 '그 외(other) 로테이션'으로 둔다.
         try:
-            import realtime
+            from brokers import realtime
             hold_codes = [h['pdno'] for h in (holdings or [])]
             cand_codes = [s['code'] for s in config.session.stock_data.get('stocks_kr', [])]
             etf_codes = [s['code'] for s in config.session.stock_data.get('etfs_kr', [])]

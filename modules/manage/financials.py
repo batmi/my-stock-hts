@@ -13,7 +13,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 
 import config
 import api
-import utils
+from core import utils
 
 _REPRT_LABEL = {"11011": "사업(연간)", "11012": "반기", "11013": "1분기", "11014": "3분기"}
 

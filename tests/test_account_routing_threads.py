@@ -18,8 +18,8 @@ import pytest
 
 import api
 import config
-import context
-import utils
+from core import context
+from core import utils
 
 MAIN_CANO = "11111111"
 AUTO_CANO = "22222222"

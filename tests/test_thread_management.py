@@ -50,7 +50,7 @@ def test_autotrader_zombie_killer():
         # _run_loop 내부 while 조건: self.is_running and self.thread is my_thread
         # self.thread(dummy_thread_2) is not my_thread(dummy_thread_1) 이므로
         # 무한 루프에 진입하지 않고 즉시 리턴(종료)되어야 테스트 통과
-        with patch('utils.AccountContext'):
+        with patch('core.utils.AccountContext'):
             trader._run_loop() 
 
 def test_conclusion_monitor_zombie_killer():

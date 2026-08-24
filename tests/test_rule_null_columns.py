@@ -134,7 +134,7 @@ def test_calculate_score_tolerates_string_weights():
         'low': np.linspace(99, 129, n), 'close': np.linspace(100, 130, n),
         'volume': np.full(n, 1_000_000),
     })
-    import indicators
+    from core import indicators
     ind = indicators.calculate_indicators(d)
     w = json.dumps({'TREND': 4.0, 'MOMENTUM': 2.5, 'STRENGTH': 1.5, 'SYNERGY': 2.0})
     score, _ = analysis.calculate_score(df=d, ind=ind, weights=w)

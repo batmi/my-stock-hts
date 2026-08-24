@@ -18,7 +18,7 @@ from urllib3.poolmanager import PoolManager
 from urllib3.util.retry import Retry
 from collections import Counter, deque
 import config
-import context
+from core import context
 from modules import instance_lock
 
 #  로거 이름은 분해 전(api.py)과 같은 'api' 로 둔다 — 로그 필터·레벨 설정이 이름을 보므로

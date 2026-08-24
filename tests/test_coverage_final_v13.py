@@ -1,9 +1,9 @@
 import pytest
 from unittest.mock import patch, MagicMock
 import config
-import context
+from core import context
 from modules import manage, theme_analysis, trading, db_manager
-import utils
+from core import utils
 
 @pytest.fixture(autouse=True)
 def setup_and_teardown():
@@ -25,8 +25,8 @@ def test_manage_delete_stock_with_memo(mock_ask):
     # 그룹선택(1) -> 종목선택(1) -> 삭제확인(y) -> 메모삭제확인(y)
     mock_ask.side_effect = ["1", "1", "y", "y"]
     
-    with patch('utils.get_memo_codes', return_value=["005930"]), \
-         patch('utils.delete_all_stock_memos') as mock_delete_memo, \
+    with patch('core.utils.get_memo_codes', return_value=["005930"]), \
+         patch('core.utils.delete_all_stock_memos') as mock_delete_memo, \
          patch('config.session.save_stock_config'), \
          patch('config.session.load_stock_config'): # [수정] 원본 파일 로드 차단
         
@@ -57,9 +57,9 @@ def test_manage_stock_memos_by_mode_flow(mock_ask):
         "q"
     ]
     
-    with patch('utils.get_all_stock_memos', side_effect=[mock_memos, mock_memos, []]), \
-         patch('utils.get_stock_memos', return_value=mock_memos), \
-         patch('utils.delete_stock_memo_by_id', return_value=True), \
+    with patch('core.utils.get_all_stock_memos', side_effect=[mock_memos, mock_memos, []]), \
+         patch('core.utils.get_stock_memos', return_value=mock_memos), \
+         patch('core.utils.delete_stock_memo_by_id', return_value=True), \
          patch('api.get_stock_name_by_code', return_value="SK하이닉스"):
         
         # 3. 실행

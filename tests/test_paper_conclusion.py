@@ -266,7 +266,7 @@ def test_reset_clears_only_paper_daily_baseline(paper, monkeypatch, tmp_path):
     daily_asset_state.json은 실계좌와 한 파일을 공유한다. 통째로 지우면 실전
     인스턴스가 같은 날 재기동할 때 당일 손실 기준을 잃는다.
     """
-    import jsonio
+    from core import jsonio
     from modules.auto_trade import common as at_common
 
     state = tmp_path / "daily_asset_state.json"

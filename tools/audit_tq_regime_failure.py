@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tools.audit_common import SELL_REASONS, seed_notice  # noqa: E402
 
 import config  # noqa: E402
-import indicators  # noqa: E402
+from core import indicators  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 from tools.audit_defensive_sector import (  # noqa: E402
     INITIAL_CAPITAL, new_scale_fn_factory,

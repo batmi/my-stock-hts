@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 import pandas as pd
 import config
-import utils
+from core import utils
 from modules import settings, theme_analysis, backtest, manage, market, db_manager, account, telegram_bot
 from modules.auto_trade import AutoTrader, RiskManager, ConclusionMonitor
 

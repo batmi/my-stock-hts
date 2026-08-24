@@ -70,7 +70,7 @@ def _vkospi_series(years):
     패닉 수준으로 잡는 밴드가 나왔을 것이다. 거부는 재시도로 넘기고, 호출 사이를 띄운다.
     """
     from datetime import datetime, timedelta
-    import constants
+    from core import constants
 
     url_path = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["INDEX_CHART"]
     floor_date = (datetime.now() - timedelta(days=int(years * 365.25))).strftime("%Y%m%d")

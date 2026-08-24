@@ -5,7 +5,7 @@ from datetime import datetime
 
 import api
 import config
-import context
+from core import context
 from modules import theme_analysis, settings, trading, auto_trade, db_manager
 from modules.telegram_bot import TelegramCommander
 

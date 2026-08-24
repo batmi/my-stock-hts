@@ -9,7 +9,7 @@ import logging
 import time
 import requests
 import json
-import jsonio
+from core import jsonio
 import os
 import sqlite3 # [추가] DB 직접 접근용
 from datetime import datetime, timedelta
@@ -20,10 +20,10 @@ from rich.table import Table
 from rich import box
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
 import config
-import context # [추가]
+from core import context # [추가]
 import api
-import utils
-import indicators
+from core import utils
+from core import indicators
 from modules import analysis, account # [수정] account 모듈 재사용
 import math # [추가] math 모듈
 from modules import db_manager # [추가] DB 매니저
@@ -131,7 +131,7 @@ class ConclusionMonitor:
         기존 주기 폴링이 그대로 체결을 처리한다(완전 폴백).
         """
         try:
-            import realtime
+            from brokers import realtime
             realtime.register_exec_callback(self._on_ws_exec_notice)
         except Exception as e:
             logger.debug(f"[Monitor] 체결통보 콜백 등록 실패(REST 폴링 유지): {e}")
