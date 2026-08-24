@@ -109,7 +109,7 @@ def test_average_price_is_replayed_forward():
 
 def test_realized_profit_is_net_of_costs():
     """실현손익은 왕복 비용을 뺀 값이어야 한다(DB의 다른 기록과 같은 자를 쓴다)."""
-    from modules import trading_cost
+    from core import trading_cost
     recs = hb.build_records([_tx("20260701", True, 10, price=10_000),
                              _tx("20260720", False, 10, price=11_000)])
     expected, _ = trading_cost.net_realized_profit(10_000, 11_000, 10)
@@ -130,7 +130,7 @@ def test_selling_more_than_held_does_not_go_negative():
 
 
 def test_overseas_uses_overseas_cost_rates():
-    from modules import trading_cost
+    from core import trading_cost
     txs = [_tx("20260701", True, 10, price=100), _tx("20260720", False, 10, price=110)]
     dom = hb.build_records(txs)[-1]['profit_amt']
     ovs = hb.build_records(txs, is_overseas=True)[-1]['profit_amt']

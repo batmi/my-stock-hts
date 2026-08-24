@@ -17,7 +17,8 @@ import pytest
 import api
 import config
 import modules.auto_trade as auto_trade
-from modules import db_manager, paper_broker, trading_cost
+from modules import db_manager, paper_broker
+from core import trading_cost
 from modules.auto_trade.common import OrderStatus
 
 

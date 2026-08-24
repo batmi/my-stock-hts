@@ -27,7 +27,7 @@ from core import indicators
 from modules import analysis, account # [수정] account 모듈 재사용
 import math # [추가] math 모듈
 from modules import db_manager # [추가] DB 매니저
-from modules import trading_cost # [추가] 거래비용 단일 계산
+from core import trading_cost # [추가] 거래비용 단일 계산
 from modules import chart # [추가] 차트 모듈
 import re # [추가] 정규식 모듈
 import pandas as pd

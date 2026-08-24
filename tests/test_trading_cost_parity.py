@@ -17,7 +17,7 @@
 import pytest
 
 import config
-from modules import trading_cost
+from core import trading_cost
 
 
 # ─────────────────────────────────────────────

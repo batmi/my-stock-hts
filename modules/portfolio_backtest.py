@@ -36,7 +36,7 @@ from core import context
 from core import indicators
 from core import utils
 from modules import backtest
-from modules import trading_cost
+from core import trading_cost
 
 # 분봉 캐시는 선택 의존이다 — 없으면 종가 모델로 돌아간다(감사 도구 전용 경로가 아니라
 #  메뉴 백테스트의 기본 경로가 되므로, 임포트 실패가 백테스트 전체를 막으면 안 된다).

@@ -15,7 +15,7 @@ from core import utils
 from core import indicators
 from modules import analysis, account, chart, db_manager, auto_trade, market, theme_analysis
 from modules.auto_trade import AutoTrader
-from modules.executors import bot_executor
+from core.executors import bot_executor
 from modules.scheduler import SystemScheduler
 
 logger = logging.getLogger(__name__)

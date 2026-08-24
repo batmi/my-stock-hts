@@ -19,7 +19,7 @@ from core import utils
 import json
 from core import context # [추가]
 from modules import prompts # [추가] 외부 프롬프트 템플릿 로드
-from modules.executors import ai_executor, io_executor
+from core.executors import ai_executor, io_executor
 from modules import db_manager
 
 # [최적화] google.genai(httpx·pydantic 등 포함)는 AI 기능 최초 사용 시점에 지연 임포트한다

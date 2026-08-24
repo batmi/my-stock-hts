@@ -381,6 +381,8 @@ my-stock-hts/
 │   ├── utils.py          #   ├ 공통 유틸리티 (날짜, 포맷팅 등)
 │   ├── jsonio.py         #   ├ JSON 파일 로드/저장 공용 헬퍼
 │   ├── caching.py        #   ├ 공용 인메모리 TTL 캐시 (항목 상한·자동 eviction)
+│   ├── executors.py      #   ├ 전역 스레드 풀 (AI·IO·텔레그램 발신)
+│   ├── trading_cost.py   #   ├ 거래비용 산식 단일 소스 (수수료·세금)
 │   ├── session.py        #   ├ 세션 및 토큰 관리 (config 는 `_config()` 로 지연 참조)
 │   └── context.py        #   └ 스레드 전역 상태 및 락(Lock) 관리
 ├── requirements.txt      # 런타임 의존성 단일 소스 (run.sh 가 이 파일을 읽어 설치)
@@ -436,7 +438,6 @@ my-stock-hts/
     ├── scheduler.py      # 백그라운드 스케줄링 및 타이머 전담 워커
     ├── heartbeat.py      # 프로세스 생존 신호 기록·판정 (죽으면 알린다 / 되살리지 않는다)
     ├── market_halt.py    # 서킷브레이커(CB)/VI 시장 정지 감지 및 텔레그램 알림
-    ├── executors.py      # 시스템 전역 스레드 풀(Thread Pool) 중앙 관리
     ├── prompts.py        # AI 어시스턴트용 프롬프트 템플릿 외부 관리
     ├── settings.py       # [0] 시스템 설정 관리
     ├── market.py         # [1] 시장 지수 조회
@@ -444,7 +445,6 @@ my-stock-hts/
     ├── chart.py          # [3] 차트 시각화 및 분석
     ├── backtest.py       # [4] 전략 백테스팅
     ├── portfolio_backtest.py # 다종목 포트폴리오 백테스트 (슬롯 경쟁·현금 제약·히트 캡)
-    ├── trading_cost.py   # 거래비용(수수료·세금·슬리피지) 단일 계산 지점
     ├── intraday_bars.py  # 분봉 수집·캐시 (tvDatafeed) — 체결 시점 검증용
     ├── krx_daily.py      # 국내 일봉을 KRX 정규장 기준으로 조회 (pykrx/FDR)
     ├── auto_trade/       # [5] 시스템 트레이딩 (자동매매) 패키지

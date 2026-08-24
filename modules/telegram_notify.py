@@ -17,7 +17,7 @@ import requests
 
 import config
 from core import context
-from modules.executors import tg_sender_executor
+from core.executors import tg_sender_executor
 
 logger = logging.getLogger(__name__)
 

@@ -25,7 +25,7 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config  # noqa: E402
-from modules import trading_cost  # noqa: E402
+from core import trading_cost  # noqa: E402
 
 # INFO 는 판정이 아니라 맥락(표본 규모 등)이다. SKIP(판정 보류)과 같은 기호를 쓰되
 #  집계에서는 갈라야 한다 — 안 그러면 안내문 한 줄이 "검증 보류 1건"으로 둔갑한다.

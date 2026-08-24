@@ -15,7 +15,7 @@ import api
 from core import utils
 from core import indicators
 from modules import analysis
-from modules import trading_cost
+from core import trading_cost
 from modules import chart
 import logging
 from modules import market # [추가] 통합 지수 리스트 참조용

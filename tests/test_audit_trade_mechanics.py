@@ -47,7 +47,7 @@ def _buy(conn, code="005930", name="삼성전자", price=100000, sl=-7.0,
 def _sell(conn, code="005930", name="삼성전자", price=93000, reason="ATR손절",
           when="2026-08-10 14:00:00", qty=10, profit_amt=None, buy_price=100000,
           profit_rate=-7.0, with_buy_price=True):
-    from modules import trading_cost
+    from core import trading_cost
     if profit_amt is None:
         profit_amt = int(trading_cost.net_realized_profit(buy_price, price, qty)[0])
     cols = "time, type, code, name, qty, price, order_status, reason, profit_amt, profit_rate"

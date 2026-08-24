@@ -7,7 +7,7 @@ from pydantic import ValidationError
 import config
 import api
 from modules import prompts
-from modules import executors
+from core import executors
 
 # ==========================================================
 # 2. 전역 변수(Global) 기반 설정 관리 개선 (Pydantic & Thread-Safety)

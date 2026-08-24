@@ -20,7 +20,8 @@ import pytest
 
 import api
 import config
-from modules import db_manager, paper_broker, trading_cost
+from modules import db_manager, paper_broker
+from core import trading_cost
 
 CODE = "005930"
 BUY_PRICE = 70000

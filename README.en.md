@@ -369,6 +369,8 @@ my-stock-hts/
 │   ├── utils.py          #   ├ Common utilities (dates, formatting, etc.)
 │   ├── jsonio.py         #   ├ Shared JSON file load/save helper
 │   ├── caching.py        #   ├ Shared in-memory TTL cache (size cap & auto-eviction)
+│   ├── executors.py      #   ├ Global thread pools (AI / IO / Telegram sending)
+│   ├── trading_cost.py   #   ├ Single source for trading-cost math (fees & taxes)
 │   ├── session.py        #   ├ Session & token management (config resolved lazily via `_config()`)
 │   └── context.py        #   └ Global thread states & Lock management
 ├── requirements.txt      # Single source of runtime dependencies (run.sh installs from this file)
@@ -424,7 +426,6 @@ my-stock-hts/
     ├── scheduler.py      # Dedicated worker for background scheduling & timers
     ├── heartbeat.py      # Process liveness stamp & verdict (alert on death; never auto-restart)
     ├── market_halt.py    # Circuit breaker (CB) / VI market-halt detection & Telegram alerts
-    ├── executors.py      # Central management of system-wide Thread Pool
     ├── prompts.py        # External management of prompt templates for AI assistant
     ├── settings.py       # [0] System Settings management
     ├── market.py         # [1] Market Indices inquiry
@@ -432,7 +433,6 @@ my-stock-hts/
     ├── chart.py          # [3] Chart visualization & analysis
     ├── backtest.py       # [4] Strategy Backtesting
     ├── portfolio_backtest.py # Multi-stock portfolio backtest (slot contention, cash limits, heat cap)
-    ├── trading_cost.py   # Single source for trading costs (fees, tax, slippage)
     ├── intraday_bars.py  # Intraday bar collection/cache (tvDatafeed) for fill-timing checks
     ├── krx_daily.py      # KRX regular-session daily bars (pykrx/FDR)
     ├── auto_trade/       # [5] System Trading (Auto Trading) package

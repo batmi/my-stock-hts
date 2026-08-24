@@ -24,7 +24,7 @@ from datetime import datetime
 
 import config
 from core import utils
-from modules import trading_cost
+from core import trading_cost
 
 logger = logging.getLogger(__name__)
 
