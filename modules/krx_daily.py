@@ -384,3 +384,75 @@ def get_ticker_name(code):
         return raw.strip()
     # 단건 폴백은 '없는 코드'와 '조회 실패'를 구분하지 못하므로 보수적으로 검증 불가 처리.
     return None
+
+
+# ---------------------------------------------------------------------------
+# 과거 수급(투자자별 순매수 수량)
+# ---------------------------------------------------------------------------
+# [왜 여기 있나 · 2026-08-24]
+#  스마트머니 시그널은 외국인·기관의 일별 순매수로 판정하는데, KIS 수급 TR
+#  (FHKST01010900)에는 **기간 파라미터가 없고 최근 30거래일만** 돌려준다. 그래서 다년
+#  백테스트에서는 창 밖 구간이 통째로 '수급 없음'으로 단정돼 이 축이 사실상 빠져 있었다.
+#  KRX는 같은 값을 기간으로 준다 — 겹치는 30일에서 외국인·기관 **30/30 완전일치**를 확인했다
+#  (원천이 KRX이고 KIS가 중계하는 것이니 당연한 결과다).
+#
+# [자격증명] data.krx.co.kr 회원 계정이 필요하다(KRX_ID / KRX_PW 환경변수). API 키가 아니라
+#  웹 로그인이며, 없으면 pykrx가 조용히 빈 DataFrame을 준다 → 여기서 None을 돌려주고
+#  호출부는 기존 KIS 30일 경로로 폴백한다. 즉 자격증명이 없어도 동작은 종전과 같다.
+_INVESTOR_CACHE = {}              # {(code, start, end): df | None}
+_INVESTOR_CACHE_LOCK = threading.RLock()
+_INVESTOR_CACHE_MAX = 200
+
+# KRX 컬럼 → 기존 KIS 필드 의미. 기관합계/외국인합계가 각각 orgn_ntby_qty/frgn_ntby_qty다.
+_INVESTOR_COLUMNS = {'기관합계': 'o_net', '외국인합계': 'f_net'}
+
+
+def get_investor_netbuy(code, start, end):
+    """[start, end] 구간의 일별 순매수 **수량**. DataFrame[date, f_net, o_net] 또는 None.
+
+    date는 일봉과 같은 'YYYYMMDD' 문자열이라 병합에 그대로 쓸 수 있다.
+    조회 불가(자격증명 없음·미설치·오류)면 None — 호출부가 폴백할 수 있게 빈 프레임과 구분한다.
+
+    거래대금이 아니라 수량을 쓴다. 기존 판정이 순매수 '수량'의 부호를 보므로 의미를 맞춘다
+    (대금으로 바꾸면 같은 날 부호가 뒤집히는 경우가 생긴다).
+    """
+    code = str(code or '').strip()
+    if not is_domestic_code(code):
+        return None
+
+    key = (code, str(start), str(end))
+    with _INVESTOR_CACHE_LOCK:
+        if key in _INVESTOR_CACHE:
+            return _INVESTOR_CACHE[key]
+
+    _lazy_import()
+    if _pykrx is None:
+        return None
+
+    df = None
+    try:
+        buf = io.StringIO()
+        # pykrx는 로그인 성공/실패와 ID를 stdout으로 흘린다 — 로그에 계정이 남지 않게 삼킨다.
+        with redirect_stderr(buf), redirect_stdout(buf):
+            raw = _pykrx.get_market_trading_volume_by_date(start, end, code, detail=False)
+        if raw is not None and not raw.empty and set(_INVESTOR_COLUMNS) <= set(raw.columns):
+            out = raw.reset_index()
+            date_col = out.columns[0]           # '날짜'
+            out['date'] = pd.to_datetime(out[date_col]).dt.strftime('%Y%m%d')
+            out = out.rename(columns=_INVESTOR_COLUMNS)[['date', 'f_net', 'o_net']]
+            for c in ('f_net', 'o_net'):
+                out[c] = pd.to_numeric(out[c], errors='coerce').fillna(0)
+            df = out
+        else:
+            # 자격증명이 없으면 pykrx가 로그인 실패를 찍고 빈 프레임을 준다.
+            logger.debug(f"[KRX] 수급 조회 결과 없음({code} {start}~{end}) "
+                         f"— KRX_ID/KRX_PW 미설정이면 정상이다")
+    except Exception as e:      # noqa: BLE001
+        logger.debug(f"[KRX] 수급 조회 실패({code} {start}~{end}): {e}")
+        df = None
+
+    with _INVESTOR_CACHE_LOCK:
+        if len(_INVESTOR_CACHE) >= _INVESTOR_CACHE_MAX:
+            _INVESTOR_CACHE.clear()
+        _INVESTOR_CACHE[key] = df
+    return df

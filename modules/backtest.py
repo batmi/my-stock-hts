@@ -220,30 +220,66 @@ def _warn_if_truncated(df, code, days):
     except Exception:
         pass
 
+def _investor_netbuy_frame(df, code):
+    """일봉 구간을 덮는 일별 순매수 프레임 [date, f_net, o_net] 과 그 출처를 돌려준다.
+
+    (프레임, 'KRX'|'KIS') / 구하지 못하면 (None, None).
+
+    [왜 두 소스인가 · 2026-08-24]
+    KIS 수급 TR(FHKST01010900)에는 **기간 파라미터가 없고 최근 30거래일만** 온다. 다년
+    백테스트에서는 그 창 밖이 통째로 '수급 없음'으로 단정돼(아래 fillna(0)) 스마트머니 축이
+    사실상 빠져 있었다 — 없는 데이터를 '모름'이 아니라 '아니다'로 기록한 셈이다.
+    KRX(pykrx)는 같은 값을 기간으로 준다. 겹치는 30일에서 외국인·기관 **30/30 완전일치**를
+    확인했으므로(원천이 KRX다) 드롭인 교체이며, 자격증명(KRX_ID/KRX_PW)이 없거나 조회가
+    실패하면 종전 KIS 경로로 조용히 되돌아간다.
+    """
+    from modules import krx_daily   # 지연 import (일봉 경로와 같은 규약)
+
+    dates = df['date'].astype(str)
+    start, end = dates.min(), dates.max()
+
+    krx = krx_daily.get_investor_netbuy(code, start, end)
+    if krx is not None and not krx.empty:
+        return krx, 'KRX'
+
+    inv_list = api.get_investor_trend(code)
+    if not inv_list:
+        return None, None
+    inv_df = pd.DataFrame(inv_list)
+    if 'stck_bsop_date' not in inv_df.columns:
+        return None, None
+
+    inv_df = inv_df[['stck_bsop_date', 'frgn_ntby_qty', 'orgn_ntby_qty']].copy()
+    inv_df.rename(columns={'stck_bsop_date': 'date', 'frgn_ntby_qty': 'f_net',
+                           'orgn_ntby_qty': 'o_net'}, inplace=True)
+    inv_df['f_net'] = pd.to_numeric(inv_df['f_net'], errors='coerce').fillna(0)
+    inv_df['o_net'] = pd.to_numeric(inv_df['o_net'], errors='coerce').fillna(0)
+    inv_df['date'] = inv_df['date'].astype(str)
+    return inv_df, 'KIS'
+
+
 def _append_smart_money_signal(df, code, is_overseas):
-    """과거 수급 데이터를 API로 조회하여 DataFrame에 병합하고 스마트머니 시그널을 사전 계산 (Vectorized)"""
+    """과거 수급 데이터를 조회해 DataFrame에 병합하고 스마트머니 시그널을 사전 계산 (Vectorized)"""
     df['smart_money'] = False
     if is_overseas:
         return df
-        
+
     try:
-        inv_list = api.get_investor_trend(code)
-        if not inv_list: 
+        inv_df, source = _investor_netbuy_frame(df, code)
+        if inv_df is None:
             config.console.print("[dim yellow]※ 안내: 과거 수급 데이터를 불러올 수 없어 '스마트머니' 시그널이 시뮬레이션에 반영되지 않습니다.[/dim yellow]")
             return df
-            
-        inv_df = pd.DataFrame(inv_list)
-        if 'stck_bsop_date' not in inv_df.columns: 
-            config.console.print("[dim yellow]※ 안내: 유효한 수급 데이터가 없어 '스마트머니' 시그널이 시뮬레이션에 반영되지 않습니다.[/dim yellow]")
-            return df
-            
-        inv_df = inv_df[['stck_bsop_date', 'frgn_ntby_qty', 'orgn_ntby_qty']].copy()
-        inv_df.rename(columns={'stck_bsop_date': 'date', 'frgn_ntby_qty': 'f_net', 'orgn_ntby_qty': 'o_net'}, inplace=True)
-        
-        inv_df['f_net'] = pd.to_numeric(inv_df['f_net'], errors='coerce').fillna(0)
-        inv_df['o_net'] = pd.to_numeric(inv_df['o_net'], errors='coerce').fillna(0)
-        inv_df['date'] = inv_df['date'].astype(str)
+
         df['date'] = df['date'].astype(str)
+        if source == 'KIS':
+            # KIS 창(30거래일)이 일봉 구간을 못 덮으면 그 밖은 '수급 없음'으로 굳는다.
+            #  조용히 넘기면 감사 수치가 '스마트머니가 없었다'는 뜻으로 오독된다.
+            covered = df['date'].isin(set(inv_df['date'])).mean() * 100
+            if covered < 95.0:
+                config.console.print(
+                    f"[dim yellow]※ 안내: 수급 데이터가 최근 구간({covered:.0f}%)만 있습니다 — "
+                    f"KRX_ID/KRX_PW를 설정하면 전 구간을 조회합니다. "
+                    f"그 전까지 '스마트머니'는 나머지 구간에서 꺼진 것으로 계산됩니다.[/dim yellow]")
         
         merged = pd.merge(df, inv_df, on='date', how='left')
         merged['f_net'] = merged['f_net'].fillna(0)

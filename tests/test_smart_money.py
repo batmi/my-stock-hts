@@ -137,3 +137,76 @@ def test_append_smart_money_signal_vectorized(mock_api):
     
     # 검증: 20231005 (당일 쌍끌이 + 어제 외인 턴어라운드 성공일 반영됨)
     assert res_df.loc[res_df['date'] == '20231005', 'smart_money'].iloc[0] == True
+
+# ==========================================================
+# 3. 과거 수급 소스 (KRX 우선 · KIS 폴백) — 2026-08-24
+# ==========================================================
+# KIS 수급 TR 에는 기간 파라미터가 없고 최근 30거래일만 온다. 다년 백테스트에서는 창 밖이
+# 통째로 '수급 없음'으로 굳어(merge 후 fillna(0)) 스마트머니 축이 사실상 빠져 있었다.
+# KRX(pykrx)는 같은 값을 기간으로 주므로 그쪽을 먼저 쓰고, 자격증명이 없으면 종전대로 KIS 로
+# 되돌아간다. 아래 테스트는 그 우선순위와 폴백, 그리고 컬럼 대응을 고정한다.
+
+def _bars(dates):
+    return pd.DataFrame({"date": list(dates), "close": 70000.0})
+
+
+def test_investor_frame_prefers_krx():
+    """KRX 가 구간을 주면 그걸 쓴다 (KIS 는 부르지도 않는다)."""
+    krx = pd.DataFrame({"date": ["20240102", "20240103"],
+                        "f_net": [100, -200], "o_net": [300, -400]})
+    with patch('modules.krx_daily.get_investor_netbuy', return_value=krx) as mk, \
+         patch('api.get_investor_trend') as mkis:
+        frame, source = backtest._investor_netbuy_frame(_bars(["20240102", "20240103"]), "005930")
+
+    assert source == "KRX"
+    assert list(frame["f_net"]) == [100, -200]
+    mk.assert_called_once()
+    mkis.assert_not_called()          # 폴백 경로를 건드리지 않는다
+
+
+def test_investor_frame_falls_back_to_kis_without_krx():
+    """KRX 가 None(자격증명 없음 등)이면 기존 KIS 경로로 되돌아간다."""
+    kis = [{'stck_bsop_date': '20240102', 'frgn_ntby_qty': '11', 'orgn_ntby_qty': '22'}]
+    with patch('modules.krx_daily.get_investor_netbuy', return_value=None), \
+         patch('api.get_investor_trend', return_value=kis):
+        frame, source = backtest._investor_netbuy_frame(_bars(["20240102"]), "005930")
+
+    assert source == "KIS"
+    assert list(frame["f_net"]) == [11] and list(frame["o_net"]) == [22]
+
+
+def test_investor_frame_none_when_both_sources_empty():
+    """둘 다 없으면 None — 호출부가 '수급 없음' 안내를 띄울 수 있어야 한다."""
+    with patch('modules.krx_daily.get_investor_netbuy', return_value=None), \
+         patch('api.get_investor_trend', return_value=[]):
+        frame, source = backtest._investor_netbuy_frame(_bars(["20240102"]), "005930")
+    assert frame is None and source is None
+
+
+def test_krx_source_covers_dates_outside_the_kis_window():
+    """핵심 회귀: KIS 창(최근 30일) 밖 과거 구간에서도 시그널이 켜진다.
+
+    종전에는 이 구간이 전부 smart_money=False 였다 — 없는 데이터가 '아니다'로 기록됐다.
+    """
+    dates = ["20240102", "20240103", "20240104"]
+    # 외국인·기관 동반 순매수(c1) → 당일과 다음날 모두 True 가 되는 조건
+    krx = pd.DataFrame({"date": dates, "f_net": [500, 600, 700], "o_net": [500, 600, 700]})
+    with patch('modules.krx_daily.get_investor_netbuy', return_value=krx), \
+         patch('api.get_investor_trend', return_value=[]) as mkis:
+        out = backtest._append_smart_money_signal(_bars(dates), "005930", is_overseas=False)
+
+    assert out["smart_money"].all(), "KRX 구간인데 시그널이 꺼져 있다"
+    mkis.assert_not_called()
+
+
+def test_kis_fallback_warns_when_coverage_is_partial(capsys):
+    """KIS 폴백이 구간을 못 덮으면 그 사실을 알린다 (조용히 False 로 굳지 않게)."""
+    dates = [f"2024010{i}" for i in range(2, 6)] + ["20240108"]
+    kis = [{'stck_bsop_date': '20240108', 'frgn_ntby_qty': '1', 'orgn_ntby_qty': '1'}]
+    with patch('modules.krx_daily.get_investor_netbuy', return_value=None), \
+         patch('api.get_investor_trend', return_value=kis), \
+         patch.object(config.console, "print") as mock_print:
+        backtest._append_smart_money_signal(_bars(dates), "005930", is_overseas=False)
+
+    printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list if c.args)
+    assert "KRX_ID" in printed and "수급 데이터가 최근 구간" in printed
