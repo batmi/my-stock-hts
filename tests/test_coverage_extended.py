@@ -36,21 +36,21 @@ def test_fetch_realtime_news_fail():
         res = theme_analysis.fetch_realtime_news("삼성전자")
         assert res == ""
 
-@patch('modules.theme_analysis.genai.GenerativeModel')
-def test_analyze_stock_with_gemini_api_error(mock_model):
+@patch('modules.theme_analysis._gemini_stream')
+def test_analyze_stock_with_gemini_api_error(mock_stream):
     """종목 심층 진단 중 Rate Limit 에러 발생 시 처리 검증"""
     config.GEMINI_API_KEY = "test_key"
     # API 한도 초과 에러 모킹
-    mock_model.return_value.generate_content.side_effect = Exception("429 RESOURCE_EXHAUSTED")
+    mock_stream.side_effect = Exception("429 RESOURCE_EXHAUSTED")
     
     res = theme_analysis.analyze_stock_with_gemini("005930", "삼성전자", "기술적 분석 텍스트")
     assert "호출 한도 초과" in res
 
-@patch('modules.theme_analysis.genai.GenerativeModel')
-def test_evaluate_backtest_with_gemini_modes(mock_model):
+@patch('modules.theme_analysis._gemini_stream')
+def test_evaluate_backtest_with_gemini_modes(mock_stream):
     """백테스트 평가 시 single 및 monte_carlo 분기 커버리지"""
     config.GEMINI_API_KEY = "test_key"
-    mock_model.return_value.generate_content.return_value.text = "AI Backtest Evaluation"
+    mock_stream.return_value = [MagicMock(text="AI Backtest Evaluation")]
     
     # 1. 단일 모드 (single)
     res_single = theme_analysis.evaluate_backtest_with_gemini("005930", "삼성전자", "test info", mode='single')
@@ -60,39 +60,39 @@ def test_evaluate_backtest_with_gemini_modes(mock_model):
     res_mc = theme_analysis.evaluate_backtest_with_gemini("005930", "삼성전자", "test info", mode='monte_carlo')
     assert "AI Backtest Evaluation" in res_mc
 
-@patch('modules.theme_analysis.genai.GenerativeModel')
-def test_generate_trading_autopsy_success(mock_model):
+@patch('modules.theme_analysis._gemini_stream')
+def test_generate_trading_autopsy_success(mock_stream):
     """매매 복기(Autopsy) AI 리포트 생성 검증"""
     config.GEMINI_API_KEY = "test_key"
-    mock_model.return_value.generate_content.return_value.text = "AI Autopsy Report"
+    mock_stream.return_value = [MagicMock(text="AI Autopsy Report")]
     
     res = theme_analysis.generate_trading_autopsy("005930", "삼성전자", "2023-11-01", 8, "익절", 5.0, 3)
     assert "AI Autopsy Report" in res
 
-@patch('modules.theme_analysis.genai.GenerativeModel')
+@patch('modules.theme_analysis._gemini_stream')
 @patch('modules.theme_analysis._get_macro_context_str', return_value="Macro Context Info")
-def test_generate_daily_closing_report_success(mock_macro, mock_model):
+def test_generate_daily_closing_report_success(mock_macro, mock_stream):
     """포트폴리오 리스크 진단 AI 생성 검증"""
     config.GEMINI_API_KEY = "test_key"
-    mock_model.return_value.generate_content.return_value.text = "AI Portfolio Diagnosis"
+    mock_stream.return_value = [MagicMock(text="AI Portfolio Diagnosis")]
     
     res = theme_analysis.generate_daily_closing_report("포트폴리오 정보")
     assert "AI Portfolio Diagnosis" in res
 
-@patch('modules.theme_analysis.genai.GenerativeModel')
-def test_generate_morning_briefing_success(mock_model):
+@patch('modules.theme_analysis._gemini_stream')
+def test_generate_morning_briefing_success(mock_stream):
     """장전 브리핑 AI 리포트 생성 검증"""
     config.GEMINI_API_KEY = "test_key"
-    mock_model.return_value.generate_content.return_value.text = "AI Morning Briefing"
+    mock_stream.return_value = [MagicMock(text="AI Morning Briefing")]
     
     res = theme_analysis.generate_morning_briefing("마감 데이터 요약")
     assert "AI Morning Briefing" in res
 
-@patch('modules.theme_analysis.genai.GenerativeModel')
-def test_generate_stock_curation_success(mock_model):
+@patch('modules.theme_analysis._gemini_stream')
+def test_generate_stock_curation_success(mock_stream):
     """AI 종목 큐레이션 생성 검증"""
     config.GEMINI_API_KEY = "test_key"
-    mock_model.return_value.generate_content.return_value.text = "AI Stock Curation"
+    mock_stream.return_value = [MagicMock(text="AI Stock Curation")]
     
     res = theme_analysis.generate_stock_curation()
     assert "AI Stock Curation" in res

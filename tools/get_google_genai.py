@@ -15,15 +15,17 @@ def main():
         return 1
 
     # SDK 는 여기서 들여온다 — 키가 없으면 import 비용도 지지 않는다.
-    import google.generativeai as genai
+    from google import genai
+    from google.genai import types
 
-    # 2. Gemini API 설정
-    genai.configure(api_key=api_key)
+    # 2. Gemini 클라이언트 생성 (신 SDK 는 전역 configure() 가 없다)
+    client = genai.Client(api_key=api_key)
 
     print("--- 사용 가능한 모델 목록 ---")
     try:
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
+        for m in client.models.list():
+            actions = getattr(m, "supported_actions", None) or []
+            if "generateContent" in actions:
                 print(f"Model Name: {m.name}")
     except Exception as e:
         print(f"모델 목록 조회 실패: {e}")
@@ -33,15 +35,15 @@ def main():
 
     print(f"\n--- 모델 테스트 ({model_name}) ---")
     try:
-        model = genai.GenerativeModel(
-            model_name=model_name,
-            generation_config={
-                "temperature": 0.2,
-                "top_p": 0.95,
-                "max_output_tokens": 8192,
-            }
+        response = client.models.generate_content(
+            model=model_name,
+            contents="현재 주식 시장 분석을 위한 간단한 파이썬 코드를 작성해줘.",
+            config=types.GenerateContentConfig(
+                temperature=0.2,
+                top_p=0.95,
+                max_output_tokens=8192,
+            ),
         )
-        response = model.generate_content("현재 주식 시장 분석을 위한 간단한 파이썬 코드를 작성해줘.")
         print(response.text)
     except Exception as e:
         print(f"모델 테스트 실패: {e}")

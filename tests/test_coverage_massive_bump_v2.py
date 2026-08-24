@@ -117,10 +117,10 @@ def test_reset_to_default_cancel(mock_ask):
 # ==============================================================================
 # 5. modules/theme_analysis.py & modules/db_manager.py - 인프라 예외
 # ==============================================================================
-@patch('modules.theme_analysis.genai.GenerativeModel')
-def test_generate_daily_closing_report_rate_limit(mock_model):
+@patch('modules.theme_analysis._gemini_stream')
+def test_generate_daily_closing_report_rate_limit(mock_stream):
     """포트폴리오 분석 중 Gemini Rate Limit 등 API 예외 발생 시 반환 문자열 커버리지"""
-    mock_model.return_value.generate_content.side_effect = Exception("429 Quota Exceeded")
+    mock_stream.side_effect = Exception("429 Quota Exceeded")
     config.GEMINI_API_KEY = "dummy_key"
     res = theme_analysis.generate_daily_closing_report("Mock Portfolio")
     assert "Rate Limit" in res

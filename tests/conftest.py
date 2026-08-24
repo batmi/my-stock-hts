@@ -22,8 +22,9 @@ def setup_config():
     """테스트 세션 동안 사용할 설정 초기화 (모의투자 모드 강제)"""
     # 테스트 중 실수로 실전 API가 호출되지 않도록 안전장치
     config.session.initialize(mode="1")
-    # [지연 임포트 대응] genai는 운영에서 최초 사용 시 로드되지만, 테스트는
-    # modules.theme_analysis.genai.GenerativeModel 을 직접 patch하므로 미리 채워 둔다.
+    # [지연 임포트 대응] genai는 운영에서 최초 사용 시 로드된다. 테스트가 SDK 심볼을 직접
+    # patch하지는 않지만(이제 이음매는 theme_analysis._gemini_stream 이다), 미리 채워 두면
+    # 첫 AI 테스트가 import 비용을 혼자 뒤집어쓰지 않는다.
     from modules import theme_analysis
     theme_analysis._ensure_genai()
 

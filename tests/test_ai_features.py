@@ -7,9 +7,15 @@ from modules.auto_trade import ConclusionMonitor
 from modules.telegram_bot import TelegramCommander
 
 @pytest.fixture
-def mock_genai():
-    """Gemini API 호출을 방지하기 위한 Mock 픽스처"""
-    with patch('modules.theme_analysis.genai') as mock:
+def mock_gemini():
+    """Gemini API 호출을 방지하기 위한 Mock 픽스처.
+
+    [2026-08-24] 구 SDK 시절에는 genai 모듈 전체를 갈아끼우고 GenerativeModel 을 흉내 냈다.
+    신 SDK(google.genai)는 Client→models→generate_content_stream 으로 객체 그래프가 깊어져,
+    그 형태를 모사하면 테스트가 SDK 내부 구조에 묶인다. 대신 theme_analysis 가 스트리밍을
+    여는 유일한 지점(_gemini_stream)만 갈아끼운다 — 반환값은 **청크 이터러블**이다.
+    """
+    with patch('modules.theme_analysis._gemini_stream') as mock:
         # 테스트 중 API 키 검증 통과를 위해 임시 값 설정
         config.GEMINI_API_KEY = "test_dummy_key"
         yield mock
@@ -18,23 +24,20 @@ def mock_genai():
 # 1. AI 매매 복기 (Trading Autopsy) 테스트
 # ==========================================================
 
-def test_generate_trading_autopsy_success(mock_genai):
+def test_generate_trading_autopsy_success(mock_gemini):
     """매매 복기 프롬프트 생성 및 응답 정상 처리 테스트"""
-    mock_model = MagicMock()
-    mock_genai.GenerativeModel.return_value = mock_model
-    
-    mock_response = MagicMock()
-    mock_response.text = "🤖 **수석 전략가 분석**:\n테스트 분석 결과입니다.\n\n💡 **조언**:\n테스트 조언입니다."
-    mock_model.generate_content.return_value = mock_response
+    mock_chunk = MagicMock()
+    mock_chunk.text = "🤖 **수석 전략가 분석**:\n테스트 분석 결과입니다.\n\n💡 **조언**:\n테스트 조언입니다."
+    mock_gemini.return_value = [mock_chunk]
 
     res = theme_analysis.generate_trading_autopsy("005930", "삼성전자", "2023-10-01 10:00:00", 8.5, "익절", 20.0, 5)
     
     assert res is not None
     assert "테스트 분석 결과" in res
-    mock_model.generate_content.assert_called_once()
+    mock_gemini.assert_called_once()
     
     # 전달된 프롬프트에 주요 파라미터가 포함되었는지 확인
-    prompt_args = mock_model.generate_content.call_args[0][0]
+    prompt_args = mock_gemini.call_args[0][0]
     assert "삼성전자(005930)" in prompt_args
     assert "8.5점" in prompt_args
     assert "+20.00%" in prompt_args
@@ -46,11 +49,9 @@ def test_generate_trading_autopsy_no_api_key():
     res = theme_analysis.generate_trading_autopsy("005930", "삼성전자", "2023-10-01", 8.0, "익절", 10.0, 5)
     assert "Gemini" in res
 
-def test_generate_trading_autopsy_api_exception(mock_genai):
+def test_generate_trading_autopsy_api_exception(mock_gemini):
     """API 호출 중 에러 발생 시의 예외 처리 테스트"""
-    mock_model = MagicMock()
-    mock_genai.GenerativeModel.return_value = mock_model
-    mock_model.generate_content.side_effect = Exception("API Timeout")
+    mock_gemini.side_effect = Exception("API Timeout")
     
     res = theme_analysis.generate_trading_autopsy("005930", "삼성전자", "2023-10-01", 8.0, "익절", 10.0, 5)
     assert "Gemini" in res
@@ -79,24 +80,21 @@ def test_conclusion_monitor_send_trading_autopsy(mock_send_tg, mock_get_buy, moc
 # ==========================================================
 
 @patch('modules.theme_analysis._get_macro_context_str')
-def test_generate_daily_closing_report_success(mock_macro, mock_genai):
+def test_generate_daily_closing_report_success(mock_macro, mock_gemini):
     """포트폴리오 진단 프롬프트 생성 및 응답 정상 처리 테스트"""
     mock_macro.return_value = "[시스템 제공 실시간 핵심 매크로 지표]\n- 코스피: 2600.00"
-    mock_model = MagicMock()
-    mock_genai.GenerativeModel.return_value = mock_model
-    
-    mock_response = MagicMock()
-    mock_response.text = "📊 **섹터/테마 편중도 요약**: 반도체 편중\n💡 **리밸런싱 제안**: 헷지 필요"
-    mock_model.generate_content.return_value = mock_response
+    mock_chunk = MagicMock()
+    mock_chunk.text = "📊 **섹터/테마 편중도 요약**: 반도체 편중\n💡 **리밸런싱 제안**: 헷지 필요"
+    mock_gemini.return_value = [mock_chunk]
 
     portfolio_str = "총 자산: 10,000,000원\n- 삼성전자: 비중 100%"
     res = theme_analysis.generate_daily_closing_report(portfolio_str)
     
     assert res is not None
     assert "반도체 편중" in res
-    mock_model.generate_content.assert_called_once()
+    mock_gemini.assert_called_once()
     
-    prompt_args = mock_model.generate_content.call_args[0][0]
+    prompt_args = mock_gemini.call_args[0][0]
     assert "삼성전자: 비중 100%" in prompt_args
     assert "코스피: 2600.00" in prompt_args
 
@@ -105,24 +103,21 @@ def test_generate_daily_closing_report_success(mock_macro, mock_genai):
 # ==========================================================
 
 @patch('modules.theme_analysis._get_macro_context_str')
-def test_generate_stock_curation_success(mock_macro, mock_genai):
+def test_generate_stock_curation_success(mock_macro, mock_gemini):
     """관심 종목 큐레이션 프롬프트 생성 및 응답 정상 처리 테스트"""
     mock_macro.return_value = "[시스템 제공 실시간 핵심 매크로 지표]"
-    mock_model = MagicMock()
-    mock_genai.GenerativeModel.return_value = mock_model
-    
-    mock_response = MagicMock()
-    mock_response.text = "🎯 [AI 관심 종목 큐레이션]\n\n📊 1. AI 반도체 장비\n• 한미반도체(042700) - HBM 수혜"
-    mock_model.generate_content.return_value = mock_response
+    mock_chunk = MagicMock()
+    mock_chunk.text = "🎯 [AI 관심 종목 큐레이션]\n\n📊 1. AI 반도체 장비\n• 한미반도체(042700) - HBM 수혜"
+    mock_gemini.return_value = [mock_chunk]
 
     res = theme_analysis.generate_stock_curation()
     
     assert res is not None
     assert "한미반도체(042700)" in res
-    mock_model.generate_content.assert_called_once()
+    mock_gemini.assert_called_once()
     
     # 전달된 프롬프트에 주요 파라미터가 포함되었는지 확인
-    prompt_args = mock_model.generate_content.call_args[0][0]
+    prompt_args = mock_gemini.call_args[0][0]
     assert "[시스템 제공 실시간 핵심 매크로 지표]" in prompt_args
     assert "핵심 테마 2~3가지" in prompt_args
 

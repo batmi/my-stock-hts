@@ -3,7 +3,6 @@ import re
 import requests
 import sqlite3
 import concurrent.futures
-import warnings
 import math
 from contextlib import closing
 from bs4 import BeautifulSoup
@@ -23,30 +22,56 @@ from modules import prompts # [추가] 외부 프롬프트 템플릿 로드
 from modules.executors import ai_executor, io_executor
 from modules import db_manager
 
-# [최적화] google.generativeai(grpc 등 무거운 의존성 포함)는 AI 기능 최초 사용 시점에
-# 지연 임포트한다 → 프로그램 시작 시간 단축 (라즈베리파이에서 특히 유효).
+# [최적화] google.genai(httpx·pydantic 등 포함)는 AI 기능 최초 사용 시점에 지연 임포트한다
+# → 프로그램 시작 시간 단축 (라즈베리파이에서 특히 유효).
 # 테스트가 modules.theme_analysis.genai 를 직접 patch하는 관행을 유지하기 위해
 # 모듈 전역 genai 심볼은 그대로 두고 _ensure_genai()가 최초 1회만 채운다.
+#
+# [2026-08-24 SDK 이전] google-generativeai → google-genai.
+#  구 패키지는 지원 종료(EOL)를 선언했다("All support ... has ended").
+#  달라진 것은 셋이다:
+#    1) 전역 configure() 가 없다 → Client 인스턴스를 만들어 들고 다닌다(_gemini_client).
+#    2) GenerativeModel 클래스가 없다 → client.models.generate_content_stream(model=...).
+#    3) 스트리밍이 **누적 객체가 아니라 청크 제너레이터**다 → 여기서 직접 모은다
+#       (_StreamedResponse). 구 SDK 는 반환 객체가 순회 후 .text 로 전체를 줬다.
 genai = None
 _GENAI_IMPORT_TRIED = False
+_GENAI_CLIENT = None
+_GENAI_CLIENT_KEY = None
 
 def _ensure_genai():
-    """google.generativeai를 최초 사용 시 임포트해 전역 genai에 바인딩한다.
+    """google.genai를 최초 사용 시 임포트해 전역 genai에 바인딩한다.
 
     미설치 시 None 유지. 이미 로드됐거나 테스트가 genai를 patch한 경우 그대로 반환한다.
-    (FutureWarning 숨김: 최신 SDK인 google.genai로의 전환 권고 메시지 억제, 기존 로직 유지)
     """
     global genai, _GENAI_IMPORT_TRIED
     if genai is None and not _GENAI_IMPORT_TRIED:
         _GENAI_IMPORT_TRIED = True
         try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", category=FutureWarning)
-                import google.generativeai as _genai
+            import google.genai as _genai
             genai = _genai
         except ImportError:
             genai = None
     return genai
+
+
+def _gemini_client():
+    """API 키로 만든 genai.Client (키가 바뀌면 새로 만든다).
+
+    구 SDK 의 genai.configure() 는 프로세스 전역이라 한 번 부르면 끝이었지만, 신 SDK 는
+    클라이언트가 키를 들고 있다. 매 호출마다 새로 만들면 커넥션 풀이 매번 버려지므로
+    키를 캐시 열쇠로 삼아 재사용한다 — 테스트가 config.GEMINI_API_KEY 를 바꿔치기해도
+    다음 호출에서 알아서 갈아탄다.
+    """
+    global _GENAI_CLIENT, _GENAI_CLIENT_KEY
+    sdk = _ensure_genai()
+    if sdk is None:
+        return None
+    key = config.GEMINI_API_KEY
+    if _GENAI_CLIENT is None or _GENAI_CLIENT_KEY != key:
+        _GENAI_CLIENT = sdk.Client(api_key=key)
+        _GENAI_CLIENT_KEY = key
+    return _GENAI_CLIENT
 import config
 
 logger = logging.getLogger(__name__)
@@ -447,13 +472,38 @@ def _get_macro_context_str():
 
     return "\n".join(context_lines) + "\n"
 
-def _is_gemini_rate_limit(error_msg):
-    """Gemini 무료 티어 한도 초과(429/RESOURCE_EXHAUSTED/Quota) 여부 판별"""
+def _gemini_error_code(e):
+    """예외에서 HTTP 상태코드를 꺼낸다. 없으면 None.
+
+    신 SDK(google.genai)는 APIError.code 로 상태코드를 준다 — 문자열에 '429'가 우연히
+    섞이길 기다리는 것보다 정확하다. 문자열만 넘어오는 경로(기존 테스트·구 호출부)도
+    있으므로 없으면 조용히 None 이다.
+    """
+    code = getattr(e, "code", None)
+    if isinstance(code, int):
+        return code
+    try:
+        return int(code)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_gemini_rate_limit(error):
+    """Gemini 무료 티어 한도 초과(429/RESOURCE_EXHAUSTED/Quota) 여부 판별.
+
+    예외 객체와 문자열을 모두 받는다 — 코드가 있으면 코드로, 없으면 메시지로 판정한다.
+    """
+    if _gemini_error_code(error) == 429:
+        return True
+    error_msg = error if isinstance(error, str) else str(error)
     return "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg or "Quota" in error_msg
 
 
-def _is_gemini_unavailable(error_msg):
-    """Gemini 서버 과부하/일시 사용 불가(503/UNAVAILABLE/high demand) 여부 판별"""
+def _is_gemini_unavailable(error):
+    """Gemini 서버 과부하/일시 사용 불가(503/UNAVAILABLE/high demand) 여부 판별."""
+    if _gemini_error_code(error) == 503:
+        return True
+    error_msg = error if isinstance(error, str) else str(error)
     msg = error_msg.lower()
     return "503" in error_msg or "unavailable" in msg or "high demand" in msg or "overloaded" in msg
 
@@ -470,27 +520,87 @@ GEMINI_STREAM_CHUNK_TIMEOUT = 30.0
 _STREAM_END = object()
 
 
-def _gemini_stream_response(model, content, first_timeout):
-    """generate_content(stream=True)로 응답을 조각 단위로 수신해 누적한다.
+class _StreamedResponse:
+    """스트리밍 청크를 하나의 응답처럼 보이게 모은 것 (.text / .candidates).
 
-    stream=True 호출 자체가 첫 응답 조각이 도착할 때까지 블로킹되므로,
-    first_timeout은 모델의 내부 추론(thinking)을 포함한 첫 응답까지의 제한이다.
-    이후에는 조각 간 간격이 GEMINI_STREAM_CHUNK_TIMEOUT를 넘으면 중단하므로,
-    전체 생성이 오래 걸려도 진행 중인 응답은 끝까지 수신한다.
-    (future.cancel()은 이미 실행 중인 요청을 중단하지 못하므로, 타임아웃된
-    요청은 백그라운드에 남지만 ai_executor 워커가 여유 있어 재시도는 가능하다.)
+    구 SDK 는 generate_content(stream=True) 가 돌려준 객체를 끝까지 순회하면 그 객체
+    자신이 전체 텍스트를 들고 있었다. 신 SDK 의 generate_content_stream 은 **청크
+    제너레이터**라 그런 객체가 없다. 하류(_gemini_text)가 .text 와 .candidates 만 보므로
+    그 두 가지를 갖춘 얇은 그릇을 만들어 인터페이스를 유지한다.
 
-    반환: 모든 조각이 누적된 응답 객체 (.text로 전체 텍스트 접근 가능)
+    candidates 는 **마지막 청크**의 것을 쓴다 — finish_reason(MAX_TOKENS 등)은 마지막에
+    확정되기 때문이다.
     """
-    future = ai_executor.submit(model.generate_content, content, stream=True)
+
+    __slots__ = ("text", "candidates")
+
+    def __init__(self, text, candidates):
+        self.text = text
+        self.candidates = candidates
+
+
+def _chunk_text(chunk):
+    """청크에서 텍스트를 안전하게 꺼낸다. 텍스트 파트가 없으면 빈 문자열.
+
+    thinking 모델은 텍스트가 아닌 파트만 담긴 청크를 보내기도 하는데, 그때 .text 접근이
+    예외를 던지거나 경고를 남긴다. 한 조각 때문에 전체 수신이 깨지면 안 된다.
+    """
     try:
-        response = future.result(timeout=first_timeout)
+        return chunk.text or ""
+    except Exception:      # noqa: BLE001 - 파트 없음/차단 등 SDK 내부 사정
+        return ""
+
+
+def _gemini_stream(content, model_name, generation_config):
+    """모델 하나에 대한 스트리밍 청크 제너레이터를 만든다.
+
+    **테스트가 갈아끼우는 이음매**다. SDK 객체 그래프(Client→models→…)를 통째로 흉내 내는
+    대신 이 함수만 patch 하면 되도록 좁게 뚫어 둔다. content 를 첫 인자로 두는 것도 그래서다
+    — 호출부 검증이 call_args[0][0] 으로 프롬프트를 바로 집을 수 있다.
+    """
+    client = _gemini_client()
+    cfg = genai.types.GenerateContentConfig(
+        # 자동 함수 호출(AFC)을 끈다. 우리는 tools 를 넘기지 않으므로 쓸 일이 없는데,
+        #  켜져 있으면 SDK 가 호출마다 "직접 쓰지 말고 Chat 을 쓰라"는 경고를 콘솔에 남긴다.
+        automatic_function_calling=genai.types.AutomaticFunctionCallingConfig(disable=True),
+        **generation_config)
+    return client.models.generate_content_stream(
+        model=model_name, contents=content, config=cfg)
+
+
+def _gemini_stream_response(content, model_name, generation_config, first_timeout):
+    """스트리밍으로 응답을 조각 단위로 수신해 누적한다.
+
+    first_timeout은 모델의 내부 추론(thinking)을 포함한 **첫 응답 조각까지의** 제한이고,
+    그 뒤로는 조각 간 간격이 GEMINI_STREAM_CHUNK_TIMEOUT를 넘을 때만 중단한다. 전체 생성이
+    오래 걸려도 진행 중인 응답은 끝까지 받는다.
+
+    [함정 · 신 SDK] generate_content_stream 은 **제너레이터 함수**라 호출만으로는 네트워크를
+    타지 않는다(구 SDK 의 generate_content(stream=True) 는 첫 조각까지 블로킹했다). 그래서
+    첫 조각을 여기서 **강제로 당긴다** — 당기지 않으면 첫 응답 예산이 first_timeout(최대
+    150초)이 아니라 조각 간 제한(30초)으로 쪼그라들어, 추론이 긴 모델이 통째로 타임아웃난다.
+
+    (future.cancel()은 이미 실행 중인 요청을 중단하지 못하므로, 타임아웃된 요청은
+    백그라운드에 남지만 ai_executor 워커가 여유 있어 재시도는 가능하다.)
+
+    반환: _StreamedResponse (.text로 전체 텍스트 접근 가능)
+    """
+    def _open_and_pull_first():
+        stream_iter = iter(_gemini_stream(content, model_name, generation_config))
+        return stream_iter, next(stream_iter, _STREAM_END)
+
+    future = ai_executor.submit(_open_and_pull_first)
+    try:
+        stream_iter, chunk = future.result(timeout=first_timeout)
     except concurrent.futures.TimeoutError:
         future.cancel()
         raise GeminiTimeoutError(f"TimeoutError: API 응답 대기 시간 초과 (첫 응답 {int(first_timeout)}초)")
 
-    stream_iter = iter(response)
-    while True:
+    parts = []
+    last = None
+    while chunk is not _STREAM_END:
+        parts.append(_chunk_text(chunk))
+        last = chunk
         chunk_future = ai_executor.submit(next, stream_iter, _STREAM_END)
         try:
             chunk = chunk_future.result(timeout=GEMINI_STREAM_CHUNK_TIMEOUT)
@@ -499,8 +609,8 @@ def _gemini_stream_response(model, content, first_timeout):
             raise GeminiTimeoutError(
                 f"TimeoutError: API 응답 대기 시간 초과 "
                 f"(스트리밍 중 {int(GEMINI_STREAM_CHUNK_TIMEOUT)}초간 수신 없음)")
-        if chunk is _STREAM_END:
-            return response
+
+    return _StreamedResponse("".join(parts), getattr(last, "candidates", None))
 
 
 def _gemini_generate(content, generation_config, timeout, timeout_retries=1):
@@ -522,13 +632,9 @@ def _gemini_generate(content, generation_config, timeout, timeout_retries=1):
     last_exc = None
     for idx, model_name in enumerate(models):
         try:
-            model = genai.GenerativeModel(
-                model_name=model_name,
-                generation_config=generation_config,
-            )
             for attempt in range(timeout_retries + 1):
                 try:
-                    return _gemini_stream_response(model, content, timeout)
+                    return _gemini_stream_response(content, model_name, generation_config, timeout)
                 except GeminiTimeoutError:
                     if attempt < timeout_retries:
                         config.console.print("\n[yellow]API 응답 대기 시간 초과 - 같은 모델로 다시 시도합니다...[/yellow]")
@@ -538,13 +644,13 @@ def _gemini_generate(content, generation_config, timeout, timeout_retries=1):
         except Exception as e:
             last_exc = e
             has_fallback = idx < len(models) - 1
-            if has_fallback and _is_gemini_rate_limit(str(e)):
+            if has_fallback and _is_gemini_rate_limit(e):
                 next_model = models[idx + 1]
                 config.console.print(f"\n[yellow]Gemini API 호출 한도 초과 (Rate Limit) - 모델: {model_name}[/yellow]")
                 config.console.print(f"[dim]  무료 티어 사용량이 초과되어 '{next_model}' 모델로 자동 전환 후 다시 시도합니다.[/dim]")
                 logger.warning(f"Gemini rate limit on {model_name}; falling back to {next_model}. {e}")
                 continue
-            if has_fallback and _is_gemini_unavailable(str(e)):
+            if has_fallback and _is_gemini_unavailable(e):
                 next_model = models[idx + 1]
                 config.console.print(f"\n[yellow]Gemini 서버 과부하 (503 High Demand) - 모델: {model_name}[/yellow]")
                 config.console.print(f"[dim]  일시적인 수요 급증으로 '{next_model}' 모델로 자동 전환 후 다시 시도합니다.[/dim]")
@@ -627,7 +733,7 @@ def _run_gemini_report(prompt_content, *, label="분석", timeout=60.0, generati
                        default="분석 결과를 생성하지 못했습니다.", error_style="rich", error_prefix=None):
     """리포트형 Gemini 호출 공통 래퍼.
 
-    설정 확인 → genai.configure → 생성(429 시 폴백 모델 재시도) → 텍스트 추출(잘림 경고)
+    설정 확인 → 생성(429 시 폴백 모델 재시도) → 텍스트 추출(잘림 경고)
     → 오류 메시지 표준화까지의 보일러플레이트를 한곳으로 모은다.
     """
     if _ensure_genai() is None or not config.GEMINI_API_KEY:
@@ -640,7 +746,6 @@ def _run_gemini_report(prompt_content, *, label="분석", timeout=60.0, generati
         gen_cfg.update(generation_config)
 
     try:
-        genai.configure(api_key=config.GEMINI_API_KEY)
         logger.debug(f"[GEMINI_AI_DEBUG] {label} 요청 - API 호출 대기 시작 (모델: {config.GEMINI_MODEL})")
         res = _gemini_generate(prompt_content, gen_cfg, timeout)
         logger.debug(f"[GEMINI_AI_DEBUG] {label} 요청 - API 응답 수신 성공")
@@ -655,7 +760,7 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
     Gemini의 Google Search Grounding을 사용하여 실시간 시장 테마 분석
     """
     if _ensure_genai() is None:
-        config.console.print("\n[red]※ google-generativeai 라이브러리가 설치되지 않았습니다.[/red]")
+        config.console.print("\n[red]※ google-genai 라이브러리가 설치되지 않았습니다.[/red]")
         return None
 
     if not config.GEMINI_API_KEY:
@@ -687,9 +792,6 @@ def analyze_market_trends_with_gemini(custom_prompt=None):
 
             task_ai = progress.add_task(f"[cyan]Google Gemini가 시장 데이터를 분석 중입니다...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
             
-            # 1. Gemini API 설정
-            genai.configure(api_key=config.GEMINI_API_KEY)
-
             try:
                 logger.debug("[GEMINI_AI_DEBUG] 테마 분석 요청 - API 호출 대기 시작")
 

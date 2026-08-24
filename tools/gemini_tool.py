@@ -1,6 +1,8 @@
 import os
 import sys
-import google.generativeai as genai
+
+from google import genai
+from google.genai import types
 
 def run_gemini_tool():
     # 1. 환경변수에서 API 키 불러오기
@@ -11,24 +13,20 @@ def run_gemini_tool():
         print("터미널에서 'export GEMINI_API_KEY=your_key_here'를 실행해 주세요.")
         return
 
-    # 2. Gemini API 설정
-    genai.configure(api_key=api_key)
-
+    # 2. Gemini 클라이언트 생성 (신 SDK 는 전역 configure() 대신 Client 가 키를 든다)
     # 3. 모델 설정 (환경변수 GEMINI_MODEL 우선, 미설정 시 최신 Flash 사용)
     # 분석 위주의 작업을 위해 최적화된 모델입니다.
     model_name = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
-    
+    gen_config = types.GenerateContentConfig(
+        temperature=0.2,  # 분석 작업이므로 일관성을 위해 낮게 설정
+        top_p=0.95,
+        max_output_tokens=8192,
+    )
+
     try:
-        model = genai.GenerativeModel(
-            model_name=model_name,
-            generation_config={
-                "temperature": 0.2,  # 분석 작업이므로 일관성을 위해 낮게 설정
-                "top_p": 0.95,
-                "max_output_tokens": 8192,
-            }
-        )
+        client = genai.Client(api_key=api_key)
     except Exception as e:
-        print(f"모델 초기화 중 오류 발생: {e}")
+        print(f"클라이언트 초기화 중 오류 발생: {e}")
         return
 
     print(f"--- Gemini 분석 툴 실행 중 (모델: {model_name}) ---")
@@ -49,7 +47,8 @@ def run_gemini_tool():
         
         try:
             # 5. 콘텐츠 생성 및 출력
-            response = model.generate_content(user_input)
+            response = client.models.generate_content(
+                model=model_name, contents=user_input, config=gen_config)
             
             print("-" * 30)
             print(response.text)

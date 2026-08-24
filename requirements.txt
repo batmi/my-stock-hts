@@ -76,8 +76,12 @@ matplotlib>=3.7
 openpyxl>=3.1
 
 # --- AI ---------------------------------------------------------------------
-# google-generativeai: 장전 브리핑·테마 분석·AI 종목 코멘트(Gemini).
-google-generativeai>=0.8
+# google-genai: 장전 브리핑·테마 분석·AI 종목 코멘트(Gemini).
+#  [2026-08-24] 구 google-generativeai 에서 이전했다 — 그 패키지는 지원 종료를 선언했다
+#  ("All support ... has ended. Please switch to the google.genai package"). 인터페이스가
+#  다르다: 전역 configure() 대신 Client, GenerativeModel 대신 client.models.*,
+#  스트리밍은 누적 객체가 아니라 청크 제너레이터다(modules/theme_analysis.py 참조).
+google-genai>=1.0
 
 # --- 플랫폼 보조 (선택) ----------------------------------------------------
 # gnureadline: macOS 기본 파이썬의 libedit readline 이 입력 편집을 망가뜨리는 것을 피한다.
@@ -92,6 +96,6 @@ gnureadline>=8.0; sys_platform == "darwin"
 #   urllib3 2.7.0 · beautifulsoup4 4.15.0 · matplotlib 3.11.0 · openpyxl 3.1.5
 #   python-dotenv 1.2.2 · pydantic 2.13.4 · holidays 0.103 · pykrx 1.2.8
 #   finance-datareader 0.9.202 · tradingview-screener 3.2.0 · tvdatafeed 2.1.0
-#   google-generativeai 0.8.6 · websockets 16.0 · cryptography 49.0.0
+#   google-genai 2.19.0 · websockets 16.0 · cryptography 49.0.0
 #   gnureadline 8.3.3
 # ============================================================================

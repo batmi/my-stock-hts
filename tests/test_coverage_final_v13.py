@@ -78,23 +78,23 @@ def test_evaluate_market_indicator_all_cases():
     assert "신고가 근접" in theme_analysis.evaluate_market_indicator("SOX (반도체)", 100, yh_rate=-3.0)
     assert "침체/약세장" in theme_analysis.evaluate_market_indicator("기타지수", 100, yh_rate=-25.0)
 
-@patch('modules.theme_analysis.genai.GenerativeModel')
-def test_gemini_api_error_handling(mock_model):
+@patch('modules.theme_analysis._gemini_stream')
+def test_gemini_api_error_handling(mock_stream):
     """Gemini API 호출 시 발생하는 다양한 예외 처리 로직 테스트"""
     # 1. Rate Limit (429)
-    mock_model.return_value.generate_content.side_effect = Exception("429 RESOURCE_EXHAUSTED")
+    mock_stream.side_effect = Exception("429 RESOURCE_EXHAUSTED")
     with patch('config.console.print') as mock_print:
         res = theme_analysis.analyze_market_trends_with_gemini()
         assert res is None # [수정] 해당 함수는 예외 시 None을 반환함
         assert any("호출 한도 초과" in str(c) for c in mock_print.call_args_list)
     
     # 2. 모델명 오류 (404)
-    mock_model.return_value.generate_content.side_effect = Exception("404 NOT_FOUND")
+    mock_stream.side_effect = Exception("404 NOT_FOUND")
     res = theme_analysis.analyze_stock_with_gemini("005930", "삼성", "")
     assert "모델을 찾을 수 없습니다" in res
     
     # 3. 타임아웃
-    mock_model.return_value.generate_content.side_effect = Exception("TimeoutError")
+    mock_stream.side_effect = Exception("TimeoutError")
     res = theme_analysis.evaluate_backtest_with_gemini("005930", "삼성", "")
     assert "응답 대기 시간 초과" in res
 

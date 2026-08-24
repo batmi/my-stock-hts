@@ -68,7 +68,7 @@ _boot_log() {
 _import_name() {
     case "$1" in
         "beautifulsoup4")        echo "bs4" ;;
-        "google-generativeai")   echo "google.generativeai" ;;
+        "google-genai")          echo "google.genai" ;;
         "python-dotenv")         echo "dotenv" ;;
         "tradingview-screener")  echo "tradingview_screener" ;;
         "tvdatafeed")            echo "tvDatafeed" ;;

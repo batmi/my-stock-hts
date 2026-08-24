@@ -70,22 +70,22 @@ def test_get_macro_context_str(mock_fast_info, mock_dom_idx, mock_treasury):
     assert "미국채 5년물 금리" in res
     assert "선물적용" in res
 
-@patch('modules.theme_analysis.genai.GenerativeModel')
-def test_ask_gemini(mock_model):
+@patch('modules.theme_analysis._gemini_stream')
+def test_ask_gemini(mock_stream):
     """자유 질문 API 핸들러 테스트"""
     config.GEMINI_API_KEY = "test_key"
-    mock_model.return_value.generate_content.return_value = MagicMock(text="AI 답변입니다.")
+    mock_stream.return_value = [MagicMock(text="AI 답변입니다.")]
     
     res = theme_analysis.ask_gemini("주식이 뭐야?")
     assert "AI 답변입니다." in res
 
 @patch('modules.theme_analysis.fetch_realtime_news')
-@patch('modules.theme_analysis.genai.GenerativeModel')
-def test_get_latest_news_with_gemini(mock_model, mock_news):
+@patch('modules.theme_analysis._gemini_stream')
+def test_get_latest_news_with_gemini(mock_stream, mock_news):
     """뉴스 요약 API 핸들러 테스트"""
     config.GEMINI_API_KEY = "test_key"
     mock_news.return_value = "뉴스 리스트"
-    mock_model.return_value.generate_content.return_value = MagicMock(text="요약된 뉴스입니다.")
+    mock_stream.return_value = [MagicMock(text="요약된 뉴스입니다.")]
     
     res = theme_analysis.get_latest_news_with_gemini("삼성전자")
     assert "요약된 뉴스입니다." in res

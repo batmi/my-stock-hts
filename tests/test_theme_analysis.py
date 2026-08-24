@@ -113,66 +113,63 @@ def test_analyze_market_trends_success():
     있어도 이 테스트는 한 번도 실행되지 않았다(스위트의 유일한 skip 이 이것이었다).
     아래 _run_fallback_scenario 계열이 쓰는 방식과 같게 맞춘다.
     """
-    pytest.importorskip("google.generativeai")
+    pytest.importorskip("google.genai")
     theme_analysis._ensure_genai()
 
     # API 키 설정 (테스트용)
     original_key = config.GEMINI_API_KEY
     config.GEMINI_API_KEY = "TEST_KEY"
 
-    with patch('modules.theme_analysis.genai.GenerativeModel') as mock_model_cls:
-        # Mock Client 및 Response 설정
-        mock_model = mock_model_cls.return_value
-        mock_response = MagicMock()
+    with patch('modules.theme_analysis._gemini_stream') as mock_stream:
+        # 신 SDK 는 청크 제너레이터를 준다 — 조각 하나짜리 스트림으로 흉내 낸다.
+        mock_chunk = MagicMock()
         mock_candidate = MagicMock()
         mock_part = MagicMock()
 
         # 응답 구조 모킹 (candidates[0].content.parts 존재 여부 확인용)
-        mock_response.text = "시장 분석 결과입니다."
-        mock_response.candidates = [mock_candidate]
+        mock_chunk.text = "시장 분석 결과입니다."
+        mock_chunk.candidates = [mock_candidate]
         mock_candidate.content.parts = [mock_part]
 
-        mock_model.generate_content.return_value = mock_response
+        mock_stream.return_value = [mock_chunk]
 
         try:
             result = theme_analysis.analyze_market_trends_with_gemini()
 
             assert result == "시장 분석 결과입니다."
-            mock_model.generate_content.assert_called_once()
+            mock_stream.assert_called_once()
         finally:
             config.GEMINI_API_KEY = original_key
 
 def test_gemini_generate_503_fallback():
     """기본 모델 503(서버 과부하) 시 폴백 모델로 자동 전환 테스트"""
-    pytest.importorskip("google.generativeai")
+    pytest.importorskip("google.genai")
     theme_analysis._ensure_genai()
-    with patch('modules.theme_analysis.genai.GenerativeModel') as mock_model_cls:
-        _run_fallback_scenario(mock_model_cls, "503 This model is currently experiencing high demand. Please try again later.")
-        assert mock_model_cls.call_args_list[1].kwargs["model_name"] == config.GEMINI_FALLBACK_MODEL
+    with patch('modules.theme_analysis._gemini_stream') as mock_stream:
+        _run_fallback_scenario(mock_stream, "503 This model is currently experiencing high demand. Please try again later.")
+        # _gemini_stream(content, model_name, gen_cfg) — 두 번째 호출의 모델이 폴백이어야 한다
+        assert mock_stream.call_args_list[1][0][1] == config.GEMINI_FALLBACK_MODEL
 
 
 def test_gemini_generate_429_fallback():
     """기본 모델 429(한도 초과) 시 폴백 모델로 자동 전환 테스트"""
-    pytest.importorskip("google.generativeai")
+    pytest.importorskip("google.genai")
     theme_analysis._ensure_genai()
-    with patch('modules.theme_analysis.genai.GenerativeModel') as mock_model_cls:
-        _run_fallback_scenario(mock_model_cls, "429 RESOURCE_EXHAUSTED: Quota exceeded")
+    with patch('modules.theme_analysis._gemini_stream') as mock_stream:
+        _run_fallback_scenario(mock_stream, "429 RESOURCE_EXHAUSTED: Quota exceeded")
 
 
-def _run_fallback_scenario(mock_model_cls, error_message):
+def _run_fallback_scenario(mock_stream, error_message):
     """기본 모델이 error_message로 실패하면 폴백 모델 응답이 반환되는지 검증"""
-    mock_fail = MagicMock()
-    mock_fail.generate_content.side_effect = Exception(error_message)
-    mock_response = MagicMock()
-    mock_response.text = "폴백 모델 분석 결과"
-    mock_ok = MagicMock()
-    mock_ok.generate_content.return_value = mock_response
-    mock_model_cls.side_effect = [mock_fail, mock_ok]
+    mock_chunk = MagicMock()
+    mock_chunk.text = "폴백 모델 분석 결과"
+    mock_stream.side_effect = [Exception(error_message), [mock_chunk]]
 
     result = theme_analysis._gemini_generate("테스트 프롬프트", {"temperature": 0.2}, 5.0)
 
-    assert result is mock_response
-    assert mock_model_cls.call_count == 2
+    # 신 SDK 경로는 청크를 모아 만든 _StreamedResponse 를 돌려준다
+    assert result.text == "폴백 모델 분석 결과"
+    assert mock_stream.call_count == 2
 
 
 def test_analyze_market_trends_no_api_key():

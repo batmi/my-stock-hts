@@ -71,10 +71,10 @@ def test_telegram_cmd_chart_empty_data(mock_chart):
 # ==========================================================
 # 3. modules/theme_analysis.py 커버리지
 # ==========================================================
-@patch('modules.theme_analysis.genai.GenerativeModel')
-def test_theme_analysis_gemini_400_error(mock_model):
+@patch('modules.theme_analysis._gemini_stream')
+def test_theme_analysis_gemini_400_error(mock_stream):
     """Gemini API Tools 400 에러(Search Grounding 미지원) 커버리지"""
-    mock_model.return_value.generate_content.side_effect = Exception("400 INVALID_ARGUMENT: tools")
+    mock_stream.side_effect = Exception("400 INVALID_ARGUMENT: tools")
     
     with patch('config.console.print') as mock_print:
         res = theme_analysis.analyze_stock_with_gemini("005930", "삼성전자", "기술적 정보")
