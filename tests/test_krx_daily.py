@@ -641,3 +641,51 @@ def test_name_map_never_raises_on_bad_input(bad):
     """경고 문구용 부가 정보라 여기서 예외가 나면 표 자체가 죽는다 — 절대 던지지 않는다."""
     from modules import analysis
     assert isinstance(analysis._name_map_from(bad), dict)
+
+
+# ---------------------------------------------------------
+# 상장 목록 — KRX 공식(1순위) / FDR(폴백·KONEX 보충)
+#  2026-08-25: FDR도 원천은 data.krx.co.kr이지만 비공식 래퍼 + GitHub CSV 캐시를 거친다.
+#  공식 경로가 열려 있으면 그쪽을 먼저 쓰되, KRX가 커버하지 않는 KONEX는 FDR로 메운다.
+# ---------------------------------------------------------
+_KRX_LISTING = {'005930': {'name': '삼성전자', 'marcap': 1.5e15}}
+_FDR_LISTING = {'005930': {'name': '삼성전자(FDR)', 'marcap': 9.9e9},
+                '0070X0': {'name': '에스테크엠', 'marcap': 1.51e10}}      # KONEX
+
+
+def test_상장목록은_KRX가_1순위다():
+    with patch.object(krx_daily, '_listing_map_from_krx', return_value=dict(_KRX_LISTING)), \
+         patch.object(krx_daily, '_listing_map_from_fdr', return_value=dict(_FDR_LISTING)):
+        m = krx_daily.get_listing_map(use_cache=False)
+    assert m['005930']['name'] == '삼성전자'          # FDR 값이 덮어쓰지 않는다
+
+
+def test_KONEX는_FDR로_메운다():
+    """KRX 업종분류 화면은 KOSPI·KOSDAQ만 준다 — KONEX 109종목이 빠지면 오탐이 난다."""
+    with patch.object(krx_daily, '_listing_map_from_krx', return_value=dict(_KRX_LISTING)), \
+         patch.object(krx_daily, '_listing_map_from_fdr', return_value=dict(_FDR_LISTING)):
+        m = krx_daily.get_listing_map(use_cache=False)
+    assert '0070X0' in m and m['0070X0']['name'] == '에스테크엠'
+
+
+def test_KRX_실패시_FDR로_폴백한다():
+    with patch.object(krx_daily, '_listing_map_from_krx', return_value=None), \
+         patch.object(krx_daily, '_listing_map_from_fdr', return_value=dict(_FDR_LISTING)):
+        m = krx_daily.get_listing_map(use_cache=False)
+    assert m['005930']['name'] == '삼성전자(FDR)'
+
+
+def test_KONEX_보충_실패는_무해하다():
+    """FDR이 죽어도 KOSPI·KOSDAQ 목록만으로 검증은 계속돼야 한다."""
+    with patch.object(krx_daily, '_listing_map_from_krx', return_value=dict(_KRX_LISTING)), \
+         patch.object(krx_daily, '_listing_map_from_fdr', return_value=None):
+        m = krx_daily.get_listing_map(use_cache=False)
+    assert m == _KRX_LISTING
+
+
+def test_둘다_실패하면_None이다():
+    """'검증 불가'와 '없는 종목'을 구분해야 한다 — 호출부가 검증을 건너뛴다."""
+    krx_daily._LISTING_FAIL_TS[0] = 0.0
+    with patch.object(krx_daily, '_listing_map_from_krx', return_value=None), \
+         patch.object(krx_daily, '_listing_map_from_fdr', return_value=None):
+        assert krx_daily.get_listing_map(use_cache=False) is None

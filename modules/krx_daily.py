@@ -87,6 +87,14 @@ def _lazy_import():
         noise = buf.getvalue().strip()
         if noise:
             logger.debug(f"[KRX] 라이브러리 로드 메시지(억제됨): {noise[:200]}")
+        # [중요] redirect 는 이 **일회성 import** 에서만 쓴다. 조회 경로에서 쓰면 전역
+        #  sys.stdout 을 초 단위로 잡아 rich 화면 출력이 통째로 사라진다(2026-08-25 장애).
+        #  이후의 로그인 배너는 모듈 print 교체로 지운다.
+        try:
+            from modules import krx_data
+            krx_data.silence_pykrx_banner()
+        except Exception:       # noqa: BLE001 - 배너 억제 실패는 조회에 영향이 없다
+            pass
 
 
 def is_available():
@@ -299,36 +307,69 @@ _LISTING_LOCK = threading.RLock()
 _LISTING_FAIL_TS = [0.0]
 
 
-def get_listing_map(use_cache=True):
-    """{'005930': {'name': '삼성전자', 'marcap': 1458646512696000}, ...} 또는 None.
+def _listing_map_from_krx():
+    """KRX 공식 상장 목록 {코드: {'name','marcap'}}. 자격증명 없음·실패 시 None.
 
-    None은 '조회 실패'를 뜻한다 — 상장 종목이 없다는 뜻이 아니므로 호출부는
-    이 경우 검증을 건너뛰어야 한다.
+    업종분류 화면이 **시장당 1콜**에 종목명과 시가총액을 함께 준다. 전종목 시총 조회
+    (get_market_cap_by_ticker)는 이름을 주지 않고, 이름은 종목당 1콜이라 2,700콜이 된다.
+
+    ※ 이 화면은 KOSPI·KOSDAQ만 지원한다 — KONEX 109종목은 여기 없어 호출부가 FDR로 메운다
+      (실측 2026-08-25: FDR 2,874 ⊃ KRX 2,765, 차이는 전부 KONEX. 겹치는 2,765종목에서
+       이름·시총 불일치 0).
     """
-    now = time.time()
-    if use_cache:
-        with _LISTING_LOCK:
-            hit = _LISTING.get('map')
-            if hit and (now - _LISTING.get('ts', 0.0)) < _cache_ttl_sec():
-                return hit
-            if now - _LISTING_FAIL_TS[0] < _FAIL_COOLDOWN_SEC:
-                return None
+    try:
+        from modules import krx_data
+        if not krx_data.is_available():
+            return None
+    except Exception:       # noqa: BLE001
+        return None
 
+    result = {}
+    try:
+        # [중요] sys.stdout 을 건드리지 않는다 — 전역이라 워커 스레드가 잡으면 화면 출력이
+        #  통째로 사라진다(krx_data.silence_pykrx_banner 주석 참조). pykrx 배너는 그쪽이 맡는다.
+        from pykrx import stock
+        day = datetime.now()
+        frames = []
+        # 휴장일에는 빈 프레임이 오므로 응답이 있는 날까지 거슬러 훑는다.
+        for _ in range(10):
+            d = day.strftime('%Y%m%d')
+            frames = [stock.get_market_sector_classifications(d, m)
+                      for m in ('KOSPI', 'KOSDAQ')]
+            if any(f is not None and not f.empty for f in frames):
+                break
+            day -= timedelta(days=1)
+        for frame in frames:
+            if frame is None or frame.empty:
+                continue
+            for code, row in frame.iterrows():
+                code = str(code).strip()
+                if not is_domestic_code(code):
+                    continue
+                try:
+                    marcap = float(row.get('시가총액') or 0)
+                except (TypeError, ValueError):
+                    marcap = 0.0
+                result[code] = {'name': str(row.get('종목명') or '').strip(),
+                                'marcap': marcap}
+    except Exception as e:      # noqa: BLE001 - 어떤 실패든 FDR 폴백으로 넘긴다
+        logger.debug(f"[KRX] 공식 상장목록 조회 실패: {e}")
+        return None
+    return result or None
+
+
+def _listing_map_from_fdr():
+    """FinanceDataReader 상장 목록 {코드: {'name','marcap'}}. 실패 시 None."""
     _lazy_import()
     if _fdr is None:
         return None
-
     try:
-        buf = io.StringIO()
-        with redirect_stderr(buf), redirect_stdout(buf):
-            df = _fdr.StockListing('KRX')
+        df = _fdr.StockListing('KRX')
     except Exception as e:      # noqa: BLE001 - 네트워크/파싱 실패 모두 '검증 불가'
         logger.debug(f"[KRX] 상장목록 조회 실패: {e}")
-        _LISTING_FAIL_TS[0] = now
         return None
 
     if df is None or getattr(df, 'empty', True) or 'Code' not in df.columns:
-        _LISTING_FAIL_TS[0] = now
         return None
 
     result = {}
@@ -347,6 +388,36 @@ def get_listing_map(use_cache=True):
             'marcap': marcap,
         }
     del df
+    return result or None
+
+
+def get_listing_map(use_cache=True):
+    """{'005930': {'name': '삼성전자', 'marcap': 1458646512696000}, ...} 또는 None.
+
+    **KRX 공식(1순위) / FDR(폴백)**. FDR 도 원천은 data.krx.co.kr 이지만 비공식 래퍼 +
+    GitHub CSV 캐시를 거치므로, 공식 경로가 열려 있으면 그쪽을 먼저 쓴다.
+    KRX 가 커버하지 않는 KONEX 는 FDR 로 메운다(있으면 보태고, 없으면 그대로 둔다).
+
+    None은 '조회 실패'를 뜻한다 — 상장 종목이 없다는 뜻이 아니므로 호출부는
+    이 경우 검증을 건너뛰어야 한다.
+    """
+    now = time.time()
+    if use_cache:
+        with _LISTING_LOCK:
+            hit = _LISTING.get('map')
+            if hit and (now - _LISTING.get('ts', 0.0)) < _cache_ttl_sec():
+                return hit
+            if now - _LISTING_FAIL_TS[0] < _FAIL_COOLDOWN_SEC:
+                return None
+
+    result = _listing_map_from_krx()
+    if result:
+        # KONEX 보충 — 실패해도 무해하다(공식 목록만으로도 KOSPI·KOSDAQ 전종목을 덮는다).
+        fallback = _listing_map_from_fdr()
+        for code, entry in (fallback or {}).items():
+            result.setdefault(code, entry)
+    else:
+        result = _listing_map_from_fdr()
 
     if not result:
         _LISTING_FAIL_TS[0] = now
@@ -374,9 +445,7 @@ def get_ticker_name(code):
     if _pykrx is None:
         return None
     try:
-        buf = io.StringIO()
-        with redirect_stderr(buf), redirect_stdout(buf):
-            raw = _pykrx.get_market_ticker_name(code)
+        raw = _pykrx.get_market_ticker_name(code)
     except Exception as e:      # noqa: BLE001
         logger.debug(f"[KRX] 종목명 조회 실패({code}): {e}")
         return None
@@ -431,10 +500,9 @@ def get_investor_netbuy(code, start, end):
 
     df = None
     try:
-        buf = io.StringIO()
-        # pykrx는 로그인 성공/실패와 ID를 stdout으로 흘린다 — 로그에 계정이 남지 않게 삼킨다.
-        with redirect_stderr(buf), redirect_stdout(buf):
-            raw = _pykrx.get_market_trading_volume_by_date(start, end, code, detail=False)
+        # 로그인 배너(계정 ID 포함)는 krx_data.silence_pykrx_banner 가 지운다.
+        #  여기서 redirect_stdout 을 쓰면 전역 stdout 을 초 단위로 잡아 화면이 멎는다.
+        raw = _pykrx.get_market_trading_volume_by_date(start, end, code, detail=False)
         if raw is not None and not raw.empty and set(_INVESTOR_COLUMNS) <= set(raw.columns):
             out = raw.reset_index()
             date_col = out.columns[0]           # '날짜'

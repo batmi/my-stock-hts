@@ -76,8 +76,12 @@ def _fake_get(quote=None, total_pages=5, page_size=None, prices=None):
 
 @pytest.fixture(autouse=True)
 def _clear_gold_cache():
+    # 아래 대부분은 **네이버 폴백 경로**를 검증한다. 개발자가 KRX_ID를 셸에 걸어 둔 채
+    #  돌리면 1순위(KRX)로 새어 결과가 갈리므로, 여기서 자격증명을 비워 경로를 고정한다.
+    #  KRX 경로 자체는 아래 'KRX 공식' 절에서 _krx_gold_official을 직접 목으로 잡아 검증한다.
     analysis._KRX_GOLD_CACHE.clear()
-    yield
+    with patch.dict(os.environ, {"KRX_ID": "", "KRX_PW": ""}):
+        yield
     analysis._KRX_GOLD_CACHE.clear()
 
 
@@ -354,3 +358,84 @@ def test_포지션분석은_시장구분_조회를_건너뛴다():
 
     m_type.assert_not_called()
     assert res.get("^KRXGOLD", {}).get('action')
+
+
+# ---------------------------------------------------------------- KRX 공식(1순위)
+#  2026-08-25: data.krx.co.kr 로그인이 생기면서 금현물도 실제 OHLC·거래량을 받게 됐다.
+#  네이버는 폴백으로 남는다(위 절이 그 경로를 계속 지킨다).
+
+def _official_frame():
+    """krx_data.get_gold_daily 가 주는 모양 — date는 'YYYYMMDD' 문자열이다."""
+    return pd.DataFrame([
+        {"date": "20260820", "open": 201420.0, "high": 202060.0, "low": 200850.0,
+         "close": 201620.0, "volume": 262774.0},
+        {"date": "20260821", "open": 202390.0, "high": 203410.0, "low": 201170.0,
+         "close": 203410.0, "volume": 216327.0},
+    ])
+
+
+def test_KRX가_1순위이고_네이버_시계열을_부르지_않는다():
+    """네이버 한계(종가만·거래량 0)를 피하는 것이 이 경로의 존재 이유다."""
+    with patch.object(analysis, '_krx_gold_official', return_value=_official_frame()), \
+         patch.object(analysis, '_fetch_krx_gold_history') as hist, \
+         patch.object(analysis, '_fetch_krx_gold_quote', return_value=None):
+        df = analysis.get_krx_gold_data()
+    hist.assert_not_called()
+    assert df.attrs['source'] == 'KRX'
+    assert (df['high'] > df['low']).all()          # 평탄화가 아니다
+    assert (df['volume'] > 0).all()                # OBV가 산다
+
+
+def test_KRX_실패시_네이버로_폴백한다():
+    with patch.object(analysis, '_krx_gold_official', return_value=None), \
+         patch.object(analysis, '_fetch_krx_gold_history',
+                      return_value=[(pd.to_datetime('2026-08-21'), 203410.0)]), \
+         patch.object(analysis, '_fetch_krx_gold_quote', return_value=None):
+        df = analysis.get_krx_gold_data()
+    assert df.attrs['source'] == 'NAVER'
+    assert len(df) == 1
+
+
+def test_장중_현재가는_확정봉_위에_덧대진다():
+    """KRX는 마감 후 확정 봉만 준다 — 오늘 봉이 없으면 현재가로 새 봉을 만든다."""
+    quote = {'date': pd.to_datetime('2026-08-24'), 'close': 207490.0}
+    with patch.object(analysis, '_krx_gold_official', return_value=_official_frame()), \
+         patch.object(analysis, '_fetch_krx_gold_quote', return_value=quote):
+        df = analysis.get_krx_gold_data()
+    assert len(df) == 3
+    assert df['close'].iloc[-1] == 207490.0
+    assert df['date'].iloc[-1] == pd.to_datetime('2026-08-24')
+
+
+def test_현재가가_봉_밖으로_나가면_고저를_넓힌다():
+    """종가가 [저,고] 밖에 있으면 True Range가 음수가 되어 ATR·SAR이 망가진다."""
+    quote = {'date': pd.to_datetime('2026-08-21'), 'close': 209000.0}   # 그날 고가(203,410) 위
+    with patch.object(analysis, '_krx_gold_official', return_value=_official_frame()), \
+         patch.object(analysis, '_fetch_krx_gold_quote', return_value=quote):
+        df = analysis.get_krx_gold_data()
+    last = df.iloc[-1]
+    assert last['close'] == 209000.0
+    assert last['high'] >= last['close'] and last['low'] <= last['close']
+
+
+def test_현재가_장애는_확정봉_표시를_막지_않는다():
+    """네이버가 죽어도 KRX 확정 봉만으로 표를 채울 수 있어야 한다."""
+    with patch.object(analysis, '_krx_gold_official', return_value=_official_frame()), \
+         patch.object(analysis, '_fetch_krx_gold_quote', side_effect=RuntimeError('네이버 장애')):
+        df = analysis.get_krx_gold_data()
+    assert df is not None and len(df) == 2
+    assert df.attrs['source'] == 'KRX'
+
+
+def test_현재가_장애는_음성캐시로_묶이고_시계열과_섞이지_않는다():
+    """현재가 실패가 시계열(fail) 마커를 건드리면 시계열 재시도까지 막힌다."""
+    with patch.object(analysis, '_krx_gold_official', return_value=_official_frame()), \
+         patch.object(analysis, '_fetch_krx_gold_quote',
+                      side_effect=RuntimeError('네이버 장애')) as q:
+        analysis.get_krx_gold_data()
+        first = q.call_count
+        analysis.get_krx_gold_data()
+        assert q.call_count == first            # 장애 구간엔 재요청하지 않는다
+    ent = analysis._krx_gold_entry(config.KRX_GOLD_SYMBOL)
+    assert ent['quote_fail'] is not None
+    assert ent['fail'] is None                  # 시계열 음성 캐시는 건드리지 않았다

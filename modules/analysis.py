@@ -242,6 +242,71 @@ def _init_tvdatafeed():
         _TVDATAFEED_LOGGED_IN = False
     return _TVDATAFEED_INSTANCE
 
+# KRX 공식 확정 봉을 '이력'으로 덮어쓸 지수 — 실시간 소스를 대체하지 않고 뼈대만 바꾼다.
+#  V코스피200은 뺀다: KRX가 종가만 주므로(선물 응답의 SPOT_PRC) KIS의 OHLC를 덮으면
+#  오히려 지표가 나빠진다. 그쪽은 KIS를 못 쓰는 모드에서만 폴백으로 쓴다.
+_KRX_INDEX_MERGE_TYPES = ("KOSPI", "KOSDAQ", "KOSPI200", "KOSDAQ150")
+
+# 지수 조회 창(달력일) — 250거래일(EMA120·52주)을 덮도록 여유를 둔다.
+_KRX_INDEX_DAYS = 400
+
+
+def _fetch_index_via_krx(market_type):
+    """data.krx.co.kr 공식 지수·파생 일봉. 자격증명 없음·실패 시 None.
+
+    지수(코스피 계열)·V코스피200·코스피200 선물(주간/야간)을 한 입구로 모은다 —
+    호출부가 소스 종류를 몰라도 되게 하려는 것이다.
+    """
+    try:
+        from modules import krx_data
+        if market_type == "VKOSPI":
+            return krx_data.get_vkospi_daily(_KRX_INDEX_DAYS)
+        if market_type in ("K200FUT_F", "K200FUT_CM"):
+            return krx_data.get_k200_futures_daily(
+                "F" if market_type == "K200FUT_F" else "CM", _KRX_INDEX_DAYS)
+        return krx_data.get_index_daily(market_type, _KRX_INDEX_DAYS)
+    except Exception as e:      # noqa: BLE001 - 어떤 실패든 종전 소스로 폴백한다
+        logger.debug(f"[KRX] {market_type} 공식 조회 실패: {e}")
+        return None
+
+
+def _date_key(value):
+    """비교용 'YYYYMMDD' 문자열. 소스마다 date 타입이 다르다(KIS/토스=문자열, tvDatafeed=datetime)."""
+    try:
+        return pd.to_datetime(value).strftime("%Y%m%d")
+    except Exception:       # noqa: BLE001
+        return str(value)
+
+
+def _merge_index_history(hist, live):
+    """KRX 확정 봉(hist) 위에 실시간 소스(live)의 '더 최신 날짜'만 얹는다.
+
+    [왜 병합인가] KRX는 마감 후 확정 봉만 주므로 장중 당일 값이 없다. 반대로 실시간
+     소스는 당일 값을 주지만 tvDatafeed는 간헐 빈 응답이고 지수 거래량을 0으로 준다.
+     그래서 **판단(지표)의 뼈대는 KRX 확정 봉**으로 두고 KRX가 아직 갖지 않은 날짜만
+     실시간 소스에서 가져온다 — 국내 일봉(krx_daily + 당일 오버레이)과 같은 구조다.
+
+    한쪽이 없으면 있는 쪽을 그대로 돌려준다(그래서 tvDatafeed가 통째로 죽어도
+    코스닥150이 살아남는다 — 야후·FDR에는 티커 자체가 없어 종전엔 복구 불가였다).
+    반환 date는 'YYYYMMDD' 문자열로 통일한다(KIS·토스 경로와 같은 표기).
+    """
+    if hist is None or getattr(hist, "empty", True):
+        return live
+    if live is None or getattr(live, "empty", True):
+        return hist
+
+    out = hist.copy()
+    out["date"] = out["date"].map(_date_key)
+    tail = live.copy()
+    tail["date"] = tail["date"].map(_date_key)
+    tail = tail[tail["date"] > out["date"].max()]
+    if not tail.empty:
+        out = pd.concat([out, tail[out.columns]], ignore_index=True)
+    out = out.sort_values("date").reset_index(drop=True)
+    out.attrs["source"] = hist.attrs.get("source", "KRX")
+    return out
+
+
 def _fetch_index_via_tvdatafeed(market_type, n_bars=260):
     """토스 모드 국내 지수(코스피·코스닥·코스피200·코스닥150)를 TradingView(tvDatafeed)로 조회한다.
 
@@ -629,6 +694,9 @@ def _krx_gold_entry(symbol):
         return _KRX_GOLD_CACHE.setdefault(symbol, {
             "hist": None, "hist_time": None, "hist_day": None,
             "quote": None, "quote_time": None, "fail": None,
+            # quote_fail: KRX 경로에서 현재가만 실패했을 때의 음성 캐시.
+            #  시계열 실패(fail)와 분리해야 현재가 장애가 시계열 재시도를 막지 않는다.
+            "quote_fail": None,
         })
 
 
@@ -675,18 +743,104 @@ def _fetch_krx_gold_quote(symbol):
     return {'date': day, 'close': current}
 
 
-def get_krx_gold_data(symbol=None):
-    """KRX 금현물(원/g) 일봉을 네이버에서 조회한다(현재가 60초 / 시계열 6시간 캐시).
+# KRX 공식 금현물 조회 창(달력일). 네이버 경로(_KRX_GOLD_PAGES × 60 = 300거래일)와 같은
+#  분량을 목표로 여유 있게 잡는다 — EMA120·52주(250봉)를 덮어야 한다.
+_KRX_GOLD_OFFICIAL_DAYS = 400
 
-    반환 스키마는 다른 지수 전용 소스와 동일: ['date','open','high','low','close','volume']
-    (open/high/low=close 평탄화, volume=0 — 거래량 이력 미제공이라 OBV 불가,
-    attrs['source']='NAVER'). 실패 시 None(성공 캐시가 있으면 그것을 돌려준다).
+
+def _krx_gold_official():
+    """KRX 공식 금현물 일봉(확정 봉). 자격증명 없음·실패 시 None → 네이버로 폴백한다."""
+    try:
+        from modules import krx_data
+        return krx_data.get_gold_daily(_KRX_GOLD_OFFICIAL_DAYS)
+    except Exception as e:      # noqa: BLE001 - 어떤 실패든 네이버 폴백으로 넘긴다
+        logger.debug(f"[KRX] 금현물 공식 조회 실패: {e}")
+        return None
+
+
+def _krx_gold_quote_cached(symbol, ent, now):
+    """네이버 현재가(60초 캐시). KRX 경로 전용 — 실패는 quote_fail로 따로 묶는다.
+
+    시계열 실패(ent['fail'])와 섞지 않는다. 섞으면 현재가 한 번 실패가 시계열 재시도까지
+    막아 버린다(실제로 그렇게 짰다가 음성 캐시 테스트가 잡아냈다).
+    """
+    quote = ent.get("quote")
+    if quote and ent.get("quote_time") and \
+            (now - ent["quote_time"]).total_seconds() < _KRX_GOLD_QUOTE_TTL_SEC:
+        return quote
+    last_fail = ent.get("quote_fail")
+    if last_fail and (now - last_fail).total_seconds() < _KRX_GOLD_NEG_TTL_SEC:
+        return quote                      # 장애 구간엔 재요청하지 않는다(만료된 값이라도 그대로)
+    try:
+        fetched = _fetch_krx_gold_quote(symbol)
+        if fetched:
+            with _KRX_GOLD_LOCK:
+                ent["quote"], ent["quote_time"], ent["quote_fail"] = fetched, now, None
+            return fetched
+    except Exception as e:      # noqa: BLE001 - 현재가는 없어도 확정 봉만으로 표를 채울 수 있다
+        logger.debug(f"[NAVER] KRX 금 현재가 조회 실패: {e}")
+    with _KRX_GOLD_LOCK:
+        ent["quote_fail"] = now
+    return quote
+
+
+def _overlay_gold_quote(df, quote):
+    """확정 일봉에 장중 현재가를 덮는다(KRX는 마감 후 확정 봉만 주기 때문).
+
+    같은 날짜 봉이 있으면 종가를 갈아끼우면서 **고·저를 그 값까지 넓힌다** — 종가가 봉
+    밖으로 벗어나면 True Range 가 음수가 되어 ATR·SAR 이 망가진다. 봉이 없으면 새로 덧붙인다.
+    """
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    # 네이버 경로와 날짜 타입을 맞춘다(그쪽은 Timestamp를 쓴다) — 호출부가 둘을 구분하지 않는다.
+    out['date'] = pd.to_datetime(out['date'], format='%Y%m%d', errors='coerce')
+    out = out.dropna(subset=['date'])
+    if not quote or quote.get('date') is None or not quote.get('close'):
+        out.attrs['source'] = 'KRX'
+        return out.reset_index(drop=True)
+
+    day, price = pd.to_datetime(quote['date']), float(quote['close'])
+    hit = out.index[out['date'] == day]
+    if len(hit):
+        i = hit[-1]
+        out.loc[i, 'high'] = max(float(out.loc[i, 'high']), price)
+        out.loc[i, 'low'] = min(float(out.loc[i, 'low']), price)
+        out.loc[i, 'close'] = price
+    else:
+        out = pd.concat([out, pd.DataFrame([{
+            'date': day, 'open': price, 'high': price, 'low': price,
+            'close': price, 'volume': 0.0}])], ignore_index=True)
+    out = out.sort_values('date').reset_index(drop=True)
+    out.attrs['source'] = 'KRX'
+    return out
+
+
+def get_krx_gold_data(symbol=None):
+    """KRX 금현물(원/g) 일봉 — **KRX 공식(1순위) / 네이버(폴백)**.
+
+    반환 스키마는 다른 지수 전용 소스와 동일: ['date','open','high','low','close','volume'].
+
+    [왜 KRX가 1순위인가] 네이버 일별 시세는 **종가만** 유효하고 시·고·저가 0으로 내려와
+     모든 봉을 종가로 평탄화해야 했다 — True Range 가 종가 차분이 되어 ATR·ADX 가 왜곡되고,
+     거래량 이력이 없어 OBV 는 '-' 로 남았다. data.krx.co.kr 로그인이 생기면서 실제 OHLC 와
+     거래량을 받게 됐다(네이버 종가와 겹치는 60일 불일치 0으로 드롭인 확인).
+     KRX_ID/KRX_PW 가 없으면 종전 네이버 경로로 그대로 폴백하므로 동작은 종전과 같다.
+
+    KRX는 마감 후 확정 봉만 주므로 **장중 현재가는 네이버 현재가로 덮는다**(60초 캐시).
+    attrs['source'] 는 'KRX' 또는 'NAVER'. 실패 시 None(성공 캐시가 있으면 그것을 돌려준다).
     """
     symbol = symbol or config.KRX_GOLD_SYMBOL
     now = datetime.now()
     ent = _krx_gold_entry(symbol)
     today = now.strftime("%Y%m%d")
 
+    official = _krx_gold_official()
+    if official is not None and not official.empty:
+        # KRX가 확정 봉을 줬다 — 장중 현재가만 네이버에서 덧댄다(네이버 장애는 무해하다).
+        return _overlay_gold_quote(official, _krx_gold_quote_cached(symbol, ent, now))
+
+    # ── 여기부터는 네이버 폴백 (KRX 미설정·조회 실패) — 종전 로직 그대로 ─────────────
     hist = ent["hist"]
     hist_fresh = (hist and ent["hist_time"] and ent["hist_day"] == today
                   and (now - ent["hist_time"]).total_seconds() < _KRX_GOLD_HIST_TTL_SEC)
@@ -1399,6 +1553,13 @@ def _fetch_domestic_index_data(market_type):
     # [추가] 코스피200 선물 (주간 K200FUT_F / 야간 K200FUT_CM): KIS 전용, 폴백 없음.
     #  세션별 market_type을 분리해 TTL 캐시가 주간/야간 데이터를 섞지 않게 한다.
     if market_type in ("K200FUT_F", "K200FUT_CM"):
+        # [KIS 전용 · 2026-08-25 재확인] KRX 공식 경로는 **마감 후 확정 봉만** 준다. 선물은
+        #  세션이 하루를 거의 덮어(주간 09:00~15:45 · 야간 18:00~익일 06:00) 장중 내내 최대
+        #  하루 묵은 값이 나온다 — 야간장 01:47 실측에서 KIS 실시간 1,034.85 vs KRX 확정
+        #  1,074.55 로 40포인트 벌어졌고 등락률 기준도 어긋났다. 토스는 선물을 제공하지 않고
+        #  tvDatafeed 는 심볼 검색이 막혀 있어 살릴 방법이 없다 → **토스 모드에서는 아예
+        #  목록에서 뺀다**(market.blocked_kis_only_indices). 여기서 KRX 로 폴백하지 않는 이유도
+        #  같다: 부정확하거나 오해를 부르는 값은 보여 주지 않는다.
         if config.session.is_toss:
             return None
         div = "F" if market_type == "K200FUT_F" else "CM"
@@ -1441,6 +1602,13 @@ def _fetch_domestic_index_data(market_type):
         return d is None or d.empty or len(d) < ma_period
 
     df = None
+
+    # KRX 공식 확정 봉 — 지표의 뼈대. 실시간 소스를 **대체하지 않고** 이력만 바꾼다(맨 아래 병합).
+    #  ① 코스피200·코스닥150은 여태 tvDatafeed 단일 소스였다(야후·FDR에 티커가 없다) →
+    #    간헐 빈 응답이 곧 시장필터·국면 판정의 공백이었다. KRX가 그 바닥을 받친다.
+    #  ② tvDatafeed는 지수 거래량을 0으로 준다 → KRX 거래량으로 지수 OBV가 성립한다.
+    krx_hist = (_fetch_index_via_krx(market_type)
+                if market_type in _KRX_INDEX_MERGE_TYPES else None)
 
     # 0) 토스 시장지표 (모드 3의 1순위) — 코스피·코스닥만 지원(그 외는 아래 폴백으로)
     if config.session.is_toss and market_type in _TOSS_INDEX_MARKET_TYPES:
@@ -1494,7 +1662,14 @@ def _fetch_domestic_index_data(market_type):
         except Exception as e:
             logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} yfinance 폴백 실패: {e}")
 
-    return df
+    # 4) V코스피200 — KIS 업종코드 0503 전용이라 토스·모의 모드에서는 위 체인이 전부 비어 있다.
+    #    KRX가 변동성지수 선물 응답의 SPOT_PRC로 현물값을 주므로 그걸 쓴다(종가만·OHLC 없음).
+    if _insufficient(df) and market_type == "VKOSPI":
+        krx_vk = _fetch_index_via_krx(market_type)
+        if krx_vk is not None and not krx_vk.empty:
+            df = krx_vk
+
+    return _merge_index_history(krx_hist, df)
 
 def get_domestic_index_data(market_type, force_refresh=False):
     """국내 지수 데이터 조회 (KIS API -> yfinance Fallback, 공유 캐시 적용)"""
