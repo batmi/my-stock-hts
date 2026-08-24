@@ -31,7 +31,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tools.audit_common import exits  # noqa: E402
+from tools.audit_common import exits, seed_notice  # noqa: E402
 
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
@@ -105,6 +105,7 @@ def main():
                     help="이 날짜(YYYYMMDD) 이후를 본 검증에서 제외한다. 0이면 제외 없음")
     ap.add_argument("--no-tail", action="store_true", help="제외구간 대조 창을 찍지 않는다")
     args = ap.parse_args()
+    seed_notice(1)
 
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
     config.session.load_stock_config()

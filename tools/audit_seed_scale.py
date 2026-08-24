@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
+from tools.audit_common import seed_notice  # noqa: E402
 
 OLD_CAPITAL = 5_000_000    # 종전 검증 시드(config 주석들의 근거)
 NEW_CAPITAL = 10_000_000   # 실거래 전환 시드
@@ -62,7 +63,10 @@ def main():
     ap.add_argument("--new-capital", type=int, default=NEW_CAPITAL)
     ap.add_argument("--split", type=int, default=0,
                     help="거래일을 N등분해 하위기간별로 따로 본다(견고성 확인)")
+    ap.add_argument("--seed", type=int, default=20260805,
+                    help="종목 표본 추출 씨드. 경계선 결과는 씨드를 바꿔 재확인한다")
     args = ap.parse_args()
+    seed_notice(1)
 
     # 시장 필터의 지수 선택은 config.session.stock_data 를 본다(JSON 직접 읽기 금지).
     config.session.load_stock_config()
@@ -99,7 +103,7 @@ def main():
 
     for plabel, pdates in periods:
         results = {name: [] for name, *_ in vs}
-        rng = random.Random(20260805)
+        rng = random.Random(args.seed)
         for t in range(args.trials):
             pick = rng.sample(codes, min(args.sample, len(codes)))
             sub_dfs = {c: dfs[c] for c in pick}

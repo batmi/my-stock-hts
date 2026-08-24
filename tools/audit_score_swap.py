@@ -37,6 +37,7 @@ import config  # noqa: E402
 from modules import analysis, backtest  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 from tools.audit_scoring_weights import metrics, rolling_trend_quality  # noqa: E402
+from tools.audit_common import seed_notice  # noqa: E402
 
 INITIAL_CAPITAL = 10_000_000
 _PTS = re.compile(r"\(([+-]?\d+\.\d+)\)")
@@ -168,6 +169,7 @@ def main():
     ap.add_argument("--with-addonly", action="store_true",
                     help="비채택 대조군(교체 없이 추가) 팔을 포함한다")
     args = ap.parse_args()
+    seed_notice(1)
 
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
     config.session.load_stock_config()

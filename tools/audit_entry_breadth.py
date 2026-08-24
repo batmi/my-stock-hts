@@ -34,7 +34,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tools.audit_common import SELL_REASONS  # noqa: E402
+from tools.audit_common import SELL_REASONS, seed_notice  # noqa: E402
 
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
@@ -69,6 +69,7 @@ def main():
     ap.add_argument("--draws", type=int, default=8)
     ap.add_argument("--live-only", action="store_true")
     args = ap.parse_args()
+    seed_notice(len(args.seeds.split(",")), example="--seeds 20260816,7,101")
     seeds = [int(x) for x in args.seeds.split(",")]
     rate = args.rate / 100
     slots = getattr(config, "SYSTEM_MAX_HOLDINGS", 4)

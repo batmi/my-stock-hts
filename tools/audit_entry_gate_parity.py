@@ -35,6 +35,7 @@ import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 from tools.audit_scoring_weights import (Probe, metrics, rolling_trend_quality,  # noqa: E402
                                          verify_tq_parity)
+from tools.audit_common import seed_notice  # noqa: E402
 
 INITIAL_CAPITAL = 10_000_000
 # 실매매의 상관관계 창 = 차트 조회분(약 250봉)의 겹치는 구간. 최소 겹침 30일 초과도 같다.
@@ -104,6 +105,7 @@ def main():
     ap.add_argument("--subperiods", type=int, default=4)
     ap.add_argument("--exclude-from", default="20260301")
     args = ap.parse_args()
+    seed_notice(1)
 
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
     config.session.load_stock_config()

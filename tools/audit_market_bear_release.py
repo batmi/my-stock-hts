@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
 from modules import backtest  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
+from tools.audit_common import seed_notice  # noqa: E402
 
 INITIAL_CAPITAL = 10_000_000  # 실거래 시드와 같게 둔다(seed-slot-sizing)
 
@@ -195,6 +196,7 @@ def main():
                     help="전 종목 고정 · WIN 거래일 창을 굴리며 비교(권장 250)")
     ap.add_argument("--step", type=int, default=30, help="--walk 의 창 이동 간격(거래일)")
     args = ap.parse_args()
+    seed_notice(1)
 
     # [필수] 거래소(KOSPI/KOSDAQ) 조회는 config.session.stock_data 를 본다. 로드하지 않으면
     #  prepare_market_filter 가 전 종목을 KOSPI 로 취급한다(기존 감사 도구들의 누락).

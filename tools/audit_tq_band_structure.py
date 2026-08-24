@@ -35,7 +35,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tools.audit_common import SELL_REASONS  # noqa: E402
+from tools.audit_common import SELL_REASONS, seed_notice  # noqa: E402
 
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
@@ -86,6 +86,7 @@ def main():
     ap.add_argument("--live-only", action="store_true",
                     help="관심종목만 사용 (확장·폐지 풀 없이 — 목록 원본이 죽었을 때)")
     args = ap.parse_args()
+    seed_notice(len(args.seeds.split(",")), example="--seeds 20260816,7,101")
     seeds = [int(x) for x in args.seeds.split(",")]
     slots = getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
 

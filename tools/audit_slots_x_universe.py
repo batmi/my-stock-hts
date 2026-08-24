@@ -47,6 +47,7 @@ from tools.audit_defensive_sector import (  # noqa: E402
     INITIAL_CAPITAL, metrics, new_scale_fn_factory,
 )
 from tools.audit_universe import extend_targets  # noqa: E402
+from tools.audit_common import seed_notice  # noqa: E402
 
 
 def main():
@@ -62,6 +63,7 @@ def main():
     ap.add_argument("--dead-frac", type=float, default=0.0,
                     help="표본에서 상장폐지 종목이 차지할 비율(실제 폐지율은 대략 0.2)")
     args = ap.parse_args()
+    seed_notice(len(args.seeds.split(",")), example="--seeds 20260816,7,101")
     seeds = [int(x) for x in args.seeds.split(",")]
     sizes = [int(x) for x in args.sizes.split(",")]
     slot_list = [int(x) for x in args.slots.split(",")]

@@ -43,7 +43,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tools.audit_common import exits  # noqa: E402
+from tools.audit_common import exits, seed_notice  # noqa: E402
 
 import config  # noqa: E402
 from modules import intraday_bars as ib  # noqa: E402
@@ -107,6 +107,7 @@ def main():
                     help="분봉 일수가 중앙값의 이 배 미만인 종목은 제외(늦은 상장 등)")
     ap.add_argument("--exclude-from", default="20260301")
     args = ap.parse_args()
+    seed_notice(1)
 
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
     config.session.load_stock_config()

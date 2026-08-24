@@ -114,3 +114,24 @@ def windows(dates, k, whole=False):
     if whole:
         return [("전체", list(dates))] + chunks
     return chunks if k > 1 else [("전체", list(dates))]
+
+
+def seed_notice(n_seeds, flag="--seed", example=None, emit=print):
+    """표본 씨드 수가 규약에 못 미치면 경고 한 줄. 판정을 막지는 않는다.
+
+    [왜] audit-seed-robustness: 승패가 31/60 부근이면 **표본 씨드 하나만 바꿔도**
+    답이 뒤집힌 적이 있다(2026-08-17, 3슬롯 58%→43%). 그런데 도구 대부분의 기본
+    씨드는 1개다 — 한 번 돌린 표를 그대로 결론으로 적기 쉬운 구조다. 기본값을
+    3으로 올리면 실행 시간이 그대로 3배가 되므로, 올리는 대신 **잊지 않게** 한다.
+
+    [무엇이 아닌가] 여기서 말하는 씨드는 **종목 표본을 뽑는 난수 씨드**다.
+    `--seed-capital`(초기 자본)과는 무관하다.
+
+    반환: 경고를 찍었으면 True.
+    """
+    n = int(n_seeds)
+    if n >= 3:
+        return False
+    emit(f"[씨드] 표본 씨드 {n}개로 실행 — 경계선 결과는 3개, 채택 직전이면 5개로 "
+         f"재확인할 것. 예: {example or f'{flag} 7'} (audit-seed-robustness)")
+    return True

@@ -32,7 +32,7 @@ import pandas as pd  # noqa: F401  (CorrGate가 쓴다)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tools.audit_common import windows as audit_windows  # noqa: E402
+from tools.audit_common import seed_notice, windows as audit_windows  # noqa: E402
 
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
@@ -103,6 +103,7 @@ def main():
     ap.add_argument("--placebo-draws", type=int, default=5,
                     help="차단형 팔의 같은 차단율 무작위 대조 장수")
     args = ap.parse_args()
+    seed_notice(len(args.seeds.split(",")), example="--seeds 20260816,7,101")
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
     seeds = [int(x) for x in args.seeds.split(",")]
 

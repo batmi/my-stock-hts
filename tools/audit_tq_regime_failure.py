@@ -27,7 +27,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tools.audit_common import SELL_REASONS  # noqa: E402
+from tools.audit_common import SELL_REASONS, seed_notice  # noqa: E402
 
 import config  # noqa: E402
 import indicators  # noqa: E402
@@ -51,6 +51,7 @@ def main():
     ap.add_argument("--dead-frac", type=float, default=0.2)
     ap.add_argument("--subperiods", type=int, default=3)
     args = ap.parse_args()
+    seed_notice(len(args.seeds.split(",")), example="--seeds 20260816,7,101")
     seeds = [int(x) for x in args.seeds.split(",")]
     slots = getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
 

@@ -35,7 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 
-from tools.audit_common import exits  # noqa: E402
+from tools.audit_common import exits, seed_notice  # noqa: E402
 
 INITIAL_CAPITAL = 10_000_000  # 실거래 시드와 같게 둔다(seed-slot-sizing)
 
@@ -165,6 +165,7 @@ def main():
     ap.add_argument("--subperiods", type=int, default=1,
                     help="거래일을 N등분해 구간별로 따로 잰다(과최적화 점검)")
     args = ap.parse_args()
+    seed_notice(1)
 
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
     config.session.load_stock_config()

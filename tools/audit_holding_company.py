@@ -38,6 +38,7 @@ from tools.audit_defensive_sector import (  # noqa: E402
     INITIAL_CAPITAL, entry_days, metrics, new_scale_fn_factory,
 )
 from modules.manage.discover import DEFENSIVE_KEYWORDS, HOLDING_KEYWORDS  # noqa: E402
+from tools.audit_common import seed_notice  # noqa: E402
 
 
 def _is_defensive(industry):
@@ -106,6 +107,7 @@ def main():
     ap.add_argument("--slots", type=int, default=None)
     ap.add_argument("--seeds", default="20260816,7,101")
     args = ap.parse_args()
+    seed_notice(len(args.seeds.split(",")), example="--seeds 20260816,7,101")
     only = args.only.split(",")
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
 

@@ -30,7 +30,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tools.audit_common import windows as audit_windows  # noqa: E402
+from tools.audit_common import seed_notice, windows as audit_windows  # noqa: E402
 
 import config  # noqa: E402
 from modules import intraday_bars as ib  # noqa: E402
@@ -95,6 +95,7 @@ def main():
     ap.add_argument("--placebo-draws", type=int, default=5,
                     help="같은 차단량을 무작위로 막는 대조를 몇 장 뽑을지 (--placebo와 함께)")
     args = ap.parse_args()
+    seed_notice(len(args.seeds.split(",")), example="--seeds 20260816,7,101")
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
     seeds = [int(x) for x in args.seeds.split(",")]
 

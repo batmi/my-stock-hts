@@ -33,7 +33,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tools.audit_common import exits  # noqa: E402
+from tools.audit_common import exits, seed_notice  # noqa: E402
 
 import config  # noqa: E402
 from modules import intraday_bars as ib  # noqa: E402
@@ -123,6 +123,7 @@ def main():
     ap.add_argument("--no-gate", action="store_true",
                     help="분봉 게이트를 걸지 않는다(--daily-exits 전용: 10년 전체 창을 쓴다)")
     args = ap.parse_args()
+    seed_notice(args.seeds, example="--seeds 3")
 
     arms_def = DAILY_ARMS if args.daily_exits else build_arms(args.interval)
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)

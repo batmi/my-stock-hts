@@ -50,6 +50,7 @@ from tools.audit_defensive_sector import (  # noqa: E402
 )
 from tools.audit_dials_intraday import apply  # noqa: E402
 from tools.audit_scoring_weights import rolling_trend_quality  # noqa: E402
+from tools.audit_common import seed_notice  # noqa: E402
 
 NEG = float("-inf")
 
@@ -77,6 +78,7 @@ def main():
     ap.add_argument("--interval", default="60m")
     ap.add_argument("--min-coverage", type=float, default=0.9)
     args = ap.parse_args()
+    seed_notice(len(args.seeds.split(",")), example="--seeds 20260816,7,101")
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
     seeds = [int(x) for x in args.seeds.split(",")]
 

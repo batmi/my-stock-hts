@@ -34,6 +34,7 @@ import config  # noqa: E402
 from modules import analysis  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 from tools.audit_scoring_weights import metrics  # noqa: E402
+from tools.audit_common import seed_notice  # noqa: E402
 
 INITIAL_CAPITAL = 10_000_000
 _PTS = re.compile(r"\(([+-]?\d+\.\d+)\)")
@@ -139,6 +140,7 @@ def main():
     ap.add_argument("--arms", default=None,
                     help="라벨 일부(쉼표)만 실행 — 기준선은 항상 포함. 씨드 견고성 재확인용")
     args = ap.parse_args()
+    seed_notice(1)
 
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
     config.session.load_stock_config()

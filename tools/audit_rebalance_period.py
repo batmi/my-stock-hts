@@ -34,6 +34,7 @@ from tools.audit_defensive_sector import (  # noqa: E402
 from modules.manage.discover import _fit_score  # noqa: E402
 from tools.audit_discover_fit import fit_at, rule_pool  # noqa: E402
 from tools.audit_universe import dead_targets  # noqa: E402
+from tools.audit_common import seed_notice  # noqa: E402
 
 
 def main():
@@ -49,6 +50,7 @@ def main():
     ap.add_argument("--start", type=int, default=250, help="워밍업 거래일")
     ap.add_argument("--turnover-only", action="store_true")
     args = ap.parse_args()
+    seed_notice(len(args.pool_seeds.split(",")), example="--pool-seeds 20260817,31,777")
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
     months = [int(x) for x in args.months.split(",")]
     pool_seeds = [int(x) for x in args.pool_seeds.split(",")]

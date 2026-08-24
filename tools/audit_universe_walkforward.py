@@ -40,6 +40,7 @@ from tools.audit_defensive_sector import (  # noqa: E402
 from modules.manage.discover import _fit_score  # noqa: E402
 from tools.audit_discover_fit import fit_at, rule_pool  # noqa: E402
 from tools.audit_universe import dead_targets  # noqa: E402
+from tools.audit_common import seed_notice  # noqa: E402
 
 
 def main():
@@ -56,6 +57,7 @@ def main():
     #  결론을 확정하기 전에 풀 씨드를 바꿔 재확인한다([[audit-seed-robustness]]).
     ap.add_argument("--pool-seed", type=int, default=20260817)
     args = ap.parse_args()
+    seed_notice(len(args.seeds.split(",")), example="--seeds 20260816,7,101")
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
     sizes = [int(x) for x in args.sizes.split(",")]
     seeds = [int(x) for x in args.seeds.split(",")]

@@ -27,7 +27,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tools.audit_common import exits  # noqa: E402
+from tools.audit_common import exits, seed_notice  # noqa: E402
 
 import config  # noqa: E402
 from modules import intraday_bars as ib  # noqa: E402
@@ -83,6 +83,7 @@ def main():
     ap.add_argument("--min-coverage", type=float, default=0.9)
     ap.add_argument("--exclude-from", default="20260301")
     args = ap.parse_args()
+    seed_notice(1)
 
     worlds = [w for w in args.worlds.split(",") if w]
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)

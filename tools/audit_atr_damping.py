@@ -44,6 +44,7 @@ from modules import portfolio_backtest as pb  # noqa: E402
 from modules.auto_trade import engine  # noqa: E402
 
 from tools.audit_atr_cap_and_ts import metrics  # noqa: E402
+from tools.audit_common import seed_notice  # noqa: E402
 
 INITIAL_CAPITAL = 10_000_000
 WINSOR_LOOKBACK = 60          # TR 분위수를 재는 창
@@ -210,6 +211,7 @@ def main():
     ap.add_argument("--subperiods", type=int, default=5)
     ap.add_argument("--diag-only", action="store_true", help="진단표만(시뮬 생략)")
     args = ap.parse_args()
+    seed_notice(1)
 
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
     config.session.load_stock_config()

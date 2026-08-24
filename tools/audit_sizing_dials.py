@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
+from tools.audit_common import seed_notice  # noqa: E402
 
 INITIAL_CAPITAL = 10_000_000  # 실거래 시드와 같게 둔다(seed-slot-sizing)
 
@@ -83,7 +84,10 @@ def main():
                     help="시드(원). 정수 주식수 양자화 때문에 결론이 시드에 좌우될 수 있다")
     ap.add_argument("--split", type=int, default=0,
                     help="거래일을 N등분해 하위기간별로 따로 본다(견고성 확인)")
+    ap.add_argument("--seed", type=int, default=20260804,
+                    help="종목 표본 추출 씨드. 경계선 결과는 씨드를 바꿔 재확인한다")
     args = ap.parse_args()
+    seed_notice(1)
 
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
 
@@ -125,7 +129,7 @@ def main():
 
     for plabel, pdates in periods:
         results = {name: [] for name, _tv, _sm in vs}
-        rng = random.Random(20260804)
+        rng = random.Random(args.seed)
         for t in range(args.trials):
             pick = rng.sample(codes, min(args.sample, len(codes)))
             sub_dfs = {c: dfs[c] for c in pick}

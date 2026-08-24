@@ -36,7 +36,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tools.audit_common import SELL_REASONS, exits  # noqa: E402
+from tools.audit_common import SELL_REASONS, exits, seed_notice  # noqa: E402
 
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
@@ -175,6 +175,7 @@ def main():
                     help="이 날짜 이후를 본 검증에서 제외(대조 창으로 따로 표시). 0이면 제외 없음")
     ap.add_argument("--diag-only", action="store_true")
     args = ap.parse_args()
+    seed_notice(1)
 
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
     config.session.load_stock_config()

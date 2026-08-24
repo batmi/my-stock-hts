@@ -45,6 +45,7 @@ import indicators  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 
 from tools.audit_atr_cap_and_ts import metrics  # noqa: E402
+from tools.audit_common import seed_notice  # noqa: E402
 
 INITIAL_CAPITAL = 10_000_000
 
@@ -132,6 +133,7 @@ def main():
     ap.add_argument("--seed", type=int, default=20260809)
     ap.add_argument("--subperiods", type=int, default=5)
     args = ap.parse_args()
+    seed_notice(1)
 
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
     config.session.load_stock_config()

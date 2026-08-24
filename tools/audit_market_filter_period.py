@@ -40,6 +40,7 @@ from tools.audit_defensive_sector import (  # noqa: E402
     INITIAL_CAPITAL, metrics, new_scale_fn_factory,
 )
 from tools.audit_universe import dead_targets, extend_targets  # noqa: E402
+from tools.audit_common import seed_notice  # noqa: E402
 
 
 def _ticker_of(code):
@@ -109,6 +110,7 @@ def main():
     ap.add_argument("--periods", default="40,60,80,100,120")
     ap.add_argument("--bands", default="0,1,2")
     args = ap.parse_args()
+    seed_notice(len(args.seeds.split(",")), example="--seeds 20260816,7,101")
     seeds = [int(x) for x in args.seeds.split(",")]
     slots = getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
     only = [x.strip() for x in args.only.split(",")]

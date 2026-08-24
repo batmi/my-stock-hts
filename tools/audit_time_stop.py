@@ -31,7 +31,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tools.audit_common import exits  # noqa: E402
+from tools.audit_common import exits, seed_notice  # noqa: E402
 
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
@@ -62,6 +62,7 @@ def main():
     ap.add_argument("--slots", type=int, default=None)
     ap.add_argument("--seeds", default="20260813,7,101,4242,31337")
     args = ap.parse_args()
+    seed_notice(len(args.seeds.split(",")), example="--seeds 20260816,7,101")
     only = args.only.split(",")
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
 

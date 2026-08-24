@@ -33,6 +33,7 @@ from tools.audit_defensive_sector import (  # noqa: E402
     INITIAL_CAPITAL, metrics, new_scale_fn_factory,
 )
 from tools.audit_universe import dead_targets, extend_targets  # noqa: E402
+from tools.audit_common import seed_notice  # noqa: E402
 
 ARMS = [
     ("[대조] 하한 0.25 (인하)", 0.25),
@@ -52,6 +53,7 @@ def main():
     ap.add_argument("--dead-frac", type=float, default=0.2)
     ap.add_argument("--subperiods", type=int, default=3)
     args = ap.parse_args()
+    seed_notice(len(args.seeds.split(",")), example="--seeds 20260816,7,101")
     seeds = [int(x) for x in args.seeds.split(",")]
 
     config.session.load_stock_config()

@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 
-from tools.audit_common import exits  # noqa: E402
+from tools.audit_common import exits, seed_notice  # noqa: E402
 
 INITIAL_CAPITAL = 10_000_000  # 실거래 시드와 같게 둔다(seed-slot-sizing)
 
@@ -72,7 +72,10 @@ def main():
     ap.add_argument("--with-risk-scaling", action="store_true",
                     help="국면×휩소율×드로다운 배수를 함께 적용한다(실제 운용 스택). "
                          "상한 없이 돌렸을 때의 꼬리가 이 층들로 얼마나 눌리는지 본다.")
+    ap.add_argument("--seed", type=int, default=20260804,
+                    help="종목 표본 추출 씨드. 경계선 결과는 씨드를 바꿔 재확인한다")
     args = ap.parse_args()
+    seed_notice(1)
 
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
     data = json.load(open(config.STOCK_DATA_FILE))
@@ -108,7 +111,7 @@ def main():
     codes = list(dfs.keys())
     results = {name: [] for name, _ in RATIOS}
     saved = config.SELL_STRATEGY.get("TS_MAX_GIVEBACK_RATIO")
-    rng = random.Random(20260804)
+    rng = random.Random(args.seed)
     try:
         for t in range(args.trials):
             pick = rng.sample(codes, min(args.sample, len(codes)))

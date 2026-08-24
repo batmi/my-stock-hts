@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 
-from tools.audit_common import exits, windows as audit_windows  # noqa: E402
+from tools.audit_common import exits, seed_notice, windows as audit_windows  # noqa: E402
 from tools.audit_defensive_sector import (  # noqa: E402
     INITIAL_CAPITAL, metrics, new_scale_fn_factory,
 )
@@ -132,6 +132,7 @@ def main():
     ap.add_argument("--slots", type=int, default=None)
     ap.add_argument("--subperiods", type=int, default=3)
     args = ap.parse_args()
+    seed_notice(len(args.seeds.split(",")), example="--seeds 20260816,7,101")
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
     seeds = [int(x) for x in args.seeds.split(",")]
 

@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 from tools.audit_scoring_weights import metrics  # noqa: E402
+from tools.audit_common import seed_notice  # noqa: E402
 
 INITIAL_CAPITAL = 10_000_000
 
@@ -87,6 +88,7 @@ def main():
     ap.add_argument("--exclude-from", default="20260301")
     ap.add_argument("--only", default=None, help="파라미터 키 일부(쉼표) — 부분 실행")
     args = ap.parse_args()
+    seed_notice(1)
 
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
     config.session.load_stock_config()

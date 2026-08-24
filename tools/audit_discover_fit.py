@@ -32,6 +32,7 @@ from modules.manage.discover import DEFENSIVE_KEYWORDS, HOLDING_KEYWORDS, _fit_s
 from tools.audit_defensive_sector import (  # noqa: E402
     INITIAL_CAPITAL, entry_days, metrics, new_scale_fn_factory,
 )
+from tools.audit_common import seed_notice  # noqa: E402
 
 
 def rule_pool(pool, size, seed):
@@ -111,6 +112,7 @@ def main():
     ap.add_argument("--seed", type=int, default=20260816)
     ap.add_argument("--only", default="A,B")
     args = ap.parse_args()
+    seed_notice(args.seeds, example="--seeds 3")
     only = args.only.split(",")
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
 

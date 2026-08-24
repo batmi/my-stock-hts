@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 
-from tools.audit_common import exits  # noqa: E402
+from tools.audit_common import exits, seed_notice  # noqa: E402
 
 INITIAL_CAPITAL = 10_000_000  # 실거래 시드와 같게 둔다(seed-slot-sizing)
 BEP_OFF = -999.0   # sl < bep_stop 이 성립할 수 없게 만들어 BEP를 무력화한다
@@ -86,7 +86,10 @@ def main():
     ap.add_argument("--only", default=None, help="그룹 접두사만 실행 (예: A)")
     ap.add_argument("--subperiods", type=int, default=1,
                     help="거래일을 N등분해 구간별로 따로 잰다(과최적화 점검)")
+    ap.add_argument("--seed", type=int, default=20260804,
+                    help="종목 표본 추출 씨드. 경계선 결과는 씨드를 바꿔 재확인한다")
     args = ap.parse_args()
+    seed_notice(1)
 
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
     # [필수] 시장 필터의 지수 선택(KOSPI/KOSDAQ)은 config.session.stock_data 를 본다.
@@ -133,7 +136,7 @@ def main():
     all_results = {}
     for wname, wdates in windows:
         results = {(g, l): [] for g, l, _ in sets}
-        rng = random.Random(20260804)
+        rng = random.Random(args.seed)
         try:
             for t in range(args.trials):
                 pick = rng.sample(codes, min(args.sample, len(codes)))
