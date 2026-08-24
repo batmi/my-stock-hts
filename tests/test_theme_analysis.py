@@ -217,3 +217,37 @@ def test_fetch_theme_detail_success():
         # 등락률 순 정렬 (2.0% > 1.5%)
         assert 'SK하이닉스' in theme['leading']
         assert '삼성전자' in theme['leading']
+
+def test_analyze_chart_image_sends_sdk_part(tmp_path):
+    """차트 이미지 입력이 신 SDK 가 받는 Part 로 전달되는지 검증.
+
+    구 SDK 관행대로 {"mime_type": ..., "data": ...} dict 를 넘기면 요청 전에
+    _GenerateContentParameters 검증에서 터졌다(2026-08-25). 실제 SDK 스키마에
+    통과하는지까지 확인해 회귀를 막는다.
+    """
+    pytest.importorskip("google.genai")
+    theme_analysis._ensure_genai()
+    from google.genai import types as genai_types
+
+    img = tmp_path / "chart.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    original_key = config.GEMINI_API_KEY
+    config.GEMINI_API_KEY = "TEST_KEY"
+    with patch('modules.theme_analysis._gemini_stream') as mock_stream:
+        mock_chunk = MagicMock()
+        mock_chunk.text = "차트 분석 결과"
+        mock_chunk.candidates = [MagicMock()]
+        mock_stream.return_value = [mock_chunk]
+        try:
+            result = theme_analysis.analyze_chart_image_with_gemini(str(img), "삼성전자", "005930", "6개월")
+        finally:
+            config.GEMINI_API_KEY = original_key
+
+    assert result == "차트 분석 결과"
+    content = mock_stream.call_args[0][0]
+    assert isinstance(content[0], str)
+    assert isinstance(content[1], genai_types.Part)
+    # SDK 요청 스키마가 그대로 받아들이는지(= 실제 호출이 통과하는지)까지 확인
+    params = genai_types._GenerateContentParameters(model="x", contents=content)
+    assert [type(c).__name__ for c in params.contents] == ["str", "Part"]

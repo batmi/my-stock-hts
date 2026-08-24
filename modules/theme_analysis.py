@@ -935,7 +935,8 @@ def analyze_chart_image_with_gemini(image_path, name, code, period_str):
 
     차트 이미지를 그대로 전달하므로, 수치 텍스트가 아닌 '차트 전체 그림'을 보고 분석한다.
     """
-    if _ensure_genai() is None or not config.GEMINI_API_KEY:
+    sdk = _ensure_genai()
+    if sdk is None or not config.GEMINI_API_KEY:
         return "⚠️ Gemini API가 설정되지 않았습니다. (config.GEMINI_API_KEY 확인)"
 
     try:
@@ -949,8 +950,10 @@ def analyze_chart_image_with_gemini(image_path, name, code, period_str):
     prompt = prompts.CHART_IMAGE_ANALYSIS_PROMPT.format(
         now=now, name=name, code=code, period_str=period_str
     )
-    # Gemini 멀티모달 입력: [프롬프트 텍스트, 이미지 blob] (PIL 없이 바이트로 직접 전달)
-    image_part = {"mime_type": "image/png", "data": image_bytes}
+    # Gemini 멀티모달 입력: [프롬프트 텍스트, 이미지 파트] (PIL 없이 바이트로 직접 전달)
+    # 구 SDK 는 {"mime_type": ..., "data": ...} dict 를 받아 줬지만, 신 SDK(google-genai)의
+    # contents 는 Part 만 허용한다 — dict 를 넘기면 요청 전에 pydantic 검증에서 터진다.
+    image_part = sdk.types.Part.from_bytes(data=image_bytes, mime_type="image/png")
 
     # 이미지 처리로 텍스트 분석보다 여유 있게 (timeout 120초)
     return _run_gemini_report([prompt, image_part], label=f"[{name}({code})] 차트 이미지 분석",
