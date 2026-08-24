@@ -16,6 +16,8 @@
  ② 종목 표본을 무작위로 뽑는 감사 도구는 전부 seed_notice 를 부른다 — 새 도구가
     조용히 빠지면 잡는다.
  ③ 씨드 손잡이가 없는 도구가 다시 생기지 않는다(random.Random 에 리터럴 금지).
+ ④ 경고가 데이터 준비보다 **앞**에 온다 — 표본을 뽑지 않고 끝나는 분기(`--refresh-listing`
+    처럼 곧장 return 하는 가드)는 예외로 둔다.
 """
 import ast
 import glob
@@ -99,6 +101,18 @@ def test_no_hardcoded_sampling_seed():
     )
 
 
+def _is_exit_guard(stmt):
+    """측정에 들어가기 전에 **빠져나가는** 분기인가 — `if ...: ...; return`.
+
+    이런 블록은 씨드 경고보다 앞에 와도 규약을 어기지 않는다. 경고의 목적은 '수 분짜리
+    데이터 준비 전에 멈춰 세우는 것'인데, 여기서 반환하는 실행은 표본을 뽑지도 재지도
+    않기 때문이다(예: `--refresh-listing` — 목록 스냅샷만 새로 받고 끝난다).
+    씨드와 무관한 실행에 씨드 경고를 찍으면 경고가 무뎌진다.
+    """
+    return (isinstance(stmt, ast.If) and not stmt.orelse
+            and isinstance(stmt.body[-1], ast.Return))
+
+
 def test_seed_notice_is_placed_right_after_parse_args():
     """경고는 데이터 준비(수 분) **전에** 나와야 멈춰 세울 수 있다."""
     late = []
@@ -112,7 +126,10 @@ def test_seed_notice_is_placed_right_after_parse_args():
             body = fn.body
             for i, stmt in enumerate(body):
                 if (isinstance(stmt, ast.Assign) and "parse_args" in ast.dump(stmt)):
-                    nxt = body[i + 1] if i + 1 < len(body) else None
+                    j = i + 1
+                    while j < len(body) and _is_exit_guard(body[j]):
+                        j += 1
+                    nxt = body[j] if j < len(body) else None
                     if not (isinstance(nxt, ast.Expr)
                             and getattr(getattr(nxt.value, "func", None), "id", None)
                             == "seed_notice"):

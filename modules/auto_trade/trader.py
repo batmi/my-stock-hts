@@ -4774,6 +4774,28 @@ class AutoTrader:
             #  아래 analyze_sell에 current_price를 그대로 넘기므로 실시간 대응에는 영향이 없다.
             indicators.apply_realtime_price(df, api.chart_overlay_price(current_price, is_overseas_stock))
 
+            # [앵커 복원 · 2026-08-24] 진입일 이후 봉 고가가 기록된 앵커보다 높으면 그것으로
+            #  올린다. 위의 갱신은 **봇이 보고 있는 동안의 현재가**만 쌓으므로, 다음 구간이
+            #  통째로 비어 있었다:
+            #    · HTS·앱에서 직접 산 포지션 — 봇이 처음 본 날의 현재가부터 시작한다
+            #    · 재기동·정지 구간의 고점 — 그 사이 고가가 앵커에 남지 않는다
+            #    · 매수 주문이 심는 앵커 — 보유 중인 종목에 1주만 더 담아도 그 체결가가
+            #      앵커로 기록되고(update_highest_price는 단조라 내리진 않지만, 기록이
+            #      없던 종목엔 매수가가 그대로 앵커가 된다) 실제 고점이 사라진다
+            #  백테스트는 진입 봉 고가에서 시작해 봉 고가의 러닝맥스를 쓴다
+            #  (portfolio_backtest: pos["high"] = max(pos["high"], row["high"])).
+            #  즉 이 복원은 실매매를 백테스트의 정의 쪽으로 되돌리는 것이다.
+            if entry_date:
+                derived_high = _pkg().highest_since(df, entry_date)
+                if derived_high and derived_high > highest_price:
+                    db_manager.db.update_highest_price(code, derived_high)
+                    with self._lock:
+                        self.trailing_stop_cache[code] = derived_high
+                    self.log(f"[TrailingStop] {name}({code}) 앵커 복원: "
+                             f"{highest_price:,.0f} → {derived_high:,.0f} "
+                             f"(진입일 {entry_date} 이후 봉 고가)")
+                    highest_price = derived_high
+
             # [SSOT] 임계값 조립은 build_sell_thresholds가 단독 보유한다.
             #  잔고 화면(메뉴 9-2)의 보유 분석도 같은 함수를 호출해 판정이 갈리지 않게 한다.
             # [최적화] 주기 시작 시 배치 로드한 buy_trades_map 사용 (종목별 개별 쿼리 제거)

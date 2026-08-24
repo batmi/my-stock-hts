@@ -52,33 +52,78 @@ def apply(ov):
     return prev
 
 
-def _listing(kind):
-    """FDR 종목 목록을 디스크에 캐시한다 — 감사 도구가 매번 원격을 두드리면 429로 막힌다.
+_LISTING_ANNOUNCED = set()
 
-    2026-08-17에 `StockListing("KRX")`가 HTTP 429로 실패해 감사가 통째로 죽었다. 목록은
-    하루 단위로도 거의 안 변하는 데다, 팔 사이 비교의 **배경**일 뿐이어서 최신성이
-    결론에 영향을 주지 않는다. 그러니 받으면 남기고, 못 받으면 남은 것을 쓴다.
-    캐시조차 없으면 조용히 빈 결과를 주지 않고 그대로 터뜨린다 — 표본이 없으면 없다고
-    말하는 것이 규약이다.
-    """
+
+def _listing_paths(kind):
     import os
-    import pandas as pd
     d = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                      "data", "listing_cache")
     os.makedirs(d, exist_ok=True)
-    f = os.path.join(d, kind.replace("/", "_") + ".csv")
+    base = os.path.join(d, kind.replace("/", "_"))
+    return base + ".csv", base + ".meta.json"
+
+
+def _listing(kind, refresh=None):
+    """FDR 종목 목록. **스냅샷으로 고정**하고, 갱신은 명시적으로만 한다.
+
+    [종전 동작과 왜 바꿨나 — 2026-08-24] 이 함수는 매 호출마다 원격을 받아 캐시를
+    덮어썼고, 캐시는 원격 실패 시의 폴백일 뿐이었다. 당시 근거는 "목록은 거의 안 변하고
+    팔 사이 비교의 배경일 뿐이라 최신성이 결론에 영향을 주지 않는다"였다.
+    **그 전제가 틀렸다.** `extend_targets(mode="random")` 은 시총 내림차순으로 정렬한
+    뒤 상위 `pool`개를 셔플해 뽑는다. 정렬 순서가 조금만 흔들려도 셔플의 입력 순서가
+    통째로 바뀌므로 **뽑히는 종목이 갈린다.**
+      실측(캐시된 KRX 목록에 시총 지터를 걸어 8회): ±2%면 60종목 중 **41.5개 교체**,
+      ±5%면 48.6개, ±10%면 51.2개. ±2%는 하루치 주가 변동 수준이다.
+    즉 같은 씨드로 같은 도구를 **다른 날** 돌리면 다른 유니버스를 재고 있었다. 실제로
+    2026-08-24 TQ 국면 축 재검증에서 다이얼 세 개를 전부 되돌려도 기록이 재현되지 않았고,
+    남은 설명이 이것이었다([[allocation-equal-weight-lead]]).
+
+    [규약] 스냅샷이 있으면 **무조건 그것을 쓴다.** 없을 때만 받는다. 갱신은
+    `AUDIT_LISTING_REFRESH=1` 또는 `python3 tools/audit_universe.py --refresh-listing`.
+    갱신하면 그 이전에 찍힌 수치와는 유니버스가 달라진다 — 되돌릴 수 없으니 의도해서 할 것.
+    스냅샷도 원격도 없으면 조용히 빈 결과를 주지 않고 그대로 터뜨린다.
+    """
+    import json
+    import os
+    import pandas as pd
+    f, meta_f = _listing_paths(kind)
+    if refresh is None:
+        refresh = os.environ.get("AUDIT_LISTING_REFRESH", "") not in ("", "0")
+
+    if os.path.exists(f) and not refresh:
+        if kind not in _LISTING_ANNOUNCED:
+            _LISTING_ANNOUNCED.add(kind)
+            when = "?"
+            try:
+                with open(meta_f, encoding="utf-8") as fh:
+                    when = json.load(fh).get("fetched_at", "?")
+            except Exception:
+                import datetime as _dt
+                when = _dt.datetime.fromtimestamp(os.path.getmtime(f)).strftime("%Y-%m-%d")
+            print(f"[목록] {kind} 스냅샷 {when} 사용 — 유니버스를 고정한다. "
+                  f"갱신은 AUDIT_LISTING_REFRESH=1", flush=True)
+        return pd.read_csv(f, dtype={"Code": str, "Symbol": str})
+
     try:
         import FinanceDataReader as fdr
         df = fdr.StockListing(kind)
-        if df is not None and len(df):
-            df.to_csv(f, index=False, encoding="utf-8")
-            return df
-        raise RuntimeError("빈 목록")
+        if df is None or not len(df):
+            raise RuntimeError("빈 목록")
     except Exception as e:
         if os.path.exists(f):
-            print(f"[캐시] {kind} 원격 실패({type(e).__name__}) → 캐시 사용: {f}", flush=True)
+            print(f"[목록] {kind} 원격 실패({type(e).__name__}) → 스냅샷 사용: {f}", flush=True)
             return pd.read_csv(f, dtype={"Code": str, "Symbol": str})
         raise
+    df.to_csv(f, index=False, encoding="utf-8")
+    import datetime as _dt
+    with open(meta_f, "w", encoding="utf-8") as fh:
+        json.dump({"kind": kind, "rows": int(len(df)),
+                   "fetched_at": _dt.datetime.now().strftime("%Y-%m-%d %H:%M")}, fh,
+                  ensure_ascii=False)
+    print(f"[목록] {kind} 스냅샷 갱신 — {len(df):,}행. "
+          f"이전 수치와 유니버스가 달라진다.", flush=True)
+    return df
 
 
 def extend_targets(exclude, limit, mode="marcap", pool=500, seed=20260816):
@@ -92,15 +137,38 @@ def extend_targets(exclude, limit, mode="marcap", pool=500, seed=20260816):
     [mode='random'] 시총 상위 `pool`개 안에서 **무작위로** 뽑는다. '거래 가능성'만 통제하고
       승자 선택은 제거한다. 이쪽에서도 좋아지면 크기 효과가 진짜다.
     """
-    import random as _r
     df = _listing("KRX")
     df = df[df["Market"].isin(["KOSPI", "KOSDAQ"])].dropna(subset=["Marcap"])
-    bad = df["Name"].str.contains("스팩|리츠", na=False) | df["Code"].str.endswith(("5", "7", "9"))
+    #  우선주는 두 가지 표기가 있다. 구형은 끝자리 5·7·9(005935 삼성전자우), 신형은
+    #  **여섯째 자리가 알파벳**이다(00680K 미래에셋증권2우B). 끝자리 숫자만 보던 필터는
+    #  신형을 통째로 놓쳤다 — 2026-08-24 스냅샷 기준 상위 500 풀 안에 3종(미래에셋증권2우B·
+    #  한화3우B·CJ4우(전환))이 남아 있었고, pool을 키우면 그만큼 더 샌다.
+    #  ※ `0120G0`(삼양바이오팜)처럼 **가운데**에 문자가 오는 코드는 최근 상장된 보통주의
+    #    신규 채번이다. 그래서 '문자 포함'이 아니라 '끝자리가 문자'로 가른다.
+    bad = (df["Name"].str.contains("스팩|리츠", na=False)
+           | df["Code"].str.endswith(("5", "7", "9"))
+           | df["Code"].str.match(r"^\d{5}[A-Z]$", na=False))
     df = df[~bad].sort_values("Marcap", ascending=False)
     cand = [(r["Code"], r["Name"]) for _, r in df.iterrows() if r["Code"] not in exclude]
     if mode == "random":
-        cand = cand[:pool]
-        _r.Random(seed).shuffle(cand)
+        # [2026-08-24] '리스트를 셔플해서 앞에서 자르기'를 버리고 **종목별 해시**로 뽑는다.
+        #  종전 방식은 시총 내림차순 리스트를 고정 씨드로 셔플했다. 고정 씨드 셔플은
+        #  '인덱스 → 자리'의 고정 치환이라, 리스트에서 **한 종목의 위치만 밀려도** 그
+        #  뒤 전부의 자리가 바뀐다. 그래서 뽑히는 60개가 통째로 갈렸다.
+        #    실측(시총에 지터를 걸어 8회):
+        #      셔플·시총순   ±2% → 60 중 41.5개 교체  |  ±5% 48.6  |  ±10% 51.2
+        #      셔플·코드순   ±2% → 60 중 20.9개 교체  |  ±5% 34.0  |  ±10% 40.1
+        #      해시(현행)    ±2% → 60 중  0.8개 교체  |  ±5%  1.0  |  ±10%  1.4
+        #  정작 데이터는 거의 안 움직인다 — 같은 지터에서 상위 pool의 **구성원**은
+        #  500개 중 3개(0.6%)만 바뀐다. 흔들린 것은 유니버스가 아니라 계측기였다.
+        #  해시 방식은 한 종목의 당락이 **그 종목만의 함수**라, 구성원이 3개 바뀌면
+        #  뽑히는 것도 그만큼만 바뀐다.
+        #  ※ 이 수정 이전에 mode="random"으로 찍힌 수치와는 유니버스가 다르다. 다만
+        #    그 수치들은 애초에 날짜를 넘어 재현되지 않았다 — 비교 가능성이 사라진 게
+        #    아니라, 없던 것이 드러난 것이다([[allocation-equal-weight-lead]]).
+        import hashlib
+        cand = sorted(cand[:pool],
+                      key=lambda c: hashlib.md5(f"{seed}|{c[0]}".encode()).hexdigest())
     return cand[:limit]
 
 
@@ -144,8 +212,53 @@ def prep(targets, days, label):
     return dfs, mf, dates
 
 
+def refresh_listings():
+    """종목 목록 스냅샷을 의도적으로 새로 받고, **유니버스가 얼마나 움직였는지** 보고한다.
+
+    갱신은 되돌릴 수 없다(옛 스냅샷을 덮어쓴다). 그래서 조용히 하지 않는다 — 갱신 뒤에
+    찍은 수치는 갱신 전 기록과 유니버스가 다르고, 얼마나 다른지는 여기 출력이 말해 준다.
+    """
+    import pandas as pd
+    before = {}
+    for kind in ("KRX", "KRX-DELISTING"):
+        f, _ = _listing_paths(kind)
+        if os.path.exists(f):
+            df = pd.read_csv(f, dtype={"Code": str, "Symbol": str})
+            col = "Code" if "Code" in df.columns else "Symbol"
+            before[kind] = set(df[col].astype(str))
+    old_pick = set()
+    try:
+        old_pick = {c for c, _ in extend_targets(set(), 60, mode="random")}
+    except Exception:
+        pass
+
+    for kind in ("KRX", "KRX-DELISTING"):
+        _listing(kind, refresh=True)
+
+    print()
+    for kind in ("KRX", "KRX-DELISTING"):
+        f, _ = _listing_paths(kind)
+        df = pd.read_csv(f, dtype={"Code": str, "Symbol": str})
+        col = "Code" if "Code" in df.columns else "Symbol"
+        now = set(df[col].astype(str))
+        if kind in before:
+            print(f"[{kind}] {len(before[kind]):,} → {len(now):,}행 "
+                  f"(신규 {len(now - before[kind]):,} · 사라짐 {len(before[kind] - now):,})")
+        else:
+            print(f"[{kind}] 스냅샷 신규 생성 {len(now):,}행")
+
+    new_pick = {c for c, _ in extend_targets(set(), 60, mode="random")}
+    if old_pick:
+        kept = len(old_pick & new_pick)
+        print(f"\n[확장 유니버스] mode=random 60종목 중 {kept}개 유지 · "
+              f"{60 - kept}개 교체")
+        print("  → 교체된 만큼, 갱신 전 기록과 이 뒤의 수치는 **다른 표본**을 잰 것이다.")
+
+
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--refresh-listing", action="store_true",
+                    help="종목 목록 스냅샷을 새로 받는다(되돌릴 수 없다). 유니버스 변화량을 찍는다")
     ap.add_argument("--axis", default="A", choices=["A", "B"])
     ap.add_argument("--trials", type=int, default=15)
     ap.add_argument("--days", type=int, default=3650)
@@ -167,6 +280,9 @@ def main():
     ap.add_argument("--subperiods", type=int, default=3)
     ap.add_argument("--exclude-from", default="20260301")
     args = ap.parse_args()
+    if args.refresh_listing:
+        refresh_listings()
+        return
     seed_notice(args.seeds, example="--seeds 3")
 
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)

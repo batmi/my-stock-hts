@@ -973,11 +973,20 @@ def analyze_holdings(entries, max_workers=None, restricted_codes=None):
                 derived = highest_since(df, entry['highest_since'])
                 if derived:
                     highest_price = derived
-            elif highest_price <= 0 and entry_date:
-                # 시스템이 감시하지 않은 포지션(HTS 직접 매수 등)은 trailing_stops 기록이
-                # 없다. 진입일 이후 실제 고가에서 TS 앵커를 유도한다.
+            elif entry_date:
+                # 진입일 이후 실제 고가와 DB 기록 중 **높은 쪽**을 앵커로 쓴다.
+                #  [왜 '기록이 없을 때만'에서 바꿨나 — 2026-08-24] 매수 주문 경로는 앵커를
+                #  그 매수의 체결가로 심는다(trading.py·engine.OrderManager). 그래서 몇 달
+                #  들고 있던 포지션에 1주만 더 담아도 그 순간 앵커가 매수가로 굳고, 유도
+                #  분기는 `highest_price <= 0`이 깨져 영영 열리지 않았다.
+                #  실측(102780, 진입 2026-04-10): 진입 후 실제 고가 36,360원인데 2026-08-24
+                #  1주 추가 매수 직후 화면 최고가가 25,500원(=그 체결가)으로 내려앉았다.
+                #  MFE가 +78% → +24.9%로 줄고, 30% 반납이 TS 판정에서 통째로 사라진다.
+                #  백테스트는 진입 봉의 고가에서 시작해 봉 고가의 러닝맥스를 쓰므로
+                #  (portfolio_backtest: pos["high"] = max(pos["high"], row["high"]))
+                #  '진입일 이후 봉 고가'가 원래의 정의이기도 하다.
                 derived = highest_since(df, entry_date)
-                if derived:
+                if derived and derived > highest_price:
                     highest_price = derived
             if current_price > buy_price and current_price > highest_price:
                 highest_price = current_price
