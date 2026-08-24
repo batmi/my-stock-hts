@@ -76,6 +76,10 @@ NO_SELLABLE_ALERT_CYCLES = 3
 #  대기 주문 스킵은 정상 흐름에서도 몇 주기 이어질 수 있으므로 더 여유를 둔다.
 #  (미체결 자동 취소 타임아웃보다 길게 잡아야 정상 취소 흐름을 오경보로 만들지 않는다)
 STUCK_PENDING_ALERT_CYCLES = 10
+#  매도 판정 밖에서 트레일링 앵커만 되짚을 때(ETF)의 종목별 최소 간격.
+#  앵커는 일봉 고가에서 나오므로 주기(수십 초)마다 볼 이유가 없고, 차트 캐시가
+#  만료되는 순간과 겹치면 보유 ETF 수만큼 KIS 호출이 한꺼번에 붙는다.
+ANCHOR_RESTORE_INTERVAL_SEC = 3600
 
 
 def get_unmanaged_reason(code, name="", is_overseas=False, restricted_codes=None):
@@ -757,6 +761,108 @@ def highest_since(df, since_date):
         return None
 
 
+# 진입일이 일봉 조회창(250봉 ≈ 14개월)보다 오래된 포지션의 깊은 구간 최고가 메모.
+#  키는 (code, entry_date) — 진입일이 바뀌면(재진입) 다시 구해야 한다. 값은 float 또는
+#  None(근거 없음)이며, None도 캐시해 매 주기 헛조회가 반복되지 않게 한다.
+_DEEP_ANCHOR_CACHE = {}
+_DEEP_ANCHOR_CACHE_MAX = 256
+
+# 주봉 라벨이 '그 주의 시작일'인지 '마감일'인지는 소스마다 다르다(KIS 네이티브 주봉 vs
+#  토스 일봉 리샘플링). 진입일에 걸친 주(週)를 쓰면 **진입 전 고가**가 앵커로 섞여 들어와
+#  앵커가 실제보다 높아지고, 그 방향의 오염은 샹들리에 청산선을 끌어올려 멀쩡한 포지션을
+#  즉시 청산시킨다. 어느 라벨 규약이든 진입일 이후로만 남도록 한 주를 통째로 버린다.
+_DEEP_ANCHOR_WEEK_MARGIN_DAYS = 7
+
+
+def _oldest_bar_date(df):
+    """일봉 df의 가장 오래된 봉 날짜(Timestamp). 구하지 못하면 None."""
+    if df is None or df.empty:
+        return None
+    try:
+        dates = pd.to_datetime(df['date']) if 'date' in df.columns else pd.to_datetime(df.index)
+        if getattr(dates.dt, 'tz', None) is not None:
+            dates = dates.dt.tz_localize(None)
+        val = dates.min()
+        return None if pd.isna(val) else val.normalize()
+    except Exception as e:
+        logger.debug(f"일봉 시작일 확인 실패: {e}")
+        return None
+
+
+def _deep_high_since(code, entry_date, is_overseas=False):
+    """일봉 조회창 밖(진입 직후 ~ 14개월 전)의 최고가를 주봉에서 보강한다.
+
+    [왜 필요한가] 일봉 경로는 CHART_LOOKBACK_DAYS(730일)로 요청하지만 마지막에
+    `.tail(250)`으로 자른다(api/charts.py). 250거래일 ≈ 14개월이라, 그보다 오래 들고 있는
+    포지션은 **진입 직후 구간이 df에 아예 없다.** 시스템이 감시하는 종목은 트레이더가
+    첫날부터 현재가로 앵커를 쌓아 DB에 남기므로 창이 문제되지 않지만, 봇이 보지 않는
+    포지션(ETF·수동 매수·정지 구간)은 앵커를 봉에서 되짚는 수밖에 없어 이 구멍이 그대로
+    드러난다.
+
+    주봉의 고가는 그 주 일봉 고가의 최댓값과 같으므로, 잘려나간 구간의 최고가는 주봉으로
+    복원해도 값이 달라지지 않는다. 다만 경계 주(週)만 진입 전 가격을 물고 올 수 있어
+    통째로 버린다(_DEEP_ANCHOR_WEEK_MARGIN_DAYS) — 그만큼 과소 산정되지만, 앵커는
+    낮게 잡히면 청산이 늦어질 뿐이고 높게 잡히면 오청산이 나간다. 안전한 쪽으로 기운다.
+
+    토스 모드의 주봉은 같은 일봉을 리샘플링한 것이라 더 과거가 없다 — 이 경우 조용히
+    None이 되고, 앵커는 일봉 창 안의 값으로만 잡힌다.
+    """
+    key = (code, str(entry_date))
+    if key in _DEEP_ANCHOR_CACHE:
+        return _DEEP_ANCHOR_CACHE[key]
+
+    try:
+        wdf = api.get_chart_data(code, is_overseas=is_overseas, period_type='weekly')
+        cutoff = pd.Timestamp(entry_date)
+        if cutoff.tz is not None:
+            cutoff = cutoff.tz_localize(None)
+        cutoff = cutoff.normalize() + timedelta(days=_DEEP_ANCHOR_WEEK_MARGIN_DAYS)
+        val = highest_since(wdf, cutoff)
+    except Exception as e:
+        logger.debug(f"[앵커] {code} 주봉 보강 실패: {e}")
+        val = None
+
+    # 캐시가 무한히 늘지 않게 한다(라즈베리파이 메모리). 보유 종목 수 규모라 사실상
+    #  닿지 않지만, 재진입이 반복되면 키가 쌓인다.
+    if len(_DEEP_ANCHOR_CACHE) >= _DEEP_ANCHOR_CACHE_MAX:
+        _DEEP_ANCHOR_CACHE.clear()
+    _DEEP_ANCHOR_CACHE[key] = val
+    return val
+
+
+def anchor_high_since(code, df, entry_date, is_overseas=False):
+    """진입일 이후 **보유 기간 전체**의 봉 고가. 일봉 창이 모자라면 주봉으로 보강한다.
+
+    `highest_since`가 '주어진 df 안에서'의 답이라면 이쪽은 '보유 기간 전체'의 답이다.
+    트레일링 앵커를 봉에서 되짚는 곳은 전부 이 함수를 쓴다 — 표시(메뉴 9-2)와 판정(트레이더)이
+    서로 다른 구간을 보면 화면과 봇이 갈린다.
+    """
+    if entry_date is None:
+        return None
+
+    base = highest_since(df, entry_date)
+
+    try:
+        cutoff = pd.Timestamp(entry_date)
+        if cutoff.tz is not None:
+            cutoff = cutoff.tz_localize(None)
+        cutoff = cutoff.normalize()
+    except Exception:
+        return base
+
+    # 일봉 창이 진입일까지 덮으면 보강할 것이 없다(절대다수 경로 — 추가 조회 0회).
+    oldest = _oldest_bar_date(df)
+    if oldest is None or oldest <= cutoff:
+        return base
+
+    deep = _deep_high_since(code, cutoff, is_overseas=is_overseas)
+    if deep and (base is None or deep > base):
+        logger.debug(f"[앵커] {code} 일봉 창({oldest.date()}) 밖 구간을 주봉으로 보강: "
+                     f"{(base or 0):,.0f} → {deep:,.0f} (진입 {cutoff.date()})")
+        return deep
+    return base
+
+
 def resolve_entry_date(entry_date=None, last_buy=None, fallback_buy_date=None):
     """현재 보유 포지션의 진입일을 확정한다. 'YYYY-MM-DD' 또는 None.
 
@@ -970,7 +1076,8 @@ def analyze_holdings(entries, max_workers=None, restricted_codes=None):
                 highest_price = float(entry['highest_price'])
             elif entry.get('highest_since') is not None:
                 # [수동 분석] 입력한 매수일이 시스템 DB 기록보다 우선한다.
-                derived = highest_since(df, entry['highest_since'])
+                derived = anchor_high_since(code, df, entry['highest_since'],
+                                            is_overseas=is_overseas)
                 if derived:
                     highest_price = derived
             elif entry_date:
@@ -985,7 +1092,7 @@ def analyze_holdings(entries, max_workers=None, restricted_codes=None):
                 #  백테스트는 진입 봉의 고가에서 시작해 봉 고가의 러닝맥스를 쓰므로
                 #  (portfolio_backtest: pos["high"] = max(pos["high"], row["high"]))
                 #  '진입일 이후 봉 고가'가 원래의 정의이기도 하다.
-                derived = highest_since(df, entry_date)
+                derived = anchor_high_since(code, df, entry_date, is_overseas=is_overseas)
                 if derived and derived > highest_price:
                     highest_price = derived
             if current_price > buy_price and current_price > highest_price:

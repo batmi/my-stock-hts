@@ -35,7 +35,8 @@ from modules import telegram_notify # [추가] 알림 발신 상태 조회
 import re # [추가] 정규식 모듈
 import pandas as pd
 
-from modules.auto_trade.engine import (DefaultStrategy, NO_SELLABLE_ALERT_CYCLES, OrderManager,
+from modules.auto_trade.engine import (ANCHOR_RESTORE_INTERVAL_SEC, DefaultStrategy,
+                                       NO_SELLABLE_ALERT_CYCLES, OrderManager,
                                        RiskManager, STUCK_PENDING_ALERT_CYCLES,
                                        UNMANAGED_ANALYSIS_ERROR,
                                        UNMANAGED_BAD_PRICE, UNMANAGED_ETF,
@@ -193,6 +194,8 @@ class AutoTrader:
             cls._instance.no_sellable_streak = {}
             # 대기 주문에 묶여 매도 판정에서 빠진 연속 주기 수 {code: n}
             cls._instance.stuck_pending_streak = {}
+            # 매도 판정 밖에서 앵커만 되짚는 경로(ETF)의 종목별 스로틀 {code: ts}
+            cls._instance._anchor_restore_at = {}
             # [관측성] 장 마감 후 감지된 매도 신호의 알림 스로틀 {code: 사유}.
             #  마감 뒤에는 주문을 낼 수 없어 로그 한 줄만 남았다 — 청산이 하루 밀리는데
             #  운영자가 그 사실을 모른다. 장이 열리면 비워서 다음 마감 때 다시 알린다.
@@ -4365,6 +4368,72 @@ class AutoTrader:
             logger.debug(f"[권리 조정] 판정 실패({code}): {e}")
         return highest_price
 
+    def _cached_anchor(self, code):
+        """기록된 트레일링 앵커(최고가). 캐시에 없으면 DB에서 읽어 채운다. 없으면 0.0."""
+        with self._lock:
+            cached = self.trailing_stop_cache.get(code)
+            if cached is None:
+                val = db_manager.db.get_highest_price(code)
+                cached = val if val is not None else 0.0
+                self.trailing_stop_cache[code] = cached
+        return cached
+
+    def _restore_trailing_anchor(self, code, name, entry_date, highest_price=None,
+                                 df=None, is_overseas=False):
+        """진입일 이후 봉 고가가 기록된 앵커보다 높으면 그것으로 올린다. 확정된 앵커를 돌려준다.
+
+        [왜 필요한가 · 2026-08-24] 주기마다의 갱신은 **봇이 보고 있는 동안의 현재가**만
+        쌓으므로 다음 구간이 통째로 비어 있었다:
+          · HTS·앱에서 직접 산 포지션 — 봇이 처음 본 날의 현재가부터 시작한다
+          · 재기동·정지 구간의 고점 — 그 사이 고가가 앵커에 남지 않는다
+          · 매수 주문이 심는 앵커 — 보유 중인 종목에 1주만 더 담아도 그 체결가가 앵커로
+            기록되고(update_highest_price는 단조라 내리진 않지만, 기록이 없던 종목엔
+            매수가가 그대로 앵커가 된다) 실제 고점이 사라진다
+        백테스트는 진입 봉 고가에서 시작해 봉 고가의 러닝맥스를 쓴다
+        (portfolio_backtest: pos["high"] = max(pos["high"], row["high"])). 즉 이 복원은
+        실매매를 백테스트의 정의 쪽으로 되돌리는 것이다.
+
+        [왜 매도 분석 밖에서도 부르나] 자동 매도에서 제외된 ETF는 판정 루프에 닿기 전에
+        빠져나가, 저 세 구멍을 메울 기회가 영영 없었다. 앵커를 쓰는 쪽(메뉴 9-2 보유 분석)은
+        매번 봉에서 되짚으므로 화면은 맞지만 DB에는 매수가가 그대로 남는다. **쓰는 주체는
+        트레이더 하나로 묶는다** — 표시 경로에서 쓰면 메뉴 9-5의 가상 포지션(사용자가 입력한
+        임의의 매수일)과 다른 계좌의 잔고가 같은 테이블(code가 PK)로 흘러들고, 단조 갱신이라
+        한 번 높게 오염되면 되돌릴 수 없다(청산선이 올라가 오청산이 나간다).
+
+        df 를 주지 않으면 여기서 조회한다(ETF 경로). 이때는 주기마다 차트를 새로 집는 셈이라
+        종목당 1시간에 한 번으로 묶는다 — 앵커는 일봉 고가에서 나오므로 그보다 잦게 볼 이유가
+        없고, 라즈베리파이에서 캐시 만료(6시간)와 겹치면 종목마다 KIS 호출이 붙는다.
+        highest_price 를 주지 않으면 기록된 앵커를 직접 읽는다(스로틀에 걸리면 읽지도 않는다).
+        실패하면 앵커를 건드리지 않는다.
+        """
+        if df is None:
+            now = time.time()
+            if now - self._anchor_restore_at.get(code, 0.0) < ANCHOR_RESTORE_INTERVAL_SEC:
+                return highest_price
+            self._anchor_restore_at[code] = now
+        if highest_price is None:
+            highest_price = self._cached_anchor(code)
+        if not entry_date:
+            return highest_price
+        try:
+            if df is None:
+                df = api.get_chart_data(code, is_overseas=is_overseas)
+            derived_high = _pkg().anchor_high_since(code, df, entry_date, is_overseas=is_overseas)
+        except Exception as e:
+            logger.debug(f"[TrailingStop] {code} 앵커 복원 실패: {e}")
+            return highest_price
+
+        if not derived_high or derived_high <= highest_price:
+            return highest_price
+
+        db_manager.db.update_highest_price(code, derived_high)
+        with self._lock:
+            self.trailing_stop_cache[code] = derived_high
+        self.log(f"[TrailingStop] {name}({code}) 앵커 복원: "
+                 f"{highest_price:,.0f} → {derived_high:,.0f} "
+                 f"(진입일 {entry_date} 이후 봉 고가)")
+        return derived_high
+
     def _alert_unmanaged_stop(self, code, name, item, kind, buy_trades=None):
         """[안전장치] 자동 매도 대상에서 제외된 보유 포지션의 손절선 이탈 경보
 
@@ -4677,6 +4746,13 @@ class AutoTrader:
             if is_nxt_market and not is_overseas_stock:
                 if is_domestic_etf or (hasattr(api, 'is_nxt_tradeable') and not api.is_nxt_tradeable(code)):
                     self.set_stock_state(code, None)
+                    # [앵커 복원] 이 분기는 아래 ETF 제외보다 **먼저** 걸린다. 여기서 그냥
+                    #  돌아서면 NXT 시간대(15:30~20:00·08:00~08:50)에만 봇을 켜는 운용에서는
+                    #  ETF 앵커가 영영 복원되지 않는다. 주문과 무관한 기록이므로 여기서도 남긴다.
+                    self._restore_trailing_anchor(
+                        code, name,
+                        _pkg().resolve_entry_date(entry_date_map.get(code),
+                                                  latest_buy_map.get(code)))
                     return
 
             # [추가] ETF 포함 여부가 False면 보유 ETF는 자동 매도 대상에서도 제외한다.
@@ -4688,6 +4764,14 @@ class AutoTrader:
                 # [Fix] 시스템이 손절하지 않는 포지션이므로 손절선 이탈 시 경보는 발송한다.
                 self._alert_unmanaged_stop(code, name, item, UNMANAGED_ETF,
                                            buy_trades_map.get(code))
+                # [앵커 복원] 매도 판정에서 빠져도 앵커는 남겨 둔다. 여기서 돌아서면 이 종목의
+                #  trailing_stops 는 영영 갱신되지 않아, 마지막 매수의 체결가가 앵커로 굳는다
+                #  (102780: 4월 진입·실제 고가 36,360인데 8월 1주 추가 매수로 25,500이 기록).
+                #  ETF 포함 설정을 켜는 순간 그 값이 곧바로 청산선의 근거가 되고, DB만 보고
+                #  판단하는 도구·감사도 같은 값을 읽는다. 주문은 내지 않으므로 부작용이 없다.
+                self._restore_trailing_anchor(
+                    code, name,
+                    _pkg().resolve_entry_date(entry_date_map.get(code), latest_buy_map.get(code)))
                 return
 
             qty = api.safe_int(item.get('ord_psbl_qty'))
@@ -4746,14 +4830,7 @@ class AutoTrader:
                 last_buy, entry_date=entry_date_map.get(code))
             entry_date = _pkg().resolve_entry_date(entry_date_map.get(code), last_buy)
 
-            with self._lock:
-                cached_highest = self.trailing_stop_cache.get(code)
-                if cached_highest is None:
-                    val = db_manager.db.get_highest_price(code)
-                    cached_highest = val if val is not None else 0.0
-                    self.trailing_stop_cache[code] = cached_highest
-            
-            highest_price = cached_highest
+            highest_price = self._cached_anchor(code)
 
             # [안전장치] 액면분할·무상증자로 평단이 재조정되면 최고가만 조정 전 값으로 남아
             #  트레일링 스탑이 즉시 오발동한다(5:1 분할 → drop_rate 80% → 시장가 강제 매도).
@@ -4774,27 +4851,8 @@ class AutoTrader:
             #  아래 analyze_sell에 current_price를 그대로 넘기므로 실시간 대응에는 영향이 없다.
             indicators.apply_realtime_price(df, api.chart_overlay_price(current_price, is_overseas_stock))
 
-            # [앵커 복원 · 2026-08-24] 진입일 이후 봉 고가가 기록된 앵커보다 높으면 그것으로
-            #  올린다. 위의 갱신은 **봇이 보고 있는 동안의 현재가**만 쌓으므로, 다음 구간이
-            #  통째로 비어 있었다:
-            #    · HTS·앱에서 직접 산 포지션 — 봇이 처음 본 날의 현재가부터 시작한다
-            #    · 재기동·정지 구간의 고점 — 그 사이 고가가 앵커에 남지 않는다
-            #    · 매수 주문이 심는 앵커 — 보유 중인 종목에 1주만 더 담아도 그 체결가가
-            #      앵커로 기록되고(update_highest_price는 단조라 내리진 않지만, 기록이
-            #      없던 종목엔 매수가가 그대로 앵커가 된다) 실제 고점이 사라진다
-            #  백테스트는 진입 봉 고가에서 시작해 봉 고가의 러닝맥스를 쓴다
-            #  (portfolio_backtest: pos["high"] = max(pos["high"], row["high"])).
-            #  즉 이 복원은 실매매를 백테스트의 정의 쪽으로 되돌리는 것이다.
-            if entry_date:
-                derived_high = _pkg().highest_since(df, entry_date)
-                if derived_high and derived_high > highest_price:
-                    db_manager.db.update_highest_price(code, derived_high)
-                    with self._lock:
-                        self.trailing_stop_cache[code] = derived_high
-                    self.log(f"[TrailingStop] {name}({code}) 앵커 복원: "
-                             f"{highest_price:,.0f} → {derived_high:,.0f} "
-                             f"(진입일 {entry_date} 이후 봉 고가)")
-                    highest_price = derived_high
+            highest_price = self._restore_trailing_anchor(
+                code, name, entry_date, highest_price, df=df, is_overseas=is_overseas_stock)
 
             # [SSOT] 임계값 조립은 build_sell_thresholds가 단독 보유한다.
             #  잔고 화면(메뉴 9-2)의 보유 분석도 같은 함수를 호출해 판정이 갈리지 않게 한다.
