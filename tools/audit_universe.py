@@ -126,7 +126,131 @@ def _listing(kind, refresh=None):
     return df
 
 
-def extend_targets(exclude, limit, mode="marcap", pool=500, seed=20260816):
+def _pit_date(days):
+    """백테스트 창의 **시작일**(YYYYMMDD) — 유니버스를 그 시점 기준으로 고르기 위한 날짜.
+
+    휴장일이면 직전 영업일로 당긴다. KRX 는 휴장일에도 직전 영업일 값을 주지만, 그러면
+    스냅샷 파일명이 날짜마다 갈려 같은 데이터가 여러 벌 쌓인다 — 하나로 모은다.
+    """
+    import datetime as _dt
+    d = (_dt.date.today() - _dt.timedelta(days=int(days))).strftime("%Y%m%d")
+    try:
+        from pykrx import stock
+        return stock.get_nearest_business_day_in_a_week(d)
+    except Exception:       # noqa: BLE001 - pykrx 없거나 조회 실패면 원래 날짜로 간다
+        return d
+
+
+def _pit_marcap(date):
+    """그 **시점의** 시가총액 {티커: 시총}. KOSPI+KOSDAQ. 조회 불가면 None.
+
+    [왜 필요한가 — 2026-08-24] `_listing("KRX")` 의 Marcap 은 **오늘의** 시총이다. 그것으로
+    10년 백테스트의 유니버스를 고르면 "2016년에는 고를 수 없었던 종목"을 2016년에 심는 셈이다
+    (실측: 2016-01-04 시총 2위는 **한국전력**이었고, 오늘 목록으로는 재현되지 않는다).
+    이 함수는 그날 실제 순위를 준다 — 폐지된 종목도 그 시점엔 살아 있었으므로 자연히 섞인다.
+
+    [자격증명] pykrx 의 시총 조회는 data.krx.co.kr 로그인(KRX_ID/KRX_PW)이 있어야 열린다.
+    없으면 빈 프레임이 오므로 None 을 돌려주고, 호출부가 기존 모드로 안내한 뒤 멈춘다.
+
+    [고정] `_listing` 과 같은 규약으로 **디스크 스냅샷**에 박는다. 과거 시총은 불변이라
+    갱신할 이유가 없고, 매 실행마다 KRX 를 두드리면 레이트리밋에 걸린다.
+    """
+    import os
+    import pandas as pd
+    d = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                     "data", "listing_cache")
+    os.makedirs(d, exist_ok=True)
+    f = os.path.join(d, f"pit_marcap_{date}.csv")
+    if os.path.exists(f):
+        df = pd.read_csv(f, dtype={"ticker": str})
+        return dict(zip(df["ticker"], df["marcap"]))
+
+    try:
+        from pykrx import stock
+    except Exception as e:      # noqa: BLE001
+        print(f"[PIT] pykrx 로드 실패: {e}", flush=True)
+        return None
+
+    frames = []
+    for market in ("KOSPI", "KOSDAQ"):
+        try:
+            cap = stock.get_market_cap(date, market=market)
+        except Exception as e:  # noqa: BLE001
+            print(f"[PIT] {market} 시총 조회 실패({date}): {type(e).__name__}: {e}", flush=True)
+            return None
+        if cap is None or cap.empty:
+            return None
+        frames.append(cap[["시가총액"]])
+
+    out = pd.concat(frames)
+    out = out[out["시가총액"] > 0]
+    pd.DataFrame({"ticker": out.index.astype(str), "marcap": out["시가총액"].values}).to_csv(
+        f, index=False, encoding="utf-8")
+    print(f"[PIT] {date} 시총 스냅샷 생성 — {len(out):,}종목 (KOSPI+KOSDAQ)", flush=True)
+    return dict(zip(out.index.astype(str), out["시가총액"]))
+
+
+def _name_map():
+    """{코드: 이름} — 현재 상장 목록과 폐지 목록을 합친다.
+
+    PIT 유니버스에는 **지금은 없는 종목**이 섞이므로(그게 요점이다) 폐지 목록의 이름까지
+    있어야 스팩·리츠를 걸러낼 수 있다. 어느 쪽에도 없으면 이름 기반 필터는 통과시킨다 —
+    코드 기반 우선주 필터는 그대로 걸린다.
+    """
+    out = {}
+    for kind, code_col in (("KRX", "Code"), ("KRX-DELISTING", "Symbol")):
+        try:
+            df = _listing(kind)
+        except Exception as e:      # noqa: BLE001
+            print(f"[PIT] {kind} 목록을 못 읽었다({type(e).__name__}) — 이름 필터가 느슨해진다",
+                  flush=True)
+            continue
+        if code_col not in df.columns or "Name" not in df.columns:
+            continue
+        for c, n in zip(df[code_col].astype(str), df["Name"].astype(str)):
+            out.setdefault(c, n)
+    return out
+
+
+def _is_excluded_ticker(code, name):
+    """우선주·스팩·리츠인가. (mode 공용 — 현재 목록과 PIT 목록이 같은 규칙을 쓰게 한다)
+
+    우선주는 두 가지 표기가 있다. 구형은 끝자리 5·7·9(005935 삼성전자우), 신형은
+    **여섯째 자리가 알파벳**이다(00680K 미래에셋증권2우B). 끝자리 숫자만 보던 필터는
+    신형을 통째로 놓쳤다 — 2026-08-24 스냅샷 기준 상위 500 풀 안에 3종(미래에셋증권2우B·
+    한화3우B·CJ4우(전환))이 남아 있었고, pool을 키우면 그만큼 더 샌다.
+    ※ `0120G0`(삼양바이오팜)처럼 **가운데**에 문자가 오는 코드는 최근 상장된 보통주의
+      신규 채번이다. 그래서 '문자 포함'이 아니라 '끝자리가 문자'로 가른다.
+    """
+    import re
+    code = str(code)
+    if code.endswith(("5", "7", "9")):
+        return True
+    if re.match(r"^\d{5}[A-Z]$", code):
+        return True
+    return bool(name) and ("스팩" in name or "리츠" in name)
+
+
+def _hash_draw(cand, pool, limit, seed):
+    """상위 `pool` 안에서 **종목별 해시**로 뽑는다.
+
+    [2026-08-24] '리스트를 셔플해서 앞에서 자르기'를 버렸다. 고정 씨드 셔플은
+    '인덱스 → 자리'의 고정 치환이라, 리스트에서 **한 종목의 위치만 밀려도** 그 뒤 전부의
+    자리가 바뀐다. 그래서 뽑히는 60개가 통째로 갈렸다.
+      실측(시총에 지터를 걸어 8회):
+        셔플·시총순   ±2% → 60 중 41.5개 교체  |  ±5% 48.6  |  ±10% 51.2
+        셔플·코드순   ±2% → 60 중 20.9개 교체  |  ±5% 34.0  |  ±10% 40.1
+        해시(현행)    ±2% → 60 중  0.8개 교체  |  ±5%  1.0  |  ±10%  1.4
+    정작 데이터는 거의 안 움직인다 — 같은 지터에서 상위 pool의 **구성원**은 500개 중
+    3개(0.6%)만 바뀐다. 흔들린 것은 유니버스가 아니라 계측기였다. 해시 방식은 한 종목의
+    당락이 **그 종목만의 함수**라, 구성원이 3개 바뀌면 뽑히는 것도 그만큼만 바뀐다.
+    """
+    import hashlib
+    return sorted(cand[:pool],
+                  key=lambda c: hashlib.md5(f"{seed}|{c[0]}".encode()).hexdigest())[:limit]
+
+
+def extend_targets(exclude, limit, mode="marcap", pool=500, seed=20260816, pit_date=None):
     """관심종목에 없는 종목으로 풀을 넓힌다. '44개를 넘기면 나아지는가'를 재려면 필요하다.
 
     우선주·스팩·리츠는 뺀다 — 추세추종 대상이 아니고 유동성 성격도 다르다.
@@ -134,41 +258,35 @@ def extend_targets(exclude, limit, mode="marcap", pool=500, seed=20260816):
     [mode='marcap'] **현재** 시총 상위에서 뽑는다. 편하지만 생존 편향이 이 축에서 최대로
       작동한다 — 지금 시총이 큰 종목은 정의상 지난 10년간 크게 오른 종목이다. 이 팔만으로는
       '종목을 늘려서 좋아진 것'과 '지금 큰 종목을 과거에 심어서 좋아진 것'을 못 가른다.
-    [mode='random'] 시총 상위 `pool`개 안에서 **무작위로** 뽑는다. '거래 가능성'만 통제하고
-      승자 선택은 제거한다. 이쪽에서도 좋아지면 크기 효과가 진짜다.
+    [mode='random'] **현재** 시총 상위 `pool`개 안에서 무작위로 뽑는다. '거래 가능성'만
+      통제하고 승자 선택은 제거한다. 다만 pool 자체가 오늘 기준이라 look-ahead 가 남는다.
+    [mode='pit'] **그 시점(pit_date)의** 시총 상위 `pool` 안에서 뽑는다. random 과 뽑기
+      방식(해시)이 같고 **시총을 언제 재느냐만 다르다** — 그래서 둘을 나란히 돌리면
+      look-ahead 의 크기가 그대로 드러난다. 그 시점에 살아 있던 종목을 쓰므로 나중에
+      폐지된 종목도 자연히 섞인다(축 B 의 생존 편향과 겹치는 부분이 있다).
+      KRX_ID/KRX_PW 가 없으면 시총 조회가 막혀 있어 쓸 수 없다.
     """
+    if mode == "pit":
+        if not pit_date:
+            raise ValueError("mode='pit' 은 pit_date 가 필요하다")
+        caps = _pit_marcap(pit_date)
+        if not caps:
+            print("[PIT] 그 시점 시총을 받지 못했다 — KRX_ID/KRX_PW 를 확인하라. "
+                  "(--extend-mode random 으로는 계속 잴 수 있다)", flush=True)
+            return []
+        names = _name_map()
+        cand = [(c, names.get(c, c)) for c in caps
+                if c not in exclude and not _is_excluded_ticker(c, names.get(c, ""))]
+        cand.sort(key=lambda t: caps[t[0]], reverse=True)
+        return _hash_draw(cand, pool, limit, seed)
+
     df = _listing("KRX")
     df = df[df["Market"].isin(["KOSPI", "KOSDAQ"])].dropna(subset=["Marcap"])
-    #  우선주는 두 가지 표기가 있다. 구형은 끝자리 5·7·9(005935 삼성전자우), 신형은
-    #  **여섯째 자리가 알파벳**이다(00680K 미래에셋증권2우B). 끝자리 숫자만 보던 필터는
-    #  신형을 통째로 놓쳤다 — 2026-08-24 스냅샷 기준 상위 500 풀 안에 3종(미래에셋증권2우B·
-    #  한화3우B·CJ4우(전환))이 남아 있었고, pool을 키우면 그만큼 더 샌다.
-    #  ※ `0120G0`(삼양바이오팜)처럼 **가운데**에 문자가 오는 코드는 최근 상장된 보통주의
-    #    신규 채번이다. 그래서 '문자 포함'이 아니라 '끝자리가 문자'로 가른다.
-    bad = (df["Name"].str.contains("스팩|리츠", na=False)
-           | df["Code"].str.endswith(("5", "7", "9"))
-           | df["Code"].str.match(r"^\d{5}[A-Z]$", na=False))
-    df = df[~bad].sort_values("Marcap", ascending=False)
+    bad = [not _is_excluded_ticker(r["Code"], r["Name"]) for _, r in df.iterrows()]
+    df = df[bad].sort_values("Marcap", ascending=False)
     cand = [(r["Code"], r["Name"]) for _, r in df.iterrows() if r["Code"] not in exclude]
     if mode == "random":
-        # [2026-08-24] '리스트를 셔플해서 앞에서 자르기'를 버리고 **종목별 해시**로 뽑는다.
-        #  종전 방식은 시총 내림차순 리스트를 고정 씨드로 셔플했다. 고정 씨드 셔플은
-        #  '인덱스 → 자리'의 고정 치환이라, 리스트에서 **한 종목의 위치만 밀려도** 그
-        #  뒤 전부의 자리가 바뀐다. 그래서 뽑히는 60개가 통째로 갈렸다.
-        #    실측(시총에 지터를 걸어 8회):
-        #      셔플·시총순   ±2% → 60 중 41.5개 교체  |  ±5% 48.6  |  ±10% 51.2
-        #      셔플·코드순   ±2% → 60 중 20.9개 교체  |  ±5% 34.0  |  ±10% 40.1
-        #      해시(현행)    ±2% → 60 중  0.8개 교체  |  ±5%  1.0  |  ±10%  1.4
-        #  정작 데이터는 거의 안 움직인다 — 같은 지터에서 상위 pool의 **구성원**은
-        #  500개 중 3개(0.6%)만 바뀐다. 흔들린 것은 유니버스가 아니라 계측기였다.
-        #  해시 방식은 한 종목의 당락이 **그 종목만의 함수**라, 구성원이 3개 바뀌면
-        #  뽑히는 것도 그만큼만 바뀐다.
-        #  ※ 이 수정 이전에 mode="random"으로 찍힌 수치와는 유니버스가 다르다. 다만
-        #    그 수치들은 애초에 날짜를 넘어 재현되지 않았다 — 비교 가능성이 사라진 게
-        #    아니라, 없던 것이 드러난 것이다([[allocation-equal-weight-lead]]).
-        import hashlib
-        cand = sorted(cand[:pool],
-                      key=lambda c: hashlib.md5(f"{seed}|{c[0]}".encode()).hexdigest())
+        return _hash_draw(cand, pool, limit, seed)
     return cand[:limit]
 
 
@@ -265,8 +383,11 @@ def main():
     ap.add_argument("--seeds", type=int, default=3)
     ap.add_argument("--seed", type=int, default=20260816)
     ap.add_argument("--sizes", default="10,20,30,44")
-    ap.add_argument("--extend-mode", default="marcap", choices=["marcap", "random"],
-                    help="확장 종목 선정: marcap=현재 시총 상위(생존 편향 최대) / random=상위 pool 내 무작위")
+    ap.add_argument("--extend-mode", default="marcap", choices=["marcap", "random", "pit"],
+                    help="확장 종목 선정: marcap=현재 시총 상위(생존 편향 최대) / "
+                         "random=현재 상위 pool 내 무작위 / "
+                         "pit=**그 시점** 상위 pool 내 무작위(look-ahead 제거, KRX_ID 필요). "
+                         "random 과 pit 을 나란히 돌리면 look-ahead 의 크기가 드러난다")
     ap.add_argument("--extend-pool", type=int, default=500)
     ap.add_argument("--extend", type=int, default=0,
                     help="축 A: 시총 상위에서 관심종목에 없는 종목을 이만큼 추가해 44개 너머를 잰다")
@@ -293,9 +414,13 @@ def main():
     dfs, mf, dates = prep(live, args.days, "현행 풀")
     ext_dfs = {}
     if args.axis == "A" and args.extend > 0:
+        pit_date = _pit_date(args.days)
         et = extend_targets({c for c, _n in live}, args.extend,
-                            mode=args.extend_mode, pool=args.extend_pool, seed=args.seed)
-        tag = "시총 상위" if args.extend_mode == "marcap" else f"상위{args.extend_pool} 내 무작위"
+                            mode=args.extend_mode, pool=args.extend_pool, seed=args.seed,
+                            pit_date=pit_date)
+        tag = {"marcap": "시총 상위",
+               "random": f"상위{args.extend_pool} 내 무작위",
+               "pit": f"{pit_date} 시점 상위{args.extend_pool} 내 무작위"}[args.extend_mode]
         ext_dfs, ext_mf, _ed = prep(et, args.days, f"확장 풀({tag} {len(et)})")
         mf.update({c: ext_mf.get(c, set()) for c in ext_dfs})
     dead_dfs = {}

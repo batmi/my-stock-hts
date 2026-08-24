@@ -159,3 +159,81 @@ def test_신형우선주는_풀에_들어오지_않는다(monkeypatch):
         "가운데에 문자가 오는 코드는 최근 상장 **보통주**의 신규 채번이다"
         "(0120G0 삼양바이오팜) — '문자 포함'으로 자르면 멀쩡한 종목이 날아간다")
     assert {"005930", "000660"} <= picked
+
+
+# ==========================================================
+# 시점별 시가총액 (mode='pit') — 2026-08-24
+# ==========================================================
+# `mode='marcap'`/`'random'` 은 **오늘의** 시총으로 과거 유니버스를 고른다. 10년 백테스트라면
+# "그때는 고를 수 없었던 종목"을 그때 심는 셈이다 — 실측으로 현행 marcap 상위 10에
+# LG에너지솔루션(2022년 상장)이 들어 있었다. `mode='pit'` 은 그 시점 시총으로 고른다.
+# 뽑기 방식(해시)은 random 과 같고 **시총을 언제 재느냐만 다르다** — 그래야 둘을 나란히
+# 돌렸을 때 차이가 look-ahead 의 크기가 된다.
+
+def test_pit_은_그_시점_시총으로_고른다(monkeypatch):
+    """오늘 1위지만 그 시점엔 없던 종목은 뽑히지 않아야 한다."""
+    today = pd.DataFrame({
+        "Code": ["373220", "005930", "015760"],       # LG엔솔(2022 상장) · 삼성전자 · 한국전력
+        "Name": ["LG에너지솔루션", "삼성전자", "한국전력"],
+        "Market": ["KOSPI"] * 3,
+        "Marcap": [9e14, 8e14, 1e14],
+    })
+    monkeypatch.setattr(AU, "_listing", lambda kind, refresh=None: today)
+    # 그 시점(2016)에는 LG엔솔이 없고 한국전력이 2위였다
+    monkeypatch.setattr(AU, "_pit_marcap", lambda date: {"005930": 8e14, "015760": 3e14})
+    monkeypatch.setattr(AU, "_name_map", lambda: {"005930": "삼성전자", "015760": "한국전력"})
+
+    now = {c for c, _ in AU.extend_targets(set(), 3, mode="marcap")}
+    pit = {c for c, _ in AU.extend_targets(set(), 3, mode="pit", pit_date="20160826")}
+
+    assert "373220" in now, "현행 모드는 오늘 시총을 쓴다(대조군)"
+    assert "373220" not in pit, \
+        "그 시점에 상장도 안 된 종목이 PIT 유니버스에 들어왔다 — look-ahead 가 남아 있다"
+    assert pit == {"005930", "015760"}
+
+
+def test_pit_도_우선주_스팩을_배제한다(monkeypatch):
+    """배제 규칙은 현재 목록과 PIT 목록이 **같아야** 한다 (같은 헬퍼를 쓴다)."""
+    monkeypatch.setattr(AU, "_pit_marcap", lambda date: {
+        "005930": 9e14, "005935": 8e14, "00680K": 7e14, "123456": 6e14, "654321": 5e14})
+    monkeypatch.setattr(AU, "_name_map", lambda: {
+        "005930": "삼성전자", "005935": "삼성전자우", "00680K": "미래에셋증권2우B",
+        "123456": "케이비제20호스팩", "654321": "OO리츠"})
+
+    picked = {c for c, _ in AU.extend_targets(set(), 10, mode="pit", pit_date="20160826")}
+    assert picked == {"005930"}, f"배제가 새고 있다: {picked}"
+
+
+def test_pit_은_뽑기_방식이_random_과_같다(monkeypatch):
+    """같은 구성원·같은 씨드면 두 모드가 같은 종목을 뽑아야 한다.
+
+    그래야 random↔pit 비교에서 **시총을 언제 쟀는가**만 남는다. 뽑기까지 다르면
+    차이가 look-ahead 때문인지 뽑기 때문인지 못 가른다.
+    """
+    codes = [f"{i:06d}" for i in range(1, 601)]
+    caps = {c: float(600 - i) for i, c in enumerate(codes)}
+    df = pd.DataFrame({"Code": codes, "Name": [f"종목{c}" for c in codes],
+                       "Market": ["KOSPI"] * 600, "Marcap": [caps[c] for c in codes]})
+    monkeypatch.setattr(AU, "_listing", lambda kind, refresh=None: df)
+    monkeypatch.setattr(AU, "_pit_marcap", lambda date: caps)
+    monkeypatch.setattr(AU, "_name_map", lambda: {c: f"종목{c}" for c in codes})
+
+    a = {c for c, _ in AU.extend_targets(set(), 60, mode="random")}
+    b = {c for c, _ in AU.extend_targets(set(), 60, mode="pit", pit_date="20160826")}
+    assert a == b
+
+
+def test_pit_은_시총을_못_받으면_조용히_비지_않는다(monkeypatch, capsys):
+    """자격증명이 없으면 빈 결과를 주되 **이유를 말해야** 한다.
+
+    조용히 0종목을 돌려주면 '확장 없이 잰 수치'가 확장한 것처럼 기록된다.
+    """
+    monkeypatch.setattr(AU, "_pit_marcap", lambda date: None)
+    out = AU.extend_targets(set(), 10, mode="pit", pit_date="20160826")
+    assert out == []
+    assert "KRX_ID" in capsys.readouterr().out
+
+
+def test_pit_은_기준일이_없으면_거부한다():
+    with pytest.raises(ValueError):
+        AU.extend_targets(set(), 10, mode="pit")
