@@ -290,6 +290,17 @@ def preflight_check():
         config.session.load_stock_config() # 갱신된 데이터를 메모리 캐시에 다시 로드
         config.console.print("  - 성공: 누락/오류 시장(exchange) 정보 교정 및 업데이트 완료.")
 
+    # 4. 데이터 원천 점검 — KRX 공식 경로가 켜져 있는가.
+    #  자격증명이 없어도 프로그램은 종전 소스로 돌지만 **판단의 원천이 달라진다**.
+    #  폴백이 조용하면 운영자는 켜져 있다고 믿는 동안 꺼진 채로 운용하게 된다.
+    #  점검을 실패로 만들지는 않는다 — 폴백은 정상 동작이고, 알리는 것이 목적이다.
+    try:
+        from modules import krx_data
+        krx_ok, krx_msg = krx_data.status_text()
+        config.console.print(f"  - {'성공' if krx_ok else '[yellow]주의[/yellow]'}: {krx_msg}")
+    except Exception as e:      # noqa: BLE001 - 점검 자체가 기동을 막으면 안 된다
+        config.console.print(f"  - [dim]KRX 공식 데이터 상태 확인 실패: {e}[/dim]")
+
     return checks_ok
 
 def show_help():

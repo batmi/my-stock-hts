@@ -757,7 +757,14 @@ def _run_gemini_report(prompt_content, *, label="분석", timeout=60.0, generati
 
 def analyze_market_trends_with_gemini(custom_prompt=None):
     """
-    Gemini의 Google Search Grounding을 사용하여 실시간 시장 테마 분석
+    시스템이 수집한 매크로 지표 + Gemini의 학습된 지식으로 시장 테마를 분석한다.
+
+    [주의 · 2026-08-25] **Google Search Grounding(실시간 웹 검색)은 쓰지 않는다.** 검색
+     도구(tools) 전달은 2026년 초 ea3f1ea 에서 제거됐는데(장전 브리핑 오류 대응) 문구만
+     남아 "AI가 오늘 뉴스를 봤다"고 읽히고 있었다. 프롬프트(prompts.py)는 이미 모델에게
+     '실시간 검색이 불가능하다'고 알리고 있어 서로 어긋나 있었다. 매매 판단에 쓰이는
+     화면이라 표기를 사실에 맞춘다. 실시간성이 필요한 재료는 시스템이 직접 모아
+     프롬프트에 넣는다(_get_macro_context_str).
     """
     if _ensure_genai() is None:
         config.console.print("\n[red]※ google-genai 라이브러리가 설치되지 않았습니다.[/red]")
@@ -1183,7 +1190,7 @@ def _analyze_with_gemini_ui():
             result = cached['data']
     
     if not result:
-        config.console.print("[dim]시스템이 최신 매크로 지표를 수집하고 Google Gemini가 실시간 검색을 융합하여 테마를 분석합니다.[/dim]\n")
+        config.console.print("[dim]시스템이 최신 매크로 지표를 수집하고 Google Gemini가 학습된 지식으로 테마를 분석합니다. (실시간 웹 검색 없음)[/dim]\n")
         result = analyze_market_trends_with_gemini()
         if result:
             _save_theme_analysis(result)
@@ -1209,7 +1216,7 @@ def _analyze_with_custom_prompt_ui():
         if user_prompt.lower() in ['b', 'q'] or not user_prompt.strip():
             return
 
-        config.console.print("[dim]Google Gemini가 실시간 검색(Grounding)을 통해 분석합니다.[/dim]")
+        config.console.print("[dim]Google Gemini가 학습된 지식으로 분석합니다. (실시간 웹 검색 없음 — 최신 재료는 시스템이 수집해 전달합니다)[/dim]")
         
         # 사용자 프롬프트 실행 (캐시 저장 안함)
         result = analyze_market_trends_with_gemini(custom_prompt=user_prompt)

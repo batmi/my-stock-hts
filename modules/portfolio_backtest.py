@@ -92,8 +92,12 @@ PRICE_EXIT_REASONS = ("손절", "ATR손절", "본전청산", "이익보호", "�
 #  [2026-08-23] 종전에는 이 목록이 아래 sells 조립부에 리터럴로 박혀 있었고 "이익보호"가
 #   빠져 있었다. 뒤따르는 `profit_amt != 0` 절이 가려 실제 표본은 온전했지만(그리고
 #   PROFIT_LOCK_USE 는 기본 OFF다), 사유가 늘 때마다 갈라지는 자리였다.
+#  [2026-08-25] "데이터종료"를 넣는다. 봉이 끊긴 종목의 포지션을 강제 청산하는 사유인데,
+#   표본에서 빼면 종전의 결함(슬롯은 묶이고 손익은 어디에도 안 잡힌다)이 이름만 바꿔
+#   되살아난다. 상장폐지 종목을 섞어 재는 감사(tools/audit_universe.py 축 B)에서는 이것이
+#   **실제 손실**이므로 승률·PF 분모에 들어가야 한다.
 EXIT_REASONS = ("ATR손절", "손절", "본전청산", "이익보호", "시간청산",
-                "트레일링스탑", "점수하락", "교체")
+                "트레일링스탑", "점수하락", "교체", "데이터종료")
 
 
 def decide_sell(*, price, high, avg, sl_rate, atr_applied, is_bep, holding_days,
@@ -522,6 +526,9 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
 
     rows = {code: {str(r["date"]): r for r in df.to_dict("records")} for code, df in dfs.items()}
     parsed = {d: pd.to_datetime(d, format="%Y%m%d") for d in dates}
+    # 종목별 **마지막 봉**. 상장폐지·장기 거래정지·데이터 실패로 봉이 끊긴 뒤에도
+    #  포지션이 남아 있으면 그날이 이 세계에서 팔 수 있는 마지막 날이다(_close_on_data_end).
+    last_bar = {code: max(r) for code, r in rows.items() if r}
 
     # ---------- 진입 순위: 기본값이 실매매다 ----------
     # [2026-08-18] 종전 기본 정렬은 **점수 하나만** 보고 동점을 dict 등록 순서로 갈랐다.
@@ -597,9 +604,25 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     # 장중 청산으로 나간 건수와, 청산선 산식이 decide_sell 과 어긋난 건수(0이어야 정상).
     intraday_exits = intraday_mismatch = 0
 
+    # 종목별 **최근에 알려진 종가**. 그날 봉이 없는 보유 종목을 평가할 때 쓴다.
+    #  [2026-08-25] 종전 _equity 는 봉 없는 종목을 합계에서 통째로 뺐다. 거래정지 하루만
+    #  걸려도 그날 자산이 그 포지션만큼 꺼졌다가 다음 날 돌아왔고, MDD 는 그 인공 구덩이를
+    #  실제 낙폭으로 셌다(합성 실측: -7.7% → -34.0%). **직전 마크로 평가하는 것**이 맞다 —
+    #  주가가 사라진 것이 아니라 그날의 시세가 없을 뿐이다. 마크는 그날까지 본 값만 쓰므로
+    #  앞을 보지 않는다(마지막 봉으로 소급 평가하면 미래를 당겨쓰게 된다).
+    mark_px = {}
+
+    def _mark(px):
+        return px if px and not (isinstance(px, float) and math.isnan(px)) and px > 0 else None
+
     def _equity(day):
-        return cash + reserved_cash + sum(
-            p["qty"] * rows[c][day]["close"] for c, p in positions.items() if day in rows[c])
+        total = cash + reserved_cash
+        for c, p in positions.items():
+            row = rows[c].get(day)
+            px = _mark(row["close"]) if row is not None else mark_px.get(c)
+            if px:
+                total += p["qty"] * px
+        return total
 
     def _effective_sl(position, hwm=None):
         """현재 유효 손절률(BEP 상향 반영). BEP는 실매매와 같은 토글을 따른다.
@@ -640,6 +663,33 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             "mfe": max_profit, "armed": bool(pos.get("ts_armed_ever")), "bep": bool(is_bep),
         })
         del positions[code]
+
+    def _close_on_data_end(code, pos):
+        """봉이 끊긴 종목의 포지션을 **마지막 봉의 종가**로 청산한다.
+
+        [왜 필요한가 · 2026-08-25] 종전에는 그날 봉이 없으면 매도 루프가 그냥 건너뛰었다
+         (`row is None → continue`). 그래서 상장폐지·장기 거래정지·데이터 실패로 봉이 끊기면
+         포지션이 창 끝까지 살아남아 **슬롯을 영구 점유**하고, `_equity` 는 봉 없는 종목을
+         합계에서 빼므로 **투입 자본이 자산곡선에서 통째로 증발**했다(최종 자산도 같은 자를
+         쓴다). 청산 기록이 없으니 승률·PF·꼬리 표본에서도 빠졌다. 합성 2종목 실측에서
+         동결 1건이 시드의 34.6%를 지우고 MDD 를 -7.7% → -36.3% 로 부풀렸다.
+
+        [가격을 무엇으로 두는가] 마지막으로 **알 수 있었던** 종가다. 슬리피지는 얹지 않는다
+         — 이건 전략이 내린 매매 판정이 아니라 자료가 끝나서 하는 정리이고, 없는 호가를
+         지어내지 않는 것이 낫다. 다만 상장폐지 종목을 섞어 재는 감사에서는 실제 회수액이
+         마지막 종가보다 훨씬 낮은 것이 보통이므로, 이 청산은 **낙관 쪽으로 치우친다**.
+         생존 편향의 크기를 재는 도구는 그 점을 감안해 읽어야 한다.
+        """
+        last_day = last_bar.get(code)
+        if last_day is None:
+            return
+        last_row = rows[code][last_day]
+        px = last_row["close"]
+        if px is None or (isinstance(px, float) and math.isnan(px)) or px <= 0:
+            return
+        holding_days = (parsed[last_day] - pos["buy_dt"]).days
+        mfe = (pos["high"] - pos["avg"]) / pos["avg"] * 100 if pos["avg"] > 0 else 0.0
+        _do_sell(code, pos, last_day, px, "데이터종료", holding_days, mfe, False)
 
     def _pyramid_gate(price, pos, state, trigger):
         """증액 판정 — 차수·수익률·상태.
@@ -746,6 +796,10 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     prev_equity = None      # 방어 모드 판정용 전일 자산
     for day in dates:
         stop_px_today.clear()   # 게이트는 '당일'만 — 실매매도 today_trades로 하루치만 본다
+        for _c, _p in positions.items():          # 보유 종목의 마크 갱신(그날 봉이 있는 것만)
+            _r = rows[_c].get(day)
+            if _r is not None and _mark(_r["close"]):
+                mark_px[_c] = _r["close"]
         equity_curve.append(_equity(day))
         if equity_curve[-1] > 0:
             cash_ratios.append(cash / equity_curve[-1] * 100)
@@ -763,6 +817,10 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
         for code in list(positions.keys()):
             row = rows[code].get(day)
             if row is None:
+                # 봉이 **아예 끝난** 종목이면 마지막 봉으로 정리한다. 중간에 하루 빠진
+                #  것(거래정지 등)은 종전대로 건너뛴다 — 재개일에 판정이 다시 돈다.
+                if day > last_bar.get(code, day):
+                    _close_on_data_end(code, positions[code])
                 continue
             price = row["close"]
             if price is None or (isinstance(price, float) and math.isnan(price)) or price <= 0:
@@ -1264,6 +1322,9 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                                "lots": [{"qty": qty, "sl": sl_rate}],
                                "high": row.get("high", buy_price), "buy_dt": parsed[day],
                                "pyr": 0}
+            # 진입 당일에도 마크를 세워 둔다 — 그 봉이 그 종목의 마지막 봉이면
+            #  다음 날 마크 갱신 루프가 돌 기회가 없다.
+            mark_px[code] = _mark(row.get("close")) or buy_price
             trades.append({"code": code, "date": day, "reason": "매수",
                            "profit_amt": 0, "profit": 0, "days": 0})
             return True

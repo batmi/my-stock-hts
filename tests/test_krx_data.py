@@ -84,6 +84,37 @@ def test_session_none_when_unavailable():
         assert krx_data._session() is None
 
 
+def test_status_text_names_the_missing_variable():
+    """폴백은 조용해도 되지만 **기동 점검은 조용하면 안 된다**.
+
+    ~/.htsrc 에 값을 넣어도 그 뒤 재기동한 프로세스에만 들어온다. 그래서 '왜 꺼졌는지'와
+    '무엇을 해야 하는지'가 한 줄에 다 있어야 한다 — main.preflight_check 가 이걸 찍는다.
+    """
+    with patch.dict(os.environ, {"KRX_ID": "", "KRX_PW": ""}):
+        ok, msg = krx_data.status_text()
+    assert ok is False
+    assert "KRX_ID" in msg and "KRX_PW" in msg
+    assert "재기동" in msg
+    assert krx_data.KRX_COVERAGE in msg, "무엇이 꺼졌는지가 문구에 있어야 한다"
+
+
+def test_status_text_when_available():
+    ok, msg = krx_data.status_text()          # fixture 가 자격증명·모듈을 채워 둔다
+    assert ok is True and "사용" in msg
+
+
+def test_status_text_distinguishes_library_failure():
+    """자격증명은 있는데 pykrx 세션 모듈이 없는 경우 — 원인이 다르면 문구도 달라야 한다."""
+    saved = krx_data._pykrx_webio
+    krx_data._pykrx_webio = None
+    try:
+        ok, msg = krx_data.status_text()
+    finally:
+        krx_data._pykrx_webio = saved
+    assert ok is False
+    assert "pykrx" in msg and "재기동" not in msg
+
+
 # ---------------------------------------------------------------------------
 # 지수 티커 — KIS 코드와 숫자가 겹치므로 표가 섞이면 안 된다
 # ---------------------------------------------------------------------------
@@ -98,6 +129,70 @@ def test_index_tickers_do_not_follow_kis_numbering():
 def test_index_rejects_unsupported_type():
     assert krx_data.get_index_daily("VKOSPI") is None
     assert krx_data.get_index_daily("K200FUT_F") is None
+
+
+# ---------------------------------------------------------------------------
+# 지수 일봉 **파서** — 시장필터·국면 판정이 이 값 위에 선다.
+#  [2026-08-25] 커버리지 실측에서 이 함수는 31줄 중 27줄이 미실행이었다. 티커 표와 거부
+#  규칙만 테스트가 있었고, 정작 pykrx 응답을 읽어 스키마로 바꾸는 본문은 비어 있었다.
+# ---------------------------------------------------------------------------
+def _index_ohlcv(n=3):
+    """pykrx.get_index_ohlcv 형태 — 한글 컬럼 + DatetimeIndex(이름 '날짜')."""
+    idx = pd.to_datetime(["2026-08-20", "2026-08-21", "2026-08-22"][:n])
+    idx.name = "날짜"
+    return pd.DataFrame({
+        "시가": [3100.0, 3110.0, 3120.0][:n],
+        "고가": [3150.0, 3160.0, 3170.0][:n],
+        "저가": [3090.0, 3100.0, 3110.0][:n],
+        "종가": [3140.0, 3150.0, 3160.0][:n],
+        "거래량": [500_000.0, 510_000.0, 520_000.0][:n],
+    }, index=idx)
+
+
+def test_index_daily_parses_ohlcv_and_volume():
+    """지수에 거래량이 함께 와야 OBV 가 성립한다(tvDatafeed 는 0 을 준다)."""
+    with patch("pykrx.stock.get_index_ohlcv", return_value=_index_ohlcv()) as call:
+        df = krx_data.get_index_daily("KOSPI200", days=30, use_cache=False)
+    assert list(df.columns) == ["date", "open", "high", "low", "close", "volume"]
+    assert df["date"].tolist() == ["20260820", "20260821", "20260822"]
+    assert df["close"].iloc[-1] == 3160.0
+    assert df["volume"].iloc[0] == 500_000.0
+    assert call.call_args[0][2] == krx_data.INDEX_TICKERS["KOSPI200"], "다른 지수를 조회했다"
+    assert df.attrs.get("source") == "KRX"
+
+
+def test_index_daily_is_sorted_ascending_and_dedup():
+    """지표 계산은 오름차순 전제다 — 소스가 역순으로 줘도 바로잡아야 한다."""
+    raw = _index_ohlcv().iloc[::-1]
+    with patch("pykrx.stock.get_index_ohlcv", return_value=raw):
+        df = krx_data.get_index_daily("KOSPI", days=30, use_cache=False)
+    assert df["date"].is_monotonic_increasing
+
+
+def test_index_daily_none_when_source_fails():
+    with patch("pykrx.stock.get_index_ohlcv", side_effect=RuntimeError("KRX 500")):
+        assert krx_data.get_index_daily("KOSPI200", days=30, use_cache=False) is None
+
+
+def test_index_daily_none_when_empty():
+    with patch("pykrx.stock.get_index_ohlcv", return_value=pd.DataFrame()):
+        assert krx_data.get_index_daily("KOSDAQ150", days=30, use_cache=False) is None
+
+
+def test_index_daily_negative_cache_stops_retry_storm():
+    """실패도 캐시한다 — 감사·워커가 같은 지수를 초 단위로 재조회하면 KRX 가 막는다."""
+    with patch("pykrx.stock.get_index_ohlcv", side_effect=RuntimeError("KRX 500")) as call:
+        assert krx_data.get_index_daily("KOSPI200", days=30) is None
+        assert krx_data.get_index_daily("KOSPI200", days=30) is None
+    assert call.call_count == 1
+
+
+def test_index_daily_cache_hit_skips_refetch():
+    with patch("pykrx.stock.get_index_ohlcv", return_value=_index_ohlcv()) as call:
+        first = krx_data.get_index_daily("KOSPI", days=30)
+        second = krx_data.get_index_daily("KOSPI", days=30)
+    assert call.call_count == 1
+    assert first["close"].tolist() == second["close"].tolist()
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +263,43 @@ def test_k200_futures_night_aliases():
 def test_k200_futures_none_when_no_contract():
     with patch.object(krx_data, "_front_contract", return_value=(None, None)):
         assert krx_data.get_k200_futures_daily("F", 400) is None
+
+
+def test_live_contracts_drops_spreads_and_options():
+    """스프레드(SP)·옵션이 섞이면 근월물 선택이 엉뚱한 계약으로 간다.
+
+    [2026-08-25] 이 필터(8줄)는 테스트가 한 번도 밟지 않았다. 응답 표기가 바뀌면
+     조용히 스프레드를 근월물로 골라 40포인트 어긋난 값을 지수 자리에 앉힌다.
+    """
+    raw = [
+        {"ISU_CD": "A", "ISU_NM": "코스피200 F 202609 (주간)", "ACC_TRDVOL": "117,863"},
+        {"ISU_CD": "B", "ISU_NM": "코스피200 SP 202609-202612", "ACC_TRDVOL": "9,999,999"},
+        {"ISU_CD": "C", "ISU_NM": "코스피200 C 202609 340.0", "ACC_TRDVOL": "500,000"},
+    ]
+    with patch.object(krx_data, "_post", return_value=raw):
+        out = krx_data._live_contracts(krx_data.PROD_K200_FUTURES, "20260821")
+    assert [c[0] for c in out] == ["A"], "선물(F)만 남아야 한다"
+    assert out[0][2] == 117863.0
+
+
+def test_live_contracts_empty_on_holiday():
+    """휴장일이면 빈 응답 — _front_contract 가 전날로 거슬러 갈 수 있어야 한다."""
+    with patch.object(krx_data, "_post", return_value=None):
+        assert krx_data._live_contracts(krx_data.PROD_K200_FUTURES, "20260815") == []
+
+
+def test_front_contract_walks_back_to_a_trading_day():
+    """오늘이 휴장이면 응답이 있는 날까지 거슬러 훑는다(달력을 따로 들여오지 않는 설계)."""
+    seen = []
+
+    def _fake(prod_id, day):
+        seen.append(day)
+        return [] if len(seen) < 3 else [("A", "코스피200 F 202609 (주간)", 1.0)]
+
+    with patch.object(krx_data, "_live_contracts", _fake):
+        isu, day = krx_data._front_contract(krx_data.PROD_K200_FUTURES)
+    assert isu == "A" and day == seen[-1]
+    assert len(seen) == 3
 
 
 def test_front_contract_picks_most_traded():

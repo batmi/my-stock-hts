@@ -641,7 +641,8 @@ The **major economic events** section at the top of `[5] Investment Calendar` me
 
 ## 10. AI-Powered Assistant
 
-*   **Overview**: Combines Google Gemini LLM's real-time web search capabilities with precise technical analysis to provide deep investment insights.
+*   **Overview**: Combines Google Gemini LLM's analytical capabilities with precise technical analysis to provide deep investment insights.
+    *   Note: **Search Grounding (real-time web search) is not used.** The system collects up-to-date inputs (macro indicators, investor flows, disclosures) itself and puts them in the prompt, so individual news after the model's knowledge cutoff is not reflected.
 *   **Key Services**:
     1.  **AI In-depth Stock Diagnostics (`/analyze`)**: Writes future stock price prospect reports based on quant scores and news.
     2.  **Market-Leading Theme Analysis**: Analyzes top 5 themes and leading stocks.

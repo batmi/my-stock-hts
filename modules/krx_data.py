@@ -168,6 +168,29 @@ def is_available():
     return _pykrx_webio is not None
 
 
+# 이 자격증명이 켜고 끄는 것들 — 문구 하나로 관리한다(폴백이 조용하면 안 되는 이유).
+KRX_COVERAGE = "금현물 OHLC·지수 확정봉·V코스피200·과거 수급"
+
+
+def status_text():
+    """기동 점검에 찍을 (사용 가능 여부, 한 줄 문구).
+
+    [왜 · 2026-08-25] 자격증명이 없으면 이 모듈의 모든 함수가 조용히 None 을 돌려주고
+     호출부가 종전 소스로 폴백한다. 동작은 이어지지만 **판단의 원천이 달라진다** — 금현물은
+     시·고·저가 종가로 평탄화되고(ATR·ADX 왜곡), 지수는 확정 봉 뼈대 없이 실시간 소스만
+     남는다. 그런데 화면에는 아무 흔적도 남지 않아, 운영자가 '켜져 있다'고 믿는 동안 꺼져
+     있을 수 있다. 실제로 이 변수들은 ~/.htsrc 에 추가된 뒤 **재기동한 프로세스에만** 들어온다.
+    """
+    if is_available():
+        return True, f"KRX 공식 데이터 사용 ({KRX_COVERAGE})"
+    import os
+    missing = [n for n in ("KRX_ID", "KRX_PW") if not os.environ.get(n)]
+    if missing:
+        return False, (f"KRX 공식 데이터 미사용 — {'·'.join(missing)} 미설정 → 종전 소스로 폴백 "
+                       f"({KRX_COVERAGE}). ~/.htsrc 에 넣었다면 **프로세스 재기동**이 필요합니다.")
+    return False, f"KRX 공식 데이터 미사용 — pykrx 세션 모듈 로드 실패 → 종전 소스로 폴백 ({KRX_COVERAGE})"
+
+
 def _session():
     """pykrx 가 관리하는 인증 세션(만료 시 자동 재로그인). 실패 시 None."""
     if not is_available():
@@ -314,6 +337,12 @@ def get_gold_daily(days=400, use_cache=True):
     """KRX 금현물(원/g) 일봉 — ['date','open','high','low','close','volume'], attrs['source']='KRX'.
 
     네이버 경로와 달리 **시·고·저와 거래량이 실제 값**이다. 조회 불가 시 None(호출부가 폴백).
+
+    [기준선 주의 · 2026-08-25] 종전 네이버 경로는 시·고·저를 종가로 평탄화했다. 그래서
+     True Range 가 종가 차분이었고 ATR·ADX 가 실제보다 작게 나왔으며 OBV 는 아예 불가였다.
+     이제 값이 바뀐다 — **KRXGOLD 로 돌린 이전 백테스트·감사 수치와 직접 비교하면 안 된다.**
+     게다가 이 경로는 자격증명 유무로 켜지고 꺼지므로(status_text 참조), 두 실행을 비교할
+     때는 양쪽이 같은 상태였는지 먼저 확인해야 한다.
     """
     key = ("gold", int(days))
     if use_cache:

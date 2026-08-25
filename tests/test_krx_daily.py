@@ -117,6 +117,54 @@ def test_both_sources_fail_returns_none():
 
 
 # ---------------------------------------------------------
+# 소스 **어댑터** — 위 폴백 테스트들은 _fetch_* 를 통째로 목으로 바꾼다.
+#  그래서 라이브러리를 실제로 부르는 두 함수(수정주가 인자·구버전 호환)는 한 번도
+#  실행되지 않았다(2026-08-25 커버리지 실측).
+# ---------------------------------------------------------
+def test_pykrx는_수정주가로_받는다():
+    """adjusted=True 를 놓치면 액면분할 구간에서 FDR 과 어긋나 EMA120·52주 밴드가 튄다."""
+    with patch.object(krx_daily, '_pykrx') as pykrx:
+        pykrx.get_market_ohlcv.return_value = _pykrx_frame()
+        df = krx_daily._fetch_pykrx('005930', '20250101', '20251231')
+    assert df is not None and df['close'].iloc[0] == 10050
+    assert pykrx.get_market_ohlcv.call_args.kwargs.get('adjusted') is True
+
+
+def test_구버전_pykrx는_adjusted_없이_재시도한다():
+    """adjusted 인자를 모르는 버전에서 TypeError 로 죽으면 국내 일봉이 통째로 폴백된다."""
+    calls = []
+
+    def _ohlcv(start, end, code, **kw):
+        calls.append(kw)
+        if 'adjusted' in kw:
+            raise TypeError("unexpected keyword argument 'adjusted'")
+        return _pykrx_frame()
+
+    with patch.object(krx_daily, '_pykrx') as pykrx:
+        pykrx.get_market_ohlcv.side_effect = _ohlcv
+        df = krx_daily._fetch_pykrx('005930', '20250101', '20251231')
+    assert df is not None and len(calls) == 2
+
+
+def test_pykrx_미설치면_None():
+    with patch.object(krx_daily, '_pykrx', None):
+        assert krx_daily._fetch_pykrx('005930', '20250101', '20251231') is None
+
+
+def test_fdr_어댑터는_영문컬럼을_정규화한다():
+    with patch.object(krx_daily, '_fdr') as fdr:
+        fdr.DataReader.return_value = _fdr_frame()
+        df = krx_daily._fetch_fdr('005930', '20250101', '20251231')
+    assert df is not None and df['close'].iloc[0] == 20050
+    assert list(df.columns) == krx_daily._COLUMNS
+
+
+def test_fdr_미설치면_None():
+    with patch.object(krx_daily, '_fdr', None):
+        assert krx_daily._fetch_fdr('005930', '20250101', '20251231') is None
+
+
+# ---------------------------------------------------------
 # 코드 검증 / 캐시 / 실패 쿨다운
 # ---------------------------------------------------------
 @pytest.mark.parametrize("code", ['ABC', 'AAPL', '00593', '0059300', '', None])
@@ -689,3 +737,135 @@ def test_둘다_실패하면_None이다():
     with patch.object(krx_daily, '_listing_map_from_krx', return_value=None), \
          patch.object(krx_daily, '_listing_map_from_fdr', return_value=None):
         assert krx_daily.get_listing_map(use_cache=False) is None
+
+
+# ---------------------------------------------------------
+# 상장 목록 **파서** — 위 테스트들은 두 소스를 목으로 갈아끼워 '고르는 규칙'만 봤다.
+#  정작 응답을 읽는 코드(29줄·17줄)는 한 번도 실행되지 않았다(2026-08-25 커버리지 실측).
+#  라이브러리가 컬럼 이름이나 인덱스를 바꾸면 조용히 None 이 되고 목록 검증이 통째로 꺼진다.
+# ---------------------------------------------------------
+def _sector_frame(rows):
+    """pykrx.get_market_sector_classifications 형태 — 종목코드가 **인덱스**다."""
+    return pd.DataFrame(
+        [{'종목명': n, '시가총액': m} for _c, n, m in rows],
+        index=[c for c, _n, _m in rows])
+
+
+def _krx_available(flag=True):
+    from modules import krx_data
+    return patch.object(krx_data, 'is_available', return_value=flag)
+
+
+def test_공식_상장목록은_시장당_한_콜로_이름과_시총을_읽는다():
+    frames = {'KOSPI': _sector_frame([('005930', '삼성전자', 1.5e15)]),
+              'KOSDAQ': _sector_frame([('247540', '에코프로비엠', 1.2e13)])}
+    with _krx_available(), patch('pykrx.stock.get_market_sector_classifications',
+                                 side_effect=lambda d, m: frames[m]) as call:
+        out = krx_daily._listing_map_from_krx()
+    assert out['005930'] == {'name': '삼성전자', 'marcap': 1.5e15}
+    assert out['247540']['name'] == '에코프로비엠'
+    assert call.call_count == 2, "시장당 1콜이어야 한다(종목당 1콜이면 2,700콜이 된다)"
+
+
+def test_공식_상장목록은_휴장일이면_전날로_거슬러_간다():
+    """빈 프레임이 오면 응답이 있는 날까지 훑는다 — 휴장일에 목록이 통째로 비면 안 된다."""
+    calls = []
+
+    def _fake(day, market):
+        calls.append(day)
+        if len(calls) <= 2:                      # 첫날(두 시장)은 휴장
+            return pd.DataFrame()
+        return _sector_frame([('005930', '삼성전자', 1.5e15)])
+
+    with _krx_available(), patch('pykrx.stock.get_market_sector_classifications', _fake):
+        out = krx_daily._listing_map_from_krx()
+    assert out and '005930' in out
+    assert len(set(calls)) >= 2, "같은 날짜만 반복 조회했다"
+
+
+def test_공식_상장목록은_국내코드가_아닌_행을_버린다():
+    frame = _sector_frame([('005930', '삼성전자', 1.5e15), ('AAPL', '애플', 1.0)])
+    with _krx_available(), patch('pykrx.stock.get_market_sector_classifications',
+                                 return_value=frame):
+        out = krx_daily._listing_map_from_krx()
+    assert set(out) == {'005930'}
+
+
+def test_공식_상장목록은_시총이_망가져도_행을_살린다():
+    """시총은 정렬용 부가 정보다 — 파싱 실패로 종목명까지 잃으면 목록 검증이 오탐을 낸다."""
+    frame = _sector_frame([('005930', '삼성전자', '알수없음')])
+    with _krx_available(), patch('pykrx.stock.get_market_sector_classifications',
+                                 return_value=frame):
+        out = krx_daily._listing_map_from_krx()
+    assert out['005930'] == {'name': '삼성전자', 'marcap': 0.0}
+
+
+def test_공식_상장목록은_자격증명이_없으면_None():
+    with _krx_available(False):
+        assert krx_daily._listing_map_from_krx() is None
+
+
+def test_공식_상장목록은_예외를_None으로_삼킨다():
+    with _krx_available(), patch('pykrx.stock.get_market_sector_classifications',
+                                 side_effect=RuntimeError("KRX 500")):
+        assert krx_daily._listing_map_from_krx() is None
+
+
+def _fdr_listing_frame():
+    return pd.DataFrame({'Code': ['005930', 'AAPL'], 'Name': ['삼성전자', '애플'],
+                         'Marcap': [1.5e15, 1.0]})
+
+
+def test_FDR_상장목록_파서는_국내코드만_남긴다():
+    krx_daily._lazy_import()
+    with patch.object(krx_daily, '_fdr') as fdr:
+        fdr.StockListing.return_value = _fdr_listing_frame()
+        out = krx_daily._listing_map_from_fdr()
+    assert set(out) == {'005930'} and out['005930']['name'] == '삼성전자'
+
+
+def test_FDR_상장목록은_Code컬럼이_없으면_None():
+    """컬럼 규격이 바뀌면 '빈 목록'이 아니라 '조회 실패'여야 한다 — 호출부가 검증을 건너뛴다."""
+    krx_daily._lazy_import()
+    with patch.object(krx_daily, '_fdr') as fdr:
+        fdr.StockListing.return_value = pd.DataFrame({'종목코드': ['005930']})
+        assert krx_daily._listing_map_from_fdr() is None
+
+
+def test_FDR_상장목록은_예외를_None으로_삼킨다():
+    krx_daily._lazy_import()
+    with patch.object(krx_daily, '_fdr') as fdr:
+        fdr.StockListing.side_effect = RuntimeError("network")
+        assert krx_daily._listing_map_from_fdr() is None
+
+
+# ---------------------------------------------------------
+# 종목명 조회 — '없는 종목'과 '조회 불가'를 반드시 구분해야 한다
+# ---------------------------------------------------------
+def test_종목명은_상장목록에서_온다():
+    with patch.object(krx_daily, 'get_listing_map', return_value=dict(_KRX_LISTING)):
+        assert krx_daily.get_ticker_name('005930') == '삼성전자'
+
+
+def test_상장목록에_없는_코드는_빈문자열():
+    with patch.object(krx_daily, 'get_listing_map', return_value=dict(_KRX_LISTING)):
+        assert krx_daily.get_ticker_name('999999') == ''
+
+
+def test_목록조회_불가하면_단건_폴백을_쓴다():
+    with patch.object(krx_daily, 'get_listing_map', return_value=None), \
+         patch.object(krx_daily, '_pykrx') as pykrx:
+        pykrx.get_market_ticker_name.return_value = '삼성전자'
+        assert krx_daily.get_ticker_name('005930') == '삼성전자'
+
+
+def test_단건_폴백이_문자열이_아니면_None():
+    """pykrx 는 없는 코드에 빈 DataFrame 을 준다 — 그걸 종목명으로 쓰면 오탐이 난다."""
+    with patch.object(krx_daily, 'get_listing_map', return_value=None), \
+         patch.object(krx_daily, '_pykrx') as pykrx:
+        pykrx.get_market_ticker_name.return_value = pd.DataFrame()
+        assert krx_daily.get_ticker_name('005930') is None
+
+
+def test_해외코드는_네트워크_없이_빈문자열():
+    assert krx_daily.get_ticker_name('AAPL') == ''

@@ -602,3 +602,101 @@ def test_추세품질_상한은_과열_추세를_후보에서_뺀다(wide_univer
     with patch.dict(config.ANALYSIS_THRESHOLDS, {"TREND_QUALITY_MAX": 1e9}):
         unreachable = pbt.run_portfolio(dfs, status, dates, slots=3)
     assert unreachable["trades"] == base["trades"]
+
+
+# ==========================================================
+# 봉이 끊긴 종목 (상장폐지·장기 거래정지·데이터 실패)
+# ==========================================================
+def _thresholds():
+    """fixture 가 쓰는 것과 같은 판정 임계값 묶음."""
+    return {
+        "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
+        "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
+        "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"],
+        "WEIGHTS": config.SCORING_WEIGHTS,
+    }
+
+
+def _truncate(dfs, code, n):
+    """한 종목의 일봉을 n개에서 끊는다 — 그 뒤로는 이 세계에 시세가 없다."""
+    out = dict(dfs)
+    out[code] = dfs[code].iloc[:n].reset_index(drop=True)
+    return out
+
+
+def test_position_is_closed_when_bars_end(universe):
+    """봉이 끝난 종목의 포지션은 마지막 봉에서 청산된다 — 슬롯이 풀려야 한다.
+
+    [왜 · 2026-08-25] 종전에는 매도 루프가 `row is None → continue` 로 건너뛰어, 봉이
+     끊긴 뒤에도 포지션이 창 끝까지 살아 슬롯을 영구 점유했다. 게다가 _equity 가 봉 없는
+     종목을 합계에서 빼는 바람에 투입 자본이 자산곡선에서 증발했고(최종 자산도 같은 자),
+     청산 기록이 없으니 승률·PF 표본에서도 빠졌다. 상장폐지를 섞어 생존 편향을 재는
+     감사(tools/audit_universe.py 축 B)가 이 경로 위에 서 있다.
+    """
+    dfs, _status, dates = universe
+    code = "000001"
+    cut = _truncate(dfs, code, 150)
+    last_day = str(cut[code]["date"].iloc[-1])
+    status = pbt.precompute_status(cut, _thresholds())
+
+    r = pbt.run_portfolio(cut, status, dates, slots=2)
+
+    buys = [t for t in r["trades"] if t["code"] == code and t["reason"] == "매수"]
+    exits = [t for t in r["trades"] if t["code"] == code and t["reason"] != "매수"
+             and not t["reason"].startswith("피라미딩")]
+    assert len(buys) == len(exits), "봉이 끊긴 종목에 미청산 포지션이 남았다(슬롯 동결)"
+    if exits:
+        # 마지막 청산은 마지막 봉 날짜를 넘지 않는다 — 없는 시세로 팔지 않는다.
+        assert exits[-1]["date"] <= last_day
+    assert all(t["date"] <= last_day for t in r["trades"] if t["code"] == code)
+
+
+def test_data_end_exit_preserves_capital_and_mdd(universe):
+    """동결이 만들던 두 인공물 — 자본 증발과 가짜 낙폭 — 이 사라졌는가.
+
+    대조 팔이 필요 없다. 종전 결함은 **자산곡선 자체에 절벽**을 남겼기 때문이다:
+    봉이 끊긴 다음 날 _equity 가 그 포지션을 합계에서 빼면서 자산이 하루 만에 꺼지고
+    (이 씨드 실측 -77.65%), 그 구덩이가 그대로 MDD(-78.44%)와 최종 자산(432만원,
+    시드의 43%)이 됐다. 수정 후에는 +0.36% / -6.24% / 1,945만원이다.
+    """
+    dfs, _status, dates = universe
+    code = "000003"          # 이 씨드는 끊기는 시점에 실제로 보유 중이다(표본이 유효해야 한다)
+    cut = _truncate(dfs, code, 150)
+    cut_day = str(cut[code]["date"].iloc[-1])
+
+    r = pbt.run_portfolio(cut, pbt.precompute_status(cut, _thresholds()), dates, slots=2)
+    assert [t for t in r["trades"] if t["reason"] == "데이터종료"], \
+        "끊기는 시점에 포지션이 없으면 이 테스트는 아무것도 재지 않는다"
+
+    eq = r["equity"]
+    i = dates.index(cut_day)
+    one_day = (eq[i + 1] - eq[i]) / eq[i] * 100
+    assert one_day > -20.0, \
+        f"봉이 끊긴 다음 날 자산이 절벽처럼 꺼졌다({one_day:+.2f}%) — 포지션이 평가에서 빠진다"
+    assert r["final_asset"] > 10_000_000, "끊긴 종목의 투입 자본이 자산에서 사라졌다"
+    assert r["mdd"] > -20.0, f"인공 낙폭이 MDD에 남았다({r['mdd']:.2f}%)"
+
+
+def test_data_end_exit_is_counted_in_the_sample():
+    """'데이터종료'는 청산 어휘에 있고 감사 표본에도 들어온다 — 손익이 어디에도 안 잡히면 안 된다."""
+    from tools.audit_common import SELL_REASONS, exits as sample_exits
+    assert "데이터종료" in pbt.EXIT_REASONS
+    assert "데이터종료" in SELL_REASONS
+    r = {"trades": [{"code": "A", "date": "20240101", "reason": "데이터종료",
+                     "profit": -42.0, "profit_amt": -420000, "days": 30, "mfe": 5.0,
+                     "armed": False, "bep": False}]}
+    assert len(sample_exits(r)) == 1, "데이터종료가 감사 청산 표본에서 빠진다"
+
+
+def test_halted_day_does_not_close_the_position(universe):
+    """**중간에** 하루 빠진 것(거래정지)은 청산 사유가 아니다 — 재개일에 판정이 다시 돈다."""
+    dfs, _status, dates = universe
+    code = "000003"
+    holed = dict(dfs)
+    df = dfs[code]
+    drop_at = len(df) // 2
+    holed[code] = df.drop(df.index[drop_at:drop_at + 3]).reset_index(drop=True)
+
+    r = pbt.run_portfolio(holed, pbt.precompute_status(holed, _thresholds()), dates, slots=2)
+    assert not [t for t in r["trades"] if t["reason"] == "데이터종료"], \
+        "중간 공백을 데이터 종료로 오인해 청산했다"
