@@ -269,11 +269,30 @@ def preflight_check():
 
     if not checks_ok: return False
 
-    # 3. 종목 데이터 로드 및 누락/오류 exchange 정보 보완
+    # 3. 데이터 원천 점검 — KRX 공식 경로가 켜져 있는가.
+    #  [순서 · 2026-08-25] 종목 데이터 로드보다 먼저 찍는다. 마스터 파일 적재는 자기
+    #  메시지를 직접 출력해서, 뒤에 두면 '  - 성공:' 로 줄 맞춘 점검 항목들이 그 출력에
+    #  끊긴 채 마지막 한 줄만 떨어져 보인다.
+    #  자격증명이 없어도 프로그램은 종전 소스로 돌지만 **판단의 원천이 달라진다**.
+    #  폴백이 조용하면 운영자는 켜져 있다고 믿는 동안 꺼진 채로 운용하게 된다.
+    #  점검을 실패로 만들지는 않는다 — 폴백은 정상 동작이고, 알리는 것이 목적이다.
+    try:
+        from modules import krx_data
+        krx_ok, krx_msg = krx_data.status_text()
+        config.console.print(f"  - {'성공' if krx_ok else '[yellow]주의[/yellow]'}: {krx_msg}")
+    except Exception as e:      # noqa: BLE001 - 점검 자체가 기동을 막으면 안 된다
+        config.console.print(f"  - [dim]KRX 공식 데이터 상태 확인 실패: {e}[/dim]")
+
+    # 4. 종목 데이터 로드 및 누락/오류 exchange 정보 보완
     config.session.load_stock_config()
     
     # [수정] API 현재가 조회 응답에 시장 구분이 없어 오분류(전부 KOSPI)되던 버그를 마스터 리스트를 통해 영구 교정
     from modules import analysis
+    # [여백 · 2026-08-25] 마스터 파일 적재는 자기 메시지를 직접 출력한다. 위의 '  - 성공:'
+    #  점검 항목들과 붙으면 한 덩어리로 읽히므로 한 줄 띄운다. 이미 적재돼 있으면 아무것도
+    #  찍지 않으므로 그때는 빈 줄도 넣지 않는다(빈 줄만 덩그러니 남지 않게).
+    if analysis._MASTER_KOSDAQ_CODES is None or analysis._MASTER_KOSPI_CODES is None:
+        config.console.print("")
     needs_update = False
     
     for key in ["stocks_kr", "etfs_kr"]:
@@ -289,17 +308,6 @@ def preflight_check():
         config.session.save_stock_config(config.session.stock_data)
         config.session.load_stock_config() # 갱신된 데이터를 메모리 캐시에 다시 로드
         config.console.print("  - 성공: 누락/오류 시장(exchange) 정보 교정 및 업데이트 완료.")
-
-    # 4. 데이터 원천 점검 — KRX 공식 경로가 켜져 있는가.
-    #  자격증명이 없어도 프로그램은 종전 소스로 돌지만 **판단의 원천이 달라진다**.
-    #  폴백이 조용하면 운영자는 켜져 있다고 믿는 동안 꺼진 채로 운용하게 된다.
-    #  점검을 실패로 만들지는 않는다 — 폴백은 정상 동작이고, 알리는 것이 목적이다.
-    try:
-        from modules import krx_data
-        krx_ok, krx_msg = krx_data.status_text()
-        config.console.print(f"  - {'성공' if krx_ok else '[yellow]주의[/yellow]'}: {krx_msg}")
-    except Exception as e:      # noqa: BLE001 - 점검 자체가 기동을 막으면 안 된다
-        config.console.print(f"  - [dim]KRX 공식 데이터 상태 확인 실패: {e}[/dim]")
 
     return checks_ok
 
@@ -983,6 +991,128 @@ def _install_journal_sigterm_handler():
             pass  # 메인 스레드가 아니거나 지원되지 않는 환경
 
 
+_MODE_NAMES = {'1': "모의투자", '2': "한투증권", '3': "토스증권", '4': "가상투자"}
+
+
+def _detect_appkey_duplicates():
+    """같은 앱키를 쓰는 다른 프로세스가 있는가. (중복이 걸린 키 이름 목록)
+
+    판정 결과는 instance_lock 전역에도 남아 api.py 의 TPS 경고가 매번 인용한다. 그래서
+    차단 여부와 무관하게 **항상** 돌린다.
+    """
+    from modules import instance_lock
+
+    if config.session.is_toss:
+        return []       # 토스는 KIS 앱키를 쓰지 않는다 — 모드 잠금이 유일한 방어선이다
+    # 수동 키와 자동매매 키를 모두 본다. 두 키가 다르면 유량 예산도 키마다 따로 잡히므로
+    #  (api.ThrottledSession 의 앱키별 버킷), 자동매매 키의 중복은 수동 키를 아무리 확인해도
+    #  드러나지 않는다 — 그런데 시스템 트레이딩 트래픽은 전부 그쪽 키로 나간다.
+    keys = [(config.session.app_key, "수동")]
+    auto = getattr(config.session, 'auto_app_key', '')
+    if auto and auto != config.session.app_key:
+        keys.append((auto, "자동매매"))
+    return [lbl for k, lbl in keys if not instance_lock.guard_appkey(k, lbl)]
+
+
+def _describe_process(pid):
+    """선점 프로세스의 실체를 한 줄로 돌려준다(시작 시각 + 명령줄).
+
+    잠금 파일이 알려 주는 것은 pid 뿐이다. '죽여도 되는가'를 판단하려면 그 pid 가 정말
+    이 프로그램인지, 언제부터 떠 있는지를 봐야 한다 — 운영자가 명령을 한 번 더 치지
+    않도록 여기서 대신 읽어 준다. 읽지 못하면 빈 문자열이다(안내는 그대로 나간다).
+    """
+    if not pid:
+        return ""
+    try:
+        import subprocess
+        out = subprocess.run(["ps", "-p", str(pid), "-o", "lstart=,command="],
+                             capture_output=True, text=True, timeout=3)
+        line = " ".join(out.stdout.split())
+        return line[:200]
+    except Exception:
+        return ""
+
+
+def _enforce_single_instance(mode, allow_duplicate=False):
+    """[추가 2026-08-25] 두 번째 인스턴스면 안내하고 종료한다.
+
+    종전에는 같은 모드를 두 번 띄워도 둘 다 정상 기동했다. 계좌 잠금(InstanceLock)은
+    자동매매 엔진을 켤 때만 걸리고, 앱키 중복은 경고만 하고 지나갔다. 그 사이 두
+    인스턴스가 텔레그램 폴링(409 Conflict)·KIS 유량·DB 파일을 서로 빼앗는다.
+
+    판정은 두 갈래이고 **둘 중 하나만 걸려도 막는다.**
+      · 모드 잠금 — 이 기능의 본줄기. 토스처럼 앱키가 없는 모드까지 덮는다.
+      · 앱키 중복 — 모드 잠금이 못 보는 구멍을 메운다. 선점 프로세스가 모드 잠금이 없던
+        버전으로 떠 있으면 자리가 비어 보이는데(무중단 교체 때마다 열리는 구멍이다),
+        그 프로세스도 앱키 잠금만은 쥐고 있다. 앱키는 모드마다 갈라져 있으므로
+        (SIM_/REAL_·AUTO_/VIRT_) 앱키가 겹친다는 것은 곧 같은 모드가 겹쳤다는 뜻이다.
+
+    잠금은 세션 초기화 직후, 토큰 발급도 DB 오픈도 하기 전에 잡는다 — 실패해도 정리할
+    것이 없는 유일한 지점이다.
+    """
+    from modules import instance_lock
+
+    holder, reason = "", ""
+    if not instance_lock.guard_mode(mode, allow_duplicate=allow_duplicate):
+        holder = instance_lock.MODE_HOLDER
+        reason = f"같은 모드({_MODE_NAMES.get(str(mode), f'mode {mode}')})"
+
+    dup_labels = _detect_appkey_duplicates()
+    if dup_labels and not reason:
+        dup_holder = instance_lock.APPKEY_HOLDER
+        other_mode = instance_lock.holder_mode(dup_holder)
+        if other_mode and other_mode != str(mode):
+            # 모드가 다르면 막지 않는다. 앱키만 겹친 것은 환경변수 설정 문제이고,
+            #  '실전 운용 + 관찰 동시 기동'처럼 정상인 조합을 여기서 끊어서는 안 된다.
+            config.console.print(
+                f"\n[bold yellow]⚠️ 다른 모드({_MODE_NAMES.get(other_mode, other_mode)})가 "
+                f"같은 앱키를 쓰고 있습니다 ({dup_holder}).[/bold yellow]")
+            config.console.print(
+                "[dim]  KIS 유량(20 TPS)·웹소켓(1개)·토큰 발급 제약은 앱키 단위입니다. "
+                "모드별로 키를 나누세요(가상투자는 VIRT_APP_KEY).[/dim]")
+        else:
+            # 모드가 같거나(=차단 대상), 모드를 남기지 않던 버전이 쥔 잠금이다. 후자는
+            #  앱키가 같은 이상 같은 모드일 가능성이 압도적이므로 막는 쪽을 고른다.
+            holder = dup_holder
+            reason = f"같은 {'·'.join(dup_labels)} 앱키"
+
+    if not reason:
+        return
+
+    if allow_duplicate:
+        config.console.print(
+            f"\n[yellow]⚠️ {reason}로 다른 프로세스가 실행 중입니다 ({holder or 'unknown'}).[/yellow]")
+        config.console.print(
+            "[dim]  --allow-duplicate 로 중복 실행을 허용해 계속합니다. 조회 전용으로만 쓰세요 "
+            "— 자동매매를 켜면 계좌 잠금에서 거부됩니다.[/dim]")
+        return
+
+    holder = holder or "unknown"
+    pid = ""
+    for token in holder.split():
+        if token.startswith("pid="):
+            pid = token[4:]
+
+    config.console.print(f"\n[bold red]❌ 이미 {reason}로 실행 중인 프로세스가 있습니다.[/bold red]")
+    config.console.print(f"[dim]   선점 프로세스: {holder}[/dim]")
+    if pid:
+        detail = _describe_process(pid)
+        if detail:
+            config.console.print(f"[dim]   실행 중인 명령: {detail}[/dim]")
+        else:
+            config.console.print(
+                "[dim]   (해당 pid 의 프로세스 정보를 읽지 못했습니다 — 다른 사용자 소유일 수 있습니다)[/dim]")
+        config.console.print("\n[bold]선점 프로세스를 종료하려면:[/bold]")
+        config.console.print(f"[dim]  · 정상 종료(권장):  kill {pid}[/dim]")
+        config.console.print(
+            "[dim]    — 종료 신호를 받으면 매매일지·하트비트를 정리하고 내려갑니다.[/dim]")
+        config.console.print(f"[dim]  · 응답이 없으면:    kill -9 {pid}[/dim]")
+        config.console.print(f"[dim]  · 다시 확인:        ps -p {pid} -o pid,etime,command[/dim]")
+    config.console.print(
+        "\n[dim]조회 전용으로 하나 더 띄우려면:  ./run.sh --mode <모드> --allow-duplicate[/dim]")
+    sys.exit(1)
+
+
 def main():
     # [수정] 커맨드 라인 인자 파싱 설정 개선 (상세 도움말 추가)
     parser = argparse.ArgumentParser(
@@ -1007,11 +1137,17 @@ def main():
   5. 가상투자(페이퍼 트레이딩) 모드로 자동매매 바로 시작:
      ./run.sh --mode 4 --auto
      (KIS 실전 시세 + 가상 계좌. 실주문이 나가지 않으므로 장기 관찰에 사용)
+
+  6. 조회 전용 인스턴스를 하나 더 띄우기:
+     ./run.sh --mode 2 --allow-duplicate --no-bot
+     (같은 모드는 기본적으로 하나만 뜹니다. 텔레그램·KIS 유량·DB 를 서로 빼앗기 때문입니다)
 """
     )
     parser.add_argument('--mode', choices=['1', '2', '3', '4'], help='투자 모드 선택 (1: 모의투자, 2: 한투증권, 3: 토스증권, 4: 가상투자)\n지정하지 않으면 실행 시 모드 선택 화면이 출력됩니다.')
     parser.add_argument('--auto', action='store_true', help='프로그램 시작 시 시스템 트레이딩 자동 실행 및 로그 뷰어 활성화')
     parser.add_argument('--no-bot', action='store_true', help='텔레그램 봇 명령어 수신(폴링) 비활성화 (알림 전송 기능은 유지)')
+    parser.add_argument('--allow-duplicate', action='store_true',
+                        help='같은 모드 중복 실행 차단을 해제 (조회 전용 인스턴스를 하나 더 띄울 때만 사용)')
     args = parser.parse_args()
 
     # [추가] 로깅 설정 초기화
@@ -1030,32 +1166,14 @@ def main():
     # 1. 환경 설정 로드 (모드 선택)
     config.session.initialize(mode=args.mode)
 
-    # 1-1. [추가] 같은 앱키를 쓰는 다른 프로세스 감지.
-    #  KIS의 TPS·웹소켓·토큰 발급 제약이 전부 앱키 단위라, 두 인스턴스가 뜨면 서로를 모른 채
-    #  각자 자기 한도까지 밀어 양쪽 다 EGW00201(초당 거래건수 초과)에 갇힌다. 종전에는 이걸
-    #  확인할 방법이 없어 레이트리밋 원인 분석이 매번 추측에서 멈췄다(2026-08-09).
-    if not config.session.is_toss:
-        from modules import instance_lock
-        # 수동 키와 자동매매 키를 모두 본다. 두 키가 다르면 유량 예산도 키마다 따로
-        #  잡히므로(api.ThrottledSession의 앱키별 버킷), 자동매매 키의 중복은 수동 키를
-        #  아무리 확인해도 드러나지 않는다 — 그런데 시스템 트레이딩 트래픽은 전부
-        #  그쪽 키로 나간다.
-        _keys = [(config.session.app_key, "수동")]
-        _auto = getattr(config.session, 'auto_app_key', '')
-        if _auto and _auto != config.session.app_key:
-            _keys.append((_auto, "자동매매"))
-        _dup = [(k, lbl) for k, lbl in _keys if not instance_lock.guard_appkey(k, lbl)]
-        if _dup:
-            holder = instance_lock.APPKEY_HOLDER
-            _labels = "·".join(lbl for _, lbl in _dup)
-            config.console.print(
-                f"\n[bold yellow]⚠️ 같은 {_labels} 앱키로 다른 프로세스가 이미 실행 중입니다 ({holder}).[/bold yellow]")
-            config.console.print(
-                "[dim]  KIS 유량(20 TPS)·웹소켓(1개)·토큰 발급 제약은 앱키 단위입니다. "
-                "두 인스턴스가 유량을 나눠 쓰면서 양쪽 모두 초당 거래건수 초과에 걸립니다.[/dim]")
-            if getattr(config, 'APPKEY_DUP_ABORT', False):
-                config.console.print("[bold red]중복 실행 차단 설정(APPKEY_DUP_ABORT)이 켜져 있어 종료합니다.[/bold red]")
-                sys.exit(1)
+    # 1-0. [추가 2026-08-25] 중복 인스턴스 차단(모드 잠금 + 앱키 중복). 사전 점검보다
+    #  먼저 본다 — 토큰도 DB도 아직 건드리지 않은 지점이라 종료해도 정리할 것이 없다.
+    #  [pytest 제외] 테스트는 _enforce_single_instance 를 직접 부른다. main() 경로에서까지
+    #  실제 잠금을 잡으면, 운영 인스턴스가 떠 있는 기기에서 테스트를 돌리는 순간 선점자에
+    #  걸려 sys.exit(1) 로 죽는다(코드 결함이 아닌데 테스트가 빨개진다).
+    if "pytest" not in sys.modules and "PYTEST_CURRENT_TEST" not in os.environ:
+        _enforce_single_instance(getattr(config.session, 'mode', None) or args.mode,
+                                 allow_duplicate=args.allow_duplicate)
 
     # 2. 사전 점검
     preflight_success = False

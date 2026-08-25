@@ -252,6 +252,7 @@ chmod +x run.sh                    # first time only
 
 - `run.sh` activates the virtual environment and installs dependencies for you. **`requirements.txt` is the single source of truth** for dependencies, and `run.sh` reads that file.
 - The `holidays` package is **not** auto-upgraded at startup — if the holiday calendar changed silently on every launch, trading-hour decisions would change without anyone noticing. Run `tools/update_holidays.sh` from cron weekly instead.
+- **One instance per mode, per host.** A second launch names the process already holding the mode and exits — two instances fight over Telegram polling (409), the KIS rate/websocket/token budget, and the same DB file. Add `--allow-duplicate` for a read-only second instance (the account lock still blocks live orders).
 - Use `run.bat` on Windows; for always-on Linux hosts see `tools/stock-hts` (tmux session setup).
 
 ---

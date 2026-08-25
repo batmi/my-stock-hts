@@ -51,6 +51,15 @@ class InstanceLock:
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(key or "default"))
         return f"{self.prefix}_{safe}.lock"
 
+    def _extra_info(self):
+        """잠금 파일에 덧붙일 진단 문자열(선점자 안내에 그대로 실린다).
+
+        '언제부터 떠 있는가'는 잠금 종류를 가리지 않고 필요하다 — 안내를 받은 운영자가
+        선점 프로세스를 죽일지 살릴지는 그걸 보고 판단한다.
+        """
+        from datetime import datetime
+        return f" started={datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+
     def acquire(self):
         """잠금 획득 성공 여부. 실패 시 self.holder 에 선점자 정보가 담긴다."""
         if fcntl is None:
@@ -72,7 +81,7 @@ class InstanceLock:
             return False
 
         os.ftruncate(fd, 0)
-        os.write(fd, f"pid={os.getpid()} {self.label}={self.account_key}".encode('utf-8'))
+        os.write(fd, f"pid={os.getpid()} {self.label}={self.account_key}{self._extra_info()}".encode('utf-8'))
         try:
             os.fsync(fd)
         except OSError:
@@ -107,10 +116,11 @@ class InstanceLock:
 #  제약은 전부 앱키 단위다. 계좌가 달라도 앱키가 같으면 유량을 함께 쓴다.
 #  (mode 4 가상투자가 VIRT_APP_KEY로 키를 분리하는 이유와 같은 제약이다)
 #
-# [왜 차단이 아니라 감지가 기본인가] 조회 인스턴스를 하나 더 띄우는 것은 정상 작업
-#  흐름이고, 실주문 중복은 이미 계좌 단위 InstanceLock 이 막는다. 여기서 필요한 것은
-#  EGW00201 이 떴을 때 '다른 프로세스 때문인가'를 로그만 보고 판정할 근거다.
-#  차단이 필요하면 config.APPKEY_DUP_ABORT 를 켠다.
+# [감지에서 차단으로 2026-08-25] 오래도록 경고만 했다. 그러나 앱키는 모드마다 갈라져
+#  있어(SIM_/REAL_·AUTO_/VIRT_) 앱키가 겹친다는 것은 사실상 같은 모드가 겹쳤다는 뜻이고,
+#  그건 막아야 할 상태다. 지금은 main._enforce_single_instance 가 이 판정을 모드 잠금과
+#  함께 받아 기동을 중단시킨다(잠금 파일의 mode= 로 정말 같은 모드인지 확인한 뒤에).
+#  감지 결과는 그대로 남아 api.py 의 TPS 경고가 계속 인용한다.
 APPKEY_DUPLICATE = False   # 같은 앱키를 쓰는 다른 프로세스가 있는가
 APPKEY_HOLDER = ""         # 있다면 그 프로세스 정보(pid=…)
 APPKEY_DUP_LABEL = ""      # 중복이 걸린 키의 이름(수동/자동매매)
@@ -133,6 +143,13 @@ class AppKeyLock(InstanceLock):
 
     def __init__(self, app_key):
         super().__init__(_appkey_fingerprint(app_key))
+
+    def _extra_info(self):
+        # [추가 2026-08-25] 어느 모드가 이 키를 쥐고 있는지 남긴다. 앱키 지문만으로는
+        #  모드를 되짚을 수 없어서, 뒤에 오는 프로세스가 '같은 모드가 겹친 것인가'(=차단)
+        #  인지 '앱키만 겹친 것인가'(=설정 문제, 경고)인지 가릴 근거가 없었다.
+        mode = str(getattr(getattr(config, 'session', None), 'mode', '') or '')
+        return super()._extra_info() + (f" mode={mode}" if mode else "")
 
 
 def guard_appkey(app_key, label="수동"):
@@ -168,8 +185,89 @@ def guard_appkey(app_key, label="수동"):
     return False
 
 
+def holder_mode(holder):
+    """잠금 파일 내용에서 모드를 뽑는다. 없으면 "" — 모드를 남기지 않던 버전이 쥔 잠금이다."""
+    for token in str(holder or "").split():
+        if token.startswith("mode="):
+            return token[5:]
+    return ""
+
+
 def appkey_duplicate_note():
     """진단 로그에 붙일 한 줄. api.py의 TPS 경고가 그대로 인용한다."""
     if APPKEY_DUPLICATE:
         return f"중복 프로세스 감지됨({APPKEY_DUP_LABEL}키, {APPKEY_HOLDER})"
     return "중복 프로세스 없음"
+
+
+# ==========================================================
+# [추가 2026-08-25] 모드 단위 중복 실행 차단 (프로세스 기동 자체를 막는다)
+# ==========================================================
+# 위의 두 잠금은 '프로세스가 뜨는 것'을 막지 못한다. InstanceLock 은 자동매매 엔진이
+#  시작하는 시점에만 잡으므로, 같은 모드로 두 번 띄우면 둘 다 정상 기동해 백그라운드
+#  서비스·텔레그램 폴링·시세 조회를 각자 돌린다(두 번째가 거부되는 건 엔진을 켤 때다).
+#  AppKeyLock 은 오래도록 감지만 했고, 토스 모드는 앱키 자체를 안 본다.
+#
+# [무엇이 실제로 깨지나]
+#   - 텔레그램: 같은 봇 토큰으로 두 폴러가 getUpdates 를 물면 409 Conflict 가 나고 명령이
+#     한쪽에만 무작위로 들어간다(telegram_bot 의 409 대기 코드가 그 흔적이다).
+#   - KIS: TPS(20)·웹소켓(1)·토큰 발급(1분 1회) 제약이 앱키 단위인데, 같은 모드면 앱키도 같다.
+#   - DB: mode 1·2·3 이 trade_history.db 한 파일을 공유한다(mode 4 만 분리돼 있다).
+#   - 라즈베리파이 1GB: 인스턴스 하나로도 빠듯하다 — 둘이면 OOM 이다.
+#
+# [범위] 모드 하나당 프로세스 하나. 모드가 다르면 막지 않는다(실전 운용 + 관찰 동시 기동은
+#  정상 흐름이고, 앱키도 VIRT_ 로 갈라져 있다).
+#
+# [탈출구] 조회 전용 인스턴스를 하나 더 띄우는 것도 정상 작업 흐름이라 --allow-duplicate 로
+#  열어 둔다. 그 인스턴스는 **자리를 주장하지 않는다**(잠금을 잡지 않는다) — 손님이 자리를
+#  차지해 버리면, 나중에 정규 인스턴스를 띄울 때 손님에게 막히는 뒤집힌 상황이 된다.
+MODE_HOLDER = ""     # 선점자 정보(pid=… mode=… started=…)
+_MODE_LOCKS = {}     # 모드 → 잠금 객체. 프로세스 수명 동안 fd 를 살려 둔다.
+
+
+class ModeLock(InstanceLock):
+    """모드 단위 배타 잠금. 계좌·앱키 잠금과 파일이 겹치지 않게 접두어만 다르다."""
+
+    prefix = "mode"
+    label = "mode"
+
+
+def guard_mode(mode, allow_duplicate=False):
+    """이 모드로 뜬 프로세스가 하나뿐인가. (중복이면 False, 선점자는 MODE_HOLDER)
+
+    잠금 객체는 모듈 전역에 붙들어 프로세스가 살아 있는 동안 유지한다 — 해제는 종료 시
+    커널이 한다(kill -9·OOM 도 동일하다. flock 이라 낡은 잠금이 남지 않는다).
+    """
+    global MODE_HOLDER
+
+    key = str(mode or "").strip() or "unknown"
+    if allow_duplicate:
+        logger.warning(f"[ModeLock] --allow-duplicate 로 mode {key} 중복 실행 검사를 건너뜁니다.")
+        return True
+    if key in _MODE_LOCKS:
+        # flock 은 열린 파일 기술자 단위라, 같은 프로세스가 다시 열어 잠그면 자기 잠금에
+        #  막힌다. '이미 내가 쥐고 있다'를 성공으로 돌려 자기충돌을 막는다.
+        return True
+
+    try:
+        lock = ModeLock(key)
+        if lock.acquire():
+            _MODE_LOCKS[key] = lock
+            return True
+    except Exception as e:
+        # 잠금 장치가 고장 났다고 프로그램을 못 뜨게 하지는 않는다.
+        logger.debug(f"[ModeLock] 검사 실패 — 건너뜁니다: {e}")
+        return True
+
+    MODE_HOLDER = lock.holder or "unknown"
+    logger.warning(f"[ModeLock] 같은 모드({key})로 다른 프로세스가 이미 실행 중입니다 ({MODE_HOLDER}).")
+    return False
+
+
+def release_mode(mode=None):
+    """모드 잠금 해제. 운영 경로에서는 쓰지 않는다(프로세스 종료가 곧 해제다) — 테스트용."""
+    keys = list(_MODE_LOCKS) if mode is None else [str(mode)]
+    for k in keys:
+        lock = _MODE_LOCKS.pop(k, None)
+        if lock is not None:
+            lock.release()

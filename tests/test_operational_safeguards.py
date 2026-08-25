@@ -406,3 +406,250 @@ def test_appkey_guard_treats_missing_key_as_out_of_scope(clean_appkey_locks):
     assert il.guard_appkey("", "자동매매") is True
     assert len(il._APPKEY_LOCKS) == 0
     assert il.APPKEY_DUPLICATE is False
+
+
+# ==========================================================
+# [추가 2026-08-25] 모드 단위 중복 실행 차단
+# ==========================================================
+# 계좌 잠금은 자동매매 엔진을 켤 때만 걸리고, 앱키 감지는 기본이 경고뿐이라(토스는 검사조차
+#  안 한다) 같은 모드로 두 번 띄우면 둘 다 정상 기동했다. 그 사이 텔레그램 폴링은 409 로
+#  갈리고, KIS 유량·웹소켓·토큰은 서로를 끊고, mode 1·2·3 은 DB 파일 하나를 함께 쓴다.
+@pytest.fixture
+def clean_mode_locks(tmp_path):
+    """모드 잠금 전역을 격리한다(잠금 파일 경로도 임시로 돌린다).
+
+    앱키 전역까지 함께 되돌린다 — 기동 차단(_enforce_single_instance)이 모드 잠금과 앱키
+    감지를 한 번에 부르므로, 모드 쪽만 치우면 앱키 잠금이 fd 를 문 채 다음 테스트로 샌다.
+    """
+    saved_holder = instance_lock.MODE_HOLDER
+    saved_appkey = (list(instance_lock._APPKEY_LOCKS), instance_lock.APPKEY_DUPLICATE,
+                    instance_lock.APPKEY_HOLDER, instance_lock.APPKEY_DUP_LABEL)
+    instance_lock.release_mode()
+    instance_lock._APPKEY_LOCKS = []
+    with patch.object(config, 'DB_FILE_PATH', str(tmp_path / "t.db")):
+        yield instance_lock
+    instance_lock.release_mode()
+    for lk in instance_lock._APPKEY_LOCKS:
+        try:
+            lk.release()
+        except Exception:
+            pass
+    instance_lock.MODE_HOLDER = saved_holder
+    (instance_lock._APPKEY_LOCKS, instance_lock.APPKEY_DUPLICATE,
+     instance_lock.APPKEY_HOLDER, instance_lock.APPKEY_DUP_LABEL) = saved_appkey
+
+
+def test_second_process_in_the_same_mode_is_blocked(clean_mode_locks):
+    """[핵심] 같은 모드로 두 번째 프로세스가 자리를 잡을 수 없다."""
+    il = clean_mode_locks
+    holder = il.ModeLock("2")
+    assert holder.acquire() is True, "전제: 첫 프로세스가 자리를 잡는다"
+    try:
+        assert il.guard_mode("2") is False, "같은 모드로 두 번째 프로세스가 떴다"
+        assert "pid=" in il.MODE_HOLDER, f"선점자 정보가 비어 있다: {il.MODE_HOLDER!r}"
+    finally:
+        holder.release()
+
+
+def test_a_different_mode_is_not_blocked(clean_mode_locks):
+    """다른 모드는 막지 않는다 — 실전(2) 운용 + 관찰(4) 동시 기동이 정상 흐름이다."""
+    il = clean_mode_locks
+    holder = il.ModeLock("2")
+    assert holder.acquire()
+    try:
+        assert il.guard_mode("4") is True, "모드가 다른데 서로를 막았다"
+    finally:
+        holder.release()
+
+
+def test_the_holder_note_says_since_when(clean_mode_locks):
+    """선점자 안내에 시작 시각이 있어야 한다 — 죽일지 살릴지는 그걸 보고 판단한다."""
+    il = clean_mode_locks
+    holder = il.ModeLock("2")
+    assert holder.acquire()
+    try:
+        assert il.guard_mode("2") is False
+        assert "started=" in il.MODE_HOLDER, f"언제부터 떠 있는지 알 수 없다: {il.MODE_HOLDER!r}"
+        assert "mode=2" in il.MODE_HOLDER
+    finally:
+        holder.release()
+
+
+def test_the_same_process_does_not_block_itself(clean_mode_locks):
+    """[핵심] 자기 잠금에 자기가 걸리면 안 된다.
+
+    flock 은 '열린 파일 기술자' 단위라, 같은 프로세스가 파일을 다시 열어 잠그면 자기
+    잠금에 막힌다(POSIX 레코드 잠금과 다른 지점이다). 재진입은 성공으로 봐야 한다.
+    """
+    il = clean_mode_locks
+    assert il.guard_mode("2") is True
+    assert il.guard_mode("2") is True, "같은 프로세스가 자기 잠금에 막혔다"
+
+
+def test_allow_duplicate_does_not_claim_the_seat(clean_mode_locks):
+    """[핵심] 손님 인스턴스는 자리를 주장하지 않는다.
+
+    --allow-duplicate 로 띄운 조회 전용 인스턴스가 잠금을 차지해 버리면, 나중에 정규
+    인스턴스를 띄울 때 손님에게 막히는 뒤집힌 상황이 된다.
+    """
+    il = clean_mode_locks
+    assert il.guard_mode("2", allow_duplicate=True) is True
+    assert not il._MODE_LOCKS, "손님 인스턴스가 잠금을 잡았다"
+
+    later = il.ModeLock("2")
+    try:
+        assert later.acquire() is True, "정규 인스턴스가 손님에게 막혔다"
+    finally:
+        later.release()
+
+
+def test_allow_duplicate_ignores_an_existing_holder(clean_mode_locks):
+    """플래그를 준 쪽은 선점자가 있어도 뜬다(그게 이 플래그의 목적이다)."""
+    il = clean_mode_locks
+    holder = il.ModeLock("2")
+    assert holder.acquire()
+    try:
+        assert il.guard_mode("2", allow_duplicate=True) is True
+    finally:
+        holder.release()
+
+
+def test_mode_lock_does_not_collide_with_the_other_locks(clean_mode_locks):
+    """모드·계좌·앱키 잠금은 서로 다른 파일을 쓴다(겹치면 한쪽이 무력해진다)."""
+    il = clean_mode_locks
+    mode, acct, key = il.ModeLock("2"), il.InstanceLock("2"), il.AppKeyLock("2")
+    try:
+        assert len({mode.path, acct.path, key.path}) == 3
+        assert mode.acquire() and acct.acquire() and key.acquire()
+    finally:
+        mode.release(); acct.release(); key.release()
+
+
+def test_a_stale_mode_lock_does_not_block_restart(clean_mode_locks):
+    """비정상 종료(OOM·kill -9)가 남긴 잠금 파일이 재시작을 막으면 안 된다."""
+    il = clean_mode_locks
+    dead = il.ModeLock("2")
+    assert dead.acquire()
+    os.close(dead._fd)          # 프로세스가 죽어 fd 가 닫힌 상황(파일은 그대로 남는다)
+    dead._fd = None
+    assert os.path.exists(dead.path), "전제: 잠금 파일은 남아 있다"
+    assert il.guard_mode("2") is True, "죽은 프로세스의 잠금 파일이 재시작을 막는다"
+
+
+def test_startup_aborts_with_guidance_when_the_mode_is_taken(clean_mode_locks):
+    """[배선] 선점자가 있으면 기동은 안내를 출력하고 종료한다."""
+    import main
+    il = clean_mode_locks
+    holder = il.ModeLock("2")
+    assert holder.acquire(), "전제: 선점 잠금을 잡는다"
+    try:
+        with patch.object(config, 'console') as console:
+            with pytest.raises(SystemExit) as exc:
+                main._enforce_single_instance("2")
+    finally:
+        holder.release()
+
+    assert exc.value.code == 1, "종료 코드가 실패가 아니다"
+    printed = " ".join(str(c) for c in console.print.call_args_list)
+    assert "한투증권" in printed, "어느 모드가 겹쳤는지 밝히지 않는다"
+    assert str(os.getpid()) in printed, "선점 프로세스를 짚어 주지 않는다"
+    assert "--allow-duplicate" in printed, "빠져나갈 방법을 안내하지 않는다"
+    # 운영자가 직접 죽일 수 있어야 한다 — 명령을 찾으러 다른 문서를 뒤지게 하지 않는다.
+    assert f"kill {os.getpid()}" in printed, "종료 명령을 주지 않는다"
+    assert f"kill -9 {os.getpid()}" in printed, "응답 없는 프로세스를 처리할 방법이 없다"
+
+
+def test_the_incumbent_process_is_described(clean_mode_locks):
+    """선점 pid 가 '무엇이 언제부터'인지까지 보여야 죽일지 말지 판단할 수 있다."""
+    import main
+    detail = main._describe_process(os.getpid())
+    assert detail, "프로세스 정보를 읽지 못했다"
+    assert "python" in detail.lower() or "Python" in detail, f"명령줄이 없다: {detail!r}"
+
+
+def test_process_description_never_breaks_the_guidance(clean_mode_locks):
+    """ps 를 못 읽어도 안내 자체는 나가야 한다(조회 실패가 차단을 무르게 하면 안 된다)."""
+    import main
+    with patch('subprocess.run', side_effect=OSError("no ps")):
+        assert main._describe_process(12345) == ""
+    assert main._describe_process("") == ""
+
+
+def test_startup_proceeds_when_the_mode_is_free(clean_mode_locks):
+    """자리가 비어 있으면 조용히 통과한다."""
+    import main
+    with patch.object(config, 'console'):
+        main._enforce_single_instance("2")      # SystemExit 이 나면 실패다
+    assert "2" in clean_mode_locks._MODE_LOCKS, "통과했는데 자리를 잡지 않았다"
+
+
+def test_startup_still_aborts_when_only_the_appkey_is_held(clean_mode_locks):
+    """[핵심] 선점 프로세스가 모드 잠금이 없던 버전이어도 막는다.
+
+    실제로 겪은 구멍이다(2026-08-25). 무중단으로 새 코드를 올리면 이미 떠 있는
+    프로세스는 모드 잠금을 잡지 않은 상태라 자리가 비어 보이고, 두 번째 인스턴스가
+    그대로 기동했다. 그 프로세스도 앱키 잠금만은 쥐고 있으므로 그쪽으로 잡아낸다.
+    """
+    import main
+    il = clean_mode_locks
+    legacy = il.AppKeyLock("REAL_KEY_A")        # 모드를 남기지 않던 버전의 잠금
+    legacy._extra_info = lambda: ""
+    assert legacy.acquire(), "전제: 구버전 프로세스가 앱키만 쥐고 있다"
+    try:
+        with patch.object(config.session, 'is_toss', False), \
+             patch.object(config.session, 'app_key', "REAL_KEY_A"), \
+             patch.object(config.session, 'auto_app_key', ""), \
+             patch.object(config, 'console') as console:
+            with pytest.raises(SystemExit) as exc:
+                main._enforce_single_instance("2")
+    finally:
+        legacy.release()
+
+    assert exc.value.code == 1
+    printed = " ".join(str(c) for c in console.print.call_args_list)
+    assert str(os.getpid()) in printed, "선점 프로세스를 짚어 주지 않는다"
+
+
+def test_startup_does_not_abort_when_another_mode_shares_the_appkey(clean_mode_locks):
+    """모드가 다르면 막지 않는다 — 앱키만 겹친 것은 환경변수 설정 문제다.
+
+    실전(2) 운용 중에 관찰(4)을 띄우는 것은 정상 흐름이고, VIRT_APP_KEY 를 REAL 과 같게
+    둔 설정 실수까지 기동 차단으로 갚게 하면 정상 조합을 끊는 쪽이 더 크다.
+    """
+    import main
+    il = clean_mode_locks
+    with patch.object(config.session, 'mode', "2"):
+        other = il.AppKeyLock("SHARED_KEY")     # mode=2 가 파일에 박힌다
+        assert other.acquire()
+    try:
+        with patch.object(config.session, 'is_toss', False), \
+             patch.object(config.session, 'app_key', "SHARED_KEY"), \
+             patch.object(config.session, 'auto_app_key', ""), \
+             patch.object(config, 'console') as console:
+            main._enforce_single_instance("4")   # SystemExit 이 나면 실패다
+    finally:
+        other.release()
+
+    printed = " ".join(str(c) for c in console.print.call_args_list)
+    assert "VIRT_APP_KEY" in printed, "설정을 어떻게 고치는지 안내하지 않는다"
+
+
+def test_appkey_lock_records_the_mode(clean_mode_locks):
+    """앱키 잠금 파일에 모드가 남아야 '같은 모드인가'를 뒤에서 판정할 수 있다."""
+    il = clean_mode_locks
+    with patch.object(config.session, 'mode', "2"):
+        lock = il.AppKeyLock("MODE_STAMP_KEY")
+        assert lock.acquire()
+    try:
+        probe = il.AppKeyLock("MODE_STAMP_KEY")
+        assert probe.acquire() is False
+        assert il.holder_mode(probe.holder) == "2", f"모드가 안 남았다: {probe.holder!r}"
+    finally:
+        lock.release()
+
+
+def test_holder_mode_reads_nothing_from_a_legacy_lock(clean_mode_locks):
+    """모드를 남기지 않던 버전의 잠금은 ""로 읽힌다(= 같은 모드로 간주해 막는 쪽)."""
+    il = clean_mode_locks
+    assert il.holder_mode("pid=999 appkey=abc") == ""
+    assert il.holder_mode("") == ""

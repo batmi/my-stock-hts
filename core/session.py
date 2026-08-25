@@ -23,6 +23,10 @@ def _config():
 
 class SessionManager:
     def __init__(self):
+        # 확정된 운용 모드('1'~'4'). is_simulation/is_toss/is_paper 플래그만으로도 대부분
+        #  구분되지만, 그 조합을 되짚는 것과 '무엇으로 떴는가'를 그대로 아는 것은 다르다
+        #  — 중복 실행 잠금(modules/instance_lock.guard_mode)은 모드 자체를 키로 쓴다.
+        self.mode = ""
         self.is_simulation = False
         self.is_toss = False  # [추가] 토스증권 모드 여부
         # [추가] 관찰(페이퍼 트레이딩) 모드 여부. 시세·지표는 실제 소스(KIS 실전)를 그대로 쓰고
@@ -161,6 +165,9 @@ class SessionManager:
             _config().console.print("[4] 가상투자 (Paper Trading)")
             mode = Prompt.ask("\n선택 (종료: q)", choices=["1", "2", "3", "4", "q"], default="1")
             if mode == 'q': sys.exit()
+
+        # 모드가 확정된 지점. 아래 분기들은 mode 4 처럼 중간에 return 하므로 여기서 기록한다.
+        self.mode = str(mode)
 
         # [모드별 설정 프로필] 모드가 정해지는 즉시 설정 파일을 다시 건다.
         #  실전은 dynamic_config.json 만, 그 외 모드는 거기에 자기 프로필 파일을 얹는다.
