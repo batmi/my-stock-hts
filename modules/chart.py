@@ -9,6 +9,7 @@ from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
 from core import indicators
 from datetime import datetime
 from contextlib import nullcontext
+from modules import web_dashboard
 
 # [메모리 최적화] matplotlib/numpy 지연 로딩
 # matplotlib+numpy는 import만으로도 RSS를 수십~100MB 이상 점유한다. 차트는 자동매매 중
@@ -55,6 +56,14 @@ def _is_before_krx_open():
     """현재(KST 로컬 시각)가 KRX 정규장 시작(09:00) 이전인지 여부."""
     now = datetime.now()
     return (now.hour, now.minute) < (9, 0)
+
+def _needs_web_dashboard():
+    """현재 환경이 SSH 접속이거나 GUI가 없는 헤드리스 환경인지 확인한다."""
+    if os.environ.get("SSH_CLIENT") or os.environ.get("SSH_TTY"):
+        return True
+    if platform.system() == "Linux" and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return True
+    return False
 
 def open_image_viewer(file_path):
     """생성된 이미지 파일을 OS 기본 뷰어로 연다 (비차단).
@@ -455,6 +464,10 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
         file_path = os.path.join(config.CHART_DIR, file_name)
         plt.savefig(file_path, dpi=dpi); plt.close()
         
+        # 갤러리 웹 대시보드 인덱스 생성 (헤드리스/SSH 환경에서만)
+        if _needs_web_dashboard():
+            web_dashboard.update_chart_index(config.CHART_DIR)
+        
     if not quiet:
         config.console.print(f"\n[bold green]차트가 생성되었습니다: {file_name}[/bold green]")
     if open_file:
@@ -494,6 +507,10 @@ def generate_monte_carlo_histogram(returns, name, code, open_file=True):
     
     plt.savefig(file_path, dpi=100)
     plt.close()
+    
+    # 갤러리 웹 대시보드 인덱스 업데이트 (헤드리스/SSH 환경에서만)
+    if _needs_web_dashboard():
+        web_dashboard.update_chart_index(config.CHART_DIR)
     
     config.console.print(f"\n[bold green]수익률 분포 히스토그램이 저장되었습니다: {file_name}[/bold green]")
     

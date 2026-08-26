@@ -4,6 +4,11 @@ import sys
 import time
 import os
 import re
+import warnings
+
+# google.genai 내부에서 발생하는 Python 3.14 관련 DeprecationWarning 숨김
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="google.genai")
+
 
 # Mac/Linux 환경에서 한글 입력 시 백스페이스(Delete) 시각적 잔상 현상 방지
 try:

@@ -568,17 +568,24 @@ class AutoTrader:
                     console.print("[dim]환경 변수 TOSS_APP_KEY, TOSS_APP_SECRET, TOSS_ACC_NUM을 설정해주세요.[/dim]")
                 return
 
+            # [안내] 토스는 주식계좌를 하나만 내준다. 한투 실전처럼 자동매매 전용 계좌로
+            #  갈라 둘 수 없으므로, 시스템 트레이딩도 수동 주문과 같은 계좌에서 돈다.
+            #  운용자가 알아야 할 사실이라(예수금·보유수량을 수동 매매와 나눠 쓴다)
+            #  시작 확인 앞에서 명시한다.
             if interactive:
                 console.print("\n[bold magenta]!!! 경고: 토스증권 실계좌에서 시스템 트레이딩을 시작합니다 !!![/bold magenta]")
                 console.print(f"운용 계좌: [bold yellow]{config.session.cano}[/bold yellow] (토스증권, 실제 자산 거래)")
+                console.print("[dim]토스증권은 주식계좌를 하나만 제공합니다 — 시스템 트레이딩이 수동 주문과 "
+                              "같은 계좌를 사용합니다(자동매매 전용 계좌 없음).[/dim]")
+                console.print("[dim]따라서 수동으로 낸 주문·보유 종목이 자동매매의 예수금과 슬롯을 함께 씁니다.[/dim]")
                 utils.print_breadcrumb()
                 if Prompt.ask("위 계좌로 실제 매매가 수행됩니다. 진행하시겠습니까?", choices=["y", "n"], default="n") != "y":
                     console.print("[yellow]시작을 취소했습니다.[/yellow]")
                     return
             else:
                 if api._is_screen_output_allowed():
-                    console.print("[bold cyan][시스템 명령] 토스증권 자동매매를 시작합니다.[/bold cyan]")
-        if config.session.is_paper:
+                    console.print("[bold cyan][시스템 명령] 토스증권 자동매매를 시작합니다(수동 주문과 같은 계좌).[/bold cyan]")
+        elif config.session.is_paper:
             if interactive:
                 virt_acc_str = os.environ.get("VIRT_ACC_NUM", "")
                 display_acc = virt_acc_str.replace("PAPER-", "") if virt_acc_str.startswith("PAPER-") else virt_acc_str
