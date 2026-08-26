@@ -226,22 +226,29 @@ def update_chart_index(chart_dir):
                 import api
                 is_overseas = not code.isdigit()
                 stock_name = api.get_stock_name_by_code(code, is_overseas)
+                
+                period_str = f"({parts[2].upper()})"
                 if stock_name:
-                    title = f"{stock_name} {code} ({parts[2].upper()})"
+                    alt_text = f"{stock_name} {code} {period_str}"
+                    title_html = f"{stock_name} {code}<br><span style='font-size: 0.85em; color: var(--text-muted);'>{period_str}</span>"
                 else:
-                    title = f"{code} ({parts[2].upper()})"
+                    alt_text = f"{code} {period_str}"
+                    title_html = f"{code}<br><span style='font-size: 0.85em; color: var(--text-muted);'>{period_str}</span>"
             except Exception:
-                title = f"{code} ({parts[2].upper()})"
+                period_str = f"({parts[2].upper()})"
+                alt_text = f"{code} {period_str}"
+                title_html = f"{code}<br><span style='font-size: 0.85em; color: var(--text-muted);'>{period_str}</span>"
         else:
-            title = filename
+            alt_text = filename
+            title_html = filename
             
         anim_delay = (idx % 10) * 0.1
         
         cards_html += f'''
         <div class="card" style="animation-delay: {anim_delay}s" onclick="openLightbox('{filename}')">
-            <img src="{filename}" alt="{title}" loading="lazy">
+            <img src="{filename}" alt="{alt_text}" loading="lazy">
             <div class="card-info">
-                <h3 class="card-title">{title}</h3>
+                <h3 class="card-title">{title_html}</h3>
                 <div class="card-meta">
                     <span>{date_str}</span>
                 </div>

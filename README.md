@@ -484,6 +484,7 @@ my-stock-hts/
 │   ├── market.py           # [1] 시장 지수 조회
 │   ├── analysis.py         # [2] 종목 시세·기술적 분석
 │   ├── chart.py            # [3] 차트 시각화
+│   ├── web_dashboard.py    #     차트 시각화 결과를 띄우는 반응형 웹 대시보드
 │   ├── backtest.py         # [4] 단일 종목 백테스팅
 │   ├── portfolio_backtest.py #   N슬롯 포트폴리오 백테스트 (슬롯 경쟁·현금·히트 캡)
 │   ├── auto_trade/         # [5] 시스템 트레이딩
@@ -523,6 +524,7 @@ my-stock-hts/
 │   └── prompts.py          # AI 프롬프트 템플릿
 │
 ├── tools/                  # 진단·검증 도구 (109개)
+│   ├── web_server.py       #   차트 대시보드용 경량 웹서버 (Flask)
 │   ├── hts_watchdog.py     #   프로세스 사망 감시 (cron) — 알림만, 재기동 없음
 │   ├── get_telegram_chat_id.py  # 텔레그램 Chat ID 확인
 │   ├── update_holidays.sh  #   휴장일 라이브러리 주기 갱신

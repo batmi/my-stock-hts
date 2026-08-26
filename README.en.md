@@ -485,6 +485,7 @@ my-stock-hts/
 │   ├── market.py           # [1] Market indices
 │   ├── analysis.py         # [2] Quotes and technical analysis
 │   ├── chart.py            # [3] Chart rendering
+│   ├── web_dashboard.py    #     Responsive web dashboard for chart galleries
 │   ├── backtest.py         # [4] Single-symbol backtesting
 │   ├── portfolio_backtest.py #   N-slot portfolio backtest (slot competition, cash, heat cap)
 │   ├── auto_trade/         # [5] System trading
@@ -523,9 +524,10 @@ my-stock-hts/
 │   ├── journal_sync.py     # Trading journal sync (outbox)
 │   └── prompts.py          # AI prompt templates
 │
-├── tools/                  # Diagnostics and verification (109 scripts)
-│   ├── hts_watchdog.py     #   Process death watcher (cron) — notify only, never restart
-│   ├── get_telegram_chat_id.py  # Telegram Chat ID helper
+├── tools/                  # Diagnostics and utilities (109 files)
+│   ├── web_server.py       #   Lightweight Flask web server for chart dashboard
+│   ├── hts_watchdog.py     #   Process watchdog (cron) — alerts only, no restarts
+│   ├── get_telegram_chat_id.py  # Verify Telegram Chat ID helper
 │   ├── update_holidays.sh  #   Periodic holiday-library refresh
 │   ├── journal_sync_e2e.py #   End-to-end journal sync verification
 │   ├── check_*.py          #   Quote, fill, balance, and API diagnostics
