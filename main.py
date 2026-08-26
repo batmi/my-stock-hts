@@ -1158,9 +1158,15 @@ def main():
         try:
             web_server_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "web_server.py")
             chart_srv_cmd = [sys.executable, web_server_script, "--port", "6000", "--directory", config.CHART_DIR]
-            chart_proc = subprocess.Popen(chart_srv_cmd, stdout=subprocess.DEVNULL)
+            
+            # [디버깅용] 웹서버 강제 종료 원인 파악을 위해 로그 파일로 출력 리다이렉트
+            web_log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "web_server.log")
+            web_log_file = open(web_log_path, "a")
+            chart_proc = subprocess.Popen(chart_srv_cmd, stdout=web_log_file, stderr=subprocess.STDOUT)
+            
             atexit.register(chart_proc.terminate)
             config.console.print("\n[bold cyan]🌐 차트 웹 대시보드 서버가 백그라운드에 활성화되었습니다 (포트: 6000). 브라우저로 접속해 보세요![/bold cyan]")
+            config.console.print(f"[dim]   (웹서버 로그: {web_log_path})[/dim]")
         except Exception as e:
             config.console.print(f"\n[red]차트 웹서버 구동 실패: {e}[/red]")
 
