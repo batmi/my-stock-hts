@@ -1150,27 +1150,17 @@ def main():
     # [추가] 로깅 설정 초기화
     config.setup_logging()
 
-    chart_proc = None
     if args.webchart:
-        import subprocess
         import atexit
+        from modules import web_dashboard
         config.WEBCHART_ACTIVE = True
-        try:
-            web_server_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "web_server.py")
-            web_log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "web_server.log")
-            
-            # [수정] 차트 렌더링(DPI 300) 시 메모리 폭주로 리눅스 OOM 킬러가 웹서버를 죽이더라도
-            # 자동으로 즉시 재시작(Auto-Restart)하도록 bash while 루프로 감싸서 백그라운드 구동합니다.
-            bash_cmd = f"while true; do '{sys.executable}' '{web_server_script}' --port 6000 --directory '{config.CHART_DIR}' >> '{web_log_path}' 2>&1; sleep 2; done"
-            chart_proc = subprocess.Popen(["bash", "-c", bash_cmd], stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-            
-            # 메인 프로세스 종료 시 bash 루프 프로세스 그룹 전체를 죽여야 고아 프로세스가 안 남음.
-            atexit.register(lambda: os.kill(chart_proc.pid, 9) if chart_proc.poll() is None else None)
-            
-            config.console.print("\n[bold cyan]🌐 차트 웹 대시보드 서버가 백그라운드에 활성화되었습니다 (포트: 6000). 브라우저로 접속해 보세요![/bold cyan]")
-            config.console.print(f"[dim]   (웹서버 자동 복구 활성화 / 로그: {web_log_path})[/dim]")
-        except Exception as e:
-            config.console.print(f"\n[red]차트 웹서버 구동 실패: {e}[/red]")
+        
+        web_dashboard.start_web_server()
+        atexit.register(web_dashboard.stop_web_server)
+        
+        web_log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "web_server.log")
+        config.console.print("\n[bold cyan]🌐 차트 웹 대시보드 서버가 백그라운드에 활성화되었습니다 (포트: 6000). 브라우저로 접속해 보세요![/bold cyan]")
+        config.console.print(f"[dim]   (차트 생성 시 리소스 확보를 위해 자동 재시작됨 / 로그: {web_log_path})[/dim]")
 
     # [추가] 프로그램 구동 시작 로그 기록 (mystock.log 생성 보장)
     # [수정] 루트 로거로 남기면 FILE_DEBUG_LEVEL 이 기본값(WARNING)일 때 이 한 줄이 통째로
@@ -1680,12 +1670,10 @@ def main():
         config.console.print()
         
         # [추가] atexit이 무시되는 os._exit(0) 직전에 웹서버 프로세스를 확실히 종료
-        if chart_proc is not None:
+        if args.webchart:
             try:
-                # bash 프로세스 그룹(자식인 python 포함) 전체를 죽여 고아 프로세스 방지
-                import signal
-                os.kill(chart_proc.pid, signal.SIGKILL)
-                os.system(f"pkill -f 'python3.*tools/web_server.py'")
+                from modules import web_dashboard
+                web_dashboard.stop_web_server()
             except Exception: pass
             
         os._exit(0) # [추가] 스레드 대기 없이 즉시 종료 (KeyboardInterrupt Traceback 방지)

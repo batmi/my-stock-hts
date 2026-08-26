@@ -142,21 +142,25 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
 
     with status_ctx as progress:
         if not quiet:
-            progress.add_task(f"[cyan]{name} 맞춤형 분석 차트 생성 중...[/cyan]", total=None)
-            
+            config.console.print(f"[cyan]📊 차트 데이터를 수집하고 그리는 중... (기간: {months}개월)[/cyan]")
+
+    # [수정] 차트 렌더링 시 대규모 메모리(200MB+)가 필요하므로 OOM(Killed) 방지를 위해
+    # 렌더링 직전에 경량 웹서버를 안전하게 종료하여 메모리를 미리 확보하고, 
+    # 렌더링이 완료된 후 다시 기동합니다.
+    was_web_active = getattr(config, 'WEBCHART_ACTIVE', False)
+    if was_web_active:
+        from modules import web_dashboard
+        web_dashboard.stop_web_server()
+
+    try:
         df = api.get_chart_data(code, is_overseas, period_type)
         
         if df is None or df.empty:
-            if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
-                config.console.print(f"[dim red][TRACE] 차트 데이터 수신 실패 (Empty)[/dim red]")
-            else:
-                logging.error(f"[Chart] {name}({code}) 데이터 수신 실패 (Empty DataFrame). Period: {period_type}")
-            # 국내 분봉은 KRX 정규장 데이터만 제공 → 장 시작 전이면 안내 메시지로 구분
-            if period_type == 'intraday' and not is_overseas and _is_before_krx_open():
-                config.console.print("[yellow]분봉 차트는 KRX 장 시작(09:00) 이후에 확인할 수 있습니다.[/yellow]")
-            else:
-                config.console.print(f"[red]{name} 데이터를 불러올 수 없습니다.[/]")
-            return
+            if not quiet:
+                config.console.print(f"[red]❌ 차트 데이터가 부족합니다: {code}[/red]")
+            if was_web_active:
+                web_dashboard.start_web_server()
+            return False
         
         # [로그] 데이터 수신 확인
         if config.SCREEN_DEBUG_LEVEL == "DEBUG":
@@ -471,14 +475,16 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
         safe_code = re.sub(r'[=\-\.\^]', '', code)
         file_name = f"analysis_{safe_code}_{period_type}.png"
         file_path = os.path.join(config.CHART_DIR, file_name)
-        plt.savefig(file_path, dpi=dpi); plt.close()
-        
-        # 갤러리 웹 대시보드 인덱스 생성 (헤드리스/SSH 환경에서만)
-        if _needs_web_dashboard():
+        plt.savefig(file_path, dpi=dpi)
+    finally:
+        plt.close()
+        if was_web_active:
+            from modules import web_dashboard
             web_dashboard.update_chart_index(config.CHART_DIR)
-        
-    if not quiet:
-        config.console.print(f"\n[bold green]차트가 생성되었습니다: {file_name}[/bold green]")
+            web_dashboard.start_web_server()
+            if not quiet:
+                config.console.print("[cyan]🌐웹 대시보드(--webchart)[/cyan]가 업데이트 되었습니다. 브라우저에서 접속하여 확인해주세요.")
+                
     if open_file:
         open_image_viewer(file_path)
 

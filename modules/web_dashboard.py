@@ -1,6 +1,39 @@
 import os
+import sys
 import glob
+import subprocess
 from datetime import datetime
+import config
+
+_web_proc = None
+
+def start_web_server():
+    global _web_proc
+    if _web_proc is not None and _web_proc.poll() is None:
+        return
+        
+    try:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        web_server_script = os.path.join(base_dir, "tools", "web_server.py")
+        web_log_path = os.path.join(base_dir, "logs", "web_server.log")
+        
+        web_log_file = open(web_log_path, "a")
+        cmd = [sys.executable, web_server_script, "--port", "6000", "--directory", config.CHART_DIR]
+        _web_proc = subprocess.Popen(cmd, stdout=web_log_file, stderr=subprocess.STDOUT)
+    except Exception as e:
+        config.console.print(f"\n[red]차트 웹서버 구동 실패: {e}[/red]")
+
+def stop_web_server():
+    global _web_proc
+    if _web_proc is not None:
+        try:
+            _web_proc.terminate()
+            _web_proc.wait(timeout=3)
+        except Exception:
+            try:
+                _web_proc.kill()
+            except Exception: pass
+        _web_proc = None
 
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="ko">
