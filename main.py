@@ -1143,10 +1143,23 @@ def main():
     parser.add_argument('--no-bot', action='store_true', help='텔레그램 봇 명령어 수신(폴링) 비활성화 (알림 전송 기능은 유지)')
     parser.add_argument('--allow-duplicate', action='store_true',
                         help='같은 모드 중복 실행 차단을 해제 (조회 전용 인스턴스를 하나 더 띄울 때만 사용)')
+    parser.add_argument('--webchart', action='store_true',
+                        help='실행 시 차트 대시보드 열람을 위한 웹서버(6000 포트)를 백그라운드로 함께 구동합니다.')
     args = parser.parse_args()
 
     # [추가] 로깅 설정 초기화
     config.setup_logging()
+
+    if args.webchart:
+        import subprocess
+        import atexit
+        try:
+            chart_srv_cmd = [sys.executable, "-m", "http.server", "6000", "--directory", config.CHART_DIR]
+            chart_proc = subprocess.Popen(chart_srv_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            atexit.register(chart_proc.terminate)
+            config.console.print("\n[bold cyan]🌐 차트 웹 대시보드 서버가 백그라운드에 활성화되었습니다 (포트: 6000). 브라우저로 접속해 보세요![/bold cyan]")
+        except Exception as e:
+            config.console.print(f"\n[red]차트 웹서버 구동 실패: {e}[/red]")
 
     # [추가] 프로그램 구동 시작 로그 기록 (mystock.log 생성 보장)
     # [수정] 루트 로거로 남기면 FILE_DEBUG_LEVEL 이 기본값(WARNING)일 때 이 한 줄이 통째로
