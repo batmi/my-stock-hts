@@ -107,6 +107,24 @@ def open_image_viewer(file_path):
             config.console.print(f"[yellow]이미지 뷰어 실행에 실패했습니다({e}). 저장된 파일을 직접 확인해주세요: {file_path}[/yellow]")
         return False
 
+import functools
+
+def pause_web_server_while_running(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        was_active = getattr(config, 'WEBCHART_ACTIVE', False)
+        if was_active:
+            from modules import web_dashboard
+            web_dashboard.stop_web_server()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            if was_active:
+                from modules import web_dashboard
+                web_dashboard.start_web_server()
+    return wrapper
+
+@pause_web_server_while_running
 def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quiet=False, period_type='daily', months=6):
     # [토스] 시봉(시간봉) 미제공 → KIS 데이터 없음. 일반 실패 대신 명확한 안내 후 종료.
     # (matplotlib 적재 전에 차단하여 라즈베리파이 메모리 점유도 방지)
@@ -475,7 +493,10 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
         
         # 갤러리 웹 대시보드 인덱스 생성 (헤드리스/SSH 환경에서만)
         if _needs_web_dashboard():
+            from modules import web_dashboard
             web_dashboard.update_chart_index(config.CHART_DIR)
+            if not quiet:
+                config.console.print("[cyan]🌐웹 대시보드(--webchart)[/cyan]가 업데이트 되었습니다. 브라우저에서 접속하여 확인해주세요.")
         
     if not quiet:
         config.console.print(f"\n[bold green]차트가 생성되었습니다: {file_name}[/bold green]")
