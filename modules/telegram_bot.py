@@ -2576,7 +2576,9 @@ class TelegramCommander:
             # [추가] 매수 사유 분류 커스텀 태그 적용
             if is_buy and reason:
                 buy_tag = ""
-                if "슈퍼모멘텀" in reason or "BREAKOUT" in reason: buy_tag = "돌파매수"
+                # [주의] 피라미딩을 가장 먼저 가른다 — 증액은 신규 진입과 사유의 결이 다르다.
+                if "피라미딩" in reason or "PYRAMID" in reason.upper(): buy_tag = "추가매수"
+                elif "슈퍼모멘텀" in reason or "BREAKOUT" in reason: buy_tag = "돌파매수"
                 elif "역매수" in reason or "역추세" in reason or "TRAILING_BUY" in reason: buy_tag = "눌림목"
                 elif "조건 만족" in reason or "SCORE" in reason: buy_tag = "추세매수"
                 elif "수동" in reason: buy_tag = "수동매수"

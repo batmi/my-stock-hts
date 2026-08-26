@@ -159,3 +159,30 @@ def test_refine_records_prefers_first_type_full():
 
     merged = trader._refine_trade_records([first, second])
     assert merged[0]['type_full'] == 'buy(AUTO)'
+
+
+# ==========================================================
+# 피라미딩(추가매수) 사유 태그
+# ==========================================================
+
+def test_pyramiding_buy_tagged_as_additional_buy(bot):
+    """피라미딩 매수는 '[추가매수]'로 가른다.
+
+    실측 증상(2026-08-26): 접수 상태의 피라미딩 주문이 '[자동] [미체결] 피라미딩 1차 …'로
+    찍혔다. 매수 사유 분류에 피라미딩 분기가 없어 태그가 비었고, 그 빈자리를 '접수(미체결)'
+    상태 태그가 채운 것이다. 상태는 이미 '접수' 열이 말하고 있으니, 사유 자리에는
+    무엇을 왜 샀는지가 와야 한다.
+    """
+    reason = "피라미딩 1차 (수익률:+10.2%, 점수:9.5, 상태:강매수)"
+    msg = _history(bot, [_row("buy(AUTO)", reason=reason, status="접수")])
+
+    assert "[추가매수]" in msg, msg
+    assert "[미체결]" not in msg, msg
+    assert "[자동]" in msg, msg
+
+
+def test_pyramiding_fill_also_tagged(bot):
+    """체결된 피라미딩도 같은 태그를 단다(접수 상태에만 붙는 태그가 아니다)."""
+    reason = "피라미딩 2차 (수익률:+15.0%, 점수:9.0, 상태:강매수)"
+    msg = _history(bot, [_row("buy(AUTO)", reason=reason, status="체결")])
+    assert "[추가매수]" in msg, msg
