@@ -1154,17 +1154,35 @@ def _display_balance_details(cano, acnt_prdt_cd):
         else:
             config.console.print("\n[yellow]해외 보유 종목이 없습니다 (수량 0).[/yellow]")
 
+def _display_account_targets():
+    """화면에 나눠 찍을 계좌 목록 — [(계좌번호, 상품코드, 표시명)].
+
+    [왜 모드로 가르나] 계좌가 둘로 갈리는 것은 실전(mode 2)에서 시스템 트레이딩 계좌를
+    따로 잡았을 때뿐이다. 토스는 주식계좌가 하나뿐이고(session이 auto_cano를 cano로
+    동기화한다), 가상투자도 가상 계좌 하나로 돈다. 종전에는 '한투증권 (수동)' 줄을
+    모드와 무관하게 무조건 넣어, 토스 모드에서 같은 계좌가 '토스증권'과
+    '한투증권 (수동)'으로 두 번 찍혔다(실측 2026-08-26).
+    """
+    s = config.session
+    if s.is_toss:
+        return [(s.cano, s.acnt_prdt_cd, "토스증권")]
+    if getattr(s, 'is_paper', False):
+        return [(s.cano, s.acnt_prdt_cd, "가상투자")]
+
+    # 한투 실전 — 자동매매 계좌가 따로 있을 때만 수동/자동으로 가른다.
+    has_auto = bool(s.auto_cano and s.auto_acnt_prdt_cd and
+                    (s.auto_cano != s.cano or s.auto_acnt_prdt_cd != s.acnt_prdt_cd))
+    if not has_auto:
+        return [(s.cano, s.acnt_prdt_cd, "한투증권")]
+    return [(s.cano, s.acnt_prdt_cd, "한투증권 (수동)"),
+            (s.auto_cano, s.auto_acnt_prdt_cd, "한투증권 (자동)")]
+
+
 def get_account_balance():
     """보유 잔고 조회 (메인/자동 계좌 순차 조회)"""
     time.sleep(0.5)
     
-    accounts = []
-    if config.session.is_toss:
-        accounts.append((config.session.cano, config.session.acnt_prdt_cd, "토스증권"))
-    accounts.append((config.session.cano, config.session.acnt_prdt_cd, "한투증권 (수동)"))
-    if config.session.auto_cano and config.session.auto_acnt_prdt_cd and \
-       (config.session.auto_cano != config.session.cano or config.session.auto_acnt_prdt_cd != config.session.acnt_prdt_cd):
-        accounts.append((config.session.auto_cano, config.session.auto_acnt_prdt_cd, "한투증권 (자동)"))
+    accounts = _display_account_targets()
 
     for i, (cano, acnt, label) in enumerate(accounts):
         if i > 0: config.console.print("\n")
@@ -1452,13 +1470,7 @@ def get_deposit_balance():
     """자산 현황 조회 (메인/자동 계좌 순차 조회)"""
     time.sleep(0.5)
     
-    accounts = []
-    if config.session.is_toss:
-        accounts.append((config.session.cano, config.session.acnt_prdt_cd, "토스증권"))
-    accounts.append((config.session.cano, config.session.acnt_prdt_cd, "한투증권 (수동)"))
-    if config.session.auto_cano and config.session.auto_acnt_prdt_cd and \
-       (config.session.auto_cano != config.session.cano or config.session.auto_acnt_prdt_cd != config.session.acnt_prdt_cd):
-        accounts.append((config.session.auto_cano, config.session.auto_acnt_prdt_cd, "한투증권 (자동)"))
+    accounts = _display_account_targets()
 
     for cano, acnt, label in accounts:
         config.console.print(f"\n[bold cyan]{label} 자산 현황 ({cano}{'-' + acnt if acnt else ''})[/]")
