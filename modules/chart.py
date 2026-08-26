@@ -495,8 +495,6 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
         if _needs_web_dashboard():
             from modules import web_dashboard
             web_dashboard.update_chart_index(config.CHART_DIR)
-            if not quiet:
-                config.console.print("[cyan]🌐웹 대시보드(--webchart)[/cyan]가 업데이트 되었습니다. 브라우저에서 접속하여 확인해주세요.")
         
     if not quiet:
         config.console.print(f"\n[bold green]차트가 생성되었습니다: {file_name}[/bold green]")
