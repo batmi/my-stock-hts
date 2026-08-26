@@ -85,17 +85,26 @@ def open_image_viewer(file_path):
             return True
         # Linux: GUI 세션이 없으면(SSH/헤드리스) 뷰어를 띄울 수 없다
         if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-            config.console.print(f"[yellow]GUI 환경이 아니어서 이미지 뷰어를 실행할 수 없습니다. 저장된 파일을 직접 확인해주세요: {file_path}[/yellow]")
+            if getattr(config, 'WEBCHART_ACTIVE', False):
+                config.console.print(f"[cyan]🌐 웹 대시보드(--webchart)가 활성화되어 있습니다. 브라우저에서 접속하여 확인해주세요.[/cyan]")
+            else:
+                config.console.print(f"[yellow]GUI 환경이 아니어서 이미지 뷰어를 실행할 수 없습니다. 저장된 파일을 직접 확인해주세요: {file_path}[/yellow]")
             return False
         if shutil.which("xdg-open") is None:
-            config.console.print(f"[yellow]이미지 뷰어(xdg-open)를 찾을 수 없습니다. 저장된 파일을 직접 확인해주세요: {file_path}[/yellow]")
+            if getattr(config, 'WEBCHART_ACTIVE', False):
+                config.console.print(f"[cyan]🌐 웹 대시보드(--webchart)가 활성화되어 있습니다. 브라우저에서 접속하여 확인해주세요.[/cyan]")
+            else:
+                config.console.print(f"[yellow]이미지 뷰어(xdg-open)를 찾을 수 없습니다. 저장된 파일을 직접 확인해주세요: {file_path}[/yellow]")
             return False
         subprocess.Popen(["xdg-open", file_path],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          start_new_session=True)
         return True
     except Exception as e:
-        config.console.print(f"[yellow]이미지 뷰어 실행에 실패했습니다({e}). 저장된 파일을 직접 확인해주세요: {file_path}[/yellow]")
+        if getattr(config, 'WEBCHART_ACTIVE', False):
+            config.console.print(f"[cyan]🌐 웹 대시보드(--webchart)가 활성화되어 있습니다. 브라우저에서 접속하여 확인해주세요.[/cyan]")
+        else:
+            config.console.print(f"[yellow]이미지 뷰어 실행에 실패했습니다({e}). 저장된 파일을 직접 확인해주세요: {file_path}[/yellow]")
         return False
 
 def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quiet=False, period_type='daily', months=6):

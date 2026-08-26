@@ -1154,9 +1154,10 @@ def main():
     if args.webchart:
         import subprocess
         import atexit
+        config.WEBCHART_ACTIVE = True
         try:
             chart_srv_cmd = [sys.executable, "-m", "http.server", "6000", "--directory", config.CHART_DIR]
-            chart_proc = subprocess.Popen(chart_srv_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            chart_proc = subprocess.Popen(chart_srv_cmd, stdout=subprocess.DEVNULL)
             atexit.register(chart_proc.terminate)
             config.console.print("\n[bold cyan]🌐 차트 웹 대시보드 서버가 백그라운드에 활성화되었습니다 (포트: 6000). 브라우저로 접속해 보세요![/bold cyan]")
         except Exception as e:
