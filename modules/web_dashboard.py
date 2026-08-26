@@ -50,8 +50,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .gallery {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-            gap: 2rem;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 1.5rem;
             max-width: 1400px;
             margin: 0 auto;
         }
@@ -72,7 +72,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .card img {
             width: 100%;
-            height: 200px;
+            height: 130px;
             object-fit: cover;
             border-bottom: 1px solid var(--border);
             transition: filter 0.3s;
@@ -81,17 +81,17 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             filter: brightness(1.1);
         }
         .card-info {
-            padding: 1.2rem;
+            padding: 0.8rem;
         }
         .card-title {
             font-weight: 600;
-            font-size: 1.1rem;
-            margin: 0 0 0.5rem 0;
+            font-size: 0.95rem;
+            margin: 0 0 0.4rem 0;
             color: var(--text-main);
             word-break: break-all;
         }
         .card-meta {
-            font-size: 0.85rem;
+            font-size: 0.75rem;
             color: var(--text-muted);
             display: flex;
             justify-content: space-between;
@@ -105,14 +105,21 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             background: rgba(15, 23, 42, 0.95);
             backdrop-filter: blur(8px);
             z-index: 1000;
-            justify-content: center;
-            align-items: center;
             opacity: 0;
             transition: opacity 0.3s ease;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
         }
         #lightbox.active {
             display: flex;
             opacity: 1;
+        }
+        #lightbox.active.zoomed {
+            display: block;
+            overflow-y: auto;
+            overflow-x: hidden;
+            padding: 20px 0;
         }
         #lightbox img {
             max-width: 95%;
@@ -121,9 +128,20 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             box-shadow: 0 20px 50px rgba(0,0,0,0.5);
             transform: scale(0.95);
             transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            cursor: zoom-in;
+            display: block;
+            margin: 0 auto;
         }
         #lightbox.active img {
             transform: scale(1);
+        }
+        #lightbox.active.zoomed img {
+            max-width: none;
+            max-height: none;
+            width: 100%;
+            height: auto;
+            border-radius: 0;
+            cursor: zoom-out;
         }
         .close-btn {
             position: absolute;
@@ -148,21 +166,26 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </head>
 <body>
     <header>
-        <h1>BATMI Analytics</h1>
-        <p class="subtitle">Quantitative Chart Dashboard</p>
+        <h1>Quantitative Chart Dashboard</h1>
     </header>
     <div class="gallery">
         <!-- INJECT_CARDS -->
     </div>
 
     <div id="lightbox" onclick="closeLightbox()">
-        <span class="close-btn">&times;</span>
-        <img id="lightbox-img" src="" alt="Full Chart" onclick="event.stopPropagation()">
+        <span class="close-btn" onclick="closeLightbox()">&times;</span>
+        <img id="lightbox-img" src="" alt="Full Chart" onclick="toggleZoom(event)">
     </div>
 
     <script>
+        function toggleZoom(event) {
+            event.stopPropagation();
+            const lightbox = document.getElementById('lightbox');
+            lightbox.classList.toggle('zoomed');
+        }
         function openLightbox(src) {
             const lightbox = document.getElementById('lightbox');
+            lightbox.classList.remove('zoomed');
             document.getElementById('lightbox-img').src = src;
             lightbox.classList.add('active');
             document.body.style.overflow = 'hidden';
@@ -170,6 +193,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         function closeLightbox() {
             const lightbox = document.getElementById('lightbox');
             lightbox.classList.remove('active');
+            lightbox.classList.remove('zoomed');
             setTimeout(() => { document.getElementById('lightbox-img').src = ''; }, 300);
             document.body.style.overflow = 'auto';
         }
@@ -197,7 +221,17 @@ def update_chart_index(chart_dir):
         # 파일명에서 종목코드/이름 및 기간 파싱 (예: analysis_005930_daily.png)
         parts = filename.replace('.png', '').split('_')
         if len(parts) >= 3:
-            title = f"{parts[1]} ({parts[2].upper()})"
+            code = parts[1]
+            try:
+                import api
+                is_overseas = not code.isdigit()
+                stock_name = api.get_stock_name_by_code(code, is_overseas)
+                if stock_name:
+                    title = f"{stock_name} {code} ({parts[2].upper()})"
+                else:
+                    title = f"{code} ({parts[2].upper()})"
+            except Exception:
+                title = f"{code} ({parts[2].upper()})"
         else:
             title = filename
             
