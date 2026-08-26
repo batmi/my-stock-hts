@@ -43,10 +43,9 @@ def test_fetch_yfinance_data_db_lock_retry(mock_sleep, mock_clear, mock_dl):
     assert mock_clear.call_count == 1
 
 @patch.object(api.session, 'get')
-@patch('api.get_access_token', return_value="NEW_TOKEN")
+@patch('api.get_real_access_token', return_value="NEW_TOKEN")
 def test_call_api_token_refresh_and_retry(mock_token, mock_get):
     """call_api 내에서 토큰 만료 에러 감지 후 갱신 및 재요청 커버리지"""
-    config.session.is_simulation = True
     
     # 첫 번째: 토큰 만료 예외, 두 번째: 성공
     mock_get.side_effect = [

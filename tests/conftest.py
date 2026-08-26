@@ -19,9 +19,23 @@ from modules.telegram_bot import TelegramCommander
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_config():
-    """테스트 세션 동안 사용할 설정 초기화 (모의투자 모드 강제)"""
-    # 테스트 중 실수로 실전 API가 호출되지 않도록 안전장치
-    config.session.initialize(mode="1")
+    """테스트 세션 동안 사용할 설정 초기화 (한투증권 모드).
+
+    [주의] mode 1은 **가상투자(paper)**다. 여기서 mode 1로 초기화하면 paper_broker가
+     잔고·예수금·주문을 통째로 가로채, KIS/토스 어댑터를 재는 테스트가 전부 0을 받는다.
+     실제 네트워크 호출은 tests/ 의 호스트 차단 픽스처가 막으므로 mode 2가 안전하다.
+    """
+    config.session.initialize(mode="2")
+    # [단일계좌 고정] 종전 기본값이던 mode 1(모의투자)은 auto 계좌를 거래 계좌와 강제
+    #  동기화했고, 그래서 대화형 주문 테스트에 '계좌 선택' 단계가 없었다. 실전 모드는
+    #  두 계좌가 갈리면 그 단계가 생겨 Prompt 응답 순서가 통째로 밀린다. 계좌 분리가
+    #  검증 대상인 테스트는 각자 픽스처로 따로 세팅하므로, 기본값은 단일계좌로 둔다.
+    config.session.auto_cano = config.session.cano
+    config.session.auto_acnt_prdt_cd = config.session.acnt_prdt_cd
+    # 앱키도 같이 맞춘다. 다르면 TPS 버킷이 manual/auto 로 갈리는데(_real_bucket_key),
+    #  앞선 테스트가 use_auto_account 를 남기면 뒤 테스트가 엉뚱한 버킷을 본다.
+    config.session.auto_app_key = config.session.real_app_key
+    config.session.auto_app_secret = config.session.real_app_secret
     # [지연 임포트 대응] genai는 운영에서 최초 사용 시 로드된다. 테스트가 SDK 심볼을 직접
     # patch하지는 않지만(이제 이음매는 theme_analysis._gemini_stream 이다), 미리 채워 두면
     # 첫 AI 테스트가 import 비용을 혼자 뒤집어쓰지 않는다.
@@ -138,16 +152,24 @@ def block_side_effects_for_whole_session():
 @pytest.fixture(autouse=True)
 def isolate_session_state():
     """[격리] config.session은 전역 공유 객체이므로, 개별 테스트가 모드/키를
-    바꿔도(예: is_simulation=False) 다음 테스트로 누수되지 않도록 매 테스트 후
+    바꿔도(예: is_paper=False) 다음 테스트로 누수되지 않도록 매 테스트 후
     상태를 원복한다.
 
-    누수를 방치하면 setup_config가 강제한 모의투자 모드가 풀려, 시세/지수 조회가
-    실전 도메인(:9443)으로 나가 EGW00304(고객식별키 무효) 등이 발생할 수 있다.
+    누수를 방치하면 setup_config가 강제한 계좌·키 구성이 풀려, 조회가 엉뚱한 계좌로
+    나가거나 TPS 버킷이 갈린다.
+
+    [2026-08-26] 스레드 로컬인 `trade_context.use_auto_account` 도 같이 되돌린다.
+     mode 1(모의투자) 폐기 전에는 계좌 분기가 대부분 `not is_simulation and ...` 이라
+     모의 세션에서 이 플래그가 남아도 동작이 바뀌지 않았다. 그 가드가 사라진 지금은
+     누수가 그대로 다음 테스트의 계좌·앱키 선택을 바꾼다.
     """
+    from core import context as _ctx
     snapshot = dict(config.session.__dict__)
+    auto_flag = getattr(_ctx.trade_context, 'use_auto_account', False)
     yield
     config.session.__dict__.clear()
     config.session.__dict__.update(snapshot)
+    _ctx.trade_context.use_auto_account = auto_flag
 
 
 def _mock_index_chart_df(periods=60):

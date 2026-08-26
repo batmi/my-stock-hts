@@ -110,8 +110,7 @@ def test_initialize_actually_runs_the_restore(trader):
     summary = [{'dnca_tot_amt': '1000000', 'prvs_rcdl_excc_amt': '1000000',
                 'tot_evlu_amt': '1000000'}]
 
-    with patch.object(config.session, 'is_simulation', True), \
-         patch('modules.auto_trade.api.get_domestic_balance', return_value=([], summary)), \
+    with patch('modules.auto_trade.api.get_domestic_balance', return_value=([], summary)), \
          patch('modules.auto_trade.db_manager.db.get_all_trailing_stops', return_value={}), \
          patch('modules.auto_trade.db_manager.db.get_all_half_tp', return_value=set()), \
          patch('modules.auto_trade.trader.load_daily_initial_asset', return_value=1_000_000), \
@@ -128,8 +127,7 @@ def test_initialize_holds_buys_when_the_restore_fails(trader):
     summary = [{'dnca_tot_amt': '1000000', 'prvs_rcdl_excc_amt': '1000000',
                 'tot_evlu_amt': '1000000'}]
 
-    with patch.object(config.session, 'is_simulation', True), \
-         patch('modules.auto_trade.api.get_domestic_balance', return_value=([], summary)), \
+    with patch('modules.auto_trade.api.get_domestic_balance', return_value=([], summary)), \
          patch('modules.auto_trade.db_manager.db.get_all_trailing_stops', return_value={}), \
          patch('modules.auto_trade.db_manager.db.get_all_half_tp', return_value=set()), \
          patch('modules.auto_trade.trader.load_daily_initial_asset', return_value=1_000_000), \
@@ -150,8 +148,7 @@ def test_cycle_sweep_retracks_our_own_order_not_just_external_ones(trader):
     """
     assert not trader.order_manager.is_pending(CODE), "전제: 추적은 비어 있다"
 
-    with patch.object(config.session, 'is_simulation', False), \
-         patch.object(trader, 'is_market_open', return_value=True), \
+    with patch.object(trader, 'is_market_open', return_value=True), \
          patch('modules.auto_trade.api.get_unfilled_orders', return_value=[_open_order()]), \
          patch('modules.auto_trade.db_manager.db.get_trade_by_odno', return_value=_known_trade()), \
          patch('modules.auto_trade.db_manager.db.insert_trade') as ins, \
@@ -170,8 +167,7 @@ def test_cycle_sweep_retracks_our_own_order_not_just_external_ones(trader):
 def test_cycle_sweep_clears_the_buy_hold_once_it_can_see_orders(trader):
     """복구 조회가 한 번이라도 성공하면 매수 보류가 자동으로 풀려야 한다."""
     trader.pending_restore_ok = False
-    with patch.object(config.session, 'is_simulation', False), \
-         patch.object(trader, 'is_market_open', return_value=True), \
+    with patch.object(trader, 'is_market_open', return_value=True), \
          patch('modules.auto_trade.api.get_unfilled_orders', return_value=[]), \
          patch('modules.auto_trade.api.send_telegram_message'):
         trader.order_manager.manage_unfilled_orders()

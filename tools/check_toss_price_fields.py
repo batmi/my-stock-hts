@@ -188,7 +188,7 @@ def main():
     codes = sys.argv[2:] if len(sys.argv) > 2 else DEFAULT_CODES
 
     config.session.initialize(mode=mode)
-    server = {"1": "모의투자(KIS)", "2": "실전투자(KIS)", "3": "토스증권(TOSS)"}.get(mode, mode)
+    server = {"1": "가상투자(KIS)", "2": "실전투자(KIS)", "3": "토스증권(TOSS)"}.get(mode, mode)
     console.print(f"\n[bold]현재가/기준가 원본 필드 확인 — {server} / 종목: {', '.join(codes)}[/bold]\n")
 
     for code in codes:

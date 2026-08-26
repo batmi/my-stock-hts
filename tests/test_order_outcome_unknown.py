@@ -174,7 +174,6 @@ def test_place_order_does_not_resend_on_lost_response(monkeypatch):
     monkeypatch.setattr(api, '_prepare_account_params', lambda a, b: ("12345678", "01"))
     monkeypatch.setattr(api, 'get_today_history', lambda *a, **k: {"output1": [_row()]})
     monkeypatch.setattr(api, '_odno_known_to_db', lambda odno: False)
-    monkeypatch.setattr(api.config.session, 'is_simulation', True, raising=False)
     monkeypatch.setattr(api.config.session, 'is_toss', False, raising=False)
 
     res = api.place_order("domestic", "buy", "005930", 10, 70000, "00")
@@ -202,6 +201,9 @@ def test_cancel_failure_is_left_to_the_next_cycle(monkeypatch):
     monkeypatch.setattr(api, '_paper_active', lambda: False)
     monkeypatch.setattr(api, '_prepare_account_params', lambda a, b: ("12345678", "01"))
     monkeypatch.setattr(api.config.session, 'is_toss', False, raising=False)
+    # NXT 미지원 종목(=KRX 직접 라우팅) 경로를 잰다. SOR 경로는 거래소 폴백이 따로 있어
+    #  예외를 그대로 올리며, 그건 _order_with_exchange_fallback 쪽 계약이다.
+    monkeypatch.setattr(api, 'is_nxt_tradeable', lambda *a, **k: False)
 
     res = api.revise_cancel_order("domestic", "cancel", "0000111111", "005930", 10, 0, "02", "00")
     assert res['rt_cd'] == '1' and res['msg_cd'] == 'ORDER_UNKNOWN'

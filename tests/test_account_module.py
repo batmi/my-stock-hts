@@ -24,7 +24,6 @@ def test_get_asset_status_data(mock_deposit, mock_balance, mock_overseas):
         mock_overseas.return_value = []
     
         # Mock config
-        config.session.is_simulation = True
     
         data = account.get_asset_status_data("12345678", "01")
     

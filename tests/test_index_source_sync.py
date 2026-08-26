@@ -80,13 +80,11 @@ def test_미국채_티커맵은_지수목록과_정합적이다():
 def test_KIS실전전용_지수는_KRX가_없을_때만_목록에서_빠진다():
     """KRX 자격증명이 없으면 종전대로 뺀다 — 조회 못 하는 행을 보여 주지 않기 위해서다."""
     config.session.is_toss = False
-    config.session.is_simulation = False
     assert [n for n, _ in market.selectable_indices()] == [n for n, _ in market.ALL_INDICES]
 
     with patch.object(market, 'krx_covers_kis_only_indices', return_value=False):
-        for mode_attr in ('is_toss', 'is_simulation'):
+        for mode_attr in ('is_toss',):
             config.session.is_toss = False
-            config.session.is_simulation = False
             setattr(config.session, mode_attr, True)
             names = [n for n, _ in market.selectable_indices()]
             assert "V코스피200" not in names
@@ -97,9 +95,8 @@ def test_KIS실전전용_지수는_KRX가_없을_때만_목록에서_빠진다()
 def test_KRX가_열려_있으면_V코스피200은_토스_모의모드에서도_보인다():
     """V코스피200은 값이 KIS 0503과 일치함을 확인했다(지수·등락·EMA5/20/60 동일)."""
     with patch.object(market, 'krx_covers_kis_only_indices', return_value=True):
-        for mode_attr in ('is_toss', 'is_simulation'):
+        for mode_attr in ('is_toss',):
             config.session.is_toss = False
-            config.session.is_simulation = False
             setattr(config.session, mode_attr, True)
             names = [n for n, _ in market.selectable_indices()]
             assert "V코스피200" in names
@@ -111,15 +108,13 @@ def test_코스피200선물은_KRX가_있어도_토스_모의모드에서_빠진
     assert "코스피200선물" not in market.KRX_REPLACEABLE_INDICES
     for covered in (True, False):
         with patch.object(market, 'krx_covers_kis_only_indices', return_value=covered):
-            for mode_attr in ('is_toss', 'is_simulation'):
+            for mode_attr in ('is_toss',):
                 config.session.is_toss = False
-                config.session.is_simulation = False
                 setattr(config.session, mode_attr, True)
                 names = [n for n, _ in market.selectable_indices()]
                 assert "코스피200선물" not in names, (mode_attr, covered)
     # 모드 2(실전)에서는 그대로 보인다
     config.session.is_toss = False
-    config.session.is_simulation = False
     assert "코스피200선물" in [n for n, _ in market.selectable_indices()]
 
 
@@ -137,7 +132,6 @@ def test_토스모드_선물조회는_KRX로_폴백하지_않는다():
 def test_목록과_워커의_판정이_같은_함수를_쓴다():
     """목록에는 있는데 워커가 건너뛰면 화면에 빈 행이 남는다 — 두 곳이 갈라지면 안 된다."""
     config.session.is_toss = True
-    config.session.is_simulation = False
     try:
         with patch.object(market, 'krx_covers_kis_only_indices', return_value=True) as gate, \
              patch.object(analysis, 'get_domestic_index_data', return_value=_src_df()), \
@@ -265,7 +259,6 @@ def test_선물은_KIS와_병합하지_않는다():
 def test_지수화면_목록도_같은_게이트를_쓴다():
     """게이트가 세 곳(목록·화면·워커)에 있다 — 갈라지면 서로 다른 지수 집합을 본다."""
     config.session.is_toss = True
-    config.session.is_simulation = False
     try:
         with patch.object(market, 'krx_covers_kis_only_indices', return_value=False) as gate:
             assert market._show_market_indices_core(target_indices=["V코스피200"]) == []
@@ -306,7 +299,6 @@ def test_확정표시는_개장중일_때만_붙는다():
     df = _src_df()
     df.attrs['source'] = 'KRX'
     config.session.is_toss = False          # 앞 테스트가 남긴 모드 상태를 지운다(워커 스킵 방지)
-    config.session.is_simulation = False
     with patch.object(market, 'is_market_open_for_index', return_value=False), \
          patch.object(analysis, 'get_domestic_index_data', return_value=df):
         res = market._process_index_worker("V코스피200", "^VKOSPI", pd.DataFrame(), pd.DataFrame())
@@ -319,7 +311,6 @@ def test_장중_KRX값에는_확정표시가_붙는다():
     df = _src_df()
     df.attrs['source'] = 'KRX'
     config.session.is_toss = False
-    config.session.is_simulation = False
     with patch.object(market, 'is_market_open_for_index', return_value=True), \
          patch.object(analysis, 'get_domestic_index_data', return_value=df):
         res = market._process_index_worker("V코스피200", "^VKOSPI", pd.DataFrame(), pd.DataFrame())

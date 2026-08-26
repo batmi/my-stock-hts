@@ -206,7 +206,6 @@ class ThrottledSession(requests.Session):
 
     def __init__(self):
         super().__init__()
-        self.request_history_sim = deque()
         self.lock = threading.Lock() # [추가] Rate Limit 계산 동기화를 위한 락
         self._real_buckets = {self.BUCKET_MANUAL: _RealTpsBucket(),
                               self.BUCKET_AUTO: _RealTpsBucket()}
@@ -220,8 +219,6 @@ class ThrottledSession(requests.Session):
         폴백하므로, 여기서도 '자동 키가 있고 수동 키와 다를 때'만 auto로 가른다.
         """
         s = config.session
-        if s.is_simulation:
-            return self.BUCKET_MANUAL
         if getattr(context.trade_context, 'use_auto_account', False):
             auto = getattr(s, 'auto_app_key', '')
             if auto and auto != s.real_app_key:
@@ -397,16 +394,11 @@ class ThrottledSession(requests.Session):
             f"{instance_lock.appkey_duplicate_note()}")
 
     def request(self, method, url, *args, **kwargs):
-        is_real_server = "openapi.koreainvestment.com" in url and "openapivts" not in url
-        is_sim_server = "openapivts.koreainvestment.com" in url
+        is_real_server = "openapi.koreainvestment.com" in url
         
         # [수정] 재시도 횟수 설정 (kwargs에서 전달받거나 config 기본값 사용)
         max_retries = kwargs.pop('retries', config.MAX_RETRIES)
         if max_retries is None: max_retries = config.MAX_RETRIES
-        
-        # [추가] 모의투자의 엄격한 TPS 제어로 인한 빈번한 차단을 방지하기 위해 기본 재시도 횟수 +1 추가
-        if is_sim_server and max_retries == config.MAX_RETRIES:
-            max_retries += 1
         
         response = None
         # 거부 진단용. 어느 TR이 거부되는지가 '엔드포인트 하위 한도 vs 앱키 단위 한도'를 가른다.
@@ -425,38 +417,32 @@ class ThrottledSession(requests.Session):
             
             # [Fix] 스케줄링 지연으로 인해 스레드들이 동시에 깨어나 융단 폭격을 하는 현상을 
             # 원천 차단하기 위해, 예약 방식에서 폴링/토큰 획득 방식으로 TPS 제어 재설계
-            if is_real_server or is_sim_server:
+            if is_real_server:
                 while True:
                     wait_time = 0
                     with self.lock:
                         now = time.time()
-                        target_limit = config.REAL_TX_PER_SECOND if is_real_server else config.SIM_TX_PER_SECOND
+                        target_limit = config.REAL_TX_PER_SECOND
                         # [앱키별 예산] KIS 유량 한도는 앱키 단위다. 수동 계좌와 자동매매
                         #  계좌의 앱키가 다르면 각자 20 TPS를 따로 받으므로 카운터도 갈라야
                         #  한다. 같은 키면 같은 버킷으로 모여 종전과 동일하게 동작한다.
-                        #  모의 서버도 우선순위 예약분 해제 판정에 last_priority_grant를
-                        #  읽으므로 버킷 자체는 항상 잡는다(모의는 항상 manual 버킷).
                         bucket = self._real_bucket()
-                        history = bucket.history if is_real_server else self.request_history_sim
-                        server_type = "REAL" if is_real_server else "SIMULATION"
+                        history = bucket.history
+                        server_type = "REAL"
                         
                         if target_limit > 0:
                             # [수정] 명목 한도(target_limit)에 내부 안전계수를 곱해 '실효 한도'로 운행한다.
                             #  - 명목 한도에 정확히 붙이면 클라이언트 윈도우와 KIS 서버 1초 카운터의
                             #    경계가 충돌해 EGW00201이 상시 발생하므로, 약간의 마진을 둔다.
                             #  - config 설정값(REAL_TX_PER_SECOND 등)은 그대로 두고 로직 내부에서만 보정.
-                            if is_sim_server:
-                                effective_limit = target_limit  # 모의(2 TPS)는 기존 동작 유지
-                                min_interval = (1.0 / target_limit) * 1.2
-                            else:
-                                # [#7] 적응형 실효 한도(AIMD). 미초기화 시 시작 마진(REAL_TPS_SAFETY)으로 출발.
-                                if bucket.adaptive_limit is None:
-                                    bucket.adaptive_limit = target_limit * getattr(config, 'REAL_TPS_SAFETY', 0.9)
-                                effective_limit = max(1.0, bucket.adaptive_limit)
-                                min_interval = 1.0 / effective_limit
+                            # [#7] 적응형 실효 한도(AIMD). 미초기화 시 시작 마진(REAL_TPS_SAFETY)으로 출발.
+                            if bucket.adaptive_limit is None:
+                                bucket.adaptive_limit = target_limit * getattr(config, 'REAL_TPS_SAFETY', 0.9)
+                            effective_limit = max(1.0, bucket.adaptive_limit)
+                            min_interval = 1.0 / effective_limit
 
                             # 1. 윈도우 기반 한도 체크 (Burst 방어)
-                            window_size = 1.5 if is_sim_server else 1.1
+                            window_size = 1.1
 
                             while history and history[0] <= now - window_size:
                                 history.popleft()
@@ -512,7 +498,7 @@ class ThrottledSession(requests.Session):
                     # 전송 권한을 얻지 못한 경우 락을 반환하고 대기한 후 다시 락을 잡아 권한 획득 시도
                     time.sleep(wait_time)
 
-            if _api()._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"] and (is_sim_server or is_real_server):
+            if _api()._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"] and is_real_server:
                 # [보안] 화면 출력도 마스킹한다. 파일 로그만 가리면 SSH·화면 공유로 샌다.
                 config.console.print(f"[dim cyan][TRACE] REQ ({server_type}) TPS:{current_tps:.1f} | {method} {config.mask_sensitive(url)}[/dim cyan]")
                 if config.SCREEN_DEBUG_LEVEL == "DEBUG":
@@ -526,7 +512,7 @@ class ThrottledSession(requests.Session):
 
                 response = super().request(method, url, *args, **kwargs)
 
-                if _api()._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"] and (is_sim_server or is_real_server):
+                if _api()._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"] and is_real_server:
                     rt_cd = "-"
                     msg_cd = "-"
                     desc = "정상"
@@ -579,7 +565,7 @@ class ThrottledSession(requests.Session):
                     # [수정] OAuth 토큰 발급 요청 등은 rt_cd 구조가 다르므로 검사 제외
                     if "oauth2" in url:
                         pass
-                    elif is_sim_server or is_real_server:
+                    elif is_real_server:
                         try:
                             res_json = response.json()
                             rt_cd = res_json.get('rt_cd')
@@ -619,9 +605,6 @@ class ThrottledSession(requests.Session):
                                     # 주문과 같이 상태 변화가 있는 API는 중복 방지를 위해 재시도하지 않음
                                     req_body = kwargs.get('data', '')
                                     logger.error(f"⚠️ [ORDER_FAIL] [API Error] URL: {url} | RT_CD: {rt_disp} | MSG_CD: {msg_disp} | MSG: {msg1_disp} | REQ: {req_body}")
-                                elif msg_cd == 'MCA00124' and 'chk-holiday' in url and is_sim_server:
-                                    # 모의투자 서버에서 휴장일 조회 미지원 에러 로그 무시 (모의투자 모드에서만 동작하도록 명확화)
-                                    pass
                                 else:
                                     # 단순 조회(GET) 요청이면서 일시적인 API 서버/MCI 오류인 경우 안전하게 재시도 처리
                                     if method == 'GET' and ('MCI' in msg1_disp or '게이트웨이' in msg1_disp):

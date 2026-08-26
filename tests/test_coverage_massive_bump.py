@@ -272,7 +272,6 @@ def test_fetch_naver_themes_timeout(mock_get):
 @patch('modules.trading.utils.show_menu', return_value='q')
 def test_select_account_cancel(mock_menu):
     """주문 시 계좌 선택 화면에서 취소(q)를 눌렀을 때의 반환 커버리지"""
-    config.session.is_simulation = False
     config.session.auto_cano = "1234"
     
     cano, acnt, label = trading.select_account()

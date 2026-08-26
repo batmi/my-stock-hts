@@ -7,7 +7,6 @@ from core import context
 def test_get_common_headers_auto_account():
     """자동매매 계좌 컨텍스트에서 헤더 생성 테스트"""
     # Setup
-    config.session.is_simulation = False
     config.session.auto_app_key = "auto_key"
     config.session.auto_app_secret = "auto_secret"
     context.trade_context.use_auto_account = True

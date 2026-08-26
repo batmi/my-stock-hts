@@ -40,7 +40,6 @@ def test_get_chart_data_overseas_pagination(mock_call):
 @patch('api.call_api')
 def test_get_deposit_balance_simulation_fallback(mock_call):
     """모의투자 예수금 조회 Fallback 테스트"""
-    config.session.is_simulation = True
     
     # get_domestic_balance (balance) -> Fail or Empty
     # get_deposit (deposit) -> Success

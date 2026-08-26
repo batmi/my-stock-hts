@@ -124,25 +124,13 @@ def run_benchmark():
     console.print("[bold cyan]=== KIS API 서버 성능 벤치마크 (TPS) ===[/bold cyan]")
     console.print("[dim]이 도구는 클라이언트의 TPS 제한을 무시하고 서버의 최대 처리 성능을 측정합니다.[/dim]")
     
-    mode = Prompt.ask("테스트할 투자 모드를 선택하세요 (1: 모의, 2: 실전)", choices=["1", "2", "q"], default="1")
-    if mode == 'q': return
-
-    if mode == "1":
-        console.print("[dim]1. 모의투자 모드로 초기화 중...[/dim]")
-        config.session.initialize(mode="1")
-        if not api.get_access_token():
-            console.print("[red]토큰 발급 실패. 모의투자 API Key 등 환경변수를 확인하세요.[/red]")
-            return
-        mode_name = "모의투자"
-        num_workers = 10 # 모의서버는 부하에 약하므로 적당히
-    else:
-        console.print("[dim]1. 한투증권 모드로 초기화 중...[/dim]")
-        config.session.initialize(mode="2")
-        if not api.get_real_access_token():
-            console.print("[red]토큰 발급 실패. 한투증권 API Key 등 환경변수를 확인하세요.[/red]")
-            return
-        mode_name = "한투증권"
-        num_workers = 30 # 실전서버는 성능이 좋으므로 높게
+    console.print("[dim]1. 한투증권 모드로 초기화 중...[/dim]")
+    config.session.initialize(mode="2")
+    if not api.get_real_access_token():
+        console.print("[red]토큰 발급 실패. 한투증권 API Key 등 환경변수를 확인하세요.[/red]")
+        return
+    mode_name = "한투증권"
+    num_workers = 30 # 실전서버는 성능이 좋으므로 높게
 
     duration = int(Prompt.ask("테스트 지속 시간(초)을 입력하세요", default="20"))
     # [추가 2026-08-09] 워커 수 = 동시 연결 수(워커마다 독립 Session). 이 값이 결과를 크게

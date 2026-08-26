@@ -23,15 +23,14 @@ def _config():
 
 class SessionManager:
     def __init__(self):
-        # 확정된 운용 모드('1'~'4'). is_simulation/is_toss/is_paper 플래그만으로도 대부분
+        # 확정된 운용 모드('1'~'3'). is_toss/is_paper 플래그만으로도 대부분
         #  구분되지만, 그 조합을 되짚는 것과 '무엇으로 떴는가'를 그대로 아는 것은 다르다
         #  — 중복 실행 잠금(modules/instance_lock.guard_mode)은 모드 자체를 키로 쓴다.
         self.mode = ""
-        self.is_simulation = False
         self.is_toss = False  # [추가] 토스증권 모드 여부
-        # [추가] 관찰(페이퍼 트레이딩) 모드 여부. 시세·지표는 실제 소스(KIS 실전)를 그대로 쓰고
-        #  잔고·예수금·주문만 가상으로 처리한다(modules/paper_broker.py).
-        #  모의투자 계좌의 3개월 리셋 없이 장기 관찰하기 위한 모드이며, 실주문은 원천 차단된다.
+        # [추가] 관찰(페이퍼 트레이딩) 모드 여부 = mode 1. 시세·지표는 실제 소스(KIS 실전)를
+        #  그대로 쓰고 잔고·예수금·주문만 가상으로 처리한다(modules/paper_broker.py).
+        #  실주문은 원천 차단된다.
         self.is_paper = False
         self.url_base = ""
         
@@ -40,10 +39,6 @@ class SessionManager:
         self.app_secret = ""
         self.cano = ""
         self.acnt_prdt_cd = ""
-        
-        # 모의투자 정보 저장
-        self.sim_app_key = ""
-        self.sim_app_secret = ""
         
         # 실전투자 정보 저장
         self.real_app_key = ""
@@ -61,7 +56,7 @@ class SessionManager:
         self.toss_acc_num = ""
         self.toss_account_seq = None  # /accounts 조회로 해석되는 accountSeq
 
-        # [추가] 가상투자(mode 4) 전용 KIS 앱키. 실전 인스턴스와 앱키를 분리하기 위한 것.
+        # [추가] 가상투자(mode 1) 전용 KIS 앱키. 실전 인스턴스와 앱키를 분리하기 위한 것.
         self.virt_app_key = ""
         self.virt_app_secret = ""
         # [표시 전용] VIRT 앱키에 매인 실제 계좌번호. **매매·조회에 쓰지 않는다** —
@@ -72,12 +67,11 @@ class SessionManager:
         self.virt_acnt_prdt_cd = ""
 
         # [추가] 실시간 체결통보(WebSocket H0STCNI0/H0STCNI9) 구독키 = HTS 로그인 ID.
-        #   환경변수 우선순위: 모드별(REAL_HTS_ID/SIM_HTS_ID) → 공통(KIS_HTS_ID/HTS_ID).
+        #   환경변수 우선순위: REAL_HTS_ID → 공통(KIS_HTS_ID/HTS_ID).
         #   미설정 시 체결통보 WS는 구독하지 않고 기존 REST 폴링(ConclusionMonitor)으로 폴백한다.
         self.hts_id = ""
 
         # 토큰 관리 (API 모듈에서 사용)
-        self.sim_access_token = ""
         self.real_access_token = ""
         self.auto_access_token = ""
 
@@ -93,11 +87,7 @@ class SessionManager:
                 return parts[0].strip(), parts[1].strip()
             return acc_str.strip(), ""
 
-        # 1. 환경변수 로드 (SIM_, REAL_, AUTO_ 접두사 사용)
-        # 모의투자 (SIM_)
-        self.sim_app_key = os.environ.get("SIM_APP_KEY", "")
-        self.sim_app_secret = os.environ.get("SIM_APP_SECRET", "")
-        
+        # 1. 환경변수 로드 (REAL_, AUTO_ 접두사 사용)
         # 실전투자 (REAL_)
         self.real_app_key = os.environ.get("REAL_APP_KEY", "")
         self.real_app_secret = os.environ.get("REAL_APP_SECRET", "")
@@ -111,7 +101,7 @@ class SessionManager:
         self.toss_app_secret = os.environ.get("TOSS_APP_SECRET", "")
         self.toss_acc_num = os.environ.get("TOSS_ACC_NUM", "").strip()
 
-        # [추가] 가상투자 전용 KIS 앱키 (VIRT_). mode 4가 KIS 실전 서버에서 '시세만' 받을 때 쓴다.
+        # [추가] 가상투자 전용 KIS 앱키 (VIRT_). mode 1이 KIS 실전 서버에서 '시세만' 받을 때 쓴다.
         #  실전 운용 인스턴스와 앱키를 나누는 것이 핵심이다 — KIS의 TPS(20)·웹소켓 동시 연결(1)·
         #  토큰 발급(1분 1회) 제약이 모두 앱키 단위라, 같은 키를 두 프로세스가 쓰면 가상투자가
         #  실계좌의 주문 경로를 갉아먹는다(양쪽 모두 EGW00201에 갇히고 웹소켓은 서로 끊는다).
@@ -119,12 +109,10 @@ class SessionManager:
         self.virt_app_secret = os.environ.get("VIRT_APP_SECRET", "")
 
         # [추가] 체결통보 WebSocket 구독키(HTS ID). 모드별 우선 → 공통 폴백.
-        sim_hts = os.environ.get("SIM_HTS_ID", "")
         real_hts = os.environ.get("REAL_HTS_ID", "")
         common_hts = os.environ.get("KIS_HTS_ID", "") or os.environ.get("HTS_ID", "")
         
         # 계좌번호 (ACC_NUM)
-        sim_acc_str = os.environ.get("SIM_ACC_NUM", "")
         real_acc_str = os.environ.get("REAL_ACC_NUM", "")
         auto_acc_str = os.environ.get("AUTO_ACC_NUM", "")
         # VIRT_ACC_NUM 은 **표시 전용**이다(self.virt_cano 주석 참조). 매매·조회 경로는
@@ -132,7 +120,6 @@ class SessionManager:
         virt_acc_str = os.environ.get("VIRT_ACC_NUM", "")
 
         # 계좌번호 파싱
-        sim_cano, sim_acnt = parse_acc(sim_acc_str)
         real_cano, real_acnt = parse_acc(real_acc_str)
         auto_cano, auto_acnt = parse_acc(auto_acc_str)
         self.virt_cano, self.virt_acnt_prdt_cd = parse_acc(virt_acc_str)
@@ -156,17 +143,26 @@ class SessionManager:
         dart_key = os.environ.get("DART_API_KEY")
         if dart_key: _config().DART_API_KEY = dart_key
 
+        # [하위호환] 가상투자는 2026-08-26부터 mode 1 이다(옛 mode 4). 외부 스크립트
+        #  (cron·systemd·alias)에 남은 `--mode 4` 를 여기서 흡수한다. 흡수하지 않으면
+        #  아래 분기에서 알 수 없는 모드가 되어 기동이 중단된다 — 운영이 조용히 멈추는
+        #  것보다는 옛 번호를 받아 주고 경고하는 쪽이 낫다.
+        if mode is not None and str(mode) == '4':
+            _config().console.print(
+                "[bold yellow]⚠️ `--mode 4`는 옛 번호입니다. 가상투자는 이제 mode 1 입니다 — "
+                "이번 실행은 mode 1로 진행합니다. 실행 스크립트를 갱신하세요.[/bold yellow]")
+            mode = '1'
+
         # 2. 모드 설정 (CLI 인자 -> 사용자 입력)
         if mode is None:
             _config().console.print("\n접속할 서버를 선택하세요:")
-            _config().console.print("[1] 모의투자 (Simulation)")
-            _config().console.print("[2] 한투증권 (KIS, 실전)")
-            _config().console.print("[3] 토스증권 (Toss, 실전)")
-            _config().console.print("[4] 가상투자 (Paper Trading)")
-            mode = Prompt.ask("\n선택 (종료: q)", choices=["1", "2", "3", "4", "q"], default="1")
+            _config().console.print("[1] 가상투자 (KIS Paper Trading)")
+            _config().console.print("[2] 한투증권 (KIS Real Trading)")
+            _config().console.print("[3] 토스증권 (Toss Real Trading)")
+            mode = Prompt.ask("\n선택 (종료: q)", choices=["1", "2", "3", "q"], default="1")
             if mode == 'q': sys.exit()
 
-        # 모드가 확정된 지점. 아래 분기들은 mode 4 처럼 중간에 return 하므로 여기서 기록한다.
+        # 모드가 확정된 지점. 아래 분기들은 가상투자처럼 중간에 return 하므로 여기서 기록한다.
         self.mode = str(mode)
 
         # [모드별 설정 프로필] 모드가 정해지는 즉시 설정 파일을 다시 건다.
@@ -176,32 +172,6 @@ class SessionManager:
         _config().set_config_profile(_config().profile_for_mode(mode))
 
         if mode == '1':
-            self.is_simulation = True
-            self.url_base = _config().SIM_URL
-            
-            # 모의투자 키 적용
-            if self.sim_app_key:
-                self.app_key = self.sim_app_key
-                self.app_secret = self.sim_app_secret
-            
-            # [수정] 모의투자 계좌 우선 적용
-            if sim_cano:
-                self.cano = sim_cano
-                self.acnt_prdt_cd = sim_acnt
-            
-            # [추가] 모의투자 모드: 시스템 트레이딩 계좌 = 모의투자 계좌 강제 동기화
-            self.auto_cano = self.cano
-            self.auto_acnt_prdt_cd = self.acnt_prdt_cd
-            self.auto_app_key = self.app_key
-            self.auto_app_secret = self.app_secret
-            self.hts_id = sim_hts or common_hts  # 체결통보 WS 구독키
-
-            _config().console.print("\n[green]모의투자 서버 환경을 로드했습니다.[/green]")
-            
-            # [추가] 모의투자 키 누락 확인 (환경변수)
-            if not self.app_key or not self.app_secret:
-                _config().console.print("[bold red]⚠️ 경고: 모의투자용 API Key(SIM_APP_KEY) 또는 Secret이 환경변수에 설정되지 않았습니다.[/bold red]")
-        elif mode == '4':
             # [가상투자] KIS 실전 서버에서 '시세만' 받고, 잔고·예수금·주문은 paper_broker의
             #  가상 계좌로 대체한다. 실주문은 api.place_order 최상단 하드 가드가 원천 차단한다.
             #
@@ -214,7 +184,6 @@ class SessionManager:
             #  전부 앱키 단위다. 실전 인스턴스와 키를 공유하면 두 프로세스가 서로를 모른 채
             #  각자 18TPS로 밀어(합계 36) 양쪽 다 EGW00201에 갇히고, 웹소켓은 서로 끊는다.
             #  즉 가상투자가 실계좌의 주문 경로를 갉아먹는다. VIRT_APP_KEY로 분리한다.
-            self.is_simulation = False
             self.is_toss = False
             self.is_paper = True
             self.url_base = _config().REAL_URL
@@ -259,7 +228,6 @@ class SessionManager:
             return
         elif mode == '3':
             # [추가] 토스증권 모드 (실전). 토스 API가 제공하는 기능만 사용한다.
-            self.is_simulation = False
             self.is_toss = True
             self.is_paper = False
             self.url_base = _config().TOSS_URL
@@ -270,9 +238,8 @@ class SessionManager:
 
             # [중요] 토스는 단일 주식계좌만 제공한다. 시스템 트레이딩용 '자동' 계좌 개념이
             # 없으므로, 시스템 트레이딩(메뉴 5) 계좌를 거래 계좌와 동일하게 동기화한다.
-            #   - auto_cano 기반 분기(target = auto_cano if not is_simulation ...)가 토스 계좌를 가리키게 함
+            #   - auto_cano 기반 분기가 토스 계좌를 가리키게 함
             #   - auto_cano == cano 이므로 자산/잔고/미체결 화면의 중복 계좌 표시(auto_cano != cano 조건)는 발생하지 않음
-            # (모의투자 모드와 동일한 단일계좌 동기화 방식)
             self.auto_cano = self.cano
             self.auto_acnt_prdt_cd = self.acnt_prdt_cd
             self.auto_app_key = ""
@@ -282,8 +249,7 @@ class SessionManager:
 
             if not self.toss_app_key or not self.toss_app_secret:
                 _config().console.print("[bold red]⚠️ 경고: 토스 API Key(TOSS_APP_KEY) 또는 Secret이 환경변수에 설정되지 않았습니다.[/bold red]")
-        else:
-            self.is_simulation = False
+        elif mode == '2':
             self.url_base = _config().REAL_URL
             # 실전 모드일 경우 기본 키를 실전용으로 교체
             if self.real_app_key:
@@ -302,7 +268,16 @@ class SessionManager:
             # [추가] 실전투자 키 누락 확인 (환경변수)
             if not self.app_key or not self.app_secret:
                 _config().console.print("[bold red]⚠️ 경고: 한투증권용 API Key(REAL_APP_KEY)가 환경변수에 설정되지 않았습니다.[/bold red]")
-            
+        else:
+            # [fail-closed] 알 수 없는 모드는 **실전으로 떨어뜨리지 않는다**. 종전에는 이 자리가
+            #  `else: 한투증권 실전`이어서, 오타나 폐기된 번호(`--mode 4` 등)가 실계좌 주문
+            #  경로로 조용히 이어졌다. 모르는 값이면 아무것도 하지 않고 멈추는 쪽이 맞다.
+            _config().console.print(
+                f"\n[bold red]알 수 없는 투자 모드입니다: {mode!r}[/bold red]\n"
+                "[dim]사용 가능한 모드 — 1: 가상투자 · 2: 한투증권(실전) · 3: 토스증권(실전)[/dim]")
+            sys.exit(1)
+
+
         # [추가] 토스 모드: KIS식 계좌 입력/표시를 건너뛰고 별도 안내
         if self.is_toss:
             key_status = "OK" if self.toss_app_key and self.toss_app_secret else "MISSING"
@@ -322,8 +297,7 @@ class SessionManager:
 
         # [추가] 로드된 설정 정보 확인 메시지 출력
         key_status = "OK" if self.app_key and self.app_secret else "MISSING"
-        env_label = "모의투자" if self.is_simulation else "한투증권"
-        _config().console.print(f"\n[dim cyan][{env_label}] 설정 로드 확인[/dim cyan]")
+        _config().console.print("\n[dim cyan][한투증권] 설정 로드 확인[/dim cyan]")
         _config().console.print(f"[dim]   - APP_KEY 상태: {key_status}[/dim]")
         _config().console.print(f"[dim]   - 적용 계좌번호: {self.cano}-{self.acnt_prdt_cd}[/dim]")
         if self.auto_cano:
@@ -332,7 +306,7 @@ class SessionManager:
     def _activate_paper_mode(self):
         """관찰 모드 활성화 — DB 분리 · 가상 계좌 개설 · 외부 연동 차단.
 
-        모의투자 계좌(mode 1)의 3개월 리셋 없이 장기 관찰하기 위한 모드다.
+        폐기된 KIS 모의투자(2 TPS·3개월 계좌 리셋)를 대신해 장기 관찰을 맡는 모드다.
         시세·차트·지표·스코어링·필터·청산 판정은 토스 실전과 100% 동일하게 돌고,
         잔고·예수금·주문만 paper_broker의 가상 계좌로 대체된다.
         """
@@ -342,8 +316,13 @@ class SessionManager:
         db_manager.db.switch_path(_config().PAPER_DB_FILE_PATH)
         paper_broker.init_tables()
 
-        # 2) 매매일지 웹 연동 차단 — 가상 체결이 실제 매매 기록에 섞이면 안 된다.
-        _config().settings.JOURNAL_SYNC_USE = False
+        # 2) 매매일지 웹 연동 — 스위치(메뉴 0 → 5-3)가 정한다. 여기서 강제로 내리지 않는다.
+        #    설정은 모드별 프로필로 갈리므로(dynamic_config.paper.json) 가상에서 켠 것이
+        #    실전으로 새지 않고, 나가는 건은 isSimulated=true · botId `...:paper:PAPER` 로
+        #    실려 서버에서 실거래 기록·통계와 분리 보관된다.
+        journal_on = bool(getattr(_config().settings, 'JOURNAL_SYNC_USE', False))
+        journal_note = ("전송 (isSimulated=true 로 분리 기록)" if journal_on
+                        else "미전송 (메뉴 0 → 5-3 에서 켤 수 있음)")
 
         seed = paper_broker.get_seed()
         cash = paper_broker.get_cash()
@@ -353,7 +332,7 @@ class SessionManager:
         _config().console.print("[dim]   - 주문: 가상 체결 (실주문 원천 차단)[/dim]")
         _config().console.print(f"[dim]   - 가상 시드: {seed:,.0f}원 / 현재 현금: {cash:,.0f}원 (개설 {started})[/dim]")
         _config().console.print(f"[dim]   - 데이터: {_config().PAPER_DB_FILE_PATH} (실계좌 DB와 분리)[/dim]")
-        _config().console.print("[dim]   - 매매일지 웹 연동: 자동 차단[/dim]")
+        _config().console.print(f"[dim]   - 매매일지 웹 연동: {journal_note}[/dim]")
 
     def load_stock_config(self):
         if os.path.exists(_config().STOCK_DATA_FILE):
@@ -403,7 +382,6 @@ class SessionManager:
 
     def _token_app_key(self, key):
         """토큰 슬롯을 발급한 앱키. 앱키 개념이 없는 슬롯(TOSS)은 None."""
-        if key == "SIMULATION": return self.app_key
         if key == "REAL": return self.real_app_key
         if key == "AUTO": return self.auto_app_key
         return None
@@ -418,7 +396,7 @@ class SessionManager:
         """만료 시각과 **발급 앱키**가 모두 맞아야 유효하다.
 
         [중요] 만료만 보면 안 된다. token_cache.json은 파일 하나이고 슬롯 이름이
-          REAL/AUTO/SIMULATION 뿐인데, 관찰모드(mode 4)는 real_app_key·auto_app_key를
+          REAL/AUTO 뿐인데, 관찰모드(mode 1)는 real_app_key·auto_app_key를
           VIRT_APP_KEY로 덮어쓴다(아래 load 로직). 즉 mode 4가 VIRT 키로 받은 토큰이
           'REAL' 슬롯에 남는다. 만료 전(최대 24시간)에 mode 2로 바꾸면 그 토큰을
           '아직 유효함'으로 판정해 남의 앱키 토큰을 그대로 쓰고, KIS는 이를 거부한다.
@@ -448,7 +426,6 @@ class SessionManager:
         """메모리 또는 파일 캐시에서 유효한 토큰을 반환"""
         # 1. 메모리 확인 (force_disk_reload가 아닐 때만)
         if not force_disk_reload:
-            if key == "SIMULATION" and self.sim_access_token: return self.sim_access_token
             if key == "REAL" and self.real_access_token: return self.real_access_token
             if key == "AUTO" and self.auto_access_token: return self.auto_access_token
 
@@ -499,6 +476,5 @@ class SessionManager:
         return False
 
     def _update_memory_token(self, key, token):
-        if key == "SIMULATION": self.sim_access_token = token
-        elif key == "REAL": self.real_access_token = token
+        if key == "REAL": self.real_access_token = token
         elif key == "AUTO": self.auto_access_token = token

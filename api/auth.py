@@ -53,18 +53,10 @@ _token_session = _create_token_session()
 
 def get_current_token():
     # [추가] 시스템 트레이딩 컨텍스트 확인
-    if getattr(context.trade_context, 'use_auto_account', False) and not config.session.is_simulation:
+    if getattr(context.trade_context, 'use_auto_account', False):
         return get_auto_access_token()
         
-    if config.session.is_simulation:
-        return get_access_token()
-    else:
-        return get_real_access_token()
-
-def get_access_token(force_refresh=False):
-    # [Fix] 토큰 갱신 경합 방지 (Thread-Safe)
-    with context.TOKEN_REFRESH_LOCK:
-        return _get_access_token_internal(force_refresh)
+    return get_real_access_token()
 
 def check_and_refresh_token_if_expired():
     """토큰 만료 플래그 확인 및 갱신 (메인 스레드/로그 뷰어 등에서 주기적 호출)"""
@@ -88,19 +80,14 @@ def check_and_refresh_token_if_expired():
                 if not toss_api.get_access_token(force_refresh=True):
                     success = False
                     fail_reason = "토스 API 토큰 발급 실패"
-            elif config.session.is_simulation:
-                if not get_access_token(force_refresh=True):
-                    success = False
-                    fail_reason = "모의투자 토큰 발급 실패 (API 서버 응답 없음 또는 점검 중)"
-            else:
-                if not get_real_access_token(force_refresh=True):
-                    success = False
-                    fail_reason = "한투증권 토큰 발급 실패 (API 서버 응답 없음 또는 점검 중)"
+            if not get_real_access_token(force_refresh=True):
+                success = False
+                fail_reason = "한투증권 토큰 발급 실패 (API 서버 응답 없음 또는 점검 중)"
                 
-                if success and config.session.auto_app_key:
-                    if not get_auto_access_token(force_refresh=True):
-                        success = False
-                        fail_reason = "자동매매 토큰 발급 실패 (API 서버 응답 없음 또는 점검 중)"
+            if success and config.session.auto_app_key:
+                if not get_auto_access_token(force_refresh=True):
+                    success = False
+                    fail_reason = "자동매매 토큰 발급 실패 (API 서버 응답 없음 또는 점검 중)"
             
             if success:
                 context.TOKEN_EXPIRED = False
@@ -135,7 +122,7 @@ def _fetch_and_set_token(token_type, force_refresh=False):
     지정된 유형의 액세스 토큰을 발급받고 세션에 저장합니다.
 
     Args:
-        token_type (str): "SIMULATION", "REAL", "AUTO" 중 하나
+        token_type (str): "REAL", "AUTO" 중 하나
         force_refresh (bool): True이면 강제로 토큰을 재발급합니다.
 
     Returns:
@@ -160,11 +147,7 @@ def _fetch_and_set_token(token_type, force_refresh=False):
             logger.debug(f"{token_type} 최근(1분 내) 발급 토큰 재사용 — 재발급 생략 (EGW00133 예방)")
             return cached
 
-    if token_type == "SIMULATION":
-        app_key = config.session.app_key
-        app_secret = config.session.app_secret
-        url = f"{config.SIM_URL}/oauth2/tokenP"
-    elif token_type == "REAL":
+    if token_type == "REAL":
         app_key = config.session.real_app_key
         app_secret = config.session.real_app_secret
         url = f"{config.REAL_URL}/oauth2/tokenP"
@@ -236,11 +219,6 @@ def _fetch_and_set_token(token_type, force_refresh=False):
         logger.error(f"{token_type} 토큰 발급 중 오류: {e}")
         return None
 
-def _get_access_token_internal(force_refresh=False):
-    # [수정] 백그라운드 스레드에서도 토큰이 없거나 만료된 경우 발급 허용
-    # (자정 이후 세션 만료 등으로 인한 재발급 필요성 대응)
-    return _fetch_and_set_token("SIMULATION", force_refresh)
-
 def get_real_access_token(force_refresh=False):
     # [Fix] 토큰 갱신 경합 방지 (Thread-Safe)
     with context.TOKEN_REFRESH_LOCK:
@@ -309,33 +287,29 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
         if timeout is None: timeout = config.DEFAULT_TIMEOUT
         # [추가] 모의투자 서버는 응답이 느려 짧은 timeout에서 ReadTimeout이 빈발하므로,
         #  모의투자일 때는 최소 timeout을 보장한다. (DEFAULT_TIMEOUT보다 크게 늘리지는 않음)
-        if config.session.is_simulation:
-            sim_min = getattr(config, 'SIM_MIN_QUOTE_TIMEOUT', 5)
-            if timeout < sim_min: timeout = sim_min
         if retries is None: retries = config.MAX_RETRIES
         
         # [추가] 토큰 만료 시 재시도를 위한 루프 (최대 1회 재시도)
         for attempt in range(2):
             try:
                 token_to_use = get_current_token()
-                base_url = config.session.url_base if config.session.is_simulation else config.REAL_URL
+                base_url = config.REAL_URL
                 
                 # [수정] 컨텍스트에 따라 키 선택
                 use_auto = getattr(context.trade_context, 'use_auto_account', False)
-                if use_auto and not config.session.is_simulation:
+                if use_auto:
                     key = config.session.auto_app_key
                     secret = config.session.auto_app_secret
                     if not key: # Fallback
                         key = config.session.real_app_key; secret = config.session.real_app_secret
                 else:
-                    key = config.session.app_key if config.session.is_simulation else config.session.real_app_key
-                    secret = config.session.app_secret if config.session.is_simulation else config.session.real_app_secret
+                    key = config.session.real_app_key
+                    secret = config.session.real_app_secret
 
-                env_key = "sim" if config.session.is_simulation else "real"
                 current_tr_id = tr_id
                 if current_tr_id is None:
                     try:
-                        current_tr_id = constants.TR_ID_CONFIG[market][category][action][env_key]
+                        current_tr_id = constants.TR_ID_CONFIG[market][category][action]
                     except KeyError:
                         return {'rt_cd': '9999', 'msg1': f'TR_ID not found for {market}.{category}.{action}'}
 
@@ -374,12 +348,9 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
                 if "Token Expired" in str(e) and attempt == 0:
                     logger.warning(f"[API] 토큰 만료 감지({str(e)}). 갱신 후 재시도합니다.")
                     new_token = None
-                    if getattr(context.trade_context, 'use_auto_account', False) and not config.session.is_simulation:
+                    if getattr(context.trade_context, 'use_auto_account', False):
                         new_token = get_auto_access_token(force_refresh=True)
-                    elif config.session.is_simulation:
-                        new_token = get_access_token(force_refresh=True)
-                    else:
-                        new_token = get_real_access_token(force_refresh=True)
+                    new_token = get_real_access_token(force_refresh=True)
                     
                     if new_token:
                         context.TOKEN_EXPIRED = False

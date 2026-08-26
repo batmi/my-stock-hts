@@ -97,7 +97,6 @@ def test_display_failure_cannot_suppress_the_breaker(trader):
             raise RuntimeError("표시 단계 실패")
 
     with patch.object(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0), \
-         patch.object(config.session, 'is_simulation', True), \
          patch('modules.auto_trade.account.get_asset_status_data',
                return_value={'tot_asset': 8_900_000}), \
          patch('modules.auto_trade.api.send_telegram_message'), \

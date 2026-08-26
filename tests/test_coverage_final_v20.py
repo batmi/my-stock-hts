@@ -33,7 +33,7 @@ def test_send_telegram_message_chunking(mock_post):
     # 청크 분할로 인해 최소 2번 이상 post 요청이 발생해야 함
     assert mock_post.call_count >= 2
 
-@patch('api.get_access_token')
+@patch('api.get_real_access_token')
 def test_check_and_refresh_token_cooldown(mock_get_token):
     """토큰 갱신 시 60초 쿨타임이 적용되어 중복 API 호출을 방지하는지 테스트"""
     context.TOKEN_EXPIRED = True
@@ -59,7 +59,7 @@ def test_clear_yfinance_cache(mock_remove, mock_listdir, mock_exists):
 # ==========================================================
 # 2. main.py 커버리지 부스트
 # ==========================================================
-@patch('main.api.get_access_token', return_value=None)
+@patch('main.api.get_real_access_token', return_value=None)
 @patch('main.api.get_real_access_token', return_value=None)
 def test_preflight_check_fail_token(mock_real, mock_sim):
     """사전 점검 시 API 토큰 발급에 실패했을 때 False 반환 테스트"""

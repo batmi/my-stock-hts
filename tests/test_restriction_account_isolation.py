@@ -34,7 +34,7 @@ def isolated_store(tmp_path, monkeypatch):
 @pytest.fixture
 def separated_accounts(monkeypatch):
     s = config.session
-    for k, v in (('is_simulation', False), ('is_toss', False), ('is_paper', False),
+    for k, v in (('is_toss', False), ('is_paper', False),
                  ('cano', MANUAL[0]), ('acnt_prdt_cd', MANUAL[1]),
                  ('auto_cano', AUTO[0]), ('auto_acnt_prdt_cd', AUTO[1])):
         monkeypatch.setattr(s, k, v, raising=False)
@@ -106,12 +106,6 @@ def test_trade_account_resolver_points_at_the_auto_account(separated_accounts):
     시스템이 남의 계좌 제한 목록을 보고 자기 매매를 결정하게 된다.
     """
     assert common._get_trade_account() == AUTO
-
-
-def test_simulation_mode_collapses_to_the_session_account(separated_accounts, monkeypatch):
-    """모의투자는 계좌가 하나뿐이므로 세션 계좌로 떨어진다."""
-    monkeypatch.setattr(config.session, 'is_simulation', True, raising=False)
-    assert common._get_trade_account() == MANUAL
 
 
 def test_trader_never_looks_up_restrictions_without_an_account():

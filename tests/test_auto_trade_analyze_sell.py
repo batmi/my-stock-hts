@@ -12,6 +12,20 @@ from modules.auto_trade import DefaultStrategy
 import config
 
 
+@pytest.fixture(autouse=True)
+def _restore_sell_strategy():
+    """[격리] 이 파일은 config.SELL_STRATEGY(모듈 전역)를 직접 덮어쓴다.
+
+    되돌리지 않으면 같은 워커에서 뒤에 도는 테스트가 오염된 청산 다이얼을 본다 —
+    실제로 test_exit_parity 가 TIME_STOP_* 잔재 때문에 8건 실패했다(2026-08-26 확인).
+    """
+    import copy
+    saved = copy.deepcopy(config.SELL_STRATEGY)
+    yield
+    config.SELL_STRATEGY.clear()
+    config.SELL_STRATEGY.update(saved)
+
+
 @pytest.fixture
 def strategy():
     return DefaultStrategy()

@@ -65,31 +65,6 @@ def test_modify_order_cancel_overseas(mock_revise, mock_show, mock_ask):
     assert args[0] == "overseas"
     assert args[1] == "cancel"
 
-@patch('rich.prompt.Prompt.ask')
-@patch('modules.trading.show_open_orders')
-@patch('modules.trading.api.revise_cancel_order')
-def test_modify_order_error_40330000(mock_revise, mock_show, mock_ask):
-    """정정/취소 주문 시 KIS 40330000 (기체결/기취소) 에러 처리 로직 커버리지"""
-    mock_show.return_value = [{
-        'odno': '12345', 'pdno': '005930', 'prdt_name': '삼성전자', 
-        'rmn_qty': '10', '_origin': 'KR', 'sll_buy_dvsn_cd': '02'
-    }]
-    
-    # 1 -> 2(취소) -> 0(전량) -> y
-    mock_ask.side_effect = ["1", "2", "0", "y"]
-    
-    # 이미 체결/취소된 경우 에러 응답
-    mock_revise.return_value = {'rt_cd': '1', 'msg_cd': '40330000', 'msg1': '기체결/기취소'}
-    config.session.is_simulation = True
-    
-    with patch('config.console.print') as mock_print, \
-         patch('modules.db_manager.db.insert_trade') as mock_insert:
-        trading.modify_order()
-        
-        # 40330000 일 때 안내 메시지가 출력되고 DB 정리(더미 이력 생성)를 시도해야 함
-        assert any("이미 체결되었거나 취소된 주문" in str(c) for c in mock_print.call_args_list)
-        mock_insert.assert_called()
-
 # --- market.py coverage ---
 @patch('modules.market.analysis.get_us_treasury_spot_data', return_value=None)
 @patch('modules.market.api.get_yf_fast_info')

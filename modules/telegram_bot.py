@@ -297,9 +297,7 @@ class TelegramCommander:
     def _get_stock_stats_message(self, keyword=None):
         """종목별 매매 성과 분석 조회"""
         target_account = None
-        if config.session.is_simulation:
-            target_account = f"{config.session.cano}-{config.session.acnt_prdt_cd}"
-        elif config.session.auto_cano:
+        if config.session.auto_cano:
             target_account = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
             
         trades = self._get_refined_trades_cached(target_account=target_account)
@@ -1085,9 +1083,9 @@ class TelegramCommander:
         
         accounts = []
         if config.session.cano:
-            accounts.append((config.session.cano, config.session.acnt_prdt_cd, "모의" if config.session.is_simulation else "실전"))
+            accounts.append((config.session.cano, config.session.acnt_prdt_cd, "실전"))
         
-        if not config.session.is_simulation and config.session.auto_cano and config.session.auto_cano != config.session.cano:
+        if config.session.auto_cano and config.session.auto_cano != config.session.cano:
             accounts.append((config.session.auto_cano, config.session.auto_acnt_prdt_cd, "자동"))
 
         msg = "⏳ [미체결 주문 내역]\n"
@@ -1219,9 +1217,9 @@ class TelegramCommander:
         end_dt = today_str
         
         # [추가] 타겟 계좌 문자열 생성 및 현재 총 자산/기초 자산 조회
-        target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-        acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
-        if not config.session.is_simulation and not target_cano:
+        target_cano = config.session.auto_cano
+        acnt = config.session.auto_acnt_prdt_cd
+        if not target_cano:
             target_cano = config.session.cano
             acnt = config.session.acnt_prdt_cd
             
@@ -1471,10 +1469,10 @@ class TelegramCommander:
 
     def _cmd_balance(self, args):
         self._send_reply("⏳ [계좌 잔고 조회] 자산 및 잔고 정보를 수집 중입니다. 잠시만 기다려주세요...")
-        target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-        acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+        target_cano = config.session.auto_cano
+        acnt = config.session.auto_acnt_prdt_cd
         
-        if not config.session.is_simulation and not target_cano:
+        if not target_cano:
             target_cano = config.session.cano
             acnt = config.session.acnt_prdt_cd
 
@@ -1543,10 +1541,10 @@ class TelegramCommander:
             return f"⚠️ 자산 조회 중 오류 발생: {str(e)}"
 
     def _cmd_holdings(self, args):
-        target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-        acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+        target_cano = config.session.auto_cano
+        acnt = config.session.auto_acnt_prdt_cd
         
-        if not config.session.is_simulation and not target_cano:
+        if not target_cano:
             target_cano = config.session.cano
             acnt = config.session.acnt_prdt_cd
 
@@ -1689,7 +1687,7 @@ class TelegramCommander:
     def _get_refined_trades_cached(self, target_account=None):
         """DB에서 전체 거래 내역을 조회 및 정제(Refine)한 결과를 60초간 메모리에 캐싱"""
         now = time.time()
-        is_sim = config.session.is_simulation
+        is_sim = False
         cache_key = f"{is_sim}_{target_account}"
         
         with self._trade_cache_lock:
@@ -1768,7 +1766,7 @@ class TelegramCommander:
 
         # [추가] KIS 실전 전용 지수(코스피200선물·V코스피200)는 모의(1)/토스(3) 모드에서 제외
         #  (모의서버는 해당 TR 미지원/불안정, 토스는 대체 소스 없음 — 화면 출력 정책과 동일)
-        if config.session.is_toss or config.session.is_simulation:
+        if config.session.is_toss:
             targets = [(n, c) for n, c in targets if n not in ("코스피200선물", "V코스피200")]
 
         # [수정] 지수별 시세 산출은 market.fetch_index_quote 공용 함수 사용 —
@@ -2264,13 +2262,11 @@ class TelegramCommander:
         status_icon = "🟢" if self.trader.is_running else "🔴"
         status_text = "실행 중" if self.trader.is_running else "중지됨"
         
-        target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+        target_cano = config.session.auto_cano
         # [수정] 토스/모의는 단일계좌(시스템 트레이딩 계좌 = 기본 계좌). is_toss를 먼저 분기.
         if config.session.is_toss:
             acc_label = "토스"
-        elif config.session.is_simulation:
-            acc_label = "모의"
-        elif config.session.auto_cano:
+        if config.session.auto_cano:
             acc_label = "자동"
         else:
             acc_label = "실전"

@@ -34,7 +34,6 @@ def test_adjust_to_tick():
 def test_account_context():
     """계좌 컨텍스트 매니저 테스트"""
     # 1. 설정: 가짜 계좌 정보 설정
-    config.session.is_simulation = False
     config.session.cano = "11111111"
     config.session.auto_cano = "22222222"
     context.trade_context.use_auto_account = False

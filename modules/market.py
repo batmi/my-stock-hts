@@ -382,7 +382,7 @@ def blocked_kis_only_indices():
     목록·화면·워커 세 곳이 이 함수 하나를 본다 — 갈라지면 목록에는 있는데 워커가
     건너뛰어 화면에 빈 행이 남는다.
     """
-    if not (config.session.is_toss or config.session.is_simulation):
+    if not (config.session.is_toss):
         return ()
     if krx_covers_kis_only_indices():
         return tuple(n for n in KIS_LIVE_ONLY_INDICES if n not in KRX_REPLACEABLE_INDICES)

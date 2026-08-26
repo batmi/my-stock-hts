@@ -260,25 +260,8 @@ def test_매수_상태가_아니면_원장에_남기지_않는다(trader):
 # 나온다 — 섞이면 차단율이 어느 계좌 얘기인지 알 수 없어진다.
 # (관찰모드는 DB 파일 자체가 분리되므로 이 구분과 무관하다.)
 
-def test_실전과_모의는_같은_날_같은_종목이어도_다른_행이다(db, monkeypatch):
-    monkeypatch.setattr(config.session, "is_simulation", False, raising=False)
-    db.record_signal_ledger("20260819", [_row(outcome="passed")])
-
-    monkeypatch.setattr(config.session, "is_simulation", True, raising=False)
-    db.record_signal_ledger("20260819", [_row(outcome="reentry")])
-
-    rows = db.get_signal_ledger()
-    assert len(rows) == 2, "실전·모의가 한 행에 합산됐다"
-
-    real = db.get_signal_ledger(is_sim=0)
-    sim = db.get_signal_ledger(is_sim=1)
-    assert len(real) == 1 and real[0]["passed"] == 1 and real[0]["blocked_reentry"] == 0
-    assert len(sim) == 1 and sim[0]["blocked_reentry"] == 1 and sim[0]["passed"] == 0
-
-
 def test_같은_계좌의_주기는_종전대로_한_행에_누적된다(db, monkeypatch):
     """계좌를 가른다고 주기 누적이 깨지면 완전·부분 차단 구분이 통째로 무너진다."""
-    monkeypatch.setattr(config.session, "is_simulation", False, raising=False)
     for _ in range(3):
         db.record_signal_ledger("20260819", [_row(outcome="gate_vol")])
 
@@ -319,7 +302,6 @@ def test_옛_원장은_실전으로_옮겨진다(tmp_path, monkeypatch):
         assert rows[0]["is_sim"] == 0, "옛 행은 실전으로 옮겨져야 한다"
         assert rows[0]["cycles"] == 7 and rows[0]["passed"] == 2
         # 옮긴 뒤에도 같은 (일자, 종목)에 계속 누적된다.
-        monkeypatch.setattr(config.session, "is_simulation", False, raising=False)
         manager.record_signal_ledger("20260818", [_row(outcome="passed")])
         rows = manager.get_signal_ledger(is_sim=0)
         assert len(rows) == 1 and rows[0]["cycles"] == 8

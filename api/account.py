@@ -44,7 +44,7 @@ def get_domestic_balance(cano=None, acnt_prdt_cd=None, retries=None):
     cano, acnt_prdt_cd = _api()._prepare_account_params(cano, acnt_prdt_cd)
     
     # [수정] 조회 구분: 모의투자는 '02'(종목별), 실전투자는 '01'(대출일별 - API 제한 대응)
-    inqr_dvsn = "02" if config.session.is_simulation else "01"
+    inqr_dvsn = "01"
     
     params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": inqr_dvsn, "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
     data = _api().call_api(constants.API_URLS["DOMESTIC"]["INQUIRY"]["BALANCE"], "domestic", "inquiry", "balance", params=params, retries=retries)
@@ -87,7 +87,6 @@ def get_overseas_balance(cano=None, acnt_prdt_cd=None, retries=None):
     all_holdings = []
     
     for exc in target_exchanges:
-        if config.session.is_simulation: time.sleep(0.2)
         params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "OVRS_EXCG_CD": exc, "TR_CRCY_CD": "USD", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "CTX_AREA_FK200": "", "CTX_AREA_NK200": ""}
         data = _api().call_api(constants.API_URLS["OVERSEAS"]["INQUIRY"]["BALANCE"], "overseas", "inquiry", "balance", params=params, retries=retries)
         
@@ -113,8 +112,6 @@ def get_today_profit_summary(cano=None, acnt_prdt_cd=None, target_date=None):
         return {'rt_cd': '0', 'output2': []}
     # [수정] 모의투자 서버는 기간별 손익 조회(TTTC8494R/VTTC8494R)를 지원하지 않음 (OPSQ0002 에러 발생)
     # 따라서 모의투자일 경우 API 호출을 생략하고 빈 값 반환하여 에러 로그 방지
-    if config.session.is_simulation:
-        return {'rt_cd': '0', 'output2': []}
 
     cano, acnt_prdt_cd = _api()._prepare_account_params(cano, acnt_prdt_cd)
     today = target_date if target_date else datetime.now().strftime("%Y%m%d")
@@ -145,7 +142,7 @@ def get_today_history(cano=None, acnt_prdt_cd=None, retries=None, target_date=No
     # [수정] 주식일별주문체결조회 (inquire-daily-ccld) 사용
     # 실전: TTTC8001R, 모의: VTTC8001R
     url = constants.API_URLS["DOMESTIC"]["INQUIRY"]["HISTORY"]
-    tr_id = "VTTC8001R" if config.session.is_simulation else "TTTC8001R"
+    tr_id = "TTTC8001R"
     
     params = {
         "CANO": cano,
@@ -308,9 +305,8 @@ def _fetch_period_executions(codes, cano=None, acnt_prdt_cd=None, months=12, sho
 
     cano, acnt_prdt_cd = _api()._prepare_account_params(cano, acnt_prdt_cd)
     url = constants.API_URLS["DOMESTIC"]["INQUIRY"]["HISTORY"]
-    is_sim = config.session.is_simulation
-    tr_recent = constants.TR_ID_CONFIG["domestic"]["inquiry"]["history"]["sim" if is_sim else "real"]
-    tr_old = constants.TR_ID_CONFIG["domestic"]["inquiry"]["history_old"]["sim" if is_sim else "real"]
+    tr_recent = constants.TR_ID_CONFIG["domestic"]["inquiry"]["history"]
+    tr_old = constants.TR_ID_CONFIG["domestic"]["inquiry"]["history_old"]
 
     end = datetime.now()
 
@@ -413,7 +409,7 @@ def get_overseas_today_history(cano=None, acnt_prdt_cd=None, retries=None, targe
     today = target_date if target_date else datetime.now().strftime("%Y%m%d")
     
     url = constants.API_URLS["OVERSEAS"]["INQUIRY"]["HISTORY"]
-    tr_id = "VTTS3035R" if config.session.is_simulation else "TTTS3035R"
+    tr_id = "TTTS3035R"
     
     # [Fix] OVRS_EXCG_CD는 필수 입력값이므로, 거래소별로 순회하며 조회 후 병합
     all_trades = []
@@ -437,7 +433,7 @@ def get_overseas_today_history(cano=None, acnt_prdt_cd=None, retries=None, targe
         }
         
         # [Fix] 모의투자 환경에서 SORT_SQN 누락 시 에러(OPSQ2001) 발생 대응
-        params["SORT_SQN"] = "01" if not config.session.is_simulation else ""
+        params["SORT_SQN"] = "01"
         
         res = _api().call_api(url, "overseas", "inquiry", "history", params=params, retries=retries, tr_id=tr_id)
         if res.get('rt_cd') == '0':
@@ -453,12 +449,12 @@ def get_unfilled_orders(cano=None, acnt_prdt_cd=None):
     return get_domestic_open_orders(cano, acnt_prdt_cd)
 
 def get_domestic_open_orders(cano=None, acnt_prdt_cd=None):
-    """국내주식 미체결 내역 조회 (모의/실전/토스/관찰 분기 처리)"""
+    """국내주식 미체결 내역 조회 (실전/토스/관찰 분기 처리)"""
     # [관찰 모드] 즉시 전량 체결로 모델링하므로 미체결은 항상 없다.
     #  (미체결·부분체결 재현은 1단계 범위 밖 — paper_broker 모듈 주석 참조)
-    # [Fix] 이 함수는 **주문 dict의 리스트**를 반환하는 계약이다(모의·실전·토스 경로 모두 list).
+    # [Fix] 이 함수는 **주문 dict의 리스트**를 반환하는 계약이다(실전·토스 경로 모두 list).
     #  응답 봉투 dict를 돌려주면 호출부가 그대로 순회하면서 키 문자열을 원소로 받아
-    #  'str' object has no attribute 'get' 로 터진다. 실제로 mode 4에서 매 주기
+    #  'str' object has no attribute 'get' 로 터진다. 실제로 가상투자에서 매 주기
     #  engine.manage_unfilled_orders 가 실패했고, trader._get_toss_open_buy_reserved 도
     #  같은 이유로 예외를 내 입금 자동 감지가 조용히 건너뛰어졌다.
     if _paper_active():
@@ -467,59 +463,20 @@ def get_domestic_open_orders(cano=None, acnt_prdt_cd=None):
         return _api()._toss_open_orders('domestic')
     cano, acnt_prdt_cd = _api()._prepare_account_params(cano, acnt_prdt_cd)
     
-    if config.session.is_simulation:
-        # [수정] 모의투자: 주식일별주문체결조회(VTTC8001R) 사용하여 미체결(02) 조회
-        # 모의투자 환경에서 주식정정취소가능주문조회(VTTC8036R) 미지원 이슈 대응
-        # [주의] 모의투자 API 버그로 인해 실제 미체결이 있어도 데이터가 반환되지 않는 경우가 많음
-        #       -> AutoTrader의 manage_unfilled_orders에서 로컬 상태 기반 강제 취소 로직으로 보완 중
-        url = constants.API_URLS["DOMESTIC"]["INQUIRY"]["HISTORY"]
-        tr_id = "VTTC8001R"
-        today = datetime.now().strftime("%Y%m%d")
+    # [수정] 실전투자: 주식정정취소가능주문조회(TTTC8036R) 사용
+    url = constants.API_URLS["DOMESTIC"]["INQUIRY"]["OPEN_ORDERS"]
+    tr_id = "TTTC8036R"
         
-        params = {
-            "CANO": cano,
-            "ACNT_PRDT_CD": acnt_prdt_cd,
-            "INQR_STRT_DT": today,
-            "INQR_END_DT": today,
-            "SLL_BUY_DVSN_CD": "00",
-            "INQR_DVSN": "00",
-            "PDNO": "",
-            "CCLD_DVSN": "02", # [수정] 모의투자는 02(미체결)로 조회해야 정상 반환됨
-            "ORD_GNO_BRNO": "",
-            "ODNO": "",
-            "INQR_DVSN_3": "00",
-            "INQR_DVSN_1": "",
-            "CTX_AREA_FK100": "",
-            "CTX_AREA_NK100": ""
-        }
+    params = {
+        "CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, 
+        "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", 
+        "INQR_DVSN_1": "0", "INQR_DVSN_2": "0"
+    }
         
-        res = _api().call_api(url, "domestic", "inquiry", "history", params=params, tr_id=tr_id)
+    res = _api().call_api(url, "domestic", "inquiry", "open_orders", params=params, tr_id=tr_id)
         
-        if res.get('rt_cd') == '0':
-            # [추가] 전체 내역 중 미체결 잔량이 있는 주문만 필터링
-            all_orders = res.get('output1', [])
-            unfilled = []
-            for order in all_orders:
-                if int(order.get('rmn_qty', 0)) > 0:
-                    unfilled.append(order)
-            return unfilled
-        return []
-
-    else:
-        # [수정] 실전투자: 주식정정취소가능주문조회(TTTC8036R) 사용
-        url = constants.API_URLS["DOMESTIC"]["INQUIRY"]["OPEN_ORDERS"]
-        tr_id = "TTTC8036R"
-        
-        params = {
-            "CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, 
-            "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", 
-            "INQR_DVSN_1": "0", "INQR_DVSN_2": "0"
-        }
-        
-        res = _api().call_api(url, "domestic", "inquiry", "open_orders", params=params, tr_id=tr_id)
-        
-        if res.get('rt_cd') == '0':
-            return res.get('output', [])
+    if res.get('rt_cd') == '0':
+        return res.get('output', [])
             
     return []
 
@@ -543,7 +500,7 @@ def get_overseas_open_orders(cano=None, acnt_prdt_cd=None):
             "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "CTX_AREA_FK200": "", "CTX_AREA_NK200": ""
         }
         # [Fix] 모의투자 서버는 SORT_SQN 파라미터가 없으면 에러가 발생할 수 있으므로 빈 값으로 전송
-        params["SORT_SQN"] = "01" if not config.session.is_simulation else ""
+        params["SORT_SQN"] = "01"
             
         res = _api().call_api(constants.API_URLS["OVERSEAS"]["INQUIRY"]["OPEN_ORDERS"], "overseas", "inquiry", "open_orders", params=params)
         if res.get('rt_cd') == '0':

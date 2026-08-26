@@ -185,7 +185,6 @@ def test_apply_pins_the_account_context(monkeypatch):
                             getattr(context.trade_context, 'use_auto_account', False)) or True)
     # AccountContext는 모의투자에서 의도적으로 무동작이다(계좌가 하나뿐). 수동/자동이
     # 갈리는 실전(mode 2) 조건을 만들어야 이 가드가 실제로 검증된다.
-    monkeypatch.setattr(hb.config.session, 'is_simulation', False, raising=False)
     monkeypatch.setattr(hb.config.session, 'auto_cano', "44048158", raising=False)
     monkeypatch.setattr(hb.config.session, 'cano', "68029263", raising=False)
 

@@ -28,7 +28,7 @@ from core.session import SessionManager
 
 @pytest.fixture
 def paper_session(monkeypatch, tmp_path):
-    """mode 4 세션을 실제 initialize()로 만든다(설정 분기 자체가 검증 대상)."""
+    """가상투자(mode 1) 세션을 실제 initialize()로 만든다(설정 분기 자체가 검증 대상)."""
     monkeypatch.setenv("VIRT_APP_KEY", "VIRTKEY123")
     monkeypatch.setenv("VIRT_APP_SECRET", "VIRTSECRET123")
     monkeypatch.setenv("REAL_APP_KEY", "REALKEY999")
@@ -36,7 +36,7 @@ def paper_session(monkeypatch, tmp_path):
     monkeypatch.setenv("REAL_ACC_NUM", "12345678-01")
     s = SessionManager()
     with patch.object(s, '_activate_paper_mode'):      # DB 전환은 이 테스트 대상이 아니다
-        s.initialize(mode='4')
+        s.initialize(mode='1')
     return s
 
 
@@ -46,7 +46,7 @@ def test_mode4_uses_kis_not_toss(paper_session):
     """[핵심] mode 4는 더 이상 토스가 아니다 — mode 2와 같은 데이터 경로여야 한다."""
     assert paper_session.is_toss is False, "토스 경로면 체결강도·지수·일봉이 mode 2와 달라진다"
     assert paper_session.is_paper is True
-    assert paper_session.is_simulation is False, "모의 서버는 2 TPS에 TR 지원도 다르다"
+    assert paper_session.url_base == config.REAL_URL, "가상투자는 KIS 실전 서버 시세를 쓴다"
     assert paper_session.url_base == config.REAL_URL
 
 
@@ -84,7 +84,7 @@ def test_shared_key_is_warned(monkeypatch, capsys):
     monkeypatch.setenv("REAL_APP_KEY", "SAME"); monkeypatch.setenv("REAL_APP_SECRET", "X")
     s = SessionManager()
     with patch.object(s, '_activate_paper_mode'):
-        s.initialize(mode='4')
+        s.initialize(mode='1')
     out = capsys.readouterr().out
     assert "VIRT_APP_KEY" in out and ("경고" in out or "⚠" in out), \
         f"키 공유를 경고하지 않는다: {out}"
@@ -96,7 +96,7 @@ def test_missing_virt_key_is_warned(monkeypatch, capsys):
     monkeypatch.delenv("VIRT_APP_SECRET", raising=False)
     s = SessionManager()
     with patch.object(s, '_activate_paper_mode'):
-        s.initialize(mode='4')
+        s.initialize(mode='1')
     out = capsys.readouterr().out
     assert "VIRT_APP_KEY" in out and ("경고" in out or "⚠" in out)
 

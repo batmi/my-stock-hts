@@ -17,11 +17,9 @@ class TestThrottledSession(unittest.TestCase):
         self.session = ThrottledSession()
         
         # 테스트용 TPS 설정 (계산 검증을 위해 명확한 값 사용)
-        self.original_sim_tps = config.SIM_TX_PER_SECOND
         self.original_real_tps = config.REAL_TX_PER_SECOND
         self.original_real_safety = getattr(config, 'REAL_TPS_SAFETY', 0.9)
 
-        config.SIM_TX_PER_SECOND = 2.0   # 0.5초 간격 (실제로는 1.2배 안전계수 적용 -> 0.6초)
         config.REAL_TX_PER_SECOND = 10.0 # 실효 한도 = 10 * REAL_TPS_SAFETY(0.9) = 9 TPS -> 1/9초 간격
         config.REAL_TPS_SAFETY = 0.9     # 실전 내부 안전계수 명시 고정
         # [#7] 적응형 TPS를 비활성(step=0)으로 고정해 게이트 간격 검증을 결정적으로 만든다.
@@ -79,7 +77,6 @@ class TestThrottledSession(unittest.TestCase):
 
     def tearDown(self):
         """테스트 환경 복구"""
-        config.SIM_TX_PER_SECOND = self.original_sim_tps
         config.REAL_TX_PER_SECOND = self.original_real_tps
         config.REAL_TPS_SAFETY = self.original_real_safety
         config.TPS_ADAPT_STEP = self.original_tps_adapt_step
@@ -91,26 +88,6 @@ class TestThrottledSession(unittest.TestCase):
                 patcher.stop()
             except RuntimeError:
                 pass # 테스트 내에서 명시적으로 이미 stop()된 경우 무시
-
-    def test_simulation_throttling(self):
-        """모의투자 URL 요청 시 스로틀링(속도 제한) 적용 확인"""
-        url = "https://openapivts.koreainvestment.com/uapi/test" # 모의투자 도메인
-        
-        self.current_time = 1000.0
-        self.session.request('GET', url)
-        
-        self.session.request('GET', url)
-            
-        # 모의투자 예상 대기 시간 계산: (1.0 / 2.0) * 1.2 = 0.6초
-        expected_wait = 0.6
-        
-        # sleep이 해당 시간만큼 호출되었는지 확인
-        self.assertTrue(self.mock_sleep.called)
-        args, _ = self.mock_sleep.call_args
-        self.assertAlmostEqual(args[0], expected_wait, places=5)
-        
-        # 마지막 요청 시간이 1000.6으로 갱신되었는지 확인
-        self.assertAlmostEqual(self.session.request_history_sim[-1], 1000.6, places=3)
 
     def test_real_server_throttling(self):
         """실전투자 URL 요청 시 스로틀링 적용 확인"""
@@ -197,74 +174,6 @@ class TestThrottledSession(unittest.TestCase):
         self.session.request('GET', url)
         self.assertGreater(self.mock_sleep.max_wait, 0.0,
                            "창 상한을 넘겼는데 대기가 없다 — 명목 한도를 초과한다")
-
-    def test_reserve_then_wait_concurrency(self):
-        """선예약 후대기(Reserve-then-Wait) 로직의 동시성 처리 확인"""
-        url = "https://openapivts.koreainvestment.com/uapi/test"
-        
-        # 모의 시간 환경을 멀티스레드용으로 재정의
-        def mock_time_multithread():
-            return self.current_time
-            
-        class SleepTrackerMT:
-            def __init__(self, ctx):
-                self.ctx = ctx
-            
-            def __call__(self, seconds):
-                self.ctx.current_time += max(seconds, 0.001)
-            
-        self.current_time = 3000.0
-        self.patcher_time.stop()
-        self.patcher_sleep.stop()
-        
-        with patch('time.time', new=mock_time_multithread), \
-             patch('time.sleep', new=SleepTrackerMT(self)):
-             
-             self.session.request('GET', url)
-             self.session.request('GET', url)
-             self.session.request('GET', url)
-            
-        # sleep 호출 기록 확인
-        # args[0]이 대기 시간
-        # 이 테스트는 실제 멀티스레딩이 아니라 모킹된 순차적 흐름이므로
-        # 1. 3000.0 (즉시 전송)
-        # 2. 3000.6 (최소 간격 0.6초 대기)
-        # 3. 3001.5 (윈도우 1.5초 대기: 3000.0 + 1.5초)
-        self.assertEqual(self.mock_request.call_count, 3)
-        self.assertAlmostEqual(self.session.request_history_sim[-1], 3001.5, places=3)
-
-    def test_thread_safety_with_threads(self):
-        """실제 스레드를 생성하여 락(Lock) 동작 검증"""
-        url = "https://openapivts.koreainvestment.com/uapi/test"
-        num_threads = 10
-        threads = []
-        
-        # 실제 스레드 환경에서는 모킹된 시간(1000.0 고정)을 사용하면 무한루프에 빠지므로,
-        # 모킹을 일시 중단하고 실제 time.time과 time.sleep을 사용 (단축된 대기 시간 사용)
-        self.patcher_time.stop()
-        self.patcher_sleep.stop()
-        
-        config.SIM_TX_PER_SECOND = 100.0 # 빠른 테스트를 위해 한도 상향 (0.012초 간격)
-        
-        def worker():
-            self.session.request('GET', url)
-        
-        start = time.time()
-        for _ in range(num_threads):
-            t = threading.Thread(target=worker)
-            threads.append(t)
-            t.start()
-            
-        for t in threads:
-            t.join()
-            
-        elapsed = time.time() - start
-        
-        self.assertEqual(self.mock_request.call_count, num_threads)
-        
-        # 최소 0.012 * (num_threads - 1) 시간이 소요되어야 정상적으로 큐잉된 것
-        expected_min_elapsed = (1.0 / config.SIM_TX_PER_SECOND * 1.2) * (num_threads - 1)
-        self.assertTrue(elapsed >= expected_min_elapsed)
 
 if __name__ == '__main__':
     unittest.main()

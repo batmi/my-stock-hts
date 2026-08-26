@@ -227,8 +227,6 @@ def _current_account_type(cano=None, acnt=None):
     """
     if getattr(config.session, 'is_toss', False):
         return "토스"
-    if config.session.is_simulation:
-        return "모의"
     auto_cano = getattr(config.session, 'auto_cano', None)
     auto_acnt = getattr(config.session, 'auto_acnt_prdt_cd', None)
     # 자동매매 전용 계좌가 설정돼 있고 인자로 받은 계좌가 그와 일치하면 '한투-자동',
@@ -242,7 +240,7 @@ def _current_account_type(cano=None, acnt=None):
 def _get_trade_account():
     """현재 시스템 트레이딩이 실제 매매하는 계좌(cano, acnt)를 반환한다.
     실전은 자동매매 전용 계좌(auto_cano), 모의/토스는 세션 계좌를 사용한다."""
-    if config.session.is_simulation or getattr(config.session, 'is_toss', False):
+    if getattr(config.session, 'is_toss', False):
         return config.session.cano, config.session.acnt_prdt_cd
     cano = getattr(config.session, 'auto_cano', None) or config.session.cano
     acnt = getattr(config.session, 'auto_acnt_prdt_cd', None) or config.session.acnt_prdt_cd

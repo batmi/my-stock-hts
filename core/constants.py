@@ -6,56 +6,56 @@
 TR_ID_CONFIG = {
     "domestic": {
         "trade": {
-            "buy": {"real": "TTTC0012U", "sim": "VTTC0012U"},
-            "sell": {"real": "TTTC0011U", "sim": "VTTC0011U"},
+            "buy": "TTTC0012U",
+            "sell": "TTTC0011U",
         },
         "modify": {
-            "cancel": {"real": "TTTC0013U", "sim": "VTTC0013U"},
-            "revise": {"real": "TTTC0013U", "sim": "VTTC0013U"}
+            "cancel": "TTTC0013U",
+            "revise": "TTTC0013U"
         },
         "inquiry": {
-            "balance": {"real": "TTTC8434R", "sim": "VTTC8434R"},
-            "history": {"real": "TTTC8001R", "sim": "VTTC8001R"},
+            "balance": "TTTC8434R",
+            "history": "TTTC8001R",
             # [추가] 주식일별주문체결조회는 3개월 경계로 TR이 갈린다.
             #  위 history(TTTC8001R)는 '3개월 이내'만 조회되고, 그보다 과거는 아래 TR을 써야 한다.
-            "history_old": {"real": "CTSC9115R", "sim": "VTSC9115R"},
-            "profit": {"real": "TTTC8494R", "sim": "VTTC8494R"},
-            "open_orders": {"real": "TTTC8036R", "sim": "VTTC8001R"},
-            "deposit": {"real": "CTRP6548R", "sim": "VTTC8908R"},
-            "buyable": {"real": "TTTC8908R", "sim": "VTTC8908R"},
-            "sellable": {"real": "TTTC8434R", "sim": "VTTC8434R"}
+            "history_old": "CTSC9115R",
+            "profit": "TTTC8494R",
+            "open_orders": "TTTC8036R",
+            "deposit": "CTRP6548R",
+            "buyable": "TTTC8908R",
+            "sellable": "TTTC8434R"
         },
         "quotations": {
-            "price": {"real": "FHKST01010100", "sim": "FHKST01010100"},
-            "chart": {"real": "FHKST03010100", "sim": "FHKST03010100"},
-            "investor": {"real": "FHKST01010900", "sim": "FHKST01010900"},
+            "price": "FHKST01010100",
+            "chart": "FHKST03010100",
+            "investor": "FHKST01010900",
             # 업종(지수) 현재가 — 실전/모의 동일 TR. 이 매핑이 없으면 call_api가
             # 'TR_ID not found'로 즉시 실패해 지수 차트의 당일 봉 실시간 갱신이 통째로 멈춘다.
-            "index_price": {"real": "FHPUP02100000", "sim": "FHPUP02100000"},
-            "index_investor": {"real": "FHPTJ04040000", "sim": "VHPTJ04040000"},
-            "index_investor_current": {"real": "FHKUP01010900", "sim": "FHKUP01010900"},
-            "vol_strength": {"real": "FHKST01010300", "sim": "FHKST01010300"}
+            "index_price": "FHPUP02100000",
+            "index_investor": "FHPTJ04040000",
+            "index_investor_current": "FHKUP01010900",
+            "vol_strength": "FHKST01010300"
         }
     },
     "overseas": {
         "trade": {
-            "buy": {"real": "TTTT1002U", "sim": "VTTT1002U"},
-            "sell": {"real": "TTTT1006U", "sim": "VTTT1006U"},
+            "buy": "TTTT1002U",
+            "sell": "TTTT1006U",
         },
         "modify": {
-            "cancel": {"real": "TTTT1004U", "sim": "VTTT1004U"},
-            "revise": {"real": "TTTT1004U", "sim": "VTTT1004U"}
+            "cancel": "TTTT1004U",
+            "revise": "TTTT1004U"
         },
         "inquiry": {
-            "balance": {"real": "TTTS3012R", "sim": "VTTS3012R"},
-            "open_orders": {"real": "TTTS3018R", "sim": "VTTS3018R"},
-            "buyable": {"real": "TTTS3007R", "sim": "VTTS3007R"},
-            "sellable": {"real": "TTTS3012R", "sim": "VTTS3012R"}
+            "balance": "TTTS3012R",
+            "open_orders": "TTTS3018R",
+            "buyable": "TTTS3007R",
+            "sellable": "TTTS3012R"
         },
         "quotations": {
-            "price": {"real": "HHDFS00000300", "sim": "HHDFS00000300"},
-            "detail": {"real": "HHDFS76200200", "sim": "HHDFS76200200"},
-            "chart": {"real": "HHDFS76240000", "sim": "HHDFS76240000"}
+            "price": "HHDFS00000300",
+            "detail": "HHDFS76200200",
+            "chart": "HHDFS76240000"
         }
     }
 }

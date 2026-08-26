@@ -14,12 +14,11 @@ def test_get_telegram_footer():
     config.TELEGRAM_INSTANCE_NAME = "HTS"
     config.session.cano = "12345678"
     config.session.acnt_prdt_cd = "01"
-    config.session.is_simulation = True
     
     # 꼬리말에는 계좌번호 뒤에 상품코드(-01)까지 붙는다. 인스턴스가 여러 대일 때
     # 어느 계좌 앞으로 도는 알림인지 번호만으로는 특정되지 않기 때문이다.
     footer = api._get_telegram_footer()
-    assert "[HTS | 모의 12345678-01]" in footer
+    assert "[HTS | 실전 12345678-01]" in footer
 
 @patch('requests.post')
 def test_send_telegram_photo_retry(mock_post):
@@ -92,7 +91,6 @@ def test_get_total_estimated_asset_fallback(mock_deposit, mock_balance):
     # 예수금 조회 성공
     mock_deposit.return_value = {'deposit': 1000000, 'foreign_deposit': 0, 'd2_deposit': 1000000}
     
-    config.session.is_simulation = False
     
     asset = trader._get_total_estimated_asset()
     assert asset == 1000000

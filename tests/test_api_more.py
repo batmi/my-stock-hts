@@ -29,10 +29,9 @@ def test_get_overseas_balance(mock_request):
 def test_get_unfilled_orders(mock_request):
     """미체결 내역 조회 테스트"""
     # 국내
-    config.session.is_simulation = True
     mock_request.return_value.json.return_value = {
         'rt_cd': '0',
-        'output1': [{'odno': '12345', 'pdno': '005930', 'ord_qty': '10', 'rmn_qty': '5'}]
+        'output': [{'odno': '12345', 'pdno': '005930', 'ord_qty': '10', 'rmn_qty': '5'}]
     }
     orders = api.get_unfilled_orders()
     assert len(orders) == 1

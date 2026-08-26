@@ -93,7 +93,6 @@ def test_a_stale_lock_file_does_not_block_restart(tmp_path):
 def test_start_refuses_when_the_account_is_already_locked(trader, tmp_path):
     """[배선] 잠금이 잡히지 않으면 start()는 초기화조차 하지 않는다."""
     with patch.object(config, 'DB_FILE_PATH', str(tmp_path / "t.db")), \
-         patch.object(config.session, 'is_simulation', True), \
          patch.object(trader, 'initialize') as init, \
          patch('modules.auto_trade.api.send_telegram_message') as tg:
         other = instance_lock.InstanceLock(trader._trade_account_key())
@@ -198,7 +197,6 @@ def test_backup_produces_a_readable_copy_and_rotates(tmp_path):
 def test_start_refuses_to_trade_on_a_corrupted_db(trader, tmp_path):
     """[배선] 무결성 실패는 매매를 멈춰야 한다 — 손절 기준을 잃은 채 돌면 안 된다."""
     with patch.object(config, 'DB_FILE_PATH', str(tmp_path / "t.db")), \
-         patch.object(config.session, 'is_simulation', True), \
          patch.object(db_manager.db, 'check_integrity', return_value=(False, "page 3 corrupt")), \
          patch.object(trader, 'initialize') as init, \
          patch('modules.auto_trade.api.send_telegram_message') as tg:

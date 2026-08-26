@@ -287,8 +287,7 @@ def test_period_entry_dates_switches_tr_past_three_months():
 
     with patch("api.call_api", side_effect=_fake), \
          patch("api._prepare_account_params", return_value=("12345678", "01")), \
-         patch.object(config.session, "is_toss", False, create=True), \
-         patch.object(config.session, "is_simulation", False, create=True):
+         patch.object(config.session, "is_toss", False, create=True):
         found = api.get_period_entry_dates(["950160"], qty_map={"950160": 10}, months=12)
 
     assert found == {"950160": "20250910"}
@@ -314,8 +313,7 @@ def test_period_entry_dates_queries_sells_too():
 
     with patch("api.call_api", side_effect=_fake), \
          patch("api._prepare_account_params", return_value=("12345678", "01")), \
-         patch.object(config.session, "is_toss", False, create=True), \
-         patch.object(config.session, "is_simulation", False, create=True):
+         patch.object(config.session, "is_toss", False, create=True):
         found = api.get_period_entry_dates(["005930"], qty_map={"005930": 4}, months=3)
 
     assert seen["SLL_BUY_DVSN_CD"] == "00"        # 전체(매수+매도)
@@ -335,8 +333,7 @@ def test_period_entry_dates_ignores_pyramiding_buy():
 
     with patch("api.call_api", side_effect=_fake), \
          patch("api._prepare_account_params", return_value=("12345678", "01")), \
-         patch.object(config.session, "is_toss", False, create=True), \
-         patch.object(config.session, "is_simulation", False, create=True):
+         patch.object(config.session, "is_toss", False, create=True):
         found = api.get_period_entry_dates(["005930"], qty_map={"005930": 11}, months=3)
 
     assert found == {"005930": "20260210"}
@@ -353,8 +350,7 @@ def test_period_entry_dates_stops_on_unsupported_tr():
 
     with patch("api.call_api", side_effect=_fake), \
          patch("api._prepare_account_params", return_value=("12345678", "01")), \
-         patch.object(config.session, "is_toss", False, create=True), \
-         patch.object(config.session, "is_simulation", False, create=True):
+         patch.object(config.session, "is_toss", False, create=True):
         found = api.get_period_entry_dates(["005930", "950160"], qty_map={"005930": 5}, months=12)
 
     assert found == {"005930": "20260701"}        # 950160은 못 찾아도 예외 없이 진행

@@ -13,7 +13,7 @@ Real-time quotes, technical analysis, strategy-driven automated trading, backtes
 
 > This software is for learning and research purposes and is only an aid to investing. **You alone are responsible for any investment losses.**
 > API outages, network instability, or bugs may cause missed, duplicated, or mispriced orders. In an emergency, stop the program immediately and act through your broker's own HTS/MTS.
-> Always validate thoroughly in **paper/simulated trading** before going live.
+> Always validate thoroughly in **paper trading (mode 1)** before going live.
 
 ---
 
@@ -46,22 +46,27 @@ Quotes, orders, analysis, and automated trading all run in the terminal. Each me
 | `[8]` | Order Management | Buy, sell, modify, cancel, and **9 types of reserved orders**. |
 | `[9]` | Assets | Asset summary, holdings, trade history (Excel export), trade evaluation, **position analysis** (direct entry handles unlisted assets — enter ticker `KRXGOLD` to register spot-gold holdings in grams and see ATR stop / trailing levels), **paper account management**. |
 
-### Four Operating Modes
+### Three Operating Modes
 
 Chosen at startup or via `--mode`. Each mode keeps a separate config profile, so **settings used for validation never leak into live trading.**
 
 | Mode | Name | Quotes | Orders | Purpose |
 |---|---|---|---|---|
-| `1` | KIS Simulation | KIS sim | KIS sim | Feature validation (no NXT/SOR) |
+| `1` | Paper (Observation) | KIS live | Simulated fills | Long-run observation on live quotes — real orders blocked at the source, separate DB file |
 | `2` | KIS Live | KIS live | **Real orders** | Live account |
 | `3` | Toss Live | Toss | **Real orders** | Live account |
-| `4` | Paper (Observation) | KIS live | Simulated fills | Long-run observation on live quotes — real orders blocked at the source, separate DB file |
+
+> The KIS simulation mode was retired on 2026-08-26. Its server is capped at 2 TPS and the
+> account must be reissued every three months, and with no NXT/SOR support plus an open-order
+> query bug its conditions diverged from live trading. **Mode 1 (paper) replaces it** — quotes,
+> indicators, and decisions take the same path as live; only fills are simulated. The old
+> `--mode 4` still works but warns and runs as mode 1.
 
 ### Highlights
 
 **Trading & Quotes**
 - Unified management of domestic/US stocks and ETFs; real-time quotes with buy/sell/modify/cancel orders
-- **NXT (alternative exchange) & SOR support** — quotes and orders during pre-market (08:00–08:50) and after-hours (15:30–20:00); not available in simulation due to KIS API limits. Trading pauses during the KRX single-price auctions (08:50–09:00 and 15:20–15:30). Note that **the auto-trader's default window is the KRX regular session, 09:00–15:30** (all indicators and daily bars are on a KRX basis). To extend, widen the trading hours to `0800`/`2000` under `[0] → 5-1`.
+- **NXT (alternative exchange) & SOR support** — quotes and orders during pre-market (08:00–08:50) and after-hours (15:30–20:00). Trading pauses during the KRX single-price auctions (08:50–09:00 and 15:20–15:30). Note that **the auto-trader's default window is the KRX regular session, 09:00–15:30** (all indicators and daily bars are on a KRX basis). To extend, widen the trading hours to `0800`/`2000` under `[0] → 5-1`.
 - **US day market** — uses KIS's dedicated exchange codes (`BAQ`/`BAY`/`BAA`) for the overnight ATS session, falling back to regular-session codes when there are no fills.
 - **KRX close after hours** (`USE_KRX_CLOSE_AFTER_HOURS`, ON by default) — once every session has closed, the current price and indicators are pinned to the KRX regular-session close, so a stale last NXT print cannot move indicators built on KRX daily bars. **Order prices always use the live price regardless of this setting.**
 - **9 reserved-order types** — stop, breakout, limit, time, quant score, RSI, trailing buy/sell, EMA cross. Watched every 3 seconds in the background and persisted to the DB.
@@ -247,7 +252,7 @@ pip install -r requirements-dev.txt   # for development and tests
 chmod +x run.sh                    # first time only
 ./run.sh                           # interactive menu
 ./run.sh --help                    # options
-./run.sh --mode 1 --auto           # start auto-trading immediately in simulation
+./run.sh --mode 1 --auto           # start auto-trading immediately in paper mode
 ```
 
 - `run.sh` activates the virtual environment and installs dependencies for you. **`requirements.txt` is the single source of truth** for dependencies, and `run.sh` reads that file.
@@ -267,11 +272,10 @@ Secrets live in **environment variables**. Put them in a shell profile such as `
 
 | Area | Variables | Required | Without it |
 |---|---|:---:|---|
-| KIS simulation | `SIM_APP_KEY` `SIM_APP_SECRET` `SIM_ACC_NUM` | mode 1 | Simulation unavailable |
 | KIS live | `REAL_APP_KEY` `REAL_APP_SECRET` `REAL_ACC_NUM` | mode 2 | Live trading unavailable |
 | KIS auto-trading account | `AUTO_APP_KEY` `AUTO_APP_SECRET` `AUTO_ACC_NUM` | optional | Shares the live key |
-| KIS paper mode | `VIRT_APP_KEY` `VIRT_APP_SECRET` `VIRT_ACC_NUM` | mode 4 | Paper mode unavailable |
-| KIS fill notifications (WS) | `REAL_HTS_ID` `SIM_HTS_ID` (or `KIS_HTS_ID`/`HTS_ID`) | optional | Fill detection falls back to REST polling |
+| KIS paper mode | `VIRT_APP_KEY` `VIRT_APP_SECRET` `VIRT_ACC_NUM` | mode 1 | Paper mode unavailable |
+| KIS fill notifications (WS) | `REAL_HTS_ID` (or `KIS_HTS_ID`/`HTS_ID`) | optional | Fill detection falls back to REST polling |
 | Toss Securities | `TOSS_APP_KEY` `TOSS_APP_SECRET` `TOSS_ACC_NUM` | mode 3 | Toss mode unavailable |
 | Telegram | `TELEGRAM_BOT_TOKEN` `TELEGRAM_CHAT_ID` `TELEGRAM_INSTANCE_NAME` | recommended | No alerts or remote control |
 | Google Gemini | `GEMINI_API_KEY` `GEMINI_MODEL` `GEMINI_FALLBACK_MODEL` | optional | All AI features disabled |
@@ -288,20 +292,20 @@ Secrets live in **environment variables**. Put them in a shell profile such as `
 **How to obtain**
 1. Open an account (e.g. via the mobile app)
 2. Apply for the **KIS Developers** service
-3. Apply for **simulated trading** (recommended) on the website/HTS
-4. Issue the App Key / App Secret under **My Page > My Services > Issue** — **live and simulation keys are separate**
+3. Issue the App Key / App Secret under **My Page > My Services > Issue**
+4. Issue a **second key** for paper mode (mode 1) — TPS, WebSocket, and token-issuance limits are
+   all per app key, so sharing one key makes the two instances eat each other's budget
 5. (Optional) Note your **KIS HTS login ID** if you want real-time fill notifications over WebSocket
 
 ```sh
 export REAL_APP_KEY="..."   ; export REAL_APP_SECRET="..." ; export REAL_ACC_NUM="12345678-01"
-export SIM_APP_KEY="..."    ; export SIM_APP_SECRET="..."  ; export SIM_ACC_NUM="50012345-01"
+export VIRT_APP_KEY="..."   ; export VIRT_APP_SECRET="..." ; export VIRT_ACC_NUM="12345678-01"
 export REAL_HTS_ID="myhtsid"                 # optional — subscription key for fill notifications
-export SIM_HTS_ID="myhtsid"                  # if both are the same, KIS_HTS_ID alone suffices
 ```
 
 - **`AUTO_*` (optional)** — for running auto-trading on a separate account and app key. KIS limits (20 TPS, one concurrent WebSocket, token issuance) are **all per app key**, so splitting manual lookups from auto-trading keeps them from consuming each other's budget.
-- **`VIRT_*` (mode 4)** — a dedicated key for paper mode, so observation never interferes with the live instance's order path. `VIRT_ACC_NUM` is **display-only** (it identifies the instance in alert footers); the internal account number is always `PAPER` as a safeguard.
-- **`*_HTS_ID` (optional)** — the subscription key for fill notifications (H0STCNI0/H0STCNI9) is the HTS login ID. Without it, fill detection falls back to REST polling, which can lag by minutes in simulation.
+- **`VIRT_*` (mode 1)** — a dedicated key for paper mode, so observation never interferes with the live instance's order path. `VIRT_ACC_NUM` is **display-only** (it identifies the instance in alert footers); the internal account number is always `PAPER` as a safeguard.
+- **`*_HTS_ID` (optional)** — the subscription key for fill notifications (H0STCNI0) is the HTS login ID. Without it, fill detection falls back to REST polling.
 - Account numbers use the `12345678-01` form (8-digit account + 2-digit product code).
 
 ### 6.2 Toss Securities
@@ -411,7 +415,7 @@ What these credentials switch on — without them everything **falls back silent
 | Historical investor flows | Range queries | The KIS flow API returns **only the last 30 trading days**, so multi-year backtests run with "smart money" switched off outside that window |
 | KRX spot gold | Real OHLC + volume | Naver provides **close only** → bars must be flattened (distorting ATR/ADX) and OBV is impossible without volume |
 | KOSPI200 / KOSDAQ150 daily | Settled bars + volume | tvDatafeed returns intermittent empty responses and zero index volume. **KOSDAQ150 has no ticker on Yahoo or FDR**, making tvDatafeed a single point of failure |
-| VKOSPI200 | Available in every mode | Previously KIS-live-only (mode 2), so it was absent from the index list in Toss and simulation modes |
+| VKOSPI200 | Available in every mode | Previously KIS-live-only (mode 2), so it was absent from the index list in other modes |
 | Listed-symbol master | Names and market caps | Used to validate ticker codes in AI output (KONEX is filled in from FDR) |
 
 > KRX only publishes **settled bars after the close**, so intraday prices still come from the existing real-time sources. VKOSPI200 has no alternative real-time source, so during the session it shows the last settled value, and the index screen marks it with a **settled indicator (`=`)** instead of the open indicator (`∙`).
@@ -430,7 +434,6 @@ export JOURNAL_API_KEY="skm_..."                    # required
 export JOURNAL_SOURCE="my-stock-hts"                # optional — must differ per installation
 export JOURNAL_BOT_ID=""                            # optional (defaults to JOURNAL_SOURCE)
 export JOURNAL_BOT_LABEL=""                         # optional — display name on the web
-export JOURNAL_SYNC_SIMULATION="0"                  # optional — 1 also sends simulated fills
 ```
 
 > The toggle **and** both URL and key must be present; the menu tells you what is missing.
@@ -625,15 +628,11 @@ The fill path never touches the network. `insert_trade()` writes to `journal_out
 | Server down / network cut | Stage 1 queue | Sent automatically on recovery |
 | Sync toggled off / env vars missing | Stage 2 backfill | Local `trades` reconciled against the server's last sync point (once 60s after startup, then every 6 hours) |
 
-- **What is sent**: `filled` (CONFIRMED) and `filled (estimated)` (ESTIMATED) only — `accepted` and `cancelled` are not. Simulated fills can be enabled with `JOURNAL_SYNC_SIMULATION=1`.
+- **What is sent**: `filled` (CONFIRMED) and `filled (estimated)` (ESTIMATED) only — `accepted` and `cancelled` are not.
+- **Paper mode (mode 1)**: uses the same toggle. Fills go out flagged `isSimulated=true`, kept apart from live records and statistics on the server, and the bot id splits off as `…:paper:PAPER` so a paper bot never overwrites the live bot's status slot. The toggle is stored per mode (`dynamic_config.paper.json`), so turning it on in paper mode does not leak into live.
 - **`isSystem` classification**: only AutoTrader orders tagged `(AUTO)` are `true`. Reserved orders execute unattended but **a human set the condition**, so they are not counted as system trades.
 - **Records deleted on the web are not resent** automatically (otherwise an intentional deletion could never stick). Use **Account settings → Resync** on the web. **A restore from backup always requires a resync.**
 - Verify with `python tools/journal_sync_e2e.py [--cleanup]` — a synthetic fill travels the production path: enqueue → send → read back → field comparison.
-
-### Simulation caveats
-
-- **Open-order query bug** — the KIS simulation API can return an empty list for orders it accepted. The system tracks order state locally and, after a timeout, synchronizes with a **blind cancel plus balance check**.
-- **No NXT or SOR** — KIS simulation supports only the KRX regular session. Trading after 15:30 raises an error, and **the analysis screen's price appears frozen at the regular-session close** because NXT quotes are unavailable.
 
 ---
 

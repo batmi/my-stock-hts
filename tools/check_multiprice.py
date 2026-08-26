@@ -7,7 +7,7 @@
 일치하는지 검증한다. 개별 현재가 API와 값도 나란히 비교한다.
 
 사용법: python tools/check_multiprice.py [mode]
-  mode: 1=모의투자(기본), 2=실전투자
+  mode: 1=가상투자, 2=실전투자(기본)
 """
 import sys
 import os
@@ -27,9 +27,9 @@ SAMPLE_CODES = ["005930", "035720"]
 
 
 def main():
-    mode = sys.argv[1] if len(sys.argv) > 1 else "1"
+    mode = sys.argv[1] if len(sys.argv) > 1 else "2"
     config.session.initialize(mode=mode)
-    server = "모의투자(VTS)" if config.session.is_simulation else "실전투자"
+    server = "가상투자(PAPER)" if getattr(config.session, 'is_paper', False) else "실전투자"
     console.print(f"\n[bold]관심종목 멀티시세 확인 — {server}[/bold]\n")
 
     # 1. 원본(raw) 응답 확인

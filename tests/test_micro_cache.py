@@ -46,8 +46,7 @@ def test_get_current_price_data_uses_micro_cache(mock_call_api):
     #   - NXT 처리 단계를 'active'로 고정해 시간대와 무관하게 NXT 보조호출이 1회 발생하게 함
     from datetime import datetime as _dt
     api._HOLIDAY_CACHE[_dt.now().strftime("%Y%m%d")] = False
-    with patch.object(api.config.session, 'is_simulation', False), \
-         patch.object(api, '_nxt_quote_phase', return_value='active'):
+    with patch.object(api, '_nxt_quote_phase', return_value='active'):
         # 첫 번째 호출: 캐시가 없으므로 call_api가 호출되어야 함 (KRX 1회 + NXT 1회 = 총 2회)
         res1 = api.get_current_price_data("005930", is_overseas=False)
         assert res1["output"]["stck_prpr"] == "50000"

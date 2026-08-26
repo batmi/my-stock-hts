@@ -597,7 +597,7 @@ class DBManager:
                     if getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
                         acc_no = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
                     
-                    is_sim = 1 if config.session.is_simulation else 0
+                    is_sim = 0
                     snapshot_json = json.dumps(snapshot, ensure_ascii=False) if snapshot else "{}"
                     
                     cursor.execute('''
@@ -1317,7 +1317,7 @@ class DBManager:
         if not rows:
             return
         # 모의투자 원장은 실전과 섞이면 안 된다(같은 DB 파일을 쓴다). trades.is_sim과 같은 기준.
-        is_sim = 1 if getattr(config.session, "is_simulation", False) else 0
+        is_sim = 0
         payload = []
         for r in rows:
             col = self._LEDGER_COLS.get(r.get("outcome"), "blocked_other")

@@ -51,13 +51,13 @@ def load_nxt_master():
 
         try:
             # NXT 마스터 파일 다운로드 및 파싱을 시도합니다.
-            base_url = config.session.url_base if config.session.is_simulation else config.REAL_URL
+            base_url = config.REAL_URL
             # KIS OpenAPI 대체거래소 종목정보 다운로드 API 경로
             url_path = "uapi/domestic-stock/v1/quotations/nxt-master" 
             
             token = _api().get_current_token()
-            key = config.session.app_key if config.session.is_simulation else config.session.real_app_key
-            secret = config.session.app_secret if config.session.is_simulation else config.session.real_app_secret
+            key = config.session.real_app_key
+            secret = config.session.real_app_secret
             
             headers = {
                 "authorization": f"Bearer {token}",

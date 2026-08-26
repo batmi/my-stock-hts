@@ -1,7 +1,7 @@
 """매매일지 웹서버 연동(journal_sync) 테스트.
 
 핵심 계약을 회귀로 고정한다.
-  - 체결만 큐에 쌓이고, 접수·취소·모의투자는 기본적으로 제외된다
+  - 체결만 큐에 쌓이고, 접수·취소는 제외된다
   - 멱등키에 계좌·일자가 들어간다 (odno 는 영업일마다 재사용되므로)
   - 큐 적재는 거래 기록 저장과 같은 트랜잭션이라 '기록만 남고 큐엔 없는' 틈이 없다
   - 전송 실패·서버 장애가 매매 로직으로 새어 나오지 않고, 재시도로 복구된다
@@ -24,9 +24,7 @@ def db(tmp_path, monkeypatch):
     monkeypatch.setattr(config, 'JOURNAL_API_URL', 'http://journal.test', raising=False)
     monkeypatch.setattr(config, 'JOURNAL_API_KEY', 'skm_test', raising=False)
     monkeypatch.setattr(config, 'JOURNAL_SOURCE', 'my-stock-hts', raising=False)
-    monkeypatch.setattr(config, 'JOURNAL_SYNC_SIMULATION', False, raising=False)
     monkeypatch.setattr(config.settings, 'JOURNAL_SYNC_USE', True)
-    monkeypatch.setattr(config.session, 'is_simulation', False)
     monkeypatch.setattr(config.session, 'cano', '12345678')
     monkeypatch.setattr(config.session, 'acnt_prdt_cd', '01')
 
@@ -84,19 +82,12 @@ def test_estimated_fill_is_marked(db):
     assert payload['confidence'] == 'ESTIMATED'
 
 
-def test_simulation_is_excluded_by_default(db, monkeypatch):
-    monkeypatch.setattr(config.session, 'is_simulation', True)
-    _fill(db)
-    assert _outbox(db) == []
-
-
-def test_simulation_is_queued_when_opted_in(db, monkeypatch):
-    monkeypatch.setattr(config, 'JOURNAL_SYNC_SIMULATION', True, raising=False)
-    monkeypatch.setattr(config.session, 'is_simulation', True)
-    _fill(db)
-    payload = json.loads(_outbox(db)[0]['payload'])
-    assert payload['isSimulated'] is True
-    assert payload['brokerExecutionId'].startswith('SIM:')
+def test_legacy_simulation_rows_are_excluded(db, monkeypatch):
+    """mode 1(모의투자)은 폐기됐지만 DB에 남은 is_sim=1 레코드가 백필로 딸려 나갈 수 있다."""
+    trade = {'order_status': '체결', 'type': '매수(AUTO)', 'code': '005930',
+             'name': '삼성전자', 'qty': 10, 'price': 71000, 'odno': '0000012345',
+             'time': '2026-08-01 09:30:00', 'is_sim': 1}
+    assert journal_sync.enqueue(db._get_conn().cursor(), trade) is False
 
 
 def test_disabled_integration_queues_nothing(db, monkeypatch):
@@ -170,6 +161,87 @@ def test_toggle_on_without_credentials_does_not_start(monkeypatch):
     settings_module._set_journal_sync_use(True)
     assert config.settings.JOURNAL_SYNC_USE is True   # 설정 자체는 저장된다
     assert started == []                              # 그러나 워커는 뜨지 않는다
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 가상투자(mode 1) — 스위치 하나로 보내되, 서버에서는 실거래와 갈린다
+# ══════════════════════════════════════════════════════════════════════
+
+@pytest.fixture
+def paper(monkeypatch):
+    """가상투자 세션으로 바꾼다."""
+    monkeypatch.setattr(config.session, 'is_paper', True, raising=False)
+    monkeypatch.setattr(config.session, 'cano', 'PAPER')
+    monkeypatch.setattr(config.session, 'acnt_prdt_cd', '')
+
+
+def test_paper_queues_when_toggle_on(db, paper):
+    """가상투자도 스위치가 켜져 있으면 체결이 큐에 쌓인다."""
+    assert journal_sync.is_enabled() is True
+    _fill(db)
+    assert len(_outbox(db)) == 1
+
+
+def test_paper_respects_toggle_off(db, paper, monkeypatch):
+    """스위치를 내리면 가상 체결도 나가지 않는다."""
+    monkeypatch.setattr(config.settings, 'JOURNAL_SYNC_USE', False)
+    _fill(db)
+    assert _outbox(db) == []
+    assert len(db.get_trades()) == 1
+
+
+def test_paper_payload_is_flagged_simulated(db, paper):
+    """가상 체결은 isSimulated=true 로 나가야 실거래 통계와 섞이지 않는다.
+
+    가상투자 DB 는 파일이 분리돼 있어 trades.is_sim 을 세우지 않는다(항상 0) —
+    세션 플래그를 보지 않으면 실거래로 기록된다.
+    """
+    _fill(db)
+    payload = json.loads(_outbox(db)[0]['payload'])
+    assert payload['isSimulated'] is True
+    # 멱등키도 실거래와 갈려야 서버에서 잘못 들어간 건을 골라낼 수 있다.
+    assert payload['brokerExecutionId'].startswith('PAPER:')
+
+
+def test_live_payload_stays_real(db):
+    """실전 체결은 그대로 isSimulated=false 다 (가상 분기가 실거래를 오염시키지 않는다)."""
+    _fill(db)
+    payload = json.loads(_outbox(db)[0]['payload'])
+    assert payload['isSimulated'] is False
+    assert payload['brokerExecutionId'].startswith('REAL:')
+
+
+def test_paper_bot_id_splits_from_live(paper, monkeypatch):
+    """가상봇이 실전봇의 상태 칸을 덮어쓰지 않도록 botId 가 갈려야 한다."""
+    monkeypatch.setattr(config, 'JOURNAL_BOT_ID', 'hts', raising=False)
+    assert journal_sync._bot_env() == 'paper'
+    assert journal_sync._bot_id() == 'hts:paper:PAPER'
+
+
+def test_paper_ping_is_flagged_simulated(db, paper, monkeypatch):
+    """상태 Ping 도 가상으로 표시해야 웹에서 실전봇과 구분된다."""
+    sent = {}
+
+    def _fake(method, path, json_body=None, **kwargs):
+        sent.update(json_body or {})
+        return None
+
+    monkeypatch.setattr(journal_sync, '_request', _fake)
+    journal_sync.ping('running')
+    assert sent['isSimulated'] is True
+
+
+def test_paper_backfill_scopes_to_simulated(db, paper, monkeypatch):
+    """백필 기준점은 서버의 '가상' 칸에서 찾아야 한다 — 실거래 칸을 보면 구간이 통째로 빠진다."""
+    seen = {}
+
+    def _fake(method, path, params=None, **kwargs):
+        seen.update(params or {})
+        return None
+
+    monkeypatch.setattr(journal_sync, '_request', _fake)
+    journal_sync._fetch_last_sync()
+    assert seen['isSimulated'] == 'true'
 
 
 def test_unparseable_type_is_not_queued(db):
@@ -312,9 +384,8 @@ def test_is_system_helper_maps_every_origin():
 
 # ── 봇 인스턴스 식별 ──────────────────────────────────────────────────
 
-def _set_mode(monkeypatch, *, toss=False, simulation=False, cano='68029263', auto=''):
+def _set_mode(monkeypatch, *, toss=False, cano='68029263', auto=''):
     monkeypatch.setattr(config.session, 'is_toss', toss, raising=False)
-    monkeypatch.setattr(config.session, 'is_simulation', simulation)
     monkeypatch.setattr(config.session, 'cano', cano)
     monkeypatch.setattr(config.session, 'auto_cano', auto, raising=False)
 
@@ -329,8 +400,8 @@ def test_bot_id_defaults_to_source(db, monkeypatch):
 def test_bot_id_override_is_used_as_prefix(db, monkeypatch):
     monkeypatch.setattr(config, 'JOURNAL_SOURCE', 'raspi', raising=False)
     monkeypatch.setattr(config, 'JOURNAL_BOT_ID', 'pi3b', raising=False)
-    _set_mode(monkeypatch, simulation=True, cano='50196591')
-    assert journal_sync._bot_id() == 'pi3b:sim:50196591'
+    _set_mode(monkeypatch, cano='50196591')
+    assert journal_sync._bot_id() == 'pi3b:real:50196591'
 
 
 def test_bot_id_differs_per_mode_on_one_machine(db, monkeypatch):
@@ -339,19 +410,17 @@ def test_bot_id_differs_per_mode_on_one_machine(db, monkeypatch):
     같은 기기에서 ~/.htsrc 하나로 세 모드를 돌리면 JOURNAL_BOT_ID·JOURNAL_SOURCE 가
     셋 다 같은 값이 된다. 환경변수만 식별자로 쓰면 세 인스턴스가 서버의 같은 칸을
     덮어써서, 웹 목록에 자기 자리가 없는 봇이 생긴다
-    (실측 2026-08-03: 모의·실전·토스 3대를 돌렸는데 2대만 표시됨).
+    (실측 2026-08-03: 3대를 돌렸는데 2대만 표시됨).
     """
     monkeypatch.setattr(config, 'JOURNAL_SOURCE', 'raspi', raising=False)
     monkeypatch.setattr(config, 'JOURNAL_BOT_ID', '', raising=False)
 
-    _set_mode(monkeypatch, simulation=True, cano='50196591')
-    sim = journal_sync._bot_id()
     _set_mode(monkeypatch, cano='68029263', auto='44048158')
     real = journal_sync._bot_id()
     _set_mode(monkeypatch, toss=True, cano='189-01-501685')
     toss = journal_sync._bot_id()
 
-    assert len({sim, real, toss}) == 3
+    assert len({real, toss}) == 2
 
 
 def test_bot_id_stays_within_length_limit_without_losing_the_discriminator(db, monkeypatch):
@@ -375,12 +444,12 @@ def test_bot_label_shows_the_auto_trading_account_too(db, monkeypatch):
 def test_bot_label_keeps_the_account_product_code(db, monkeypatch):
     """상품코드(-01)는 별도 필드라, 붙이지 않으면 화면 계좌번호가 잘려 보인다."""
     monkeypatch.setattr(config, 'JOURNAL_BOT_LABEL', '', raising=False)
-    _set_mode(monkeypatch, simulation=True, cano='50196591', auto='50196591')
-    assert journal_sync._bot_label() == '모의 50196591-01'
+    _set_mode(monkeypatch, cano='50196591', auto='50196591')
+    assert journal_sync._bot_label() == '실전 50196591-01'
 
 
 def test_bot_label_omits_auto_account_when_it_is_the_same(db, monkeypatch):
-    """모의·토스는 단일 계좌라 같은 번호를 두 번 적을 이유가 없다."""
+    """토스는 단일 계좌라 같은 번호를 두 번 적을 이유가 없다."""
     monkeypatch.setattr(config, 'JOURNAL_BOT_LABEL', '', raising=False)
     _set_mode(monkeypatch, toss=True, cano='189-01-501685', auto='189-01-501685')
     monkeypatch.setattr(config.session, 'acnt_prdt_cd', '')
@@ -390,7 +459,7 @@ def test_bot_label_omits_auto_account_when_it_is_the_same(db, monkeypatch):
 
 def test_ping_carries_bot_identity(db, monkeypatch):
     """botId 가 빠지면 서버가 사용자당 한 칸에 상태를 겹쳐 쓴다 — 여러 대를 돌릴 때
-    실전봇의 죽음이 모의봇 Ping 에 가려지고, 재동기화도 엉뚱한 봇이 채간다."""
+    한 봇의 죽음이 다른 봇 Ping 에 가려지고, 재동기화도 엉뚱한 봇이 채간다."""
     monkeypatch.setattr(config, 'JOURNAL_BOT_ID', 'raspi', raising=False)
     monkeypatch.setattr(config, 'JOURNAL_BOT_LABEL', '', raising=False)
     _set_mode(monkeypatch, cano='68029263')

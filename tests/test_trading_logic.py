@@ -11,11 +11,10 @@ def setup_config_session():
     # 백업
     orig_cano = config.session.cano
     orig_acnt = config.session.acnt_prdt_cd
-    orig_sim = config.session.is_simulation
+
     
     config.session.cano = "12345678"
     config.session.acnt_prdt_cd = "01"
-    config.session.is_simulation = True
     config.session.auto_cano = None
     
     yield
@@ -23,18 +22,17 @@ def setup_config_session():
     # 복원
     config.session.cano = orig_cano
     config.session.acnt_prdt_cd = orig_acnt
-    config.session.is_simulation = orig_sim
+
 
 
 @patch('modules.trading.utils.show_menu')
 def test_select_account_default(mock_show_menu):
     """기본 계좌가 정상적으로 선택되는지 검증"""
     # 자동 계좌가 없으면 show_menu를 호출하지 않고 바로 반환함
-    config.session.is_simulation = True
     cano, acnt, label = trading.select_account()
     assert cano == "12345678"
     assert acnt == "01"
-    assert label == "모의투자"
+    assert label == "한투증권"
 
 
 @patch('modules.trading.utils.show_menu', return_value="1")
@@ -122,18 +120,13 @@ def test_show_open_orders(mock_get_trades, mock_get_ovrs, mock_get_dom):
         'ord_tmd': '100000'
     }]
     
-    # DB 기반 접수 상태 모의투자
-    mock_get_trades.side_effect = [
-        [{'odno': '7777', 'code': '035420', 'name': 'NAVER', 'type': 'buy', 'qty': '2', 'price': '200000'}], # get_trades(접수)
-        [], # get_trades(체결)
-        [], # get_trades(체결추정)
-        []  # get_trades(전체-취소확인용)
-    ]
-    
+    # [mode 1 폐기] 모의투자 API 누락을 DB '접수' 행으로 메우던 병합 경로는 사라졌다.
+    #  이제 미체결은 거래소 응답이 유일한 출처다.
+    mock_get_trades.side_effect = [[], [], [], []]
+
     with patch('modules.trading.api.get_domestic_balance', return_value=([], "0")):
         orders = trading.show_open_orders()
-        
-    assert len(orders) == 2
+
+    assert len(orders) == 1
     assert orders[0]['odno'] == '8888'
-    assert orders[1]['odno'] == '7777'
 

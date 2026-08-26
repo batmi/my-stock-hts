@@ -143,8 +143,7 @@ def test_index_price_tr_id_is_mapped():
     """지수 현재가 TR 매핑 누락 → call_api가 'TR_ID not found'로 즉시 실패하고
     당일 봉 실시간 오버레이·서킷브레이커 등락률이 통째로 죽는다(무증상 회귀)."""
     from core import constants
-    entry = constants.TR_ID_CONFIG['domestic']['quotations']['index_price']
-    assert entry['real'] and entry['sim']
+    assert constants.TR_ID_CONFIG['domestic']['quotations']['index_price']
 
 
 def test_index_price_fills_prev_close(monkeypatch):

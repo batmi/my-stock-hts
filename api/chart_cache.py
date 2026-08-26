@@ -566,7 +566,7 @@ def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=
                 except Exception: pass
                 if progress_updater: progress_updater()
 
-            max_w = 4 if config.session.is_simulation else 5
+            max_w = 5
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
                 futures = [executor.submit(fetch_yf_worker, c) for c in remaining_codes]
                 concurrent.futures.wait(futures)
@@ -599,7 +599,7 @@ def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=
             try: _api().get_realtime_vol_strength(code)
             except Exception: pass
 
-        max_w = 4 if config.session.is_simulation else 10
+        max_w = 10
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
             futures = [executor.submit(fetch_worker, c) for c in codes]
             for future in concurrent.futures.as_completed(futures):
@@ -650,7 +650,7 @@ def prefetch_watchlists_async():
             logger.info(f"[Cache] 백그라운드 예열(Warming) 시작: 총 {len(unique_stocks)}종목")
             
             # 모의투자는 시스템 트레이딩 API 호출 방해를 피하기 위해 여유를 둠 (실전:0.1초, 모의:1.0초)
-            delay = 1.0 if config.session.is_simulation else 0.1
+            delay = 0.1
             
             for code, is_overseas in unique_stocks:
                 try:
@@ -692,9 +692,6 @@ def start_overview_warmer():
         return None
     if config.session.is_toss:
         return None  # 토스 모드는 별도 캐시 경로 사용
-    if config.session.is_simulation and not getattr(config, 'OVERVIEW_WARM_ON_SIMULATION', False):
-        logger.info("[Warm] 모의투자: 개요 백그라운드 예열 비활성(시스템 트레이딩 TPS 보호)")
-        return None
 
     interval = max(5, int(getattr(config, 'OVERVIEW_WARM_INTERVAL_SEC', 15)))
 

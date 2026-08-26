@@ -245,7 +245,6 @@ def test_reset_frees_paper_account_restrictions(paper, monkeypatch, tmp_path):
     for attr, val in (('cano', 'PAPER'), ('acnt_prdt_cd', ''),
                       ('auto_cano', 'PAPER'), ('auto_acnt_prdt_cd', '')):
         monkeypatch.setattr(config.session, attr, val, raising=False)
-    monkeypatch.setattr(config.session, 'is_simulation', False, raising=False)
     monkeypatch.setattr(config.session, 'is_toss', False, raising=False)
 
     auto_trade.add_restricted_stock('018260', '삼성SDS', '수동매매', cano='PAPER', acnt='')

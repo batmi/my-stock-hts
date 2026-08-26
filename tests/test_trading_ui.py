@@ -6,7 +6,6 @@ import config
 @patch('rich.prompt.Prompt.ask')
 def test_select_account_main(mock_ask):
     """메인 계좌 선택 테스트"""
-    config.session.is_simulation = False
     config.session.cano = "1111"
     config.session.acnt_prdt_cd = "01"
     config.session.auto_cano = "2222"
@@ -21,7 +20,6 @@ def test_select_account_main(mock_ask):
 @patch('rich.prompt.Prompt.ask')
 def test_select_account_auto(mock_ask):
     """자동매매 계좌 선택 테스트"""
-    config.session.is_simulation = False
     config.session.cano = "1111"
     config.session.auto_cano = "2222"
     config.session.auto_acnt_prdt_cd = "01"

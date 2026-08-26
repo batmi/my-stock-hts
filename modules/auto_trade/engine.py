@@ -1121,7 +1121,7 @@ def analyze_holdings(entries, max_workers=None, restricted_codes=None):
             return code, None
 
     if max_workers is None:
-        max_workers = 2 if config.session.is_simulation else 4
+        max_workers = 4
     max_workers = max(1, min(max_workers, len(entries)))
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="at_engine") as executor:
@@ -1935,168 +1935,6 @@ class OrderManager:
 
             # 2. [추가] API에는 없지만 로컬에는 남아있는 주문 처리 (API 누락 대응)
             # 모의투자 등에서 API가 미체결 내역을 반환하지 않는 경우, 로컬 상태를 믿고 강제 확인
-            if config.session.is_simulation:
-                with self._lock:
-                    pending_codes = list(self.pending_orders.keys())
-                    
-                    for code in pending_codes:
-                        if code not in self.pending_orders: continue
-                        orders = self.pending_orders[code]
-                        odnos = list(orders.keys())
-                        
-                        for odno in odnos:
-                            if odno in api_checked_odnos: continue
-                            
-                            status = orders[odno]
-                            if status == OrderStatus.ORDER_SENT:
-                                trade = db_manager.db.get_trade_by_odno(odno)
-                                if trade and trade.get('time'):
-                                    try:
-                                        ord_time = datetime.strptime(trade['time'], "%Y-%m-%d %H:%M:%S")
-                                        elapsed = (now - ord_time).total_seconds()
-                                        
-                                        if elapsed >= cancel_seconds:
-                                            self.trader.log(f"[미체결 관리] 로컬 주문({odno}) 타임아웃({int(elapsed)}초). 강제 취소 시도 (API 누락 대응)")
-                                            qty = int(trade['qty'])
-                                            res = api.revise_cancel_order("domestic", "cancel", odno, code, qty, "0", "02", "00")
-                                            
-                                            if res.get('rt_cd') == '0':
-                                                self.trader.log(f"-> 강제 취소 성공. (미체결 상태였음)")
-                                                
-                                                t_str = trade.get('type', '')
-                                                t_type = "매수" if "buy" in t_str.lower() or "매수" in t_str else ("매도" if "sell" in t_str.lower() or "매도" in t_str else "")
-                                                type_label = f"{t_type}취소" if t_type else "주문 취소"
-                                                api.send_telegram_message(f"🗑 [{type_label}] {trade['name']} {qty}주\n사유: 미체결 시간 초과 (API 누락 보정)")
-                                                # 원본 접수 기록 보존을 위해 상태 덮어쓰기 로직 제거
-                                                
-                                                # 취소 주문 번호는 API 응답(res)에서 파싱해야 하나, revise_cancel_order는 현재 json을 반환함
-                                                cancel_odno = res.get('output', {}).get('ODNO') or res.get('output', {}).get('KRX_FWDG_ORD_ORGNO') or f"CANCEL_{odno}"
-                                                
-                                                db_manager.db.insert_trade("취소(자동)", code, trade['name'], qty, 0, cancel_odno, org_odno=odno, reason="미체결 시간 초과 (자동 취소)", order_status="취소")
-                                                
-                                                # 로컬 상태 정리
-                                                if code in self.pending_orders and odno in self.pending_orders[code]:
-                                                    del self.pending_orders[code][odno]
-                                                    if not self.pending_orders[code]: del self.pending_orders[code]
-                                            else:
-                                                # 취소 실패 시 (이미 체결되었거나 거부된 주문)
-                                                msg_cd = res.get('msg_cd')
-                                                # 40330000: 정정/취소할 수량이 없습니다 (이미 체결됨 or 취소됨)
-                                                if msg_cd == '40330000':
-                                                    self.trader.log(f"-> 이미 체결/취소된 주문입니다. 잔고 확인 후 상태를 동기화합니다.")
-                                                    
-                                                    # [추가] 잔고 확인을 통해 체결 여부 추정
-                                                    is_filled = False
-                                                    # 매수 주문이었던 경우 잔고에 해당 종목이 있는지 확인
-                                                    if "buy" in trade.get('type', '').lower() or "매수" in trade.get('type', ''):
-                                                        try:
-                                                            holdings, _ = api.get_domestic_balance(config.session.cano, config.session.acnt_prdt_cd)
-                                                            if holdings:
-                                                                for h in holdings:
-                                                                    if h['pdno'] == code and int(h['hldg_qty']) > 0:
-                                                                        is_filled = True
-                                                                        break
-                                                        except Exception: pass
-                                                    elif "sell" in trade.get('type', '').lower() or "매도" in trade.get('type', ''):
-                                                        # [추가] 매도 주문인 경우 40330000 에러는 대부분 체결 완료를 의미함
-                                                        is_filled = True
-                                                    
-                                                    if is_filled:
-                                                        self.trader.log(f"-> 체결/잔고 확인됨. '체결(추정)'으로 기록합니다.")
-                                                        
-                                                        fill_price = float(trade['price'])
-                                                        is_overseas = not (len(code) == 6 and code[0].isdigit() and code.isalnum()) if code else False
-                                                        if fill_price <= 0:
-                                                            try:
-                                                                cp = api.get_current_price(code, is_overseas=is_overseas)
-                                                                if cp > 0: fill_price = float(cp)
-                                                            except Exception: pass
-
-                                                        # 원본 접수 기록 보존을 위해 상태 덮어쓰기 로직 제거
-                                                        # 체결 내역 강제 생성 (히스토리 보정)
-                                                        db_manager.db.insert_trade(trade['type'], code, trade['name'], qty, fill_price, odno, order_status="체결(추정)", reason="체결 확인(잔고 확인)", custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-                                                        
-                                                        # [수정] 텔레그램 알림 발송 (실전 포맷 적용)
-                                                        try:
-                                                            type_str = trade.get('type', '')
-                                                            type_name = "매수" if "buy" in type_str.lower() or "매수" in type_str else "매도"
-                                                            
-                                                            # 개별 룰 조회
-                                                            custom_rules = db_manager.db.get_all_stock_strategies()
-                                                            rules_map = {r['code']: r for r in custom_rules}
-                                                            rule = rules_map.get(code)
-                                                            
-                                                            title_tag = "[체결 알림(추정)]"
-                                                            rule_info = ""
-                                                            if rule:
-                                                                title_tag += " [개별]"
-                                                                rule_info = f"\n🔧 [개별 룰] 익절 +{rule['take_profit']}% / 손절 {rule['stop_loss']}%"
-                                                                if rule.get('ts_activation'):
-                                                                    rule_info += f" / TS +{rule['ts_activation']}%(-{rule['ts_callback']}%)"
-                                                            
-                                                            # 현재가 정보
-                                                            cur_info = ""
-                                                            try:
-                                                                cp_data = api.get_current_price_data(code, is_overseas=is_overseas)
-                                                                if cp_data.get('rt_cd') == '0':
-                                                                    if is_overseas:
-                                                                        curr = float(cp_data['output'].get('last', 0))
-                                                                        rate = float(cp_data['output'].get('rate', 0))
-                                                                        icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
-                                                                        cur_info = f"\n현재가: ${curr:,.2f} ({icon} {rate:+.2f}%)"
-                                                                    else:
-                                                                        curr = float(cp_data['output']['stck_prpr'])
-                                                                        rate = float(cp_data['output']['prdy_ctrt'])
-                                                                        icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
-                                                                        cur_info = f"\n현재가: {int(curr):,}원 ({icon} {rate:+.2f}%)"
-                                                            except Exception: pass
-
-                                                            # 전략 지표 (스냅샷 활용)
-                                                            strategy_info = ""
-                                                            if trade.get('snapshot'):
-                                                                try:
-                                                                    snap = json.loads(trade['snapshot'])
-                                                                    if 'indicators' in snap:
-                                                                        ind = snap['indicators']
-                                                                        score = trade.get('strategy_score', 0)
-                                                                        rsi_str = f"{ind.get('rsi', 0):.1f}"
-                                                                        adx_str = f"{ind.get('adx', 0):.1f}"
-                                                                        cci_str = f"{ind.get('cci', 0):.1f}"
-                                                                        strategy_info = f"\n\n📊 [전략 지표(진입시점)]\n• 점수: {score}점\n• RSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
-                                                                except Exception: pass
-                                                            
-                                                            exec_amt = fill_price * qty
-                                                            price_fmt = f"${fill_price:,.2f}" if is_overseas else f"{fill_price:,.0f}원"
-                                                            amt_fmt = f"${exec_amt:,.2f}" if is_overseas else f"{int(exec_amt):,}원"
-                                                            
-                                                            profit_msg = ""
-                                                            if type_name == "매도":
-                                                                p_amt = trade.get('profit_amt')
-                                                                p_rate = trade.get('profit_rate')
-                                                                if p_amt is not None and p_rate is not None:
-                                                                    profit_msg = f"\n손익: {int(p_amt):+,}원 ({float(p_rate):+.2f}%)"
-                                                                    
-                                                            original_reason = trade.get('reason', '잔고 확인')
-                                                            msg = f"✅ {title_tag} {type_name} {trade['name']}({code})\n수량: {qty}주\n단가: {price_fmt}(추정체결가)\n금액: {amt_fmt}\n주문번호: {utils.format_order_no(odno)}{profit_msg}\n사유: {original_reason}{cur_info}{strategy_info}{rule_info}"
-                                                            api.send_telegram_message(msg)
-                                                            
-                                                            # [추가] 매도 체결(추정) 시 AI 매매 복기 실행 (모의투자용)
-                                                            if type_name == "매도":
-                                                                threading.Thread(target=self._send_trading_autopsy, args=(code, trade['name'], trade), daemon=True).start()
-                                                        except Exception as e:
-                                                            self.trader.log(f"알림 전송 실패: {e}")
-                                                    else:
-                                                        self.trader.log(f"-> 잔고/체결 확인 안됨. '취소'로 상태를 변경합니다.")
-                                                        # 원본 접수 기록 보존 및 취소 더미 이력 생성
-                                                        db_manager.db.insert_trade(trade['type'], code, trade['name'], qty, float(trade['price']), odno, order_status="취소(추정)", reason="잔고/체결 확인 안됨 (취소 간주)", custom_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-
-                                                    if code in self.pending_orders and odno in self.pending_orders[code]:
-                                                        del self.pending_orders[code][odno]
-                                                        if not self.pending_orders[code]: del self.pending_orders[code]
-                                                else:
-                                                    self.trader.log(f"-> 취소 실패: {res.get('msg1')}")
-                                    except Exception as e:
-                                        self.trader.log(f"로컬 미체결 처리 중 오류: {e}")
 
             # 3. [안전장치] 어느 경로로도 풀리지 않는 '고아' 주문 경보
             self._alert_orphan_pending(api_checked_odnos, cancel_seconds, now)
@@ -2208,11 +2046,6 @@ class OrderManager:
             for code, orders in snapshot.items():
                 for odno, status in orders.items():
                     if odno in api_checked_odnos:
-                        continue
-                    # 로컬 폴백은 모의투자에서만, 그것도 ORDER_SENT만 강제 취소한다.
-                    #  그 조합에 해당할 때만 경보를 미룬다 — 실계좌는 폴백 자체가 돌지
-                    #  않으므로 ORDER_SENT 고아도 똑같이 갇힌다.
-                    if config.session.is_simulation and status == OrderStatus.ORDER_SENT:
                         continue
                     # [관찰 모드] 가상투자는 '살아 있는 주문'이라는 상태가 존재하지 않는다.
                     #  paper_broker는 즉시 전량 체결로 모델링하고 get_domestic_open_orders는

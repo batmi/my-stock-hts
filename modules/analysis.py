@@ -3811,7 +3811,7 @@ def _analyze_stock_worker(stock, params=None, restricted_stocks=None, rules_map=
     
     # [최적화] 시스템 트레이딩(AutoTrader)과의 API 대역폭 경합 방지 (유동적 Pacing)
     # 모의투자는 0.3초, 실전은 0.05초의 지연을 주어 백그라운드 자동매매가 즉시 호출될 수 있는 틈을 양보합니다.
-    delay = 0.3 if config.session.is_simulation else 0.05
+    delay = 0.05
     time.sleep(delay)
 
     try:
@@ -4196,7 +4196,7 @@ def analyze_market_stocks(market_type):
             
             # 병렬 처리로 업종 정보 조회
             def fetch_sector(item):
-                delay = 0.3 if config.session.is_simulation else 0.05
+                delay = 0.05
                 time.sleep(delay)
                 try:
                     res = api.get_current_price_data(item['code'], is_overseas=False)
@@ -5469,7 +5469,7 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None, is_
 
     # [최적화] 통신+연산 통합 처리 스레드 수 — 모의서버는 TPS 여유가 작아 4, 실전·해외는 5
     #  (야후/KIS 동시 호출 차단 방지. 해외·국내 분기가 동일 값이라 단일화)
-    max_w = 4 if config.session.is_simulation else 5
+    max_w = 5
     # [수정] 메뉴1처럼 진행 상태를 '데이터 수집'과 '지표 분석' 2단계로 분리하여 운영자 인지성을 높인다.
     # [Fix] 패딩 수는 실제 정의된 컬럼 총수에서 산출 — 기존 고정값(국내 14)이 컬럼(15)보다
     #  3칸 많아 rich가 빈 유령 컬럼을 추가해 테이블 레이아웃이 밀리던 문제
@@ -5542,14 +5542,11 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None, is_
         if not is_overseas and data_list and not config.session.is_toss and getattr(config, 'USE_MULTI_PRICE', True):
             _codes = [c for _, c in data_list]
             try:
-                if config.session.is_simulation:
-                    multi_prices = api.get_multi_current_prices(_codes)  # 모의투자: NXT 미지원 → KRX만
-                else:
-                    _phase = api._nxt_quote_phase()
-                    if _phase == 'skip':        # 정규장: KRX 대표가
-                        multi_prices = api.get_multi_current_prices(_codes)
-                    elif _phase == 'active':     # 장전/장후 NXT 시간: KRX+NXT 배치 병합
-                        multi_prices = api.get_multi_current_prices_nxt(_codes)
+                _phase = api._nxt_quote_phase()
+                if _phase == 'skip':        # 정규장: KRX 대표가
+                    multi_prices = api.get_multi_current_prices(_codes)
+                elif _phase == 'active':     # 장전/장후 NXT 시간: KRX+NXT 배치 병합
+                    multi_prices = api.get_multi_current_prices_nxt(_codes)
                     # offhours(야간·주말): 종목별 조회 유지
             except Exception:
                 multi_prices = None

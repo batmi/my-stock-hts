@@ -2954,12 +2954,10 @@ TV_PASSWORD = os.getenv("TV_PASSWORD", "")
 JOURNAL_API_URL = os.getenv("JOURNAL_API_URL", "")   # 예: https://memo.example.com (HTTPS 권장)
 JOURNAL_API_KEY = os.getenv("JOURNAL_API_KEY", "")   # 웹 대시보드 설정에서 발급 (skm_...)
 JOURNAL_SOURCE = os.getenv("JOURNAL_SOURCE", "my-stock-hts")  # 서버 측 동기화 스코프 식별자
-# 모의투자 체결도 전송할지 여부. 기본 OFF — 켜더라도 서버가 isSimulated 로 분리 보관한다.
-JOURNAL_SYNC_SIMULATION = os.getenv("JOURNAL_SYNC_SIMULATION", "0") == "1"
 # 봇 인스턴스 식별자의 **접두어**(설치 단위 이름). 비우면 JOURNAL_SOURCE 를 쓴다.
 #  실제 botId 는 여기에 운용 모드·계좌가 붙는다(`{접두어}:real:68029263` 형태).
 #  모드는 `--mode` CLI 인자라 환경변수로는 구분되지 않기 때문이다 — 같은 기기에서
-#  ~/.htsrc 하나로 모의·실전·토스를 함께 돌리면 이 값이 셋 다 같아져, 세 인스턴스가
+#  ~/.htsrc 하나로 가상·실전·토스를 함께 돌리면 이 값이 셋 다 같아져, 세 인스턴스가
 #  서버의 같은 칸을 덮어써 웹 목록에서 봇 하나가 통째로 사라진다.
 JOURNAL_BOT_ID = os.getenv("JOURNAL_BOT_ID", "")
 JOURNAL_BOT_LABEL = os.getenv("JOURNAL_BOT_LABEL", "")  # 웹 화면 표시명. 비우면 자동 생성
@@ -3073,12 +3071,11 @@ INDICES_GROUPS = {
 # ==========================================================
 # [설정] 트랜잭션 속도 제한 (Rate Limiting)
 # ==========================================================
-SIM_TX_PER_SECOND = 2     # 모의투자 서버 최대 TPS: 2
 REAL_TX_PER_SECOND = 20   # 실전투자 서버 최대 TPS: 20 (KIS 명목 한도)
 
 # [최적화] 관심종목 멀티시세(FHKST11300006) 사용 여부.
 # 메뉴2(종목 시세 분석) 국내 현재가를 30종목/1콜로 일괄 수집해 TPS 소모를 대폭 줄인다.
-# (모의투자 2 TPS 환경에서 특히 효과 큼. TR 미지원/오류 시 자동으로 종목별 조회 폴백)
+# (TR 미지원/오류 시 자동으로 종목별 조회 폴백)
 USE_MULTI_PRICE = True
 
 # [추가] 내부 TPS 안전계수 (Safety Margin)
@@ -3129,7 +3126,7 @@ TPS_BACKOFF_WINDOW_SEC = 1.0
 # [속도] 전송 간격을 균등하게 벌릴 것인가.
 #  False면 1.1초 창 한도만 지키고 그 안에서는 몰아 보낸다(버스트 허용). 실측상 몰아 보내는
 #  쪽이 처리량이 높다 — 30연결 폭주 측정에서 성공 처리량이 균등 전송보다 크게 나왔다.
-#  균등 전송은 서버에 친절하지만 우리 목표가 아니다. 모의투자(2 TPS)는 여유가 없어 항상 균등.
+#  균등 전송은 서버에 친절하지만 우리 목표가 아니다.
 TPS_EVEN_PACING = False
 
 # 매매용 예약분(TPS). 조회성 호출은 이만큼을 남겨 둔다.
@@ -3172,8 +3169,6 @@ def analysis_max_workers():
     try:
         if session.is_toss:
             return 4
-        if session.is_simulation:
-            return 2
         return max(3, min(6, int(REAL_TX_PER_SECOND / 4)))
     except Exception:
         return 4
@@ -3188,10 +3183,8 @@ TOSS_TX_PER_SECOND = 10
 # 해외 종목 시세/시장 지수를 백그라운드에서 주기적으로 마이크로 캐시에 채워,
 # '시장 지수 조회'/'종목 시세 분석'(해외) 진입 시 임계경로 조회 없이 즉시 표시되게 한다.
 #  - 국내 종목 현재가/체결강도는 KRX/NXT 무관하게 매 실행마다 라이브로 조회하므로 예열하지 않는다.
-#  - 모의투자(2 TPS)는 예열이 시스템 트레이딩 호출과 TPS를 다투므로 기본 비활성화한다(실전만 ON).
 OVERVIEW_WARM_ENABLED = True          # 백그라운드 예열 사용 여부 (실전 계좌에서만 자동 동작)
 OVERVIEW_WARM_INTERVAL_SEC = 15       # 예열 주기(초). 해외 시세/지수 fast_info 예열에 사용
-OVERVIEW_WARM_ON_SIMULATION = False   # 모의투자에서도 예열할지 (기본 OFF: 시스템 트레이딩 보호)
 
 # ==========================================================
 # [설정] 실시간 시세 WebSocket (KIS 실전/모의)
@@ -3204,7 +3197,7 @@ WS_MAX_REGISTRATIONS = 41         # KIS 단일 연결 등록 한도(종목×TR)
 # 호가(H0STASP0) 구독 여부. SubscriptionManager.plan()이 현재가(H0STCNT0)를 먼저 등록해 종목
 # 커버리지를 최대(=한도)로 확보한 뒤, 남는 등록 슬롯에만 호가를 best-effort로 얹으므로 현재가
 # 커버리지는 절반으로 줄지 않는다. WS 호가 캐시는 api.get_ask_bid_ratio()의 수급 게이트가 소비하며,
-# 이를 켜면 매수후보/매도조건 분석에서 종목당 호가 REST 1콜을 절감한다(특히 모의투자 2 TPS에서 체감 큼).
+# 이를 켜면 매수후보/매도조건 분석에서 종목당 호가 REST 1콜을 절감한다.
 WS_SUBSCRIBE_ORDERBOOK = True
 WS_DATA_TTL_SEC = 3.0             # WS 캐시 신선도(초): 이 시간 이내면 REST 대신 WS 값을 사용
 WS_ROTATE_INTERVAL_SEC = 30       # 41건 초과분(관심종목) 구독 로테이션 주기(초)
@@ -3328,9 +3321,6 @@ AUTOTRADE_LOG_RETENTION_DAYS = 120
 # [설정] 시스템 및 네트워크 정책
 # ==========================================================
 DEFAULT_TIMEOUT = 10      # API 요청 타임아웃 (초)
-# [추가] 모의투자(VTS) 서버는 실전 대비 응답이 느려 시세/차트의 짧은 timeout(2~3초)에서
-#  ReadTimeout이 빈발한다. 모의투자일 때는 호출별 timeout을 이 값 이상으로 보장한다.
-SIM_MIN_QUOTE_TIMEOUT = 5  # 모의투자 시 최소 보장 timeout (초)
 RETRY_DELAY_SERVER = 1.0  # 서버 에러 발생 시 재시도 대기 시간 (초) (기본값 1.0)
 # [추가 2026-08-19] 지수 화면(메뉴 1)의 '무진행' 허용 시간(초).
 #  이 단계는 지수마다 워커를 띄우고 전부 끝날 때까지 기다렸다. 워커의 외부 호출은 전역
@@ -3364,7 +3354,6 @@ SYSTEM_TRADING_LOG_DIR = LOG_DIR # 시스템 트레이딩 로그 저장 디렉�
 session = SessionManager()
 
 # 서버 URL 상수 정의
-SIM_URL = "https://openapivts.koreainvestment.com:29443"
 REAL_URL = "https://openapi.koreainvestment.com:9443"
 
 # [추가] 토스증권 Open API 서버 URL
@@ -3419,7 +3408,7 @@ def build_token_failure_help(is_toss=False):
                     필수지만, 한투(KIS Developers)는 개인 계정에 IP 등록 메뉴 자체가 없어
                     (실측 확인) IP 안내를 하지 않는다.
       - AUTH      : 앱키/시크릿 거부(한투 403 EGW00103 '유효하지 않은 AppKey' 포함).
-                    한투는 키 불일치·만료·모의투자 서비스 만기 확인을 안내한다.
+                    한투는 키 불일치·만료 확인을 안내한다.
       - NETWORK   : 연결 거부/타임아웃. 서버 점검·네트워크 문제일 수 있으며,
                     토스는 화이트리스트 필수라 IP 미등록도 유력 원인으로 함께 안내한다.
     """
@@ -3436,7 +3425,6 @@ def build_token_failure_help(is_toss=False):
         lines.append("  [bold yellow]→ 앱키/시크릿이 거부되었습니다 (예: EGW00103 '유효하지 않은 AppKey').[/bold yellow]")
         lines.append("     • KIS Developers → My App 에서 현재 발급된 AppKey/AppSecret과 ~/.htsrc 값이 일치하는지 확인하세요.")
         lines.append("       (키 재발급·유효기간(1년) 만료 시 기존 키는 무효화됩니다)")
-        lines.append("     • 모의투자 키라면 '모의투자' 서비스 신청 상태가 유효한지 확인하세요. (모의계좌 만기 시 키 무효화)")
         lines.append("     • 다른 기기에서 정상 동작 중이라면 그 기기의 ~/.htsrc 키와 값을 비교하세요.")
         return lines
 
@@ -3669,7 +3657,7 @@ def setup_logging():
     #  KIS 서버가 idle keep-alive 연결을 먼저 끊어(RemoteDisconnected) 발생하는
     #  "Retrying (Retry(total=...)) after connection broken by ..." 경고는 어댑터가
     #  자동 재시도로 자가 치유하는 정상 동작이라 로그 노이즈일 뿐이다.
-    #  (특히 모의투자(2 TPS)는 요청 간격이 길어 연결이 오래 idle→더 빈번). ERROR로 올려 숨긴다.
+    #  (요청 간격이 길면 연결이 오래 idle 상태가 되어 더 빈번). ERROR로 올려 숨긴다.
     logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
 
     # [추가] 데이터 라이브러리의 '예상된 실패' ERROR를 DEBUG로 강등.
@@ -3778,16 +3766,15 @@ def get_autotrade_logger():
 # 모드별 설정 프로필
 # ===========================================================================
 # [문제] dynamic_config.json 은 한 벌뿐이라 모든 모드가 같은 파일을 읽고 썼다.
-#  관찰모드(mode 4)에서 검증하려고 시장 필터를 끄면 그 값이 그대로 남아, 다음에
+#  가상투자(mode 1)에서 검증하려고 시장 필터를 끄면 그 값이 그대로 남아, 다음에
 #  실전(mode 2)으로 띄울 때도 필터가 꺼진 채로 돈다. 방어선은 기동 시 경고 하나뿐이었고
 #  (main.py warn_if_safety_switches_off), 그건 '사람이 경고를 읽는가'에 기대는 장치다.
 #
 # [구조] 실전은 기준 파일(dynamic_config.json)만 읽고 쓴다. 실전이 아닌 모드는 자기
 #  프로필 파일(dynamic_config.<프로필>.json)을 하나 더 얹는다.
-#      실전(mode 2)      → dynamic_config.json
-#      모의(mode 1)      → dynamic_config.json + dynamic_config.sim.json
-#      토스(mode 3)      → dynamic_config.json + dynamic_config.toss.json
-#      관찰/가상(mode 4) → dynamic_config.json + dynamic_config.paper.json
+#      실전(mode 2)   → dynamic_config.json
+#      가상(mode 1)   → dynamic_config.json + dynamic_config.paper.json
+#      토스(mode 3)   → dynamic_config.json + dynamic_config.toss.json
 #  프로필 파일에는 **기준과 다른 값만** 적힌다. 그래서 (1) 실전 설정을 바꾸면 다른
 #  모드도 따라오고(검증 조건이 운용 조건에서 멀어지지 않는다), (2) 다른 모드에서 바꾼
 #  값은 그 파일에만 남아 실전으로 새지 않는다. 파일을 열어 보면 '이 모드가 실전과
@@ -3797,10 +3784,9 @@ def get_autotrade_logger():
 #  자동으로 올려주지 않는 것이 요점이다 — 검증용으로 끈 안전장치가 조용히 따라 올라오는
 #  경로를 없애는 것이 이 구조의 목적이기 때문이다.
 _MODE_PROFILES = {
-    '1': 'sim',
+    '1': 'paper',   # 가상투자(관찰 모드)
     '2': None,      # 실전 = 기준 파일 그 자체
     '3': 'toss',
-    '4': 'paper',
 }
 #  프로필 파일에서 '얹는' 대상이 되는 중첩 딕셔너리 그룹(스칼라 키는 그대로 덮어쓴다)
 _CONFIG_GROUP_KEYS = ["ANALYSIS_THRESHOLDS", "SELL_STRATEGY", "INDICATOR_PARAMS",
@@ -3810,7 +3796,12 @@ active_profile = None      # None = 실전(기준 파일). 모드 결정 시 set
 
 
 def profile_for_mode(mode):
-    """세션 모드 문자열('1'~'4') → 프로필 이름. 모르는 값은 실전으로 본다(보수적)."""
+    """세션 모드 문자열('1'~'3') → 프로필 이름. 모르는 값은 실전 프로필(기준 파일)을 돌려준다.
+
+    [주의] 여기서 None(=실전 설정)이 나와도 **거래 모드가 실전이 되지는 않는다** —
+     모드 자체의 유효성은 core/session.SessionManager.initialize 가 화이트리스트로
+     판정하고, 모르는 값이면 기동을 중단한다(fail-closed).
+    """
     return _MODE_PROFILES.get(str(mode), None)
 
 

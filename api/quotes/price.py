@@ -95,7 +95,7 @@ def get_current_price_data(code, is_overseas, include_nxt=True, cache_ttl=3.0, f
             #  종목당 호출을 절반으로 줄인다. NXT 단독시간(프리/애프터)에만 NXT를 조회한다.
             out = res.get('output', {})
             # 모의투자(VTS)는 NXT 미지원 → 항상 KRX 종가. 실전만 NXT 병합/회상.
-            if include_nxt and not config.session.is_simulation:
+            if include_nxt:
                 phase = _api()._nxt_quote_phase()
                 if phase in ('active', 'offhours'):
                     # 거래시간이든 야간이든 KIS 라이브 NXT가를 먼저 시도한다.
@@ -536,7 +536,7 @@ def get_realtime_vol_strength(code, is_overseas=False, exchange_code=None, inclu
         #  - phase=='skip'(정규장): NX 조회 생략(TPS 절감 겸용).
         #  - phase=='offhours'(야간·휴장): NXT 미개장 → 조회 생략.
         _nxt_phase = _api()._nxt_quote_phase()
-        if include_nxt and not config.session.is_simulation and _nxt_phase == 'active':
+        if include_nxt and _nxt_phase == 'active':
             # [수정] retries=1: NXT 단독시간대엔 NX가 유일한 유효 체결강도 소스인데, 개요 팬아웃(다워커
             #  동시호출) 중 EGW00201(초당 거래건수 초과)에 걸려 retries=0으로 즉시 실패하면 J의 0으로
             #  폴백돼 [0%]로 오표시된다(간헐적·종목마다 뒤바뀜). call_api의 스로틀 백오프로 회복시킨다.
@@ -714,7 +714,7 @@ def fetch_buyable_quantity(stock_code, price):
     # [수정] 컨텍스트에 따른 계좌번호 선택
     cano = config.session.cano
     acnt_prdt_cd = config.session.acnt_prdt_cd
-    if not config.session.is_simulation and getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
+    if getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
         cano = config.session.auto_cano
         acnt_prdt_cd = config.session.auto_acnt_prdt_cd
 
@@ -746,7 +746,7 @@ def fetch_sellable_quantity(stock_code):
     # [수정] 컨텍스트에 따른 계좌번호 선택
     cano = config.session.cano
     acnt_prdt_cd = config.session.acnt_prdt_cd
-    if not config.session.is_simulation and getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
+    if getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
         cano = config.session.auto_cano
         acnt_prdt_cd = config.session.auto_acnt_prdt_cd
 
@@ -781,7 +781,7 @@ def fetch_overseas_buyable_quantity(stock_code, price, excd):
     # [수정] 컨텍스트에 따른 계좌번호 선택
     cano = config.session.cano
     acnt_prdt_cd = config.session.acnt_prdt_cd
-    if not config.session.is_simulation and getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
+    if getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
         cano = config.session.auto_cano
         acnt_prdt_cd = config.session.auto_acnt_prdt_cd
         
@@ -813,7 +813,7 @@ def fetch_overseas_sellable_quantity(stock_code, excd):
     # [수정] 컨텍스트에 따른 계좌번호 선택
     cano = config.session.cano
     acnt_prdt_cd = config.session.acnt_prdt_cd
-    if not config.session.is_simulation and getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
+    if getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
         cano = config.session.auto_cano
         acnt_prdt_cd = config.session.auto_acnt_prdt_cd
 
@@ -876,7 +876,7 @@ def _prepare_account_params(cano, acnt_prdt_cd):
     """계좌 파라미터 준비 및 컨텍스트 설정 (내부 헬퍼)"""
     # 인자가 없으면 현재 설정/컨텍스트 값 사용
     if not cano:
-        if not config.session.is_simulation and getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
+        if getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
             cano = config.session.auto_cano
             acnt_prdt_cd = config.session.auto_acnt_prdt_cd
         else:
@@ -884,9 +884,9 @@ def _prepare_account_params(cano, acnt_prdt_cd):
             acnt_prdt_cd = config.session.acnt_prdt_cd
     
     # 요청 계좌가 자동매매 계좌와 일치하면 컨텍스트 전환 (토큰/Key 변경)
-    if not config.session.is_simulation and cano == config.session.auto_cano and config.session.auto_app_key:
+    if cano == config.session.auto_cano and config.session.auto_app_key:
         context.trade_context.use_auto_account = True
-    elif not config.session.is_simulation and cano == config.session.cano:
+    elif cano == config.session.cano:
         context.trade_context.use_auto_account = False
         
     return cano, acnt_prdt_cd

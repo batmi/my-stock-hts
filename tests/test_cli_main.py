@@ -38,7 +38,7 @@ def test_main_menu_navigation(mock_asset, mock_manage, mock_theme, mock_backtest
     with patch('sys.argv', ['main.py']):
         with patch('config.session.initialize'): # 초기화 로직 스킵
             with patch('config.session.load_stock_config'):
-                with patch('api.get_access_token'):
+                with patch('api.get_real_access_token'):
                     with patch('api.get_real_access_token'):
                         with patch('modules.auto_trade.ConclusionMonitor.start'):
                             with patch('modules.telegram_bot.TelegramCommander.start'):
@@ -79,7 +79,7 @@ def test_main_chart_menu(mock_cp, mock_chart, mock_ask, mock_exit):
     with patch('sys.argv', ['main.py']):
         with patch('config.session.initialize'), \
              patch('config.session.load_stock_config'), \
-             patch('api.get_access_token'), \
+             patch('api.get_real_access_token'), \
              patch('api.get_real_access_token'), \
              patch('modules.auto_trade.ConclusionMonitor.start'), \
              patch('modules.telegram_bot.TelegramCommander.start'), \

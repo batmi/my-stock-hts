@@ -125,7 +125,6 @@ def test_multi_price_nxt_reenables_after_cooldown(monkeypatch):
     """[Fix] NXT(NX) 배치도 쿨다운 경과 후 자동 재시도 — NX 병합이 세션 내내 꺼져
     장전/장후 현재가가 KRX 전일 종가로 굳는(등락률 0%) 증상을 방지한다."""
     monkeypatch.setattr(api, '_MULTI_PRICE_NXT_DISABLED', False, raising=False)
-    monkeypatch.setattr(config.session, 'is_simulation', False, raising=False)
 
     with patch('api.call_api', return_value={'rt_cd': '1', 'msg1': 'transient'}):
         assert api._fetch_multi_nxt_raw(['005930']) == {}
@@ -300,7 +299,6 @@ def test_multi_price_nxt_merge_overrides_price(monkeypatch):
     """[근본개선] 장전/장후 NXT 시간: KRX(J)에 NXT(NX) 체결가를 배치 병합해 stck_prpr을 교체한다.
     (종목별 fetch_nxt_price 팬아웃 → EGW00201 stale 폴백 제거)"""
     monkeypatch.setattr(api, '_MULTI_PRICE_NXT_DISABLED', False, raising=False)
-    monkeypatch.setattr(config.session, 'is_simulation', False, raising=False)
 
     def fake_call(url, market, category, action, params=None, **kw):
         mkt = params.get('FID_COND_MRKT_DIV_CODE_1')
@@ -319,7 +317,6 @@ def test_multi_price_nxt_merge_overrides_price(monkeypatch):
 def test_multi_price_nxt_missing_keeps_krx(monkeypatch):
     """NXT에 체결가가 없는 종목(nxtSupported=false, prpr 0)은 KRX 값을 그대로 유지한다."""
     monkeypatch.setattr(api, '_MULTI_PRICE_NXT_DISABLED', False, raising=False)
-    monkeypatch.setattr(config.session, 'is_simulation', False, raising=False)
 
     def fake_call(url, market, category, action, params=None, **kw):
         mkt = params.get('FID_COND_MRKT_DIV_CODE_1')
@@ -337,7 +334,6 @@ def test_multi_price_nxt_missing_keeps_krx(monkeypatch):
 def test_multi_price_nxt_failure_falls_back_to_krx(monkeypatch):
     """NXT 배치 실패/미지원 시 KRX 결과만 반환하고 NXT 병합을 세션 내 비활성화한다."""
     monkeypatch.setattr(api, '_MULTI_PRICE_NXT_DISABLED', False, raising=False)
-    monkeypatch.setattr(config.session, 'is_simulation', False, raising=False)
 
     def fake_call(url, market, category, action, params=None, **kw):
         mkt = params.get('FID_COND_MRKT_DIV_CODE_1')

@@ -24,7 +24,6 @@ def kis_mode(monkeypatch):
     """관찰모드·토스 분기를 타지 않고 KIS 경로를 검사한다."""
     monkeypatch.setattr(api, "_paper_active", lambda: False, raising=False)
     monkeypatch.setattr(api.config.session, "is_toss", False, raising=False)
-    monkeypatch.setattr(api.config.session, "is_simulation", True, raising=False)
 
 
 def test_api_failure_returns_none_not_zero():

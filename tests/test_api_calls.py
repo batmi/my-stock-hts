@@ -50,34 +50,6 @@ def test_call_api_failure(mock_session):
         result = api.call_api("test/url", "domestic", "test", "test", tr_id="TEST_TR_ID")
         assert result["rt_cd"] == "9999"
 
-def test_get_access_token_success(mock_session):
-    """토큰 발급 성공 테스트"""
-    mock_session.post.return_value = MagicMock(status_code=200)
-    mock_session.post.return_value.json.return_value = {"access_token": "test_token"}
-    
-    config.session.app_key = "test_key"
-    config.session.app_secret = "test_secret"
-
-    with patch("api._token_session", mock_session), \
-         patch("config.session.get_valid_token", return_value=None): # 캐시 무시
-        result = api.get_access_token()
-        assert result == "test_token"
-        mock_session.post.assert_called_once()
-
-def test_get_access_token_failure(mock_session):
-    """토큰 발급 실패 테스트 (HTTP 에러)"""
-    mock_session.post.return_value.status_code = 500
-    mock_session.post.return_value.text = "Server Error"
-    
-    config.session.app_key = "test_key"
-    config.session.app_secret = "test_secret"
-
-    with patch("api._token_session", mock_session), \
-         patch("config.session.get_valid_token", return_value=None): # 캐시 무시
-        result = api.get_access_token()
-        assert result is None
-        mock_session.post.assert_called_once()
-
 def test_safe_int_valid_input():
     """safe_int 유효한 입력 테스트"""
     assert api.safe_int("123") == 123
@@ -104,22 +76,24 @@ def test_get_domestic_index_chart_empty_response(mock_session):
 # Test cases for Rate Limiter
 def test_api_rate_limit():
     """API Rate Limit 테스트 (RateLimiter)"""
-    config.SIM_TX_PER_SECOND = 1
-
-    with patch.object(requests.Session, 'request') as mock_request, \
+    _orig_tps = config.REAL_TX_PER_SECOND
+    config.REAL_TX_PER_SECOND = 1
+    try:
+      with patch.object(requests.Session, 'request') as mock_request, \
          patch("api.get_current_token", return_value="test_token"), \
          patch("time.sleep"): # Rate Limit 대기 시간 제거
         
         mock_request.return_value = MagicMock(status_code=200, json=lambda: {'rt_cd': '0', 'output': {}})
         
         # 세션 상태 초기화 (다른 테스트 영향 제거)
-        api.session.request_history_sim.clear()
         api.session.request_history_real.clear()
 
         # call_api를 연속으로 호출하여 Rate Limiting이 동작하는지 확인
         api.call_api("test/url", "domestic", "test", "test", method="GET", tr_id="TEST_TR_ID")
         api.call_api("test/url", "domestic", "test", "test", method="GET", tr_id="TEST_TR_ID")  # Second call (should be throttled)
         assert mock_request.call_count == 2
+    finally:
+        config.REAL_TX_PER_SECOND = _orig_tps
 
 
 from unittest.mock import ANY
@@ -140,6 +114,8 @@ def test_call_api_args(mock_get):
     config.session.url_base = "https://openapi.koreainvestment.com:9443"
     config.session.app_key = "test_app_key"
     config.session.app_secret = "test_app_secret"
+    config.session.real_app_key = "test_app_key"
+    config.session.real_app_secret = "test_app_secret"
     mock_get.return_value = MagicMock(status_code=200)
     mock_get.return_value.json.return_value = {"rt_cd": "0", "output": {}}
     

@@ -6,26 +6,6 @@ import time
 import requests
 import pandas as pd
 
-def test_throttled_session_rate_limit():
-    """Rate Limit 동작 테스트"""
-    session = api.ThrottledSession()
-    config.SIM_TX_PER_SECOND = 2 # 0.5s interval
-    
-    # Mock time
-    with patch('time.time') as mock_time, patch('time.sleep') as mock_sleep:
-        mock_time.side_effect = [100.0 + i*0.1 for i in range(20)] # Provide enough values
-        
-        # Mock super().request to avoid actual network call
-        with patch('requests.Session.request') as mock_request:
-            mock_request.return_value.status_code = 200
-            
-            # First request (Sim)
-            session.request('GET', 'https://openapivts.koreainvestment.com/test')
-            # Second request (Sim) - should trigger sleep
-            session.request('GET', 'https://openapivts.koreainvestment.com/test')
-            
-            assert mock_sleep.called
-
 @patch('api.get_current_token', return_value="TEST_TOKEN")
 @patch('requests.Session.request')
 def test_call_api_retry_logic(mock_request, mock_token):
@@ -73,11 +53,10 @@ def test_call_api_token_expired(mock_get):
     
     mock_get.side_effect = [Exception("Token Expired (EGW00123)"), success_resp]
     
-    with patch('api.get_access_token') as mock_refresh:
+    with patch('api.get_real_access_token') as mock_refresh:
         mock_refresh.return_value = "NEW_TOKEN"
         
         # Simulation mode
-        config.session.is_simulation = True
         
         res = api.call_api("test/url", "domestic", "inquiry", "balance", method="GET")
         

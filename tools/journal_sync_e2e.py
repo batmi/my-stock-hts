@@ -1,7 +1,7 @@
 # tools/journal_sync_e2e.py
 """매매일지 웹서버 연동 실전송 검증 도구 (End-to-End).
 
-모의투자 계좌 정보로 가상의 체결을 만들어 **실제 운영 코드 경로 그대로**
+가상의 체결을 만들어 **실제 운영 코드 경로 그대로**
 원격 매매일지 서버까지 보내고, 서버가 실제로 무엇을 받아 저장했는지 되읽어
 필드 단위로 대조합니다.
 
@@ -27,7 +27,7 @@
     python tools/journal_sync_e2e.py --no-ping      # 봇 상태 Ping 검증 생략
 
 사전 조건 (~/.htsrc)
-    export SIM_ACC_NUM="50012345-01"
+    export REAL_ACC_NUM="12345678-01"
     export JOURNAL_API_URL="https://memo.example.com"
     export JOURNAL_API_KEY="skm_..."
 """
@@ -76,16 +76,16 @@ def _check_prerequisites():
         console.print("[dim]  ~/.htsrc 에 export 로 추가한 뒤 `source ~/.htsrc` 하고 다시 실행하세요.[/dim]")
         return False
 
-    config.session.initialize(mode="1")  # 모의투자 모드 (환경변수만 읽고 네트워크는 타지 않음)
+    config.session.initialize(mode="2")  # 실전 모드 (환경변수만 읽고 네트워크는 타지 않음)
     if not config.session.cano:
-        _fail("모의투자 계좌번호(SIM_ACC_NUM)가 설정되지 않았습니다.")
-        console.print('[dim]  예) export SIM_ACC_NUM="50012345-01"[/dim]')
+        _fail("계좌번호(REAL_ACC_NUM)가 설정되지 않았습니다.")
+        console.print('[dim]  예) export REAL_ACC_NUM="12345678-01"[/dim]')
         return False
 
     console.print(f"  서버 주소   : [green]{config.JOURNAL_API_URL}[/green]")
     console.print(f"  API 키      : [green]{config.JOURNAL_API_KEY[:12]}…[/green]")
-    console.print(f"  모의투자 계좌: [green]{config.session.cano}-{config.session.acnt_prdt_cd}[/green]"
-                  f" (is_simulation={config.session.is_simulation})")
+    console.print(f"  계좌        : [green]{config.session.cano}-{config.session.acnt_prdt_cd}[/green]"
+                  f" (is_paper={getattr(config.session, 'is_paper', False)})")
     return True
 
 
@@ -99,7 +99,6 @@ def _prepare_sandbox(source, keep_db):
 
     # 메모리상에서만 켠다 — dynamic_config.json 에 저장하지 않으므로 운영 설정은 그대로다.
     config.settings.JOURNAL_SYNC_USE = True
-    config.JOURNAL_SYNC_SIMULATION = True   # 모의투자 체결도 전송 대상에 포함
     config.JOURNAL_SOURCE = source
     config.settings.SCREEN_DEBUG_LEVEL = "OFF"   # DB 마이그레이션 로그로 결과가 묻히지 않게
 
@@ -157,12 +156,12 @@ def _check_server_alive():
 
 
 def _generate_fills(count):
-    """모의투자 계좌로 가상 체결을 만들어 대기열에 적재한다.
+    """가상 체결을 만들어 대기열에 적재한다.
 
     운영과 동일하게 db_manager.insert_trade() 를 통과시킨다 — 큐 적재 훅까지
     실제 경로를 그대로 타야 '연동이 동작한다'를 증명할 수 있다.
     """
-    console.print("\n[bold cyan]═══ 4. 가상 체결 생성 (모의투자 계좌) ═══[/bold cyan]")
+    console.print("\n[bold cyan]═══ 4. 가상 체결 생성 ═══[/bold cyan]")
     from modules import db_manager
 
     run_tag = datetime.now().strftime("%H%M%S")
@@ -338,7 +337,7 @@ def _verify(sent, trades):
                            ("실현손익률", "realizedPnlRate"), ("전략점수", "strategyScore"),
                            ("손절률", "stopLossRate"), ("주문출처", "orderOrigin"),
                            ("계좌", "subAccount"), ("메모", "memo"),
-                           ("모의투자", "isSimulated"), ("확인필요", "needsReview")):
+                           ("가상체결", "isSimulated"), ("확인필요", "needsReview")):
             value = sample.get(key)
             style = "yellow" if (value in (None, "") or (key == "needsReview" and value)) else ""
             shown = f"[{style}]{value}[/{style}]" if style else str(value)
@@ -393,7 +392,7 @@ def _cleanup_server(trades):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="매매일지 웹서버 연동 실전송 검증 (모의투자 계좌 기반)")
+        description="매매일지 웹서버 연동 실전송 검증")
     parser.add_argument("--count", type=int, default=4, help="생성할 가상 체결 건수 (기본 4)")
     parser.add_argument("--cleanup", action="store_true",
                         help="검증 후 서버에 저장된 검증 데이터를 삭제")
@@ -404,7 +403,7 @@ def main():
     args = parser.parse_args()
 
     console.print("[bold]매매일지 웹서버 연동 실전송 검증 (E2E)[/bold]")
-    console.print("[dim]모의투자 계좌 정보로 가상 체결을 만들어 실제 서버까지 보내고 되읽어 대조합니다.[/dim]\n")
+    console.print("[dim]가상 체결을 만들어 실제 서버까지 보내고 되읽어 대조합니다.[/dim]\n")
 
     if not _check_prerequisites():
         return 1

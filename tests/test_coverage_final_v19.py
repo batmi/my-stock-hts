@@ -94,7 +94,6 @@ def test_reset_to_default_cancel(mock_ask):
 @patch('rich.prompt.Prompt.ask', return_value='2')
 def test_select_account_auto_branch(mock_ask):
     """실전 모드에서 자동매매 계좌와 메인 계좌가 분리되어 있을 때 계좌 선택 로직 커버리지"""
-    config.session.is_simulation = False
     config.session.cano = "11111111"
     config.session.auto_cano = "87654321"
     config.session.auto_acnt_prdt_cd = "01"

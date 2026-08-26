@@ -188,36 +188,6 @@ def test_print_table_worker_overseas_etf(mock_detail, mock_chart, mock_cp):
     assert "[blue]" in row_data[4] # 하락률 파란색 확인
 
 # ==========================================================
-# 5. auto_trade.py (로컬 모의투자 미체결 관리)
-# ==========================================================
-@patch('api.revise_cancel_order')
-@patch('modules.db_manager.db.get_trade_by_odno')
-def test_manage_unfilled_orders_simulation_local_cancel(mock_db_get, mock_revise):
-    """API가 미체결 내역을 주지 않을 때 로컬 상태 기반으로 강제 취소하는 로직 커버리지"""
-    config.session.is_simulation = True
-    config.UNFILLED_ORDER_CANCEL_SECONDS = 10 # 타임아웃 10초
-    
-    trader = auto_trade.AutoTrader()
-    trader.order_manager.pending_orders = {'005930': {'12345': auto_trade.OrderStatus.ORDER_SENT}}
-    
-    # 과거(1분 전)에 주문한 것으로 DB 모킹
-    past_time = (datetime.now() - pd.Timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")
-    mock_db_get.return_value = {'type': 'buy', 'qty': '10', 'price': '50000', 'time': past_time, 'name': 'Samsung'}
-    
-    mock_revise.return_value = {'rt_cd': '0'}
-    
-    with patch('api.get_unfilled_orders', return_value=[]), \
-         patch('api.send_telegram_message'), \
-         patch('modules.db_manager.db.insert_trade'):
-        
-        trader.order_manager.manage_unfilled_orders()
-        
-    # API 취소 요청이 발생했어야 함
-    mock_revise.assert_called_once()
-    # 로컬 상태에서 지워졌어야 함
-    assert '12345' not in trader.order_manager.pending_orders.get('005930', {})
-
-# ==========================================================
 # 6. account.py (체결 내역 동기화 파싱)
 # ==========================================================
 @patch('api.get_today_history', return_value={'rt_cd': '1'})
@@ -226,6 +196,9 @@ def test_sync_today_trades_overseas(mock_ovs_hist, mock_dom_hist):
     """해외주식 체결 내역 파싱 및 DB 동기화 커버리지"""
     config.session.cano = "123"
     config.session.acnt_prdt_cd = "01"
+    # 자동매매 계좌가 갈려 있으면 같은 응답을 두 계좌에서 두 번 읽는다(단일계좌로 고정).
+    config.session.auto_cano = "123"
+    config.session.auto_acnt_prdt_cd = "01"
     
     # 해외 체결 응답 모킹
     mock_ovs_hist.return_value = {

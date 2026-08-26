@@ -245,8 +245,6 @@ def market_session_label(is_overseas=False, is_domestic_etf=False):
         if is_domestic_etf:
             return (f"{name} · ETF 미거래(KRX 종가)", "dim")
         # 모의투자(VTS)는 NXT 미지원이라 이 시간대에도 화면값은 KRX 종가에 머문다
-        if getattr(config.session, 'is_simulation', False):
-            return (f"{name} · 모의투자 미지원(KRX 종가)", "dim")
         return (f"{name} · {krx}", "yellow")
     # 마감·휴장: 화면 현재가의 기준이 설정(USE_KRX_CLOSE_AFTER_HOURS)에 따라 갈린다.
     #  ETF/ETN은 NXT 체결 자체가 없어 설정과 무관하게 항상 KRX 종가다.

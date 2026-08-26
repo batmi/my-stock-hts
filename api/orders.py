@@ -199,19 +199,18 @@ def place_order(market, action, code, qty, price, ord_dvsn, exchange_code=None):
             "ORD_QTY": str(qty), "ORD_UNPR": str(price)
         }
         
-        # [추가] 모의투자가 아닐 경우 거래소 코드 적용
+        # [추가] 거래소 코드 적용
         # NXT 거래 가능 종목은 SOR(최적주문집행, KRX+NXT 통합 라우팅), 미지원 종목(ETF 등)은
         # KRX로 지정한다. NXT 미지원 종목에 SOR을 쓰면 APBK3026(종목정보 없음) 오류가 발생한다.
-        if not config.session.is_simulation:
-            data["EXCG_ID_DVSN_CD"] = "SOR" if _api().is_nxt_tradeable(code) else "KRX"
-            # 마스터 로드 실패로 낙관 배정한 SOR이 거부되면 KRX로 1회 재시도한다.
-            # (실계좌 전용 분기라 모의·가상투자 검증으로는 이 경로가 한 번도 실행되지 않는다)
-            if data["EXCG_ID_DVSN_CD"] == "SOR":
-                # [Fix 2026-08-10] SOR 경로도 응답 유실 시 재전송하지 않고 조회로 확인한다.
-                try:
-                    return _order_with_exchange_fallback(url_path, market, category, action, data)
-                except _api().OrderOutcomeUnknown as e:
-                    return _reconcile_unknown_order(action, code, qty, str(e))
+        data["EXCG_ID_DVSN_CD"] = "SOR" if _api().is_nxt_tradeable(code) else "KRX"
+        # 마스터 로드 실패로 낙관 배정한 SOR이 거부되면 KRX로 1회 재시도한다.
+        # (가상투자는 주문을 가로채므로 이 경로가 실행되지 않는다)
+        if data["EXCG_ID_DVSN_CD"] == "SOR":
+            # [Fix 2026-08-10] SOR 경로도 응답 유실 시 재전송하지 않고 조회로 확인한다.
+            try:
+                return _order_with_exchange_fallback(url_path, market, category, action, data)
+            except _api().OrderOutcomeUnknown as e:
+                return _reconcile_unknown_order(action, code, qty, str(e))
     else: # overseas
         # [Fix] 해외 주문 시 거래소 코드 보정 (3자리 -> 4자리)
         trade_excd = exchange_code
@@ -259,12 +258,11 @@ def revise_cancel_order(market, action, org_no, code, qty, price, type_cd, ord_d
         qty_all_yn = "Y" if qty == 0 else "N" # 0이면 전량으로 간주 (호출부 로직에 따름)
         data = {"CANO": cano, "ACNT_PRDT_CD": acnt, "KRX_FWDG_ORD_ORGNO": "", "ORGN_ODNO": org_no, "ORD_DVSN": ord_dvsn, "RVSE_CNCL_DVSN_CD": type_cd, "ORD_QTY": str(qty), "ORD_UNPR": str(price), "QTY_ALL_ORD_YN": qty_all_yn}
         
-        # [추가] 모의투자가 아닐 경우 거래소 코드 적용 (NXT 미지원 종목은 KRX, place_order와 동일)
-        if not config.session.is_simulation:
-            data["EXCG_ID_DVSN_CD"] = "SOR" if _api().is_nxt_tradeable(code) else "KRX"
-            # 주문과 같은 이유로 거부될 수 있다. 취소가 막히면 미체결이 계속 자리를 차지한다.
-            if data["EXCG_ID_DVSN_CD"] == "SOR":
-                return _order_with_exchange_fallback(url_path, market, category, action, data, code=code)
+        # [추가] 거래소 코드 적용 (NXT 미지원 종목은 KRX, place_order와 동일)
+        data["EXCG_ID_DVSN_CD"] = "SOR" if _api().is_nxt_tradeable(code) else "KRX"
+        # 주문과 같은 이유로 거부될 수 있다. 취소가 막히면 미체결이 계속 자리를 차지한다.
+        if data["EXCG_ID_DVSN_CD"] == "SOR":
+            return _order_with_exchange_fallback(url_path, market, category, action, data, code=code)
     else: # overseas
         # [Fix] 해외 주문 정정/취소 시 거래소 코드 보정
         trade_excd = exchange_code
@@ -301,7 +299,7 @@ def get_deposit(cano=None, acnt_prdt_cd=None, retries=None):
         "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y", "CRDT_TYPE": "00"
     }
     # [수정] TR_ID 명시적 지정 (로그상 CTRP6548R이 호출되고 있어 TTTC8908R로 교정)
-    tr_id = "VTTC8908R" if config.session.is_simulation else "TTTC8908R"
+    tr_id = "TTTC8908R"
     return _api().call_api(constants.API_URLS["DOMESTIC"]["INQUIRY"]["BUYABLE"], "domestic", "inquiry", "deposit", params=params, retries=retries, tr_id=tr_id)
 
 def get_foreign_deposit(cano=None, acnt_prdt_cd=None, retries=None):
@@ -336,113 +334,67 @@ def get_deposit_balance(cano=None, acnt_prdt_cd=None, skip_balance_check=False, 
     res = {"deposit": 0, "foreign_deposit": 0, "withdraw": 0, "d2_deposit": 0, "order_possible": 0, "d2_real": 0}
     success = False # [추가] 조회 성공 여부 플래그
 
-    if config.session.is_simulation:
-        # [수정] 모의투자: 주식잔고조회(VTTC8434R)를 우선 사용하여 예수금 확인 (더 안정적)
-        # skip_balance_check가 True이면(이미 외부에서 조회했다면) 건너뜀
-        holdings, summary_list = ([], []) if skip_balance_check else _api().get_domestic_balance(cano, acnt_prdt_cd, retries=retries)
-
-        if summary_list and len(summary_list) > 0:
-            summary = summary_list[0]
-            res['deposit'] = int(float(summary.get('dnca_tot_amt', 0)))
-            res['d2_deposit'] = int(float(summary.get('prvs_rcdl_excc_amt', 0)))
-            
-            # [추가] 모의투자에서 D+2 예수금이 0인 경우 일반 예수금으로 대체 (데이터 누락 대응)
-            if res['d2_deposit'] == 0 and res['deposit'] > 0:
-                res['d2_deposit'] = res['deposit']
-                
-            res['withdraw'] = res['d2_deposit']
-            
-            # [수정] 모의투자는 D+2 예수금을 주문가능금액으로 설정 (별도 API 호출 생략 시)
-            res['order_possible'] = res['d2_deposit']
-            success = True
+    # [수정] 실전투자: 주문가능금액(get_deposit)과 계좌잔고(get_foreign_deposit) 모두 조회하여 병합
+    # 1. 주문가능금액 조회 (주문가능금액, 출금가능금액)
+    data_order = get_deposit(cano, acnt_prdt_cd, retries=retries)
         
-        # [수정] 모의투자도 주문가능금액 상세 조회 (VTTC8908R) 수행하여 정확한 값(nrcvb_buy_amt) 확인
-        data_order = get_deposit(cano, acnt_prdt_cd, retries=retries)
-        if data_order.get('rt_cd') == '0':
-            output = data_order.get('output', {})
-            # 모의투자는 nrcvb_buy_amt(미수없는매수금액) 필드가 실질적인 주문가능금액
-            ord_psbl = _api().safe_int(output.get('nrcvb_buy_amt')) or _api().safe_int(output.get('ord_psbl_amt'))
-            if ord_psbl > 0:
-                res['order_possible'] = ord_psbl
-            
-            cash = _api().safe_int(output.get('ord_psbl_cash'))
-            if cash > 0:
-                res['withdraw'] = cash
-                # 잔고조회에서 값을 못 가져왔다면 채워넣기
-                if res['deposit'] == 0: res['deposit'] = cash
-                if res['d2_deposit'] == 0: res['d2_deposit'] = cash
-            
-            success = True
-        elif not success:
-            # 잔고조회도 실패하고 주문가능금액 조회도 실패한 경우
-            logger.warning(f"모의투자 예수금 조회 실패: {data_order.get('msg1')} ({data_order.get('msg_cd')})")
-            # 잔고 조회(get_domestic_balance)에서 가져온 d2_deposit이 있다면 이를 deposit으로 대체 사용
-            if res['d2_deposit'] > 0:
-                res['deposit'] = res['d2_deposit']
-                logger.info(f"[API] 모의투자 예수금 조회 폴백: D+2 예수금({res['d2_deposit']:,}원)을 사용합니다.")
-                success = True
+    if data_order.get('rt_cd') == '0':
+        out = data_order.get('output', {})
+        # [실전 주문가능금액] nrcvb_buy_amt(미수없는매수금액)를 **1순위**로 쓴다.
+        #  ord_psbl_amt는 계좌에 신용·대용 여력이 있으면 그것까지 포함한 값이 될 수 있다.
+        #  자본대비 리스크 한도를 두는 시스템에서 매수여력은 '증권사가 허용하는 최대'가
+        #  아니라 '미수 없이 살 수 있는 금액'이어야 한다 — 미수가 나면 연체이자와
+        #  반대매매가 붙어 손절 규칙 바깥에서 포지션이 정리된다.
+        #  (실측 2026-08-09: 이 계좌들은 ord_psbl_amt 자체가 응답에 없어 이미 폴백으로
+        #   안전했으나, 그건 우연이다. 순서를 뒤집어 명시적으로 만든다.)
+        res['order_possible'] = _api().safe_int(out.get('nrcvb_buy_amt')) or _api().safe_int(out.get('ord_psbl_amt'))
+        logger.info(f"[API] 주문가능금액 조회 성공: {res['order_possible']:,}원 (TR_ID: TTTC8908R)")
+        res['withdraw'] = _api().safe_int(out.get('ord_psbl_cash')) # 출금가능은 현금 기준
+        # 예수금 정보가 없을 경우 주문가능현금으로 대체
+        res['deposit'] = _api().safe_int(out.get('ord_psbl_cash'))
+        success = True
     else:
-        # [수정] 실전투자: 주문가능금액(get_deposit)과 계좌잔고(get_foreign_deposit) 모두 조회하여 병합
-        # 1. 주문가능금액 조회 (주문가능금액, 출금가능금액)
-        data_order = get_deposit(cano, acnt_prdt_cd, retries=retries)
-        
-        if data_order.get('rt_cd') == '0':
-            out = data_order.get('output', {})
-            # [실전 주문가능금액] nrcvb_buy_amt(미수없는매수금액)를 **1순위**로 쓴다.
-            #  ord_psbl_amt는 계좌에 신용·대용 여력이 있으면 그것까지 포함한 값이 될 수 있다.
-            #  자본대비 리스크 한도를 두는 시스템에서 매수여력은 '증권사가 허용하는 최대'가
-            #  아니라 '미수 없이 살 수 있는 금액'이어야 한다 — 미수가 나면 연체이자와
-            #  반대매매가 붙어 손절 규칙 바깥에서 포지션이 정리된다.
-            #  (실측 2026-08-09: 이 계좌들은 ord_psbl_amt 자체가 응답에 없어 이미 폴백으로
-            #   안전했으나, 그건 우연이다. 순서를 뒤집어 명시적으로 만든다.)
-            res['order_possible'] = _api().safe_int(out.get('nrcvb_buy_amt')) or _api().safe_int(out.get('ord_psbl_amt'))
-            logger.info(f"[API] 주문가능금액 조회 성공: {res['order_possible']:,}원 (TR_ID: TTTC8908R)")
-            res['withdraw'] = _api().safe_int(out.get('ord_psbl_cash')) # 출금가능은 현금 기준
-            # 예수금 정보가 없을 경우 주문가능현금으로 대체
-            res['deposit'] = _api().safe_int(out.get('ord_psbl_cash'))
-            success = True
-        else:
-            logger.warning(f"[API] 주문가능금액 조회 실패: {data_order.get('msg1')} (Code: {data_order.get('msg_cd')})")
+        logger.warning(f"[API] 주문가능금액 조회 실패: {data_order.get('msg1')} (Code: {data_order.get('msg_cd')})")
 
-        # 2. 주식 잔고 조회 (예수금, D+2 가수도) - get_domestic_balance 활용
-        # get_foreign_deposit 대신 더 안정적인 get_domestic_balance 사용
-        holdings, summary_list = _api().get_domestic_balance(cano, acnt_prdt_cd, retries=retries)
-        if summary_list and len(summary_list) > 0:
-            summary = summary_list[0]
-            res['deposit'] = int(float(summary.get('dnca_tot_amt', 0))) # 예수금 (우선)
-            res['d2_real'] = int(float(summary.get('prvs_rcdl_excc_amt', 0))) # D+2 가수도 (우선)
+    # 2. 주식 잔고 조회 (예수금, D+2 가수도) - get_domestic_balance 활용
+    # get_foreign_deposit 대신 더 안정적인 get_domestic_balance 사용
+    holdings, summary_list = _api().get_domestic_balance(cano, acnt_prdt_cd, retries=retries)
+    if summary_list and len(summary_list) > 0:
+        summary = summary_list[0]
+        res['deposit'] = int(float(summary.get('dnca_tot_amt', 0))) # 예수금 (우선)
+        res['d2_real'] = int(float(summary.get('prvs_rcdl_excc_amt', 0))) # D+2 가수도 (우선)
             
-            # [추가] Fallback: 주문가능금액 조회 실패 시 D+2 가수도 사용
-            if res['order_possible'] == 0:
-                res['order_possible'] = res['d2_real']
+        # [추가] Fallback: 주문가능금액 조회 실패 시 D+2 가수도 사용
+        if res['order_possible'] == 0:
+            res['order_possible'] = res['d2_real']
             
-            # [추가] Fallback: 출금가능금액 조회 실패 시 예수금 사용
-            if res['withdraw'] == 0:
-                res['withdraw'] = res['deposit']
+        # [추가] Fallback: 출금가능금액 조회 실패 시 예수금 사용
+        if res['withdraw'] == 0:
+            res['withdraw'] = res['deposit']
                 
-            success = True
+        success = True
 
-        # 3. 외화 잔고 조회 (보조)
-        data_foreign = get_foreign_deposit(cano, acnt_prdt_cd, retries=retries)
-        if data_foreign.get('rt_cd') == '0' and data_foreign.get('output2'):
-            out2 = data_foreign['output2'][0] if isinstance(data_foreign['output2'], list) else data_foreign['output2']
-            res['foreign_deposit'] = int(float(out2.get('frcr_evlu_tota', 0)))
+    # 3. 외화 잔고 조회 (보조)
+    data_foreign = get_foreign_deposit(cano, acnt_prdt_cd, retries=retries)
+    if data_foreign.get('rt_cd') == '0' and data_foreign.get('output2'):
+        out2 = data_foreign['output2'][0] if isinstance(data_foreign['output2'], list) else data_foreign['output2']
+        res['foreign_deposit'] = int(float(out2.get('frcr_evlu_tota', 0)))
             
-            # [추가] 계좌잔고평가 API의 D+2 가수도금(prvs_rcdl_excc_amt)이 더 정확할 수 있음 (매도 대금 반영 등)
-            d2_account_val = int(float(out2.get('prvs_rcdl_excc_amt', 0)))
-            if d2_account_val > res['d2_real']:
-                res['d2_real'] = d2_account_val
+        # [추가] 계좌잔고평가 API의 D+2 가수도금(prvs_rcdl_excc_amt)이 더 정확할 수 있음 (매도 대금 반영 등)
+        d2_account_val = int(float(out2.get('prvs_rcdl_excc_amt', 0)))
+        if d2_account_val > res['d2_real']:
+            res['d2_real'] = d2_account_val
                 
-            # [추가] 예수금도 확인하여 더 큰 값 사용
-            deposit_account_val = int(float(out2.get('dnca_tot_amt', 0)))
-            if deposit_account_val > res['deposit']:
-                res['deposit'] = deposit_account_val
+        # [추가] 예수금도 확인하여 더 큰 값 사용
+        deposit_account_val = int(float(out2.get('dnca_tot_amt', 0)))
+        if deposit_account_val > res['deposit']:
+            res['deposit'] = deposit_account_val
             
-        # D+2 예수금(매수여력) 결정: 주문가능금액이 있으면 그것을, 없으면 D+2 잔고를 사용
-        if res['order_possible'] > 0:
-            res['d2_deposit'] = res['order_possible']
-        elif res['d2_real'] > 0:
-            res['d2_deposit'] = res['d2_real']
+    # D+2 예수금(매수여력) 결정: 주문가능금액이 있으면 그것을, 없으면 D+2 잔고를 사용
+    if res['order_possible'] > 0:
+        res['d2_deposit'] = res['order_possible']
+    elif res['d2_real'] > 0:
+        res['d2_deposit'] = res['d2_real']
             
     return res if success else None # [수정] 실패 시 None 반환
 

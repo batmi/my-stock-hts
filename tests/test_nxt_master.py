@@ -151,7 +151,7 @@ def test_load_failure_is_logged_where_the_operator_can_see_it(mock_get, caplog):
 
 # ─────────── 거래소 코드 오배정 복구 (실계좌 전용 경로) ───────────
 #
-# 이 분기는 `if not config.session.is_simulation:` 안에 있어 모의·가상투자에서는
+# 이 분기는 실전 KIS 경로 안에 있어 토스 모드에서는
 # 한 번도 실행되지 않는다. 실계좌 첫날에 처음 도는 코드라 테스트로만 검증할 수 있다.
 
 REJECT = {'rt_cd': '1', 'msg_cd': 'APBK3026', 'msg1': '종목정보를 확인할 수 없습니다', 'output': {}}
@@ -163,8 +163,7 @@ NO_CASH = {'rt_cd': '1', 'msg_cd': 'APBK1234', 'msg1': '주문가능금액이 �
 def real_account():
     """실계좌 세션(모의 아님) — SOR 분기가 실제로 도는 조건."""
     api._NXT_REJECTED_CACHE.clear()
-    with patch.object(api.config.session, 'is_simulation', False), \
-         patch.object(api.config.session, 'is_toss', False), \
+    with patch.object(api.config.session, 'is_toss', False), \
          patch.object(api, '_paper_active', return_value=False), \
          patch.object(api, '_prepare_account_params', return_value=("12345678", "01")), \
          patch.object(api, 'is_nxt_tradeable', return_value=True):

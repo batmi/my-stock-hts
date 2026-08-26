@@ -34,10 +34,11 @@ def test_display_balance_details_overseas(mock_dom, mock_ovs):
 @patch('modules.account._display_balance_details')
 def test_get_account_balance_ui(mock_display):
     """계좌 잔고 조회 메뉴 테스트"""
-    config.session.is_simulation = True
     config.session.cano = "12345678"
     config.session.acnt_prdt_cd = "01"
-    
+    config.session.auto_cano = "12345678"
+    config.session.auto_acnt_prdt_cd = "01"
+
     with patch('config.console.print'):
         account.get_account_balance()
         mock_display.assert_called_with("12345678", "01")

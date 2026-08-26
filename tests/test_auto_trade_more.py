@@ -12,7 +12,6 @@ def test_get_total_estimated_asset(mock_get_asset, trader):
     """총 추정 자산 계산 테스트"""
     mock_get_asset.return_value = {'tot_asset': 1000000}
     # 모의투자 모드 가정
-    config.session.is_simulation = True
     
     asset = trader._get_total_estimated_asset()
     assert asset == 1000000

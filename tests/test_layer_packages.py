@@ -79,7 +79,7 @@ def test_brokers_names_do_not_join_the_api_namespace():
     """brokers 는 api 패키지의 평탄화 대상이 아니다 — 이름이 부딪히기 때문이다.
 
     api 는 서브모듈 이름을 전부 `api.X` 로 올리고 쓰기를 모든 서브모듈로 전파한다. brokers 를
-    그 안에 넣었다면 `get_access_token` 이 **KIS 토큰과 토스 토큰** 둘을 가리켜, patch 가 엉뚱한
+    그 안에 넣었다면 `get_investor_trend` 가 **KIS 수급과 토스 수급** 둘을 가리켜, patch 가 엉뚱한
     클라이언트를 덮었을 것이다. 실제로 충돌하는 이름이 있다는 사실 자체를 고정해 둔다 —
     누군가 brokers 를 api 계층으로 등록하려 하면 이 테스트가 이유를 알려 준다.
     """
@@ -88,10 +88,10 @@ def test_brokers_names_do_not_join_the_api_namespace():
 
     clashes = {n for n in vars(toss_api)
                if not n.startswith("__") and n in api._NAME_INDEX}
-    assert "get_access_token" in clashes, (
-        "토스와 KIS 의 토큰 발급 함수 이름이 더는 겹치지 않는다 — 분리 근거가 바뀌었으니 "
+    assert "get_investor_trend" in clashes, (
+        "토스와 KIS 의 수급 조회 함수 이름이 더는 겹치지 않는다 — 분리 근거가 바뀌었으니 "
         "brokers/__init__.py 의 설명을 다시 쓰라"
     )
-    assert api._NAME_INDEX["get_access_token"][0].__name__ == "api.auth", (
-        "api.get_access_token 이 KIS(api.auth) 가 아닌 다른 계층으로 해석된다"
+    assert api._NAME_INDEX["get_investor_trend"][0].__name__ == "api.quotes.price", (
+        "api.get_investor_trend 가 KIS(api.quotes.price) 가 아닌 다른 계층으로 해석된다"
     )

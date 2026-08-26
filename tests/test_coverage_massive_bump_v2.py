@@ -45,25 +45,6 @@ def test_risk_manager_emergency_stop(mock_tg):
 
     trader.resume_buys("테스트 정리")
 
-@patch('modules.auto_trade.api.get_unfilled_orders', return_value=[])
-@patch('modules.auto_trade.api.revise_cancel_order', return_value={'rt_cd': '0', 'output': {'ODNO': 'CANC123'}})
-def test_order_manager_simulation_force_cancel(mock_cancel, mock_unfilled):
-    """모의투자 시 API 누락으로 인해 DB 시간 기준으로 강제 취소되는 로직 커버리지"""
-    config.session.is_simulation = True
-    trader = auto_trade.AutoTrader()
-    # 주문이 아직 진행 중인 상태 모킹
-    trader.order_manager.pending_orders = {"005930": {"12345": auto_trade.OrderStatus.ORDER_SENT}}
-    
-    # 주문 발생 시간을 현재 시간보다 과거(취소 기준 시간 120초 초과)로 설정
-    old_time = (datetime.now() - timedelta(seconds=150)).strftime("%Y-%m-%d %H:%M:%S")
-    mock_trade = {'name': '삼성전자', 'qty': '10', 'price': '60000', 'type': 'buy', 'time': old_time}
-    
-    with patch('modules.db_manager.db.get_trade_by_odno', return_value=mock_trade), \
-         patch('modules.db_manager.db.insert_trade'):
-        trader.order_manager.manage_unfilled_orders()
-        
-        mock_cancel.assert_called_once()
-
 # ==============================================================================
 # 2. modules/analysis.py - AI 분석 예외 및 입력 중단 흐름
 # ==============================================================================

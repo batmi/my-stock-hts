@@ -118,15 +118,16 @@ def test_throttled_session_tps():
     now = time.time()
     
     # 오래된 요청이 앞에 오도록 설정
-    session.request_history_sim.clear()
-    session.request_history_sim.append(now - 1.5) # 만료
-    session.request_history_sim.append(now - 0.5) # 유효
-    session.request_history_sim.append(now - 0.5) # 유효
-    
+    hist = session.request_history_real
+    hist.clear()
+    hist.append(now - 1.5) # 만료
+    hist.append(now - 0.5) # 유효
+    hist.append(now - 0.5) # 유효
+
     if hasattr(session, '_get_current_tps'):
         tps = session._get_current_tps()
     else:
-        tps = len([t for t in session.request_history_sim if now - t <= 1.0])
+        tps = len([t for t in hist if now - t <= 1.0])
     assert tps == 2
 
 @patch('api.fetch_yfinance_data')

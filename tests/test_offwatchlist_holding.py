@@ -44,7 +44,6 @@ def test_sell_analysis_runs_for_an_off_watchlist_holding(trader):
     assert all(s['code'] != OFF_CODE for s in watchlist['stocks_kr']), "전제: 관심목록 밖이다"
 
     with patch.object(config.session, 'stock_data', watchlist), \
-         patch.object(config.session, 'is_simulation', True), \
          patch.object(trader, 'is_market_open', return_value=True), \
          patch('modules.auto_trade.api.is_domestic_etf_etn', return_value=False), \
          patch('modules.auto_trade.api.get_current_price', return_value=9000), \
@@ -73,7 +72,6 @@ def test_realtime_feed_keeps_covering_held_codes(trader):
         captured['priority'] = list(priority)
 
     with patch.object(config.session, 'stock_data', watchlist), \
-         patch.object(config.session, 'is_simulation', True), \
          patch.object(trader, 'is_market_open', return_value=True), \
          patch('brokers.realtime.update_symbols', side_effect=_update), \
          patch('brokers.realtime.coverage', return_value=None), \

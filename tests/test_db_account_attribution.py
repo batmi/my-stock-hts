@@ -34,7 +34,7 @@ def proxied_db(tmp_path, monkeypatch):
     from modules import db_manager, db_queue
 
     s = config.session
-    for k, v in (('is_simulation', False), ('is_toss', False), ('is_paper', False),
+    for k, v in (('is_toss', False), ('is_paper', False),
                  ('cano', MAIN[0]), ('acnt_prdt_cd', MAIN[1]),
                  ('auto_cano', AUTO[0]), ('auto_acnt_prdt_cd', AUTO[1])):
         monkeypatch.setattr(s, k, v, raising=False)

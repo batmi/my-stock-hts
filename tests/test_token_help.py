@@ -22,7 +22,7 @@ def test_kis_auth_shows_appkey_guidance_without_whitelist(monkeypatch):
 
     text = _joined(lines)
     assert "AppKey" in text
-    assert "모의투자" in text
+    assert "유효기간" in text
     assert "화이트리스트" not in text
     assert "허용 IP" not in text
     assert "고객 IP" not in text
@@ -69,7 +69,7 @@ def test_fetch_token_403_egw00103_classified_as_auth(monkeypatch):
 
     with patch('api._token_session') as mock_sess:
         mock_sess.post.return_value = res
-        token = api._fetch_and_set_token("SIMULATION", force_refresh=True)
+        token = api._fetch_and_set_token("REAL", force_refresh=True)
 
     assert token is None
     assert config.LAST_TOKEN_ERROR == 'AUTH'
@@ -85,7 +85,7 @@ def test_fetch_token_explicit_ip_message_classified_as_ip_blocked(monkeypatch):
 
     with patch('api._token_session') as mock_sess:
         mock_sess.post.return_value = res
-        token = api._fetch_and_set_token("SIMULATION", force_refresh=True)
+        token = api._fetch_and_set_token("REAL", force_refresh=True)
 
     assert token is None
     assert config.LAST_TOKEN_ERROR == 'IP_BLOCKED'

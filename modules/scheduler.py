@@ -184,10 +184,7 @@ class SystemScheduler:
                 mode = "관찰(가상)"
             elif config.session.is_toss:
                 mode = "토스"
-            elif config.session.is_simulation:
-                mode = "모의"
-            else:
-                mode = "실전"
+            mode = "실전"
         except Exception:
             mode = None
         return {
@@ -249,8 +246,8 @@ class SystemScheduler:
     def execute_daily_closing_report(self):
         """현재 계좌 정보 및 당일 매매 내역을 바탕으로 AI 장 마감 종합 브리핑 생성 및 전송"""
         try:
-            target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-            acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+            target_cano = config.session.auto_cano
+            acnt = config.session.auto_acnt_prdt_cd
             
             with utils.AccountContext(target_cano):
                 holdings, summary = api.get_domestic_balance(target_cano, acnt)

@@ -120,7 +120,6 @@ def test_trading_send_order_buy_direct(mock_tg, mock_show, mock_chart, mock_name
     mock_ask.side_effect = ["5", "005930", "y", "10", "60000", "y"]
     mock_place.return_value = {'rt_cd': '0', 'output': {'ODNO': '12345'}}
     
-    config.session.is_simulation = True # 불필요한 계좌 선택 메뉴 우회
     config.session.cano = "12345678"
     config.session.acnt_prdt_cd = "01"
     config.session.auto_cano = ""

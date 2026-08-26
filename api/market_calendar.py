@@ -73,7 +73,7 @@ def is_holiday_on(date_str):
             pass
 
     # 실전투자 모드일 경우에만 API 우선 조회 시도
-    if not config.session.is_simulation and not config.session.is_toss:
+    if not config.session.is_toss:
         res = check_holiday(date_str)
         if res is not None:
             _HOLIDAY_CACHE[date_str] = res

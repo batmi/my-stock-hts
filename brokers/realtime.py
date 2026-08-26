@@ -32,7 +32,6 @@ logger = logging.getLogger("hts")
 TR_PRICE = "H0STCNT0"   # 국내주식 실시간 체결가(KRX) — 현재가/등락/거래량/체결강도 포함
 TR_ASK = "H0STASP0"     # 국내주식 실시간 호가(10단계 잔량)
 TR_EXEC_REAL = "H0STCNI0"  # 실전 체결통보(AES256 암호화) — tr_key = HTS ID
-TR_EXEC_SIM = "H0STCNI9"   # 모의 체결통보(AES256 암호화) — tr_key = HTS ID
 
 # H0STCNT0(체결가) 레코드 필드 인덱스
 _P_CODE, _P_PRICE, _P_CHG_RATE, _P_VOLUME, _P_VOL_STRENGTH = 0, 2, 5, 13, 18
@@ -348,7 +347,7 @@ class KisRealtimeFeed(RealtimeFeed):
         return self._enabled() and bool(self._hts_id())
 
     def _exec_tr_id(self):
-        return TR_EXEC_SIM if config.session.is_simulation else TR_EXEC_REAL
+        return TR_EXEC_REAL
 
     def _invoke_exec_callbacks(self, notice):
         with self._cb_lock:
@@ -373,7 +372,7 @@ class KisRealtimeFeed(RealtimeFeed):
     # ---- 내부: approval key / URI ----
     def _fetch_approval_key(self):
         try:
-            base = config.session.url_base or (config.SIM_URL if config.session.is_simulation else config.REAL_URL)
+            base = config.session.url_base or config.REAL_URL
             appkey = config.session.app_key or config.session.real_app_key
             secret = config.session.app_secret or config.session.real_app_secret
             if not appkey or not secret:
@@ -394,7 +393,7 @@ class KisRealtimeFeed(RealtimeFeed):
 
     def _ws_uri(self):
         # 실전 21000 / 모의 31000 (ops 도메인)
-        port = 31000 if config.session.is_simulation else 21000
+        port = 21000
         return f"ws://ops.koreainvestment.com:{port}"
 
     def _sub_msg(self, approval, tr_id, tr_key, subscribe=True):
@@ -441,7 +440,7 @@ class KisRealtimeFeed(RealtimeFeed):
             if not approval:
                 await asyncio.sleep(backoff)
                 continue
-            label = "모의" if config.session.is_simulation else "실전"
+            label = "실전"
             try:
                 async with websockets.connect(self._ws_uri(), ping_interval=None, max_size=None) as ws:
                     logger.info(f"[WS] 연결 성공 ({self._ws_uri()}, {label})")
@@ -539,7 +538,7 @@ class KisRealtimeFeed(RealtimeFeed):
                     asyncio.ensure_future(ws.send(msg))  # 핑퐁 에코
                     return
                 # 체결통보 구독 응답: AES256 key/iv 수신 → 보관(이후 암호화 프레임 복호화에 사용)
-                if tr_id in (TR_EXEC_REAL, TR_EXEC_SIM):
+                if tr_id == TR_EXEC_REAL:
                     out = (data.get("body") or {}).get("output") or {}
                     key, iv = out.get("key"), out.get("iv")
                     if key and iv:
@@ -553,7 +552,7 @@ class KisRealtimeFeed(RealtimeFeed):
             enc, tr_id, count, body = parts
             now = time.time()
             # 체결통보(암호화): 복호화 후 파싱 → 콜백(ConclusionMonitor 즉시 확인 트리거)
-            if tr_id in (TR_EXEC_REAL, TR_EXEC_SIM):
+            if tr_id == TR_EXEC_REAL:
                 self._handle_exec_frame(body)
                 return
             if not self._got_data and tr_id in (TR_PRICE, TR_ASK):

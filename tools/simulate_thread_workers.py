@@ -31,30 +31,17 @@ def test_worker_real(stock):
 def run_simulation():
     console.print("[bold cyan]=== 멀티스레드 성능 시뮬레이션 (종목 분석) ===[/bold cyan]")
     
-    mode = Prompt.ask("테스트할 투자 모드를 선택하세요 (1: 모의, 2: 실전)", choices=["1", "2", "q"], default="1")
-    if mode == 'q': return
+    console.print("[dim]1. 한투증권 모드로 초기화 중... (한도: 20 TPS)[/dim]")
+    config.session.initialize(mode="2")
+    if not api.get_real_access_token():
+        console.print("[red]토큰 발급 실패. 한투증권 API Key 등 환경변수를 확인하세요.[/red]")
+        return
+    thread_counts = [0] + list(range(1, 21)) # 0은 스레드 미사용(순차 처리)
+    tps_limit = 20
+    mode_name = "한투증권"
+    sample_size = 100
 
-    if mode == "1":
-        console.print("[dim]1. 모의투자 모드로 초기화 중... (한도: 2 TPS)[/dim]")
-        config.session.initialize(mode="1") 
-        if not api.get_access_token():
-            console.print("[red]토큰 발급 실패. 모의투자 API Key 등 환경변수를 확인하세요.[/red]")
-            return
-        thread_counts = [0, 1, 2, 3, 4, 5] # 0은 스레드 미사용(순차 처리)
-        tps_limit = 2
-        mode_name = "모의투자"
-        sample_size = 20 # 모의투자는 속도가 느려 20개로 축소
-    else:
-        console.print("[dim]1. 한투증권 모드로 초기화 중... (한도: 20 TPS)[/dim]")
-        config.session.initialize(mode="2") 
-        if not api.get_real_access_token():
-            console.print("[red]토큰 발급 실패. 한투증권 API Key 등 환경변수를 확인하세요.[/red]")
-            return
-        thread_counts = [0] + list(range(1, 21)) # 0은 스레드 미사용(순차 처리)
-        tps_limit = 20
-        mode_name = "한투증권"
-        sample_size = 100
-        
+
     # 2. 테스트 종목 리스트 로드 (KOSPI 마스터 파일 사용)
     console.print(f"[dim]테스트용 종목 리스트 로드 중... (KOSPI 상위 {sample_size}개 샘플)[/dim]")
     full_stock_list = analysis._get_master_stock_list("KOSPI")

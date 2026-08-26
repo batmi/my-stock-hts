@@ -30,7 +30,7 @@ def separated_accounts(monkeypatch):
     """실전 모드 + 수동/자동 계좌·앱키가 분리된 환경."""
     s = config.session
     for k, v in (
-        ('is_simulation', False), ('is_toss', False), ('is_paper', False),
+        ('is_toss', False), ('is_paper', False),
         ('cano', MAIN_CANO), ('acnt_prdt_cd', '01'),
         ('auto_cano', AUTO_CANO), ('auto_acnt_prdt_cd', '01'),
         ('auto_app_key', 'AUTO_KEY'), ('auto_app_secret', 'AUTO_SEC'),
@@ -89,14 +89,9 @@ def test_wrapper_captures_at_submit_time_not_at_call_time(separated_accounts):
 
 
 def test_system_trading_account_matches_the_scattered_ternary(separated_accounts):
-    """utils.system_trading_account()가 trader.py의 기존 삼항식과 같은 답을 준다."""
+    """utils.system_trading_account()가 trader.py의 기존 계좌 선택과 같은 답을 준다."""
     s = config.session
-    expected = (s.auto_cano if not s.is_simulation else s.cano)
-    assert utils.system_trading_account()[0] == expected == AUTO_CANO
-
-    # 모의투자에서는 세션 로드가 auto_cano = cano로 동기화하므로 수동 계좌와 같다
-    s.is_simulation = True
-    assert utils.system_trading_account() == (MAIN_CANO, '01')
+    assert utils.system_trading_account()[0] == s.auto_cano == AUTO_CANO
 
 
 def test_system_trading_account_falls_back_when_auto_is_unset(separated_accounts, monkeypatch):

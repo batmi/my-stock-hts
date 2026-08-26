@@ -17,7 +17,7 @@
   · 지표 괴리 — RSI/ADX 등 판정에 쓰이는 값
   · 봉 개수·날짜 정렬 — 한쪽에만 있는 날(휴장일 처리 차이)
 
-[안전] 모의투자 키(mode 1)로 조회한다. 시세는 실전과 동일하고 실계좌를 건드리지 않는다.
+[안전] 가상투자 키(mode 1)로 조회한다. 시세는 실전과 동일하고 실계좌를 건드리지 않는다.
        조회 전용이며 주문 경로는 타지 않는다.
 
 [실행] python3 tools/audit_daily_bar_parity.py [--stocks 12] [--mode 1]
@@ -65,7 +65,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--stocks", type=int, default=12)
     ap.add_argument("--days", type=int, default=730)
-    ap.add_argument("--mode", default="1", help="1=모의투자(권장) / 2=실전")
+    ap.add_argument("--mode", default="1", help="1=가상투자(권장) / 2=실전")
     args = ap.parse_args()
 
     config.session.initialize(mode=args.mode)

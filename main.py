@@ -172,11 +172,9 @@ def _custom_print_breadcrumb():
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if getattr(config.session, 'is_paper', False):
         # 가상투자는 KIS 실전 시세를 쓰지만 계좌가 가상이므로 실전과 구분해 표시한다(오인 방지)
-        env_str = "[가상투자]"; env_color = "bold cyan"
+        env_str = "[가상투자]"; env_color = "bold green"
     elif config.session.is_toss:
         env_str = "[토스증권]"; env_color = "bold magenta"
-    elif config.session.is_simulation:
-        env_str = "[모의투자]"; env_color = "bold yellow"
     else:
         env_str = "[한투증권]"; env_color = "bold red"
     emoji = _get_preset_emoji()
@@ -213,13 +211,7 @@ def preflight_check():
             checks_ok = False
         else:
             config.console.print("  - 성공: 토스 API Key/Secret 확인 완료.")
-    elif config.session.is_simulation:
-        if not config.session.app_key or not config.session.app_secret:
-            config.console.print("  - [bold red]실패[/]: 모의투자 API Key/Secret이 설정되지 않았습니다.")
-            checks_ok = False
-        else:
-            config.console.print("  - 성공: 모의투자 API Key/Secret 확인 완료.")
-    else: # 실전
+    else: # 한투증권 실전 · 가상투자(VIRT 키를 real_* 슬롯에 넣어 같은 경로를 탄다)
         if not config.session.real_app_key or not config.session.real_app_secret:
             config.console.print("  - [bold red]실패[/]: 한투증권 API Key/Secret이 설정되지 않았습니다.")
             checks_ok = False
@@ -243,8 +235,6 @@ def preflight_check():
         progress.add_task("[cyan]  - API 토큰 발급 테스트 중...[/cyan]", total=None)
         if config.session.is_toss:
             token = toss_api.get_access_token(force_refresh=True)
-        elif config.session.is_simulation:
-            token = api.get_access_token(force_refresh=True)
         else:
             token = api.get_real_access_token(force_refresh=True)
         if token:
@@ -991,7 +981,7 @@ def _install_journal_sigterm_handler():
             pass  # 메인 스레드가 아니거나 지원되지 않는 환경
 
 
-_MODE_NAMES = {'1': "모의투자", '2': "한투증권", '3': "토스증권", '4': "가상투자"}
+_MODE_NAMES = {'1': "가상투자", '2': "한투증권", '3': "토스증권"}
 
 
 def _detect_appkey_duplicates():
@@ -1125,8 +1115,9 @@ def main():
      ./run.sh        (macOS/Linux)
      run.bat         (Windows)
 
-  2. 모의투자 모드로 자동매매 바로 시작:
+  2. 가상투자(페이퍼 트레이딩) 모드로 자동매매 바로 시작:
      ./run.sh --mode 1 --auto
+     (KIS 실전 시세 + 가상 계좌. 실주문이 나가지 않으므로 장기 관찰에 사용)
 
   3. 한투증권 모드로 바로 시작 (텔레그램 봇 수신 비활성화):
      ./run.sh --mode 2 --no-bot  (또는 run.bat ...)
@@ -1134,16 +1125,15 @@ def main():
   4. 토스증권 모드로 실행:
      ./run.sh --mode 3
 
-  5. 가상투자(페이퍼 트레이딩) 모드로 자동매매 바로 시작:
-     ./run.sh --mode 4 --auto
-     (KIS 실전 시세 + 가상 계좌. 실주문이 나가지 않으므로 장기 관찰에 사용)
-
-  6. 조회 전용 인스턴스를 하나 더 띄우기:
+  5. 조회 전용 인스턴스를 하나 더 띄우기:
      ./run.sh --mode 2 --allow-duplicate --no-bot
      (같은 모드는 기본적으로 하나만 뜹니다. 텔레그램·KIS 유량·DB 를 서로 빼앗기 때문입니다)
 """
     )
-    parser.add_argument('--mode', choices=['1', '2', '3', '4'], help='투자 모드 선택 (1: 모의투자, 2: 한투증권, 3: 토스증권, 4: 가상투자)\n지정하지 않으면 실행 시 모드 선택 화면이 출력됩니다.')
+    parser.add_argument('--mode', choices=['1', '2', '3', '4'],
+                        help='투자 모드 선택 (1: 가상투자, 2: 한투증권, 3: 토스증권)\n'
+                             '지정하지 않으면 실행 시 모드 선택 화면이 출력됩니다.\n'
+                             "('4'는 가상투자의 옛 번호입니다 — 받아 주되 경고 후 1로 처리합니다)")
     parser.add_argument('--auto', action='store_true', help='프로그램 시작 시 시스템 트레이딩 자동 실행 및 로그 뷰어 활성화')
     parser.add_argument('--no-bot', action='store_true', help='텔레그램 봇 명령어 수신(폴링) 비활성화 (알림 전송 기능은 유지)')
     parser.add_argument('--allow-duplicate', action='store_true',
@@ -1227,8 +1217,8 @@ def main():
 
         # [추가] 시장 국면 캐시 워밍업 (순차 1회 선행)
         # 백그라운드 모니터들이 동시에 지수차트(inquire-daily-indexchartprice)를 조회하면
-        # 모의투자(2 TPS) 서버에서 요청 폭주(EGW00201)가 발생한다. 모니터 기동 전에 TPS 게이트를
-        # 통과하는 순차 호출로 공유 캐시를 미리 채워, 초기 동시 폭주를 원천 차단한다.
+        # 요청 폭주(EGW00201)가 발생한다. 모니터 기동 전에 TPS 게이트를 통과하는 순차
+        # 호출로 공유 캐시를 미리 채워, 초기 동시 폭주를 원천 차단한다.
         if "pytest" not in sys.modules and "PYTEST_CURRENT_TEST" not in os.environ:
             for _m_type in ("KOSPI", "KOSDAQ"):
                 try:
@@ -1260,7 +1250,7 @@ def main():
     utils.show_help = show_help
 
     # [수정] KIS API를 쓰는 백그라운드 작업(체결감시·예약감시 모니터 + 관심종목 예열)은
-    # 자동매매 초기화(잔고 조회)와 모의투자 2 TPS를 두고 경합하면 EGW00201 재시도 폭주로
+    # 자동매매 초기화(잔고 조회)와 TPS를 두고 경합하면 EGW00201 재시도 폭주로
     # 초기화가 지연되고 메모리가 폭증한다. 초기화가 TPS를 선점하도록 '초기화 이후'에 시작한다.
     def _start_kis_monitors():
         auto_trade.ConclusionMonitor().start()
@@ -1294,14 +1284,13 @@ def main():
             logging.getLogger("hts").debug(f"[WS] 실시간 피드 시작 실패(REST 폴백): {_ws_e}")
 
     # [안전장치] 실계좌만 — 안전장치가 꺼진 채로 시작하는 것을 알린다.
-    #  종전에는 dynamic_config.json이 모드별로 나뉘지 않아 mode 4에서 끈 시장 필터가
+    #  종전에는 dynamic_config.json이 모드별로 나뉘지 않아 가상투자에서 끈 시장 필터가
     #  mode 2에도 그대로 적용됐고, 이 경고가 유일한 방어선이었다. 2026-08-23 설정 파일을
     #  모드별 프로필로 분리해 그 유입 경로 자체를 없앴다(config.set_config_profile).
     #  그래도 실전에서 직접 끄는 경로는 남아 있으므로 최종 확인으로 유지한다.
     #  시작을 막거나 값을 되돌리지는 않는다 — 의도적으로 끄는 경우도 있으므로
     #  판단은 사용자에게 두고, '모르는 채로 시작하는' 경우만 없앤다.
-    if not (getattr(config.session, 'is_paper', False)
-            or config.session.is_toss or config.session.is_simulation):
+    if not (getattr(config.session, 'is_paper', False) or config.session.is_toss):
         try:
             from modules import settings as _settings
             _settings.warn_if_safety_switches_off()

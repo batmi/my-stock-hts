@@ -185,12 +185,9 @@ def main():
             return
 
     config.session.initialize(mode=args.mode)
-    # 모드 4는 VIRT_APP_KEY 를 real_* 슬롯에 넣고 실전 서버를 쓴다(session.py 참조).
-    #  즉 토큰 종류는 'REAL'이며, 측정 대상 앱키만 달라진다.
-    if args.mode == '1':
-        token = api.get_access_token(force_refresh=args.force_token)
-    else:
-        token = api.get_real_access_token(force_refresh=args.force_token)
+    # 모드 1(가상투자)은 VIRT_APP_KEY 를 real_* 슬롯에 넣고 실전 서버를 쓴다(session.py 참조).
+    #  즉 어느 모드든 토큰 종류는 'REAL'이며, 측정 대상 앱키만 달라진다.
+    token = api.get_real_access_token(force_refresh=args.force_token)
     if not token:
         console.print("[red]토큰 발급 실패. 환경변수(~/.htsrc)를 확인하세요.[/red]")
         return

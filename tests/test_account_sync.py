@@ -28,8 +28,10 @@ def test_sync_today_trades(mock_db, mock_get_history):
     # Config setup
     config.session.cano = "12345678"
     config.session.acnt_prdt_cd = "01"
-    config.session.is_simulation = True
-    
+    # 자동매매 계좌가 갈리면 같은 응답을 두 계좌에서 두 번 읽는다(단일계좌로 고정).
+    config.session.auto_cano = "12345678"
+    config.session.auto_acnt_prdt_cd = "01"
+
     count = account.sync_today_trades()
     
     assert count == 1

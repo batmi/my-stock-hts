@@ -86,7 +86,7 @@ def sync_today_trades():
     if config.session.cano and config.session.acnt_prdt_cd:
         accounts.append({"cano": config.session.cano, "acnt": config.session.acnt_prdt_cd, "type": "MAIN"})
     
-    if not config.session.is_simulation and config.session.auto_cano and config.session.auto_acnt_prdt_cd:
+    if config.session.auto_cano and config.session.auto_acnt_prdt_cd:
         if config.session.auto_cano != config.session.cano or config.session.auto_acnt_prdt_cd != config.session.acnt_prdt_cd:
             accounts.append({"cano": config.session.auto_cano, "acnt": config.session.auto_acnt_prdt_cd, "type": "AUTO"})
             
@@ -1161,13 +1161,10 @@ def get_account_balance():
     accounts = []
     if config.session.is_toss:
         accounts.append((config.session.cano, config.session.acnt_prdt_cd, "토스증권"))
-    elif config.session.is_simulation:
-        accounts.append((config.session.cano, config.session.acnt_prdt_cd, "모의투자"))
-    else:
-        accounts.append((config.session.cano, config.session.acnt_prdt_cd, "한투증권 (수동)"))
-        if config.session.auto_cano and config.session.auto_acnt_prdt_cd and \
-           (config.session.auto_cano != config.session.cano or config.session.auto_acnt_prdt_cd != config.session.acnt_prdt_cd):
-            accounts.append((config.session.auto_cano, config.session.auto_acnt_prdt_cd, "한투증권 (자동)"))
+    accounts.append((config.session.cano, config.session.acnt_prdt_cd, "한투증권 (수동)"))
+    if config.session.auto_cano and config.session.auto_acnt_prdt_cd and \
+       (config.session.auto_cano != config.session.cano or config.session.auto_acnt_prdt_cd != config.session.acnt_prdt_cd):
+        accounts.append((config.session.auto_cano, config.session.auto_acnt_prdt_cd, "한투증권 (자동)"))
 
     for i, (cano, acnt, label) in enumerate(accounts):
         if i > 0: config.console.print("\n")
@@ -1211,7 +1208,7 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
             
         # [추가] 모의투자이거나 실현손익이 0인 경우 DB에서 금일 손익 및 매매금액 합산 (Fallback)
         # 모의투자는 기간별 손익 API를 지원하지 않으므로 DB 활용 필수
-        if config.session.is_simulation or summary_data['realized_pl'] == 0:
+        if summary_data['realized_pl'] == 0:
             try:
                 today_str = datetime.now().strftime("%Y-%m-%d")
                 target_acc = f"{cano}-{acnt_prdt_cd}"
@@ -1219,7 +1216,7 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
                 # DB 조회
                 db_trades = db_manager.db.get_trades(
                     start_date=today_str, end_date=today_str,
-                    is_sim=config.session.is_simulation, account=target_acc
+                    is_sim=False, account=target_acc
                 )
                 
                 db_pl = 0
@@ -1290,13 +1287,12 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
                 summary_data['next_day_plus'] = bfdy_sll - bfdy_tlex
                 summary_data['next_day_minus'] = bfdy_buy
                 
-                if not config.session.is_simulation:
-                    # [추가] 금일 제비용 보정 (기간별 손익 API 누락 시 잔고 요약 데이터 활용)
-                    tlex_amt = api.safe_int(summary.get('thdt_tlex_amt'))
-                    if tlex_amt > summary_data['total_cost']:
-                        summary_data['total_cost'] = tlex_amt
+                # [추가] 금일 제비용 보정 (기간별 손익 API 누락 시 잔고 요약 데이터 활용)
+                tlex_amt = api.safe_int(summary.get('thdt_tlex_amt'))
+                if tlex_amt > summary_data['total_cost']:
+                    summary_data['total_cost'] = tlex_amt
                     
-                    summary_data['withdraw'] = summary_data['d2_dep'] 
+                summary_data['withdraw'] = summary_data['d2_dep'] 
 
     except Exception as e:
         logger.error(f"자산 현황 조회 오류: {str(e)}")
@@ -1353,11 +1349,10 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
                 summary_data['d2_real'] = dep_data.get('d2_real', 0)
                 
                 # [수정] 실전투자일 경우 UI 표시용 D+2 값을 실제 D+2(가수도) 값으로 덮어쓰기
-                if not config.session.is_simulation and summary_data['d2_real'] > 0:
+                if summary_data['d2_real'] > 0:
                     summary_data['d2_dep'] = summary_data['d2_real']
                 
-                if not config.session.is_simulation:
-                    summary_data['dep_ovs'] = dep_data['foreign_deposit']
+                summary_data['dep_ovs'] = dep_data['foreign_deposit']
             
             if config.FILE_DEBUG_LEVEL == "DEBUG":
                 logger.debug(f"[ACCOUNT_DEBUG] Deposit Detail: {dep_data}")
@@ -1460,13 +1455,10 @@ def get_deposit_balance():
     accounts = []
     if config.session.is_toss:
         accounts.append((config.session.cano, config.session.acnt_prdt_cd, "토스증권"))
-    elif config.session.is_simulation:
-        accounts.append((config.session.cano, config.session.acnt_prdt_cd, "모의투자"))
-    else:
-        accounts.append((config.session.cano, config.session.acnt_prdt_cd, "한투증권 (수동)"))
-        if config.session.auto_cano and config.session.auto_acnt_prdt_cd and \
-           (config.session.auto_cano != config.session.cano or config.session.auto_acnt_prdt_cd != config.session.acnt_prdt_cd):
-            accounts.append((config.session.auto_cano, config.session.auto_acnt_prdt_cd, "한투증권 (자동)"))
+    accounts.append((config.session.cano, config.session.acnt_prdt_cd, "한투증권 (수동)"))
+    if config.session.auto_cano and config.session.auto_acnt_prdt_cd and \
+       (config.session.auto_cano != config.session.cano or config.session.auto_acnt_prdt_cd != config.session.acnt_prdt_cd):
+        accounts.append((config.session.auto_cano, config.session.auto_acnt_prdt_cd, "한투증권 (자동)"))
 
     for cano, acnt, label in accounts:
         config.console.print(f"\n[bold cyan]{label} 자산 현황 ({cano}{'-' + acnt if acnt else ''})[/]")
@@ -1475,7 +1467,7 @@ def get_deposit_balance():
 def export_trade_history_to_excel():
     """전체 거래 내역을 엑셀 파일로 저장"""
     try:
-        trades = db_manager.db.get_trades(is_sim=config.session.is_simulation, limit=None)
+        trades = db_manager.db.get_trades(is_sim=False, limit=None)
         if not trades:
             config.console.print("\n[yellow]저장할 거래 내역이 없습니다.[/yellow]")
             return
@@ -1697,7 +1689,7 @@ def offer_holdings_backfill():
             continue
         code = str(h.get('pdno') or '').strip()
         try:
-            rows = db_manager.db.get_trades(code=code, is_sim=config.session.is_simulation) or []
+            rows = db_manager.db.get_trades(code=code, is_sim=False) or []
         except Exception:
             continue
         if not any('매수' in str(r.get('type') or '') for r in rows):
@@ -1780,7 +1772,7 @@ def view_trade_history():
         logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
         try:
             logger.debug("[HISTORY_DEBUG] DB 조회 요청 (limit=50)")
-            trades = db_manager.db.get_trades(is_sim=config.session.is_simulation, limit=50)
+            trades = db_manager.db.get_trades(is_sim=False, limit=50)
             logger.debug(f"[HISTORY_DEBUG] DB 조회 완료. 건수: {len(trades)}")
         except Exception as e:
             logger.error(f"[HISTORY_DEBUG] DB 조회 실패: {e}")
@@ -1791,7 +1783,7 @@ def view_trade_history():
         start_dt = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
         try:
             logger.debug(f"[HISTORY_DEBUG] DB 조회 요청 (start_date={start_dt})")
-            trades = db_manager.db.get_trades(is_sim=config.session.is_simulation, start_date=start_dt)
+            trades = db_manager.db.get_trades(is_sim=False, start_date=start_dt)
             logger.debug(f"[HISTORY_DEBUG] DB 조회 완료. 건수: {len(trades)}")
         except Exception as e:
             logger.error(f"[HISTORY_DEBUG] DB 조회 실패: {e}")
@@ -1806,7 +1798,7 @@ def view_trade_history():
         logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
         try:
             logger.debug(f"[HISTORY_DEBUG] DB 조회 요청 (code={keyword})")
-            trades = db_manager.db.get_trades(is_sim=config.session.is_simulation, code=keyword)
+            trades = db_manager.db.get_trades(is_sim=False, code=keyword)
             logger.debug(f"[HISTORY_DEBUG] DB 조회 완료. 건수: {len(trades)}")
         except Exception as e:
             logger.error(f"[HISTORY_DEBUG] DB 조회 실패: {e}")
@@ -1835,18 +1827,12 @@ def view_trade_history():
                 
                 # 모의/실전 필터링
                 is_sim_account = False
-                if config.session.is_simulation:
-                    if cano == config.session.cano and acnt == config.session.acnt_prdt_cd:
-                        is_sim_account = True
-                    else:
-                        continue 
+                if cano == config.session.cano and acnt == config.session.acnt_prdt_cd:
+                    pass 
+                elif config.session.auto_cano and cano == config.session.auto_cano and acnt == config.session.auto_acnt_prdt_cd:
+                    pass 
                 else:
-                    if cano == config.session.cano and acnt == config.session.acnt_prdt_cd:
-                        pass 
-                    elif config.session.auto_cano and cano == config.session.auto_cano and acnt == config.session.auto_acnt_prdt_cd:
-                        pass 
-                    else:
-                        continue
+                    continue
 
                 t_type = "매수" if r['order_type'] == 'buy' else "매도"
                 reason = f"조건: {r['condition_type']}"
@@ -1922,8 +1908,7 @@ def view_trade_history():
     for t in trades:
         # 1. 모드 필터링 (모의투자 모드면 모의내역만, 실전이면 실전/자동 내역만)
         is_sim_data = bool(t['is_sim'])
-        if config.session.is_simulation and not is_sim_data: continue
-        if not config.session.is_simulation and is_sim_data: continue
+        if is_sim_data: continue
 
         acc_no = t.get('account', '')
         acc_norm = acc_no.rstrip('-')
@@ -1942,9 +1927,7 @@ def view_trade_history():
     #        [용어 통일] 계좌종류 라벨을 제한종목 화면과 동일하게
     #        (모의 / 토스 / 한투-수동 / 한투-자동)으로 표기한다.
     expected_sections = []  # (category, display_acc, acc_norm)
-    if config.session.is_simulation:
-        expected_sections.append(("모의", current_main_acc, current_main_acc.rstrip('-')))
-    elif getattr(config.session, 'is_toss', False):
+    if getattr(config.session, 'is_toss', False):
         expected_sections.append(("토스", current_main_acc, current_main_acc.rstrip('-')))
     else:
         expected_sections.append(("한투-수동", current_main_acc, current_main_acc.rstrip('-')))

@@ -177,7 +177,7 @@ def test_buy_candidate_skips_are_logged():
 def test_paper_mode_has_its_own_account_label():
     """[회귀 방지] mode 4가 라벨 분기에서 실전으로 떨어지지 않는다.
 
-    is_toss → is_simulation → else 순서로만 분기하면 가상투자가 '한투증권(자동)'으로
+    is_toss → else 순서로만 분기하면 가상투자가 '한투증권(자동)'으로
     표시된다. 실전 시세를 쓸 뿐 계좌는 가상이라, 실전 자동매매 계좌로 읽히면 위험하다
     (같은 누락이 텔레그램 꼬리말에서도 있었다).
     """

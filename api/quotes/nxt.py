@@ -49,8 +49,6 @@ def fetch_nxt_price(code):
     base 현재가를 이미 확보한 경로(개요 테이블 등)에서 NXT 시세만 추가로 병합할 때
     사용한다. 모의투자(VTS)는 NXT 미지원이라 ReadTimeout 방지를 위해 조회를 건너뛴다.
     """
-    if config.session.is_simulation:
-        return 0
     try:
         nxt_url = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["PRICE"]
         # [수정] retries=1: 장전(08:00~09:00) 오버뷰 팬아웃 중 EGW00201(초당 거래건수 초과)에 걸리면
@@ -271,7 +269,7 @@ def _fetch_multi_nxt_raw(codes):
         if time.time() - _MULTI_PRICE_NXT_DISABLED_AT < _MULTI_PRICE_RETRY_COOLDOWN_SEC:
             return {}
         _MULTI_PRICE_NXT_DISABLED = False  # 쿨다운 경과 → 재시도 허용
-    if not codes or config.session.is_simulation:
+    if not codes:
         return {}
     out = {}
     try:

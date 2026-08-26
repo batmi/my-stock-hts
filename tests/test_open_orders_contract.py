@@ -24,7 +24,6 @@ import config
 def paper_session(monkeypatch):
     monkeypatch.setattr(config.session, 'is_paper', True, raising=False)
     monkeypatch.setattr(config.session, 'is_toss', True, raising=False)
-    monkeypatch.setattr(config.session, 'is_simulation', False, raising=False)
 
 
 def test_paper_mode_returns_list(paper_session):

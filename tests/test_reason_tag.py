@@ -16,12 +16,11 @@ from modules.auto_trade import AutoTrader, ConclusionMonitor
 @pytest.fixture(autouse=True)
 def setup_teardown():
     """매 테스트마다 config 설정을 강제 초기화하여 독립성을 보장합니다."""
-    original_is_sim = config.session.is_simulation
-    config.session.is_simulation = True
+
     
     yield
     
-    config.session.is_simulation = original_is_sim
+
 
 @patch('modules.telegram_bot.TelegramCommander._get_refined_trades_cached')
 def test_telegram_cmd_stats(mock_get_trades):

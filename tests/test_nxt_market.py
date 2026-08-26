@@ -108,7 +108,6 @@ def test_single_price_break_only_on_trading_day(monkeypatch):
 
 def test_sor_order_routing_real(monkeypatch):
     """3. 실전 투자 시 SOR(최적주문집행) 거래소 코드가 올바르게 포함되는지 테스트"""
-    config.session.is_simulation = False
     
     def mock_call_api(url_path, market, category, action, data=None, method="GET", timeout=None, retries=None, tr_id=None):
         assert data is not None
@@ -121,7 +120,6 @@ def test_sor_order_routing_real(monkeypatch):
 
 def test_nxt_unsupported_order_routing_krx(monkeypatch):
     """4. NXT 미지원 종목(ETF 등)은 SOR 대신 KRX로 라우팅되는지 테스트 (APBK3026 방지)"""
-    config.session.is_simulation = False
     monkeypatch.setattr(api, 'is_nxt_tradeable', lambda code: False)
 
     def mock_call_api(url_path, market, category, action, data=None, method="GET", timeout=None, retries=None, tr_id=None):
@@ -145,7 +143,6 @@ def test_nxt_unsupported_order_routing_krx(monkeypatch):
 def vol_strength_env(monkeypatch):
     """체결강도 REST 경로만 타도록 WS·토스·모의투자·캐시를 정리한다."""
     monkeypatch.setattr(config.session, 'is_toss', False, raising=False)
-    monkeypatch.setattr(config.session, 'is_simulation', False, raising=False)
     monkeypatch.setattr(config, 'USE_WEBSOCKET', False, raising=False)
     api._MICRO_CACHE.clear()
     monkeypatch.setattr(api, 'is_holiday_today', lambda: False)

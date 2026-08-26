@@ -315,7 +315,7 @@ class ConclusionMonitor:
                 })
             
             # 2. 자동매매 계좌 (실전 모드이고 별도 설정된 경우)
-            if not config.session.is_simulation and config.session.auto_cano and config.session.auto_acnt_prdt_cd:
+            if config.session.auto_cano and config.session.auto_acnt_prdt_cd:
                 if config.session.auto_cano != config.session.cano or config.session.auto_acnt_prdt_cd != config.session.acnt_prdt_cd:
                     accounts_to_check.append({
                         "cano": config.session.auto_cano,
@@ -350,8 +350,6 @@ class ConclusionMonitor:
                         has_error = True
                     
                     # [추가] 모의투자 전용: API 체결내역 누락 대비 잔고 기반 체결 확인
-                    if config.session.is_simulation:
-                        self._check_simulation_conclusions_by_balance(cano, acnt)
 
                     trades = []
                     if data.get('rt_cd') == '0':
@@ -360,15 +358,6 @@ class ConclusionMonitor:
                         trades.extend(ovrs_data.get('output', []))
 
                     if trades:
-                        
-                        # [추가] 모의투자 API 데이터 불일치(output1 Empty, output2 Not Empty) 감지 로그
-                        if not trades and config.session.is_simulation:
-                            out2 = data.get('output2', {})
-                            try:
-                                tot_qty = int(out2.get('tot_ccld_qty', 0))
-                                if tot_qty > 0 and config.FILE_DEBUG_LEVEL == "DEBUG":
-                                    logger.debug(f"[Monitor] API 데이터 불일치: 체결내역 리스트는 비어있으나 요약 수량은 {tot_qty}입니다. (Pagination 또는 필터링 문제 가능성)")
-                            except Exception: pass
 
                         for item in trades:
                             odno = item.get('odno')

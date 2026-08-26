@@ -279,8 +279,6 @@ def _call_k200_futures_api(url_path, action, tr_id, params):
     모의 모드에서 실전 서버를 사용하지 않는다는 운영 방침에 따라 우회 없이 실패를 반환하며,
     코스피200선물 지수는 표시 계층(market)에서 모드 1/토스 시 목록에서 제외된다.
     """
-    if config.session.is_simulation:
-        return {'rt_cd': '9999', 'msg1': '모의투자 서버는 국내선물옵션 시세 TR을 지원하지 않습니다'}
     return _api().call_api(url_path, "domestic", "quotations", action, params=params, tr_id=tr_id, retries=0)
 
 def get_k200_futures_quote(mrkt_div_code, iscd):

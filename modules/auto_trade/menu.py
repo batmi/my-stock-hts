@@ -509,7 +509,7 @@ def _fetch_price_summaries(entries):
         transient=True
     ) as progress:
         task = progress.add_task("[cyan]데이터 조회 및 지표 계산 중...[/cyan]", total=len(uniq))
-        max_w = 2 if config.session.is_simulation else 4
+        max_w = 4
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as ex:
             futures = [ex.submit(_fetch_one, c, o) for c, o in uniq.items()]
             for fut in concurrent.futures.as_completed(futures):
@@ -606,14 +606,9 @@ def _add_restricted_stock():
             cano = config.session.cano
             acnt = config.session.acnt_prdt_cd
             account_type = "토스"
-        elif config.session.is_simulation:
-            cano = config.session.cano
-            acnt = config.session.acnt_prdt_cd
-            account_type = "모의"
-        else:
-            cano = getattr(config.session, 'auto_cano', config.session.cano)
-            acnt = getattr(config.session, 'auto_acnt_prdt_cd', config.session.acnt_prdt_cd)
-            account_type = "한투-자동"
+        cano = getattr(config.session, 'auto_cano', config.session.cano)
+        acnt = getattr(config.session, 'auto_acnt_prdt_cd', config.session.acnt_prdt_cd)
+        account_type = "한투-자동"
     elif choice == "3":
         account_type = Prompt.ask("계좌종류 선택", choices=["모의", "한투-자동", "한투-수동", "토스"], default="한투-자동")
         cano = Prompt.ask("계좌 앞 8자리")

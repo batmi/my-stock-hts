@@ -32,10 +32,10 @@ def select_account(title="주문을 수행할 계좌를 선택하세요"):
     elif config.session.is_toss:
         acc_label = "토스증권"
     else:
-        acc_label = "한투증권" if not config.session.is_simulation else "모의투자"
+        acc_label = "한투증권"
 
     # 실전 모드이고 자동매매 계좌가 별도로 설정된 경우 선택
-    if not config.session.is_simulation and config.session.auto_cano and config.session.auto_cano != config.session.cano:
+    if config.session.auto_cano and config.session.auto_cano != config.session.cano:
         menu_items = [
             ("1", f"{acc_label}", f"(Main): {config.session.cano}-{config.session.acnt_prdt_cd}"),
             ("2", "자동투자", f"(Auto): {config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}")
@@ -378,11 +378,11 @@ def show_open_orders():
     accounts = []
     # 1. 메인 계좌
     if config.session.cano:
-        label = "모의" if config.session.is_simulation else "실전"
+        label = "실전"
         accounts.append({"cano": config.session.cano, "acnt": config.session.acnt_prdt_cd, "label": label})
     
     # 2. 자동매매 계좌 (실전 모드이고 별도 설정된 경우)
-    if not config.session.is_simulation and config.session.auto_cano and config.session.auto_cano != config.session.cano:
+    if config.session.auto_cano and config.session.auto_cano != config.session.cano:
         accounts.append({"cano": config.session.auto_cano, "acnt": config.session.auto_acnt_prdt_cd, "label": "자동"})
 
     selectable_orders = []
@@ -430,275 +430,6 @@ def show_open_orders():
                 dom_orders = api.get_domestic_open_orders(cano, acnt)
                 
                 # [추가] 모의투자 API 누락 대응: DB에서 '접수' 상태 주문 조회하여 병합
-                if config.session.is_simulation:
-                    try:
-                        # [수정] 오늘 날짜 기준 접수 상태 주문만 조회 (과거 데이터 누적 방지 및 속도 개선)
-                        today_str = datetime.now().strftime("%Y-%m-%d")
-                        db_orders = db_manager.db.get_trades(limit=100, order_status="접수", start_date=today_str, is_sim=True)
-                        
-                        # [추가] 이미 체결 처리된 주문(체결 히스토리 존재) 필터링 (limit=None으로 전체 조회)
-                        filled_trades = db_manager.db.get_trades(start_date=today_str, order_status="체결", is_sim=True, limit=None)
-                        # [추가] 체결(추정) 상태도 포함하여 조회
-                        filled_trades_est = db_manager.db.get_trades(start_date=today_str, order_status="체결(추정)", is_sim=True, limit=None)
-                        filled_odnos = set(str(t['odno']) for t in filled_trades + filled_trades_est)
-                        
-                        # [DEBUG] DB 상태 로깅
-                        if config.FILE_DEBUG_LEVEL == "DEBUG":
-                            logger.debug(f"[ORDER_DEBUG] show_open_orders: DB접수({len(db_orders)}건), DB체결({len(filled_trades)}건), DB체결추정({len(filled_trades_est)}건)")
-                            logger.debug(f"[ORDER_DEBUG] Filled ODNOs: {filled_odnos}")
-                        
-                        # [추가] 이미 취소/정정된 주문(후속 이력 존재) 필터링
-                        # 취소/정정 주문은 org_odno(원주문번호)를 가지고 있음
-                        # 오늘 날짜의 모든 거래 내역을 조회하여 org_odno가 있는 경우 원본 주문을 제외 대상에 추가
-                        all_today_trades = db_manager.db.get_trades(start_date=today_str, is_sim=True)
-                        canceled_org_odnos = set(str(t['org_odno']) for t in all_today_trades if t.get('org_odno'))
-                        
-                        # [추가] 잔고 정보 조회 (매도 주문 체결 여부 검증용)
-                        holdings_map = {}
-                        try:
-                            h_list, _ = api.get_domestic_balance(cano, acnt)
-                            if h_list:
-                                for h in h_list:
-                                    holdings_map[h['pdno']] = int(h['hldg_qty'])
-                        except Exception: pass
-                        
-                        # [DEBUG] 잔고 상태 로깅
-                        if config.FILE_DEBUG_LEVEL == "DEBUG":
-                            logger.debug(f"[ORDER_DEBUG] Holdings Map: {holdings_map}")
-
-                        # 이미 API로 조회된 주문번호 집합
-                        api_odnos = set(str(o.get('odno')) for o in dom_orders if o.get('odno'))
-                        
-                        current_acc_str = f"{cano}-{acnt}"
-
-                        # [추가] 모의투자 체결 알림 헬퍼 함수 (실전 포맷 적용)
-                        def _send_sim_alert(type_name, db_order, reason_msg, fill_price=0.0):
-                            try:
-                                code = db_order.get('code')
-                                name = db_order.get('name')
-                                qty = int(float(db_order.get('qty', 0)))
-                                price = fill_price if fill_price > 0 else float(db_order.get('price', 0))
-                                
-                                is_overseas = not (len(code) == 6 and code[0].isdigit() and code.isalnum()) if code else False
-                                if price <= 0:
-                                    try:
-                                        cp = api.get_current_price(code, is_overseas=is_overseas)
-                                        if cp > 0: price = float(cp)
-                                        else:
-                                            # [추가] get_current_price 실패 시 상세 데이터에서 추출
-                                            cp_data = api.get_current_price_data(code, is_overseas=is_overseas)
-                                            if cp_data and cp_data.get('rt_cd') == '0':
-                                                if is_overseas:
-                                                    price = float(cp_data['output'].get('last', 0))
-                                                else:
-                                                    price = float(cp_data['output'].get('stck_prpr', 0))
-                                    except Exception: pass
-                                
-                                custom_rules = db_manager.db.get_all_stock_strategies()
-                                rules_map = {r['code']: r for r in custom_rules}
-                                rule = rules_map.get(code)
-                                
-                                title_tag = f"[{type_name} 체결(추정)]" if type_name else "[체결 알림(추정)]"
-                                rule_info = ""
-                                if rule:
-                                    title_tag += " [개별]"
-                                    rule_info = f"\n🔧 [개별 룰] 익절 +{rule['take_profit']}% / 손절 {rule['stop_loss']}%"
-                                    if rule.get('ts_activation'):
-                                        rule_info += f" / TS +{rule['ts_activation']}%(-{rule['ts_callback']}%)"
-                                
-                                cur_info = ""
-                                try:
-                                    cp_data = api.get_current_price_data(code, is_overseas=is_overseas)
-                                    if cp_data.get('rt_cd') == '0':
-                                        if is_overseas:
-                                            curr = float(cp_data['output'].get('last', 0))
-                                            rate = float(cp_data['output'].get('rate', 0))
-                                            icon = "🔺" if rate > 0 else ("" if rate < 0 else "➖")
-                                            cur_info = f"\n현재가: ${curr:,.2f} ({icon} {rate:+.2f}%)"
-                                        else:
-                                            curr = float(cp_data['output']['stck_prpr'])
-                                            rate = float(cp_data['output']['prdy_ctrt'])
-                                            icon = "🔺" if rate > 0 else ("🔽" if rate < 0 else "➖")
-                                            cur_info = f"\n현재가: {int(curr):,}원 ({icon} {rate:+.2f}%)"
-                                except Exception: pass
-                                
-                                strategy_info = ""
-                                if db_order.get('snapshot'):
-                                    try:
-                                        snap = json.loads(db_order['snapshot'])
-                                        if 'indicators' in snap:
-                                            ind = snap['indicators']
-                                            score = db_order.get('strategy_score', 0)
-                                            rsi_str = f"{ind.get('rsi', 0):.1f}"
-                                            adx_str = f"{ind.get('adx', 0):.1f}"
-                                            cci_str = f"{ind.get('cci', 0):.1f}"
-                                            strategy_info = f"\n\n📊 [전략 지표(진입시점)]\n• 점수: {score}점\n• RSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
-                                    except Exception: pass
-                                    
-                                if strategy_info:
-                                    strategy_info += cur_info
-                                    cur_info = ""
-                                elif cur_info:
-                                    strategy_info = f"\n\n📊 [현재 시장 데이터]{cur_info}"
-                                    cur_info = ""
-
-                                exec_amt = price * qty
-                                price_fmt = f"${price:,.2f}" if is_overseas and price > 0 else (f"{price:,.0f}원" if price > 0 else "시장가")
-                                amt_fmt = f"${exec_amt:,.2f}" if is_overseas and exec_amt > 0 else (f"{int(exec_amt):,}원" if exec_amt > 0 else "-")
-                                
-                                original_reason = db_order.get('reason', reason_msg)
-                                profit_msg = ""
-                                if type_name == "매도":
-                                    p_amt = db_order.get('profit_amt')
-                                    p_rate = db_order.get('profit_rate')
-                                    if p_amt is not None and p_rate is not None:
-                                        profit_msg = f"\n손익: {int(p_amt):+,}원 ({float(p_rate):+.2f}%)"
-                                        
-                                db_odno = db_order.get('odno', '')
-                                msg = f"✅ {title_tag} {name}({code})\n수량: {qty}주\n단가: {price_fmt}(추정체결가)\n금액: {amt_fmt}\n주문번호: {utils.format_order_no(db_odno)}{profit_msg}\n사유: {original_reason}{cur_info}{strategy_info}{rule_info}"
-                                api.send_telegram_message(msg)
-
-                                # [추가] 수동 매수 체결 시 트레이딩 제한 종목 자동 등록.
-                                #  프로그램 수동 주문은 시스템 ODNO로 등록되어 auto_trade의
-                                #  외부주문 감지 경로(앱/HTS)를 타지 않으므로 여기서 직접 등록한다.
-                                #  (자동매매가 해당 종목을 건드리지 않도록 보호)
-                                #  판정은 거래 기록의 '(AUTO)' 표기 기준 — ODNO 세트는 메모리라
-                                #  재기동 후에는 자동매매 주문까지 수동으로 오판한다.
-                                if type_name == "매수" and not auto_trade.is_system_trade(db_order.get('type'), db_odno):
-                                    try:
-                                        auto_trade.add_restricted_stock(code, name, "수동매매", is_overseas=is_overseas, cano=cano, acnt=acnt, account_type=auto_trade._current_account_type())
-                                    except Exception as e:
-                                        logger.error(f"수동 매수 제한 종목 등록 오류: {e}")
-
-                                # [수정] 중복 DB 저장 로직 제거 (_create_fill_history에서 이미 수행)
-
-                            except Exception: pass
-
-                        for db_o in db_orders:
-                            # 계좌 일치 확인
-                            if db_o.get('account') and db_o.get('account') != current_acc_str:
-                                continue
-
-                            db_odno = str(db_o.get('odno'))
-                            
-                            # [DEBUG] 주문별 판단 로직 로깅
-                            if config.FILE_DEBUG_LEVEL == "DEBUG":
-                                logger.debug(f"[ORDER_DEBUG] Checking DB Order: {db_odno} ({db_o.get('type')}, {db_o.get('name')})")
-
-                            if not db_odno or db_odno in api_odnos:
-                                if config.FILE_DEBUG_LEVEL == "DEBUG": logger.debug(f"[ORDER_DEBUG] -> Skip (In API or Invalid)")
-                                continue
-                            
-                            # [추가] 이미 체결된 주문이면 스킵 (접수 상태라도 체결 내역이 있으면 제외)
-                            if db_odno in filled_odnos:
-                                if config.FILE_DEBUG_LEVEL == "DEBUG": logger.debug(f"[ORDER_DEBUG] -> Skip (Already Filled)")
-                                continue
-                            
-                            # [추가] 이미 취소/정정된 주문이면 스킵 (원주문번호로 참조된 이력이 있으면 제외)
-                            if db_odno in canceled_org_odnos:
-                                if config.FILE_DEBUG_LEVEL == "DEBUG": logger.debug(f"[ORDER_DEBUG] -> Skip (Canceled)")
-                                continue
-                            
-                            # DB 주문 정보를 API 포맷으로 변환
-                            type_str = db_o.get('type', '')
-                            sll_buy_name = "매수" if "buy" in type_str.lower() or "매수" in type_str else "매도"
-                            
-                            # [추가] 매도 주문인데 잔고가 0이면 '체결'로 간주하고 목록에서 제외 (DB 업데이트 포함)
-                            # 모의투자 API가 체결 내역을 늦게 주거나 누락하는 경우 대응
-                            if "매도" in sll_buy_name:
-                                code = db_o.get('code')
-                                cur_qty = holdings_map.get(code, 0)
-                                # [수정] 발주 직전 보유수량 대비 감소분으로 체결 판정 (부분매도 대응)
-                                #  pre_qty 미보유 시 기존 전량매도(잔고 0) 가정으로 폴백
-                                order_qty = int(float(db_o.get('qty', 0)))
-                                trader_om = auto_trade.AutoTrader().order_manager
-                                pre_qty = trader_om.sell_pre_qty.get(str(db_odno))
-                                is_delta_fill = pre_qty is not None and (pre_qty - cur_qty) >= order_qty
-                                is_sell_filled = is_delta_fill or cur_qty == 0
-                                if is_sell_filled:
-                                    fill_reason = "잔고 감소 확인" if is_delta_fill and cur_qty != 0 else "잔고 0 확인"
-                                    cm = auto_trade.ConclusionMonitor()
-                                    with cm._lock:
-                                        if db_odno in cm.processed_sim_fills: continue
-                                        cm.processed_sim_fills.add(db_odno)
-
-                                    if config.FILE_DEBUG_LEVEL == "DEBUG":
-                                        logger.debug(f"[ORDER_DEBUG] 매도 주문({db_odno}) {fill_reason} -> 체결 처리 시작")
-                                    # 원본 업데이트 제거 (접수 기록 보존)
-
-                                    # [추가] 체결 히스토리 생성
-                                    fill_price = _create_fill_history(db_o, fill_reason)
-
-                                    if config.FILE_DEBUG_LEVEL == "DEBUG":
-                                        logger.debug(f"[ORDER_DEBUG] 매도 주문({db_odno}) 체결 처리 완료 (알림 전송 예정)")
-
-                                    # [수정] 텔레그램 알림 (헬퍼 함수 사용)
-                                    _send_sim_alert("매도", db_o, fill_reason, fill_price)
-                                    
-                                    # [추가] AutoTrader 상태도 업데이트하여 중복 처리 방지
-                                    trader = auto_trade.AutoTrader()
-                                    if hasattr(trader, 'order_manager'):
-                                        trader.update_order_status(code, db_odno, auto_trade.OrderStatus.FILLED)
-                                        
-                                    continue
-                                else:
-                                    if config.FILE_DEBUG_LEVEL == "DEBUG":
-                                        logger.debug(f"[ORDER_DEBUG] 매도 주문({db_odno}) 잔고 보유중({cur_qty}) -> 미체결 유지")
-                            
-                            # [추가] 매수 주문인데 잔고가 주문 수량 이상이면 '체결'로 간주하고 목록에서 제외
-                            # (모의투자 API 누락 대응: 잔고가 들어왔다면 체결된 것임)
-                            if "매수" in sll_buy_name:
-                                code = db_o.get('code')
-                                order_qty = int(float(db_o.get('qty', 0)))
-                                current_qty = holdings_map.get(code, 0)
-                                
-                                if current_qty >= order_qty:
-                                    cm = auto_trade.ConclusionMonitor()
-                                    with cm._lock:
-                                        if db_odno in cm.processed_sim_fills: continue
-                                        cm.processed_sim_fills.add(db_odno)
-                                        
-                                    if config.FILE_DEBUG_LEVEL == "DEBUG":
-                                        logger.debug(f"[ORDER_DEBUG] 매수 주문({db_odno}) 잔고 입고 확인({current_qty}>={order_qty}) -> 체결 처리")
-                                    # 원본 업데이트 제거 (접수 기록 보존)
-                                    
-                                    # [추가] 체결 히스토리 생성
-                                    fill_price = _create_fill_history(db_o, "잔고 입고 확인")
-
-                                    # [수정] 텔레그램 알림 (헬퍼 함수 사용)
-                                    _send_sim_alert("매수", db_o, "잔고 입고 확인", fill_price)
-                                    
-                                    # [추가] AutoTrader 상태도 업데이트하여 중복 처리 방지
-                                    trader = auto_trade.AutoTrader()
-                                    if hasattr(trader, 'order_manager'):
-                                        trader.update_order_status(code, db_odno, auto_trade.OrderStatus.FILLED)
-                                        
-                                    continue
-
-                            # [DEBUG] 최종 추가
-                            if config.FILE_DEBUG_LEVEL == "DEBUG":
-                                logger.debug(f"[ORDER_DEBUG] -> Added to Open Orders List")
-                            
-                            # 시간 포맷 변환 (YYYY-MM-DD HH:MM:SS -> HHMMSS)
-                            time_str = db_o.get('time', '')
-                            ord_tmd = ""
-                            if len(time_str) >= 19:
-                                ord_tmd = time_str[11:19].replace(':', '')
-                            
-                            converted = {
-                                'odno': db_odno,
-                                'pdno': db_o.get('code'),
-                                'prdt_name': db_o.get('name'),
-                                'sll_buy_dvsn_cd_name': sll_buy_name,
-                                'ord_qty': str(db_o.get('qty', 0)),
-                                'ord_unpr': str(int(float(db_o.get('price', 0)))),
-                                'rmn_qty': str(db_o.get('qty', 0)), # 잔량 정보가 없으므로 주문 수량으로 대체
-                                'ord_tmd': ord_tmd,
-                                '_is_db_fallback': True # DB 유래 플래그
-                            }
-                            dom_orders.append(converted)
-                    except Exception as e:
-                        logger.error(f"미체결 내역 DB 병합 중 오류: {e}")
 
                 for order in dom_orders:
                     rmn_qty = order.get('rmn_qty') or order.get('psbl_qty', '0')
@@ -1576,12 +1307,6 @@ def modify_order():
                 msg_cd = res_json.get('msg_cd')
                 err_msg = res_json.get('msg1')
                 config.console.print(f"[red]실패: {err_msg}[/]")
-                
-                # [추가] 이미 체결/취소된 주문(40330000)인 경우 DB 상태 업데이트 (유령 주문 정리)
-                if msg_cd == '40330000' and config.session.is_simulation:
-                    config.console.print("[yellow]안내: 이미 체결되었거나 취소된 주문입니다. 상태를 업데이트합니다.[/yellow]")
-                    # 원본 주문 보존 및 더미 이력(CLEAN) 생성으로 변경
-                    db_manager.db.insert_trade(f"확인요망", pdno, prdt_name, final_qty, price, org_odno, order_status="체결/취소(추정)", reason="이미 체결/취소된 주문")
         except Exception as e:
             config.console.print(f"[red]에러: {e}[/]")
 
@@ -2648,8 +2373,8 @@ def _reserved_account_label(order):
     """예약 주문이 걸린 계좌를 '실전/모의/자동/기타'로 표기한다."""
     cano, acnt = order.get('cano', ''), order.get('acnt', '')
     if cano == config.session.cano and acnt == config.session.acnt_prdt_cd:
-        return "모의" if config.session.is_simulation else "실전"
-    if (not config.session.is_simulation and config.session.auto_cano
+        return "실전"
+    if (config.session.auto_cano
             and cano == config.session.auto_cano and acnt == config.session.auto_acnt_prdt_cd):
         return "자동"
     return "기타"

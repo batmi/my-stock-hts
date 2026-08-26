@@ -21,7 +21,6 @@ import config
 
 @pytest.fixture
 def real_mode(monkeypatch):
-    monkeypatch.setattr(config.session, 'is_simulation', False, raising=False)
     monkeypatch.setattr(config.session, 'is_toss', False, raising=False)
     monkeypatch.setattr(config.session, 'is_paper', False, raising=False)
     monkeypatch.setattr(config.session, 'cano', "11111111", raising=False)

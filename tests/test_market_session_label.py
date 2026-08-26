@@ -24,11 +24,10 @@ class _FrozenDatetime(datetime):
         return cls._now
 
 
-def _freeze_kr(dt, holiday=False, simulation=False):
+def _freeze_kr(dt, holiday=False):
     _FrozenDatetime._now = dt
     return (patch.object(api, 'datetime', _FrozenDatetime),
-            patch.object(api, 'is_holiday_today', lambda: holiday),
-            patch.object(api.config.session, 'is_simulation', simulation))
+            patch.object(api, 'is_holiday_today', lambda: holiday))
 
 
 # ==========================================================
@@ -47,15 +46,15 @@ def _freeze_kr(dt, holiday=False, simulation=False):
     (23, 30, 'closed'),
 ])
 def test_domestic_session_phase_boundaries(hh, mm, expect):
-    a, b, c = _freeze_kr(datetime(2026, 7, 28, hh, mm))
-    with a, b, c:
+    a, b = _freeze_kr(datetime(2026, 7, 28, hh, mm))
+    with a, b:
         assert api.domestic_session_phase() == expect
 
 
 def test_domestic_session_phase_holiday_overrides_clock():
     """휴장일은 정규장 시간대여도 'holiday'."""
-    a, b, c = _freeze_kr(datetime(2026, 7, 28, 10, 0), holiday=True)
-    with a, b, c:
+    a, b = _freeze_kr(datetime(2026, 7, 28, 10, 0), holiday=True)
+    with a, b:
         assert api.domestic_session_phase() == 'holiday'
 
 
@@ -65,8 +64,8 @@ def test_domestic_phase_matches_nxt_quote_phase():
                'krx': 'skip', 'closed': 'offhours', 'holiday': 'offhours'}
     for hh in range(24):
         for mm in (0, 29, 30, 59):
-            a, b, c = _freeze_kr(datetime(2026, 7, 28, hh, mm))
-            with a, b, c:
+            a, b = _freeze_kr(datetime(2026, 7, 28, hh, mm))
+            with a, b:
                 assert mapping[api.domestic_session_phase()] == api._nxt_quote_phase(), \
                     f"{hh:02d}:{mm:02d} 경계 불일치"
 
@@ -76,8 +75,8 @@ def test_domestic_phase_matches_nxt_quote_phase():
 # ==========================================================
 
 def test_domestic_label_regular_is_krx():
-    a, b, c = _freeze_kr(datetime(2026, 7, 28, 10, 0))
-    with a, b, c:
+    a, b = _freeze_kr(datetime(2026, 7, 28, 10, 0))
+    with a, b:
         text, style = api.market_session_label(False)
     assert text == "KRX 정규장"
     assert style == "green"
@@ -88,20 +87,11 @@ def test_domestic_label_regular_is_krx():
     (16, 0, "NXT 애프터마켓 · KRX 마감"),
 ])
 def test_domestic_label_nxt_windows(hh, mm, expect):
-    a, b, c = _freeze_kr(datetime(2026, 7, 28, hh, mm))
-    with a, b, c:
+    a, b = _freeze_kr(datetime(2026, 7, 28, hh, mm))
+    with a, b:
         text, style = api.market_session_label(False)
     assert text == expect
     assert style == "yellow"
-
-
-def test_domestic_label_simulation_marks_nxt_unsupported():
-    """모의투자(VTS)는 NXT 미지원 — 그 시간대에도 화면값은 KRX 종가다."""
-    a, b, c = _freeze_kr(datetime(2026, 7, 28, 8, 30), simulation=True)
-    with a, b, c:
-        text, style = api.market_session_label(False)
-    assert "모의투자" in text and "KRX 종가" in text
-    assert style == "dim"
 
 
 @pytest.mark.parametrize("krx_fixed, expect_basis", [
@@ -109,8 +99,8 @@ def test_domestic_label_simulation_marks_nxt_unsupported():
     (False, "NXT 최종가"),   # 끄면 마지막 실거래가(전날 NXT 종가)를 그대로 노출
 ])
 def test_domestic_label_closed_shows_price_basis(krx_fixed, expect_basis):
-    a, b, c = _freeze_kr(datetime(2026, 7, 28, 22, 0))
-    with a, b, c, patch.object(api, 'display_price_krx_fixed', lambda _=False: krx_fixed):
+    a, b = _freeze_kr(datetime(2026, 7, 28, 22, 0))
+    with a, b, patch.object(api, 'display_price_krx_fixed', lambda _=False: krx_fixed):
         text, style = api.market_session_label(False)
     assert text == f"장 마감 · {expect_basis}"
     assert style == "dim"
@@ -127,8 +117,8 @@ def test_domestic_label_closed_shows_price_basis(krx_fixed, expect_basis):
 def test_domestic_etf_label_marks_nxt_untraded(hh, mm, session):
     """NXT는 ETF/ETN을 취급하지 않는다 — 세션은 열려도 값은 KRX 종가에서 멈춘다.
     세션 이름만 띄우면 '지금 거래 중'으로 오독되므로 미거래를 명시하고 dim 처리한다."""
-    a, b, c = _freeze_kr(datetime(2026, 7, 28, hh, mm))
-    with a, b, c:
+    a, b = _freeze_kr(datetime(2026, 7, 28, hh, mm))
+    with a, b:
         text, style = api.market_session_label(False, is_domestic_etf=True)
     assert text == f"{session} · ETF 미거래(KRX 종가)"
     assert style == "dim"
@@ -136,15 +126,15 @@ def test_domestic_etf_label_marks_nxt_untraded(hh, mm, session):
 
 def test_domestic_etf_label_regular_session_unchanged():
     """정규장에는 ETF도 KRX에서 정상 거래된다 — 주식 표와 같은 라벨."""
-    a, b, c = _freeze_kr(datetime(2026, 7, 28, 10, 0))
-    with a, b, c:
+    a, b = _freeze_kr(datetime(2026, 7, 28, 10, 0))
+    with a, b:
         assert api.market_session_label(False, is_domestic_etf=True) == ("KRX 정규장", "green")
 
 
 def test_domestic_etf_label_closed_always_krx_basis():
     """ETF는 NXT 체결 자체가 없어, USE_KRX_CLOSE_AFTER_HOURS를 꺼도 기준은 KRX 종가다."""
-    a, b, c = _freeze_kr(datetime(2026, 7, 28, 22, 0))
-    with a, b, c, patch.object(api, 'display_price_krx_fixed', lambda _=False: False):
+    a, b = _freeze_kr(datetime(2026, 7, 28, 22, 0))
+    with a, b, patch.object(api, 'display_price_krx_fixed', lambda _=False: False):
         text, _style = api.market_session_label(False, is_domestic_etf=True)
     assert text == "장 마감 · KRX 종가"
 
@@ -157,8 +147,8 @@ def test_us_label_ignores_domestic_etf_flag():
 
 
 def test_domestic_label_holiday():
-    a, b, c = _freeze_kr(datetime(2026, 7, 28, 11, 0), holiday=True)
-    with a, b, c, patch.object(api, 'display_price_krx_fixed', lambda _=False: True):
+    a, b = _freeze_kr(datetime(2026, 7, 28, 11, 0), holiday=True)
+    with a, b, patch.object(api, 'display_price_krx_fixed', lambda _=False: True):
         text, _style = api.market_session_label(False)
     assert text.startswith("휴장")
 
@@ -185,11 +175,11 @@ def test_session_phase_key_folds_closed_and_holiday():
 def test_session_phase_key_midnight_rollover_is_silent():
     """일 23:59 → 월 00:00: 실제 phase는 바뀌지만 알림 키는 그대로다."""
     from modules.auto_trade.trader import session_phase_key
-    a, b, c = _freeze_kr(datetime(2026, 8, 2, 23, 59), holiday=True)   # 일요일 심야
-    with a, b, c:
+    a, b = _freeze_kr(datetime(2026, 8, 2, 23, 59), holiday=True)   # 일요일 심야
+    with a, b:
         before = session_phase_key(api.domestic_session_phase())
-    a, b, c = _freeze_kr(datetime(2026, 8, 3, 0, 0), holiday=False)    # 월요일 자정
-    with a, b, c:
+    a, b = _freeze_kr(datetime(2026, 8, 3, 0, 0), holiday=False)    # 월요일 자정
+    with a, b:
         after = session_phase_key(api.domestic_session_phase())
     assert before == after == 'idle'
 
@@ -197,11 +187,11 @@ def test_session_phase_key_midnight_rollover_is_silent():
 def test_session_phase_key_market_close_still_notifies():
     """20:00 애프터마켓 → 20:01 마감은 진짜 전환 — 알림이 살아 있어야 한다."""
     from modules.auto_trade.trader import session_phase_key
-    a, b, c = _freeze_kr(datetime(2026, 7, 28, 20, 0))
-    with a, b, c:
+    a, b = _freeze_kr(datetime(2026, 7, 28, 20, 0))
+    with a, b:
         before = session_phase_key(api.domestic_session_phase())
-    a, b, c = _freeze_kr(datetime(2026, 7, 28, 20, 1))
-    with a, b, c:
+    a, b = _freeze_kr(datetime(2026, 7, 28, 20, 1))
+    with a, b:
         after = session_phase_key(api.domestic_session_phase())
     assert before == 'nxt_after' and after == 'idle'
 
@@ -258,8 +248,8 @@ def test_us_label_includes_et_clock(hh, mm, head, style):
 # ==========================================================
 
 def test_session_tag_wraps_label_in_markup():
-    a, b, c = _freeze_kr(datetime(2026, 7, 28, 10, 0))
-    with a, b, c:
+    a, b = _freeze_kr(datetime(2026, 7, 28, 10, 0))
+    with a, b:
         tag = api.market_session_tag(False)
     assert tag == "  [dim]│[/dim] [green]KRX 정규장[/green]"
 

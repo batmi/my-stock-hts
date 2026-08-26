@@ -32,7 +32,7 @@ def market_today(is_overseas=False):
 def get_common_headers(tr_id):
     # [수정] 컨텍스트에 따라 적절한 앱 키/시크릿 선택
     use_auto = getattr(context.trade_context, 'use_auto_account', False)
-    is_sim = config.session.is_simulation
+    is_sim = False
     
     if is_sim:
         app_key = config.session.app_key
@@ -55,10 +55,9 @@ def get_common_headers(tr_id):
     }
 
 def get_tr_id(market, category, action):
-    """constants.TR_ID_CONFIG에서 환경(실전/모의)에 맞는 TR_ID를 반환하는 헬퍼 함수"""
-    env_key = "sim" if config.session.is_simulation else "real"
+    """constants.TR_ID_CONFIG에서 TR_ID를 반환하는 헬퍼 함수"""
     try:
-        return constants.TR_ID_CONFIG[market][category][action][env_key]
+        return constants.TR_ID_CONFIG[market][category][action]
     except KeyError:
         return ""
 
@@ -242,10 +241,7 @@ def print_breadcrumb():
                 env_str = "[가상투자]"; env_color = "cyan"
             elif config.session.is_toss:
                 env_str = "[토스증권]"; env_color = "magenta"
-            elif config.session.is_simulation:
-                env_str = "[모의투자]"; env_color = "green"
-            else:
-                env_str = "[한투증권]"; env_color = "bold red"
+            env_str = "[한투증권]"; env_color = "bold red"
             
             print("\n" + "─"*50)
             config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")
@@ -560,7 +556,7 @@ class AccountContext:
 
     def __enter__(self):
         self.original_state = getattr(context.trade_context, 'use_auto_account', False)
-        if not config.session.is_simulation and self.cano:
+        if self.cano:
             if self.cano == config.session.auto_cano:
                 context.trade_context.use_auto_account = True
             elif self.cano == config.session.cano:
@@ -580,8 +576,6 @@ def system_trading_account():
     주문이 조용히 수동 계좌로 새는 구조였다.
     """
     s = config.session
-    if s.is_simulation:
-        return s.cano, s.acnt_prdt_cd
     return (s.auto_cano or s.cano), (s.auto_acnt_prdt_cd if s.auto_cano else s.acnt_prdt_cd)
 
 

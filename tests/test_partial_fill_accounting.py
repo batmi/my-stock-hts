@@ -45,7 +45,6 @@ _EMPTY = {"rt_cd": "0", "msg_cd": "", "output": []}
 def monitor(monkeypatch):
     monkeypatch.setattr(config.session, 'cano', "12345678", raising=False)
     monkeypatch.setattr(config.session, 'acnt_prdt_cd', "01", raising=False)
-    monkeypatch.setattr(config.session, 'is_simulation', False, raising=False)
     monkeypatch.setattr(config.session, 'is_toss', False, raising=False)
     monkeypatch.setattr(config.session, 'is_paper', False, raising=False)
     monkeypatch.setattr(config.session, 'auto_cano', "", raising=False)

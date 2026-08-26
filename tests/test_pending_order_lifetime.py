@@ -53,10 +53,9 @@ def _old_trade(minutes_ago=30):
             'time': (datetime.now() - timedelta(minutes=minutes_ago)).strftime("%Y-%m-%d %H:%M:%S")}
 
 
-def _sweep(trader, simulation=True):
+def _sweep(trader):
     """API 미체결 목록이 비어 있는(= 주문이 사라진) 상태로 미체결 관리를 1회 돌린다."""
-    with patch.object(config.session, 'is_simulation', simulation), \
-         patch.object(trader, 'is_market_open', return_value=True), \
+    with patch.object(trader, 'is_market_open', return_value=True), \
          patch('modules.auto_trade.api.get_unfilled_orders', return_value=[]), \
          patch('modules.auto_trade.db_manager.db.get_trade_by_odno', return_value=_old_trade()), \
          patch('modules.auto_trade.db_manager.db.insert_trade'), \
@@ -68,14 +67,6 @@ def _sweep(trader, simulation=True):
 
 
 # ─────────────────────────────── 대조군 ───────────────────────────────
-
-def test_order_sent_orphan_is_swept(trader):
-    """ORDER_SENT 고아 주문은 로컬 폴백이 강제 취소해 pending을 푼다."""
-    _register(trader, OrderStatus.ORDER_SENT)
-    _sweep(trader)
-    assert not trader.order_manager.is_pending(CODE), \
-        "ORDER_SENT 폴백이 동작하지 않는다 — 이 테스트의 전제가 깨졌다"
-
 
 # ─────────────────────── 고아 상태가 성립하는가 ───────────────────────
 
@@ -110,11 +101,11 @@ def test_stuck_pending_is_alerted(trader, status):
 def test_real_account_order_sent_orphan_is_alerted(trader):
     """실계좌에는 로컬 폴백이 아예 없다 — ORDER_SENT 고아도 갇히므로 경보 대상이다.
 
-    폴백(part 2)은 config.session.is_simulation 일 때만 돈다. 모의투자 기준으로만
-    '폴백이 처리하니 괜찮다'고 판단하면 정작 실계좌가 무방비가 된다.
+    로컬 폴백이 없는 경로이므로, '폴백이 처리하니 괜찮다'고 판단하면
+    정작 실계좌가 무방비가 된다.
     """
     _register(trader, OrderStatus.ORDER_SENT)
-    tg = _sweep(trader, simulation=False)
+    tg = _sweep(trader)
 
     assert trader.order_manager.is_pending(CODE), "실계좌에는 폴백이 없다는 전제 확인"
     assert tg.called, "실계좌에서 사라진 주문이 pending으로 남았는데 경보가 없다"
@@ -149,8 +140,7 @@ def test_fresh_progressed_order_is_not_alerted(trader):
     평범한 지정가 대기가 전부 알림이 된다.
     """
     _register(trader, OrderStatus.ACCEPTED)
-    with patch.object(config.session, 'is_simulation', True), \
-         patch.object(trader, 'is_market_open', return_value=True), \
+    with patch.object(trader, 'is_market_open', return_value=True), \
          patch('modules.auto_trade.api.get_unfilled_orders', return_value=[]), \
          patch('modules.auto_trade.db_manager.db.get_trade_by_odno',
                return_value=_old_trade(minutes_ago=0)), \
@@ -173,8 +163,7 @@ def test_fresh_progressed_order_is_not_alerted(trader):
 
 def _sweep_real(trader, history_rows):
     """실계좌 모드에서, 당일 주문내역이 주어진 상태로 미체결 관리를 1회 돌린다."""
-    with patch.object(config.session, 'is_simulation', False), \
-         patch.object(trader, 'is_market_open', return_value=True), \
+    with patch.object(trader, 'is_market_open', return_value=True), \
          patch('modules.auto_trade.api.get_unfilled_orders', return_value=[]), \
          patch('modules.auto_trade.api.get_today_history',
                return_value={'rt_cd': '0', 'output1': history_rows}), \
@@ -212,8 +201,7 @@ def test_unconfirmed_orphan_is_left_alone(trader, rows):
 def test_history_failure_leaves_pending(trader):
     """대사 조회가 실패하면 아무것도 단정하지 않는다."""
     _register(trader, OrderStatus.ACCEPTED)
-    with patch.object(config.session, 'is_simulation', False), \
-         patch.object(trader, 'is_market_open', return_value=True), \
+    with patch.object(trader, 'is_market_open', return_value=True), \
          patch('modules.auto_trade.api.get_unfilled_orders', return_value=[]), \
          patch('modules.auto_trade.api.get_today_history', side_effect=RuntimeError("down")), \
          patch('modules.auto_trade.db_manager.db.get_trade_by_odno', return_value=_old_trade()), \

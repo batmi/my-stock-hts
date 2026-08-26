@@ -329,11 +329,11 @@ class AutoTrader:
             disable=not api._is_screen_output_allowed() # [추가] 텔레그램 스레드 등 백그라운드에서는 상태바 숨김
         ) as progress:
             # [수정] 모의투자는 예수금을 잔고 summary에서 유도하므로 작업 2개(잔고/DB), 실전은 3개(+예수금)
-            _init_total = 2 if config.session.is_simulation else 3
+            _init_total = 3
             task = progress.add_task("[cyan]자동매매 세션 초기화 중...[/cyan]", total=_init_total)
             
-            target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-            acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+            target_cano = config.session.auto_cano
+            acnt = config.session.auto_acnt_prdt_cd
             
             with utils.AccountContext(target_cano):
                 # 병렬 실행을 위한 변수
@@ -368,8 +368,7 @@ class AutoTrader:
                     # 초기화 시 중복 잔고조회(get_domestic_balance)+예수금조회가 2-TPS 경합으로 재시도
                     # 폭주를 일으켜 메모리가 폭증하던 문제를 제거한다. (실전만 별도 예수금 조회 수행)
                     futures = [executor.submit(_fetch_balance), executor.submit(_load_db_caches)]
-                    if not config.session.is_simulation:
-                        futures.append(executor.submit(_fetch_deposit))
+                    futures.append(executor.submit(_fetch_deposit))
                     for future in concurrent.futures.as_completed(futures):
                         key, value = future.result()
                         results[key] = value
@@ -381,15 +380,7 @@ class AutoTrader:
                 # 않는다. 매도는 막지 않는다(청산 경로는 어떤 경우에도 열려 있어야 한다).
                 self.pending_restore_ok = bool(pending_restored)
 
-                if config.session.is_simulation:
-                    # [수정] 모의투자: 잔고 summary에서 예수금 유도 (_run_loop와 동일 방식)
-                    deposit_res = None
-                    if summary:
-                        dnca = api.safe_int(summary[0].get('dnca_tot_amt', 0))
-                        d2_dep = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
-                        deposit_res = {'deposit': dnca, 'foreign_deposit': 0, 'd2_deposit': d2_dep}
-                else:
-                    deposit_res = results.get("deposit")
+                deposit_res = results.get("deposit")
 
                 if holdings is None or deposit_res is None:
                     raise Exception("자산/예수금 조회 실패 (API 응답 없음)")
@@ -412,11 +403,8 @@ class AutoTrader:
                 # 재시도(타임아웃/EGW00201) 경로로 빠지며 네이티브 메모리가 폭증(OOM)하는 원인이었다.
                 # 모의투자는 이미 조회한 잔고 summary의 총평가금(tot_evlu_amt)으로 유도하여
                 # 추가 KIS 호출을 제거한다. (실전만 해외자산 포함 통합 조회 유지)
-                if config.session.is_simulation:
-                    tot_asset = api.safe_int(summary[0].get('tot_evlu_amt', 0)) if summary else 0
-                else:
-                    asset_data = account.get_asset_status_data(target_cano, acnt)
-                    tot_asset = asset_data.get('tot_asset', 0) if asset_data else 0
+                asset_data = account.get_asset_status_data(target_cano, acnt)
+                tot_asset = asset_data.get('tot_asset', 0) if asset_data else 0
 
                 if tot_asset > 0:
                     account_key = f"{target_cano}-{acnt}"
@@ -451,8 +439,8 @@ class AutoTrader:
         return False
 
     def _trade_account_key(self):
-        cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-        acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+        cano = config.session.auto_cano
+        acnt = config.session.auto_acnt_prdt_cd
         return f"{cano}-{acnt}"
 
     def _acquire_instance_lock(self):
@@ -590,17 +578,7 @@ class AutoTrader:
             else:
                 if api._is_screen_output_allowed():
                     console.print("[bold cyan][시스템 명령] 토스증권 자동매매를 시작합니다.[/bold cyan]")
-        elif config.session.is_simulation:
-            if interactive:
-                console.print(f"\n운용 계좌: [bold yellow]PAPER-{config.session.cano}-{config.session.acnt_prdt_cd}[/bold yellow]")
-                utils.print_breadcrumb()
-                if Prompt.ask("위 계좌로 매매가 수행됩니다. 진행하시겠습니까?", choices=["y", "n"], default="n") != "y":
-                    console.print("[yellow]시작을 취소했습니다.[/yellow]")
-                    return
-            else:
-                if api._is_screen_output_allowed():
-                    console.print("[bold cyan][시스템 명령] 가상 투자 자동매매를 시작합니다.[/bold cyan]")
-        elif config.session.is_paper:
+        if config.session.is_paper:
             if interactive:
                 virt_acc_str = os.environ.get("VIRT_ACC_NUM", "")
                 display_acc = virt_acc_str.replace("PAPER-", "") if virt_acc_str.startswith("PAPER-") else virt_acc_str
@@ -771,7 +749,7 @@ class AutoTrader:
                 if stock_eval_amt > 0:
                     msg += " (⚠️ 평가금액 존재 - API 데이터 불일치)"
 
-            target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+            target_cano = config.session.auto_cano
             with utils.AccountContext(target_cano):
                 from modules.telegram_bot import TelegramCommander
                 reply_markup = TelegramCommander()._get_default_keyboard()
@@ -794,8 +772,8 @@ class AutoTrader:
                     console.print(f"[bold red][ERROR] 자동매매 시작 실패: {e}[/bold red]")
 
             if self.initial_asset > 0:
-                target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-                acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                target_cano = config.session.auto_cano
+                acnt = config.session.auto_acnt_prdt_cd
                 account_key = f"{target_cano}-{acnt}"
                 saved_msg = " (당일 기준 복원)" if load_daily_initial_asset(account_key) > 0 else " (당일 기준 저장)"
                 self.log(f"시스템 시작 자산: {self.initial_asset:,}원{saved_msg}")
@@ -851,11 +829,11 @@ class AutoTrader:
             final_asset = 0
             is_data_valid = False # [추가] 데이터 유효성 플래그
 
-            target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+            target_cano = config.session.auto_cano
             with utils.AccountContext(target_cano):
                 try:
                     # 1. 예수금 조회
-                    acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                    acnt = config.session.auto_acnt_prdt_cd
                     res = api.get_deposit_balance(target_cano, acnt)
                     if res:
                         # [수정] 자산 계산 시 D+2 예수금(가수도금) 사용 (매도 대금 포함) - start()와 통일
@@ -920,8 +898,8 @@ class AutoTrader:
                     min_p = 0
                     try:
                         today_str = datetime.now().strftime("%Y-%m-%d")
-                        target_account = f"{config.session.cano}-{config.session.acnt_prdt_cd}" if config.session.is_simulation else (f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}" if config.session.auto_cano else None)
-                        today_trades = db_manager.db.get_trades(start_date=today_str, end_date=today_str, is_sim=config.session.is_simulation, account=target_account)
+                        target_account = (f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}" if config.session.auto_cano else None)
+                        today_trades = db_manager.db.get_trades(start_date=today_str, end_date=today_str, is_sim=False, account=target_account)
                         
                         today_trades_parsed = []
                         for r in reversed(today_trades):
@@ -1003,7 +981,7 @@ class AutoTrader:
         except Exception as e:
             self.log(f"종료 시 미체결 주문 확인 실패: {e}")
 
-        target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+        target_cano = config.session.auto_cano
         with utils.AccountContext(target_cano):
             from modules.telegram_bot import TelegramCommander
             reply_markup = TelegramCommander()._get_default_keyboard()
@@ -1050,8 +1028,8 @@ class AutoTrader:
     def log_current_holdings(self):
         """현재 보유 종목 현황을 조회하여 로그에 출력합니다 (체결 후 호출용)"""
         try:
-            target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-            acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+            target_cano = config.session.auto_cano
+            acnt = config.session.auto_acnt_prdt_cd
             
             with utils.AccountContext(target_cano):
                 holdings, _ = api.get_domestic_balance(target_cano, acnt)
@@ -1144,25 +1122,20 @@ class AutoTrader:
         deposit = 0
         holdings = []
 
-        target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+        target_cano = config.session.auto_cano
         with utils.AccountContext(target_cano):
             try:
-                acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                acnt = config.session.auto_acnt_prdt_cd
                 
                 # 1. 잔고 조회 (평가금 포함)
                 holdings, summary = api.get_domestic_balance(target_cano, acnt)
                 
                 # 2. 예수금 및 총 자산 계산
-                if config.session.is_simulation:
-                    if summary:
-                        # [수정] D+2 예수금(가수도금) 사용 (매도 대금 포함, /balance와 통일)
-                        deposit = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
-                else:
-                    res = api.get_deposit_balance(target_cano, acnt)
-                    if res:
-                        d2_val = res.get('d2_real', 0)
-                        if d2_val == 0: d2_val = res.get('d2_deposit', 0)
-                        deposit = d2_val
+                res = api.get_deposit_balance(target_cano, acnt)
+                if res:
+                    d2_val = res.get('d2_real', 0)
+                    if d2_val == 0: d2_val = res.get('d2_deposit', 0)
+                    deposit = d2_val
                 
                 # [수정] 보유 종목 개별 합산으로 평가금액 직접 계산 (데이터 정합성 보장)
                 tot_evlu = 0
@@ -1213,14 +1186,12 @@ class AutoTrader:
                 today_str = datetime.now().strftime("%Y-%m-%d")
                 
                 target_account = None
-                if config.session.is_simulation:
-                    target_account = f"{config.session.cano}-{config.session.acnt_prdt_cd}"
-                elif config.session.auto_cano:
+                if config.session.auto_cano:
                     target_account = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
                     
                 today_trades = db_manager.db.get_trades(
                     start_date=today_str, end_date=today_str, 
-                    is_sim=config.session.is_simulation, account=target_account
+                    is_sim=False, account=target_account
                 )
                 
                 today_trades_parsed = []
@@ -1507,14 +1478,10 @@ class AutoTrader:
         # 접수→체결 행은 한 건으로 정리해 운영자가 실제 주문 흐름을 오해하지 않게 한다.
         today_order_count = today_fill_count = today_cancel_count = 0
         try:
-            target_account = (
-                f"{config.session.cano}-{config.session.acnt_prdt_cd}"
-                if config.session.is_simulation
-                else f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
-            )
+            target_account = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
             today_trades = db_manager.db.get_trades(
                 start_date=now.strftime("%Y-%m-%d"), end_date=now.strftime("%Y-%m-%d"),
-                is_sim=config.session.is_simulation, account=target_account,
+                is_sim=False, account=target_account,
             )
             refined = self._refine_trade_records(today_trades)
             today_order_count = len(refined)
@@ -1544,15 +1511,12 @@ class AutoTrader:
         except Exception:
             warnings.append("실시간 피드 상태를 읽지 못했습니다")
 
-        account = config.session.cano if config.session.is_simulation else config.session.auto_cano
+        account = config.session.auto_cano
         if getattr(config.session, "is_paper", False):
             mode = "가상투자"
         elif getattr(config.session, "is_toss", False):
             mode = "토스 실전"
-        elif config.session.is_simulation:
-            mode = "KIS 모의"
-        else:
-            mode = "KIS 실전"
+        mode = "KIS 실전"
 
         if self.last_success_at and isinstance(self.last_success_at, datetime):
             age = (now - self.last_success_at).total_seconds()
@@ -1964,7 +1928,7 @@ class AutoTrader:
         holdings = []
         
         # [추가] 상태 조회 시에도 시스템 트레이딩 컨텍스트 사용
-        target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+        target_cano = config.session.auto_cano
         with utils.AccountContext(target_cano):
             with Progress(
                 SpinnerColumn(),
@@ -1974,7 +1938,7 @@ class AutoTrader:
                 transient=True
             ) as progress:
                 task = progress.add_task("[cyan]자산/시장 정보 병렬 조회 중...[/cyan]", total=None)
-                acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                acnt = config.session.auto_acnt_prdt_cd
 
                 # [최적화] 잔고+예수금 / 시장 국면 / 지수 상태를 병렬 조회 (기존 순차 → 동시)
                 def _fetch_asset():
@@ -1987,15 +1951,12 @@ class AutoTrader:
                     try:
                         if _summary and len(_summary) > 0:
                             _deposit = api.safe_int(_summary[0].get('dnca_tot_amt', 0))
-                            if config.session.is_simulation:
-                                _deposit = api.safe_int(_summary[0].get('prvs_rcdl_excc_amt', 0))
 
-                        # [수정] 실전 투자는 항상 상세 조회 시도 (정확도 우선)
-                        if _deposit == 0 or not config.session.is_simulation:
-                            res = api.get_deposit_balance(target_cano, acnt)
-                            if res:
-                                _deposit = res.get('d2_real', 0)
-                                if _deposit == 0: _deposit = res.get('d2_deposit', 0)
+                        # [수정] 예수금은 항상 상세 조회로 확인한다 (정확도 우선)
+                        res = api.get_deposit_balance(target_cano, acnt)
+                        if res:
+                            _deposit = res.get('d2_real', 0)
+                            if _deposit == 0: _deposit = res.get('d2_deposit', 0)
                     except Exception: pass
                     return _holdings, _summary, _deposit
 
@@ -2190,14 +2151,12 @@ class AutoTrader:
             today_str = datetime.now().strftime("%Y-%m-%d")
             
             target_account = None
-            if config.session.is_simulation:
-                target_account = f"{config.session.cano}-{config.session.acnt_prdt_cd}"
-            elif config.session.auto_cano:
+            if config.session.auto_cano:
                 target_account = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
             
             today_trades = db_manager.db.get_trades(
                 start_date=today_str, end_date=today_str, 
-                is_sim=config.session.is_simulation, account=target_account
+                is_sim=False, account=target_account
             )
             
             today_trades_parsed = []
@@ -2236,8 +2195,8 @@ class AutoTrader:
         if current_asset is not None:
             # [추가] 메모리에 초기 자산이 없으면 당일 백업 파일에서 복구 시도
             if self.initial_asset <= 0:
-                target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-                acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                target_cano = config.session.auto_cano
+                acnt = config.session.auto_acnt_prdt_cd
                 account_key = f"{target_cano}-{acnt}"
                 saved_initial = load_daily_initial_asset(account_key)
                 if saved_initial > 0:
@@ -2517,9 +2476,9 @@ class AutoTrader:
                 # 토스 계좌번호엔 '-'가 여러 개라(예: 189-01-501685-) 마지막 '-' 기준으로 분리
                 target_cano, acnt = target_account.rsplit('-', 1)
             else:
-                target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-                acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
-                if not config.session.is_simulation and not target_cano:
+                target_cano = config.session.auto_cano
+                acnt = config.session.auto_acnt_prdt_cd
+                if not target_cano:
                     target_cano = config.session.cano
                     acnt = config.session.acnt_prdt_cd
                     
@@ -2617,16 +2576,14 @@ class AutoTrader:
             
             # [수정] 자동매매 계좌 번호로 필터링 (시스템 트레이딩 내역만 조회)
             if not target_account:
-                if config.session.is_simulation:
-                    target_account = f"{config.session.cano}-{config.session.acnt_prdt_cd}"
-                elif config.session.auto_cano:
+                if config.session.auto_cano:
                     target_account = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
             
             # [Fix] DBManager.get_trades가 account 인자를 지원하지 않는 경우 대비 (메모리 필터링)
             try:
-                db_records = db_manager.db.get_trades(is_sim=config.session.is_simulation, limit=limit, start_date=start_date, account=target_account)
+                db_records = db_manager.db.get_trades(is_sim=False, limit=limit, start_date=start_date, account=target_account)
             except TypeError:
-                db_records = db_manager.db.get_trades(is_sim=config.session.is_simulation, limit=limit, start_date=start_date)
+                db_records = db_manager.db.get_trades(is_sim=False, limit=limit, start_date=start_date)
                 if target_account:
                     db_records = [r for r in db_records if r.get('account') == target_account]
             
@@ -2668,16 +2625,14 @@ class AutoTrader:
         
         # [수정] 자동매매 계좌 번호로 필터링
         target_account = None
-        if config.session.is_simulation:
-            target_account = f"{config.session.cano}-{config.session.acnt_prdt_cd}"
-        elif config.session.auto_cano:
+        if config.session.auto_cano:
             target_account = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
             
         # [Fix] DBManager.get_trades가 account 인자를 지원하지 않는 경우 대비
         try:
-            db_records = db_manager.db.get_trades(is_sim=config.session.is_simulation, limit=limit, start_date=start_date, account=target_account)
+            db_records = db_manager.db.get_trades(is_sim=False, limit=limit, start_date=start_date, account=target_account)
         except TypeError:
-            db_records = db_manager.db.get_trades(is_sim=config.session.is_simulation, limit=limit, start_date=start_date)
+            db_records = db_manager.db.get_trades(is_sim=False, limit=limit, start_date=start_date)
             if target_account:
                 db_records = [r for r in db_records if r.get('account') == target_account]
         
@@ -2718,9 +2673,9 @@ class AutoTrader:
         # [추가] 현재 보유 종목에 대한 총 매입금액, 평가손익, 수익률 계산
         holdings_summary = None
         try:
-            target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+            target_cano = config.session.auto_cano
             with utils.AccountContext(target_cano):
-                acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                acnt = config.session.auto_acnt_prdt_cd
                 holdings, summary = api.get_domestic_balance(target_cano, acnt)
                 
                 tot_pchs = 0
@@ -3020,8 +2975,8 @@ class AutoTrader:
         try:
             # 컨텍스트 설정 (시스템 트레이딩 계좌 조회)
             if not target_cano:
-                target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-                target_acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                target_cano = config.session.auto_cano
+                target_acnt = config.session.auto_acnt_prdt_cd
             with utils.AccountContext(target_cano):
                 holdings, _ = api.get_domestic_balance(target_cano, target_acnt)
                 
@@ -3358,7 +3313,7 @@ class AutoTrader:
         """보유 종목 현황 메시지 생성 (장 시작/마감 알림용)"""
         msg = ""
         try:
-            acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+            acnt = config.session.auto_acnt_prdt_cd
             holdings, _ = api.get_domestic_balance(target_cano, acnt)
             
             # [수정] 보유수량 0 초과인 종목만 필터링
@@ -3381,7 +3336,7 @@ class AutoTrader:
         while self.is_running and self.thread is my_thread:
             try:
                 self.last_cycle_at = datetime.now()
-                target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
+                target_cano = config.session.auto_cano
                 with utils.AccountContext(target_cano):
                     current_market_status = self.is_market_open()
                     is_log_needed = current_market_status or getattr(self, '_first_loop_flag', True) or (self.was_market_open != current_market_status)
@@ -3406,7 +3361,7 @@ class AutoTrader:
                     # [추가] 현재 운용 계좌 정보 로깅
                     if target_cano and is_log_needed:
                         # [수정] 토스/모의는 단일계좌라 시스템 트레이딩 계좌 = 기본 계좌.
-                        #        is_simulation만 보면 토스가 '한투증권(자동)'으로 오표시되므로 is_toss도 분기.
+                        #        모드 플래그를 보지 않으면 토스가 '한투증권(자동)'으로 오표시되므로 is_toss도 분기.
                         # [Fix] 가상투자(mode 4)도 자기 분기가 없어 '한투증권(자동)'으로 떨어졌다.
                         #  실전 시세를 쓸 뿐 계좌는 가상이므로 실전 자동매매 계좌로 읽히면 위험하다.
                         #  라벨은 trading.py의 표기와 같은 '가상투자'로 맞춘다.
@@ -3421,10 +3376,7 @@ class AutoTrader:
                                 display_cano = f"{_vc}-{_va}" if _va else _vc
                         elif config.session.is_toss:
                             acc_type = "토스증권"
-                        elif config.session.is_simulation:
-                            acc_type = "모의투자"
-                        else:
-                            acc_type = "한투증권(자동)"
+                        acc_type = "한투증권(자동)"
                         self.log(f"운용 계좌: {display_cano} [{acc_type}]")
                     
                     
@@ -3446,7 +3398,7 @@ class AutoTrader:
                             api.send_telegram_message("🔄 [방어 모드 해제] 날짜가 변경되어 신규 매수를 재개합니다.")
 
                         try:
-                            acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                            acnt = config.session.auto_acnt_prdt_cd
                             
                             # [수정] 해외 자산 누락 방지
                             asset_data = account.get_asset_status_data(target_cano, acnt)
@@ -3552,7 +3504,7 @@ class AutoTrader:
 
                         # [최적화] 계좌 정보(잔고, 예수금)를 루프 시작 시 1회만 조회하여 공유
                         # 2 TPS 환경에서 중복 조회를 방지하여 성능 확보
-                        acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                        acnt = config.session.auto_acnt_prdt_cd
                         
                         # 1. 잔고 조회
                         # [수정] 초기 구동 시 메인 스레드에서 조회한 데이터 재사용 (API 호출 절약)
@@ -3599,7 +3551,7 @@ class AutoTrader:
                             deposit_res = {'deposit': dnca, 'foreign_deposit': 0, 'd2_deposit': d2_dep}
                         
                         # 예수금이 0이거나 실전투자에서 정밀 조회가 필요한 경우 Fallback
-                        if (not deposit_res or deposit_res['deposit'] == 0) and not config.session.is_simulation:
+                        if (not deposit_res or deposit_res['deposit'] == 0):
                             deposit_res = api.get_deposit_balance(target_cano, acnt, skip_balance_check=True)
                         
                         # API 호출 간격 조절 (Rate Limit 방지)
@@ -3647,14 +3599,8 @@ class AutoTrader:
                                     holdings = upd_holdings
                                     summary = upd_summary
 
-                                if not config.session.is_simulation:
-                                    upd_dep = api.get_deposit_balance(target_cano, acnt, skip_balance_check=True)
-                                    if upd_dep: deposit_res = upd_dep
-                                else:
-                                    if summary:
-                                        dnca = api.safe_int(summary[0].get('dnca_tot_amt', 0))
-                                        d2_dep = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
-                                        deposit_res = {'deposit': dnca, 'foreign_deposit': 0, 'd2_deposit': d2_dep}
+                                upd_dep = api.get_deposit_balance(target_cano, acnt, skip_balance_check=True)
+                                if upd_dep: deposit_res = upd_dep
                             except Exception as e:
                                 logger.debug(f"최종 상태 로깅을 위한 잔고 갱신 실패: {e}")
 
@@ -3948,8 +3894,8 @@ class AutoTrader:
                             deposit_d2 = deposit_res.get('d2_deposit', 0)
                     
                     # [수정] account 모듈을 활용하여 해외 자산까지 완벽하게 포함된 총 자산 획득
-                    target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-                    acnt_cd = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                    target_cano = config.session.auto_cano
+                    acnt_cd = config.session.auto_acnt_prdt_cd
                     
                     asset_data = account.get_asset_status_data(target_cano, acnt_cd)
                     
@@ -3991,8 +3937,8 @@ class AutoTrader:
                         # [Fix] 초기 자산 로드 실패(0원) 시, 첫 유효 조회 값으로 보정
                         if self.initial_asset == 0:
                             is_first_init = True
-                            target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-                            acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                            target_cano = config.session.auto_cano
+                            acnt = config.session.auto_acnt_prdt_cd
                             acc_str = f"{target_cano}-{acnt}"
                             saved_initial = load_daily_initial_asset(acc_str)
                             if saved_initial > 0:
@@ -4030,14 +3976,12 @@ class AutoTrader:
                             today_str = datetime.now().strftime("%Y-%m-%d")
                             
                             target_account = None
-                            if config.session.is_simulation:
-                                target_account = f"{config.session.cano}-{config.session.acnt_prdt_cd}"
-                            elif config.session.auto_cano:
+                            if config.session.auto_cano:
                                 target_account = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
                                 
                             today_trades = db_manager.db.get_trades(
                                 start_date=today_str, end_date=today_str, 
-                                is_sim=config.session.is_simulation, account=target_account
+                                is_sim=False, account=target_account
                             )
                             
                             today_trades_parsed = []
@@ -4186,8 +4130,8 @@ class AutoTrader:
     def _get_total_estimated_asset(self):
         """현재 총 추정 자산(예수금 + 주식평가금) 계산"""
         try:
-            cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-            acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+            cano = config.session.auto_cano
+            acnt = config.session.auto_acnt_prdt_cd
             
             # [수정] 해외 자산 누락 방지를 위해 완벽하게 계산된 통합 자산 데이터 사용
             asset_data = account.get_asset_status_data(cano, acnt)
@@ -4541,8 +4485,7 @@ class AutoTrader:
                 return
             self.after_hours_scan_date = today
 
-            acnt = (config.session.auto_acnt_prdt_cd if not config.session.is_simulation
-                    else config.session.acnt_prdt_cd)
+            acnt = config.session.auto_acnt_prdt_cd
             holdings, _summary = api.get_domestic_balance(target_cano, acnt)
             if not holdings:
                 return
@@ -4687,7 +4630,7 @@ class AutoTrader:
             api.prefetch_multiple_current_prices(codes_to_prefetch, is_overseas=False, include_investor=False, prefer_ws=True)
 
         # [수정] 일괄 예열 캐시를 활용하므로 워커별 딜레이를 대폭 단축 (Rate Limit 안전장치 유지)
-        tps = config.SIM_TX_PER_SECOND if config.session.is_simulation else config.REAL_TX_PER_SECOND
+        tps = config.REAL_TX_PER_SECOND
         safe_delay = (1.0 / tps) * 0.1  
         
         # [추가] 시장 국면 판단 (적응형 임계값용) - 매도 분석 시에도 상태 분류를 위해 필요
@@ -4981,8 +4924,8 @@ class AutoTrader:
                         self.half_tp_cache.add(code)
                         db_manager.db.insert_half_tp(code)
                     else:
-                        target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-                        target_acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                        target_cano = config.session.auto_cano
+                        target_acnt = config.session.auto_acnt_prdt_cd
                         canceled_cnt = db_manager.db.cancel_reserved_sell_orders(target_cano, target_acnt, code)
                         if canceled_cnt > 0:
                             self.log(f"[예약취소] 전량 매도로 인해 대기 중이던 {name} 매도 예약 주문 {canceled_cnt}건 자동 취소")
@@ -5005,7 +4948,7 @@ class AutoTrader:
         # 병렬 처리 실행
         # [최적화] 모의투자도 워커 2개로 병렬화 (2 TPS 제한은 api 레이어의 스로틀이 보장하므로
         #  REST 대기 구간이 겹쳐져 주기당 소요 시간이 단축됨)
-        max_workers = 5 if not config.session.is_simulation else 2
+        max_workers = 5
 
         def _sell_worker_guarded(item):
             """[관측성] 매도 판정의 예외를 반드시 회수해 로그·경보로 남긴다.
@@ -5298,15 +5241,13 @@ class AutoTrader:
         # [추가] 당일 매도 이력 확인 및 재진입 허들(체결강도) 설정
         today_str = datetime.now().strftime("%Y-%m-%d")
         target_account = None
-        if config.session.is_simulation:
-            target_account = f"{config.session.cano}-{config.session.acnt_prdt_cd}"
-        elif config.session.auto_cano:
+        if config.session.auto_cano:
             target_account = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
             
         try:
-            today_trades = db_manager.db.get_trades(start_date=today_str, end_date=today_str, is_sim=config.session.is_simulation, account=target_account)
+            today_trades = db_manager.db.get_trades(start_date=today_str, end_date=today_str, is_sim=False, account=target_account)
         except TypeError:
-            today_trades = db_manager.db.get_trades(start_date=today_str, end_date=today_str, is_sim=config.session.is_simulation)
+            today_trades = db_manager.db.get_trades(start_date=today_str, end_date=today_str, is_sim=False)
             if target_account:
                 today_trades = [t for t in today_trades if t.get('account') == target_account]
                 
@@ -5814,12 +5755,12 @@ class AutoTrader:
             api.prefetch_multiple_current_prices(codes_to_prefetch, is_overseas=False, include_investor=False, prefer_ws=True)
 
         # [수정] 일괄 예열 캐시를 활용하므로 워커별 딜레이를 대폭 단축 (Rate Limit 안전장치 유지)
-        tps = config.SIM_TX_PER_SECOND if config.session.is_simulation else config.REAL_TX_PER_SECOND
+        tps = config.REAL_TX_PER_SECOND
         safe_delay = (1.0 / tps) * 0.1
 
         # [병렬 처리] 사용자 작업과의 충돌 및 모의투자 API 제한(2 TPS) 고려
         # (실전: 5개, 모의: 2개 - ThrottledSession이 병목 없이 안전하게 제어함)
-        max_workers = 5 if not config.session.is_simulation else 2
+        max_workers = 5
 
         # [최적화] 워커 내부의 차트/체결강도/호가 동시 조회용 I/O 풀을 공유
         #  (기존에는 후보 종목마다 ThreadPoolExecutor(3)를 생성/파괴 — 저사양 환경에서 오버헤드)
@@ -6149,8 +6090,8 @@ class AutoTrader:
                     self.portfolio_heat_amt -= new_risk_amt   # 주문 실패 시 선점분 반납
             if odno:
                 # [추가] 매수 주문 성공 시 대기 중인 예약 매수 취소 방어 로직 (중복 진입 방지)
-                target_cano = config.session.auto_cano if not config.session.is_simulation else config.session.cano
-                target_acnt = config.session.auto_acnt_prdt_cd if not config.session.is_simulation else config.session.acnt_prdt_cd
+                target_cano = config.session.auto_cano
+                target_acnt = config.session.auto_acnt_prdt_cd
                 canceled_cnt = db_manager.db.cancel_reserved_buy_orders(target_cano, target_acnt, cand['code'])
                 if canceled_cnt > 0:
                     self.log(f"[예약취소] 신규 매수로 인해 대기 중이던 {cand['name']} 매수 예약 주문 {canceled_cnt}건 자동 취소")

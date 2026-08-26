@@ -46,7 +46,7 @@ HTS 를 여러 대 돌릴 때
 서버의 하트비트·재동기화 명령 스코프는 API 키가 아니라 **사용자**다(키는 인증 직후
 username 으로 바뀐다). 그래서 키를 따로 발급해도 인스턴스는 갈라지지 않는다.
 `botId` 가 그 구분자다. 겹치면
-  - 상태가 한 칸에 덮여 쓰여 실전봇이 죽어도 모의봇 Ping 이 '정상'으로 유지되고
+  - 상태가 한 칸에 덮여 쓰여 실전봇이 죽어도 가상봇 Ping 이 '정상'으로 유지되고
   - 웹에서 누른 재동기화를 엉뚱한 봇이 채가서 '완료'로 뜬다(조용한 실패)
 
 **모드는 `--mode` CLI 인자라 환경변수로 구분되지 않는다.** 그래서 botId 는
@@ -63,7 +63,6 @@ username 으로 바뀐다). 그래서 키를 따로 발급해도 인스턴스는
   export JOURNAL_SOURCE="my-stock-hts"           # 선택 (last-sync 스코프 기준)
   export JOURNAL_BOT_ID=""                       # 선택 (기본 JOURNAL_SOURCE)
   export JOURNAL_BOT_LABEL=""                    # 선택 (웹 표시명, 기본 자동생성)
-  export JOURNAL_SYNC_SIMULATION="0"             # 선택, 1이면 모의투자 체결도 전송
 """
 
 import json
@@ -139,6 +138,10 @@ def is_enabled():
     설정(JOURNAL_SYNC_USE)과 자격증명(환경변수)을 분리한 이유:
       - 자격증명은 소스·설정파일에 남기면 안 되므로 환경변수로만 받는다
       - 사용 여부는 재시작 없이 껐다 켤 수 있어야 하므로 dynamic_config 에 둔다
+
+    가상투자(mode 1)도 같은 스위치를 쓴다. 설정은 모드별 프로필로 갈리므로
+    (dynamic_config.paper.json), 가상에서 켜고 끈 것이 실전으로 새지 않는다.
+    대신 전송되는 건은 `isSimulated=true` 로 실려 서버에서 실거래와 갈린다.
     """
     if not getattr(config.settings, 'JOURNAL_SYNC_USE', False):
         return False
@@ -153,16 +156,26 @@ def _source():
     return _cfg('JOURNAL_SOURCE', 'my-stock-hts')
 
 
-def _sync_simulation():
-    return bool(getattr(config, 'JOURNAL_SYNC_SIMULATION', False))
+def _is_paper():
+    """가상투자(mode 1) 세션인가. 실거래와 섞이면 안 되는 모든 분기의 기준."""
+    try:
+        return bool(getattr(config.session, 'is_paper', False))
+    except Exception:      # noqa: BLE001
+        return False
 
 
 def _bot_env():
-    """운용 환경 토큰 (sim/toss/real). 실패하면 빈 문자열."""
+    """운용 환경 토큰 (paper/toss/real). 실패하면 빈 문자열.
+
+    가상투자를 별도 토큰으로 가르지 않으면 botId 가 실전과 같은 `...:real:` 이 되어
+    웹 목록에서 가상봇이 실전봇 칸을 덮어쓴다.
+    """
     try:
+        if _is_paper():
+            return 'paper'
         if getattr(config.session, 'is_toss', False):
             return 'toss'
-        return 'sim' if getattr(config.session, 'is_simulation', False) else 'real'
+        return 'real'
     except Exception:      # noqa: BLE001
         return ''
 
@@ -174,7 +187,7 @@ def _bot_id():
     username 으로 바뀐다), 키를 따로 발급해도 인스턴스는 갈라지지 않는다.
 
     **환경변수만으로는 부족하다.** 투자 모드는 `--mode` CLI 인자로 정해지므로
-    (main.py), 같은 기기에서 `~/.htsrc` 하나를 공유한 채 모의·실전·토스를 함께
+    (main.py), 같은 기기에서 `~/.htsrc` 하나를 공유한 채 가상·실전·토스를 함께
     돌리면 JOURNAL_BOT_ID·JOURNAL_SOURCE 가 셋 다 같은 값이 된다. 그러면 세
     인스턴스가 서버의 같은 칸을 10초마다 덮어써서, 웹 목록에 자기 자리가 없는
     봇이 생긴다(실측 2026-08-03: 3대를 돌렸는데 2대만 보임).
@@ -208,7 +221,7 @@ def _bot_label():
     if label:
         return label[:60]
     try:
-        env = {'toss': '토스', 'sim': '모의', 'real': '실전'}.get(_bot_env(), '')
+        env = {'toss': '토스', 'paper': '가상', 'real': '실전'}.get(_bot_env(), '')
         account = _account_text(config.session.cano, config.session.acnt_prdt_cd)
         auto = _account_text(getattr(config.session, 'auto_cano', ''),
                              getattr(config.session, 'auto_acnt_prdt_cd', ''))
@@ -331,7 +344,9 @@ def _exec_id(trade):
     '체결(추정)'과 '체결'을 상태까지 키에 넣어 구분하면, 추정 기록이 먼저 올라간 뒤
     확정 기록이 별건으로 들어오는 대신 각각 남으므로 나중에 정정할 수 있다.
     """
-    env = 'SIM' if trade.get('is_sim') else 'REAL'
+    # 가상 체결은 계좌번호가 'PAPER' 라 실거래와 겹치지 않지만, 키만 봐도
+    # 어느 쪽인지 알 수 있어야 서버에서 잘못 들어간 건을 골라낼 수 있다.
+    env = 'SIM' if trade.get('is_sim') else ('PAPER' if _is_paper() else 'REAL')
     account = (trade.get('account') or '').replace('-', '')
     day = str(trade.get('time') or '')[:10].replace('-', '')
     odno = (trade.get('odno') or '').strip() or 'NOODNO'
@@ -449,7 +464,9 @@ def build_payload(trade):
         'volume': qty,
         'executedAt': _executed_at(trade.get('time'), overseas),
         'brokerExecutionId': _exec_id(trade),
-        'isSimulated': bool(trade.get('is_sim')),
+        # 가상투자 DB 는 파일이 분리돼 있어 is_sim 을 세우지 않는다(항상 0).
+        # 세션 플래그가 유일한 기준 — 여기를 놓치면 가상 체결이 실거래로 기록된다.
+        'isSimulated': bool(trade.get('is_sim')) or _is_paper(),
         'status': 'FILLED',
         'confidence': confidence,
         'source': _source(),
@@ -566,7 +583,10 @@ def enqueue(cursor, trade, quiet=False, backlog=False, resend=False):
         return False
     if trade.get('order_status') not in _SYNCABLE_STATUS:
         return False
-    if trade.get('is_sim') and not _sync_simulation():
+    # 폐기된 KIS 모의투자 시절 기록은 보내지 않는다. 모드는 사라졌지만 실계좌 DB에
+    #  남은 is_sim=1 레코드가 백필로 딸려 나갈 수 있다. 가상투자(mode 1) 체결은
+    #  DB 파일이 따로라 is_sim=0 이므로 여기 걸리지 않는다 — 관문은 is_enabled 쪽이다.
+    if trade.get('is_sim'):
         return False
     if not _side(trade.get('type')):
         return False  # 매수/매도로 해석되지 않는 기록(확인요망 등)은 보내지 않는다
@@ -954,9 +974,9 @@ def ping(status='running', message=None, timeout=None, force=False):
         return False
     body = {
         'status': status,
-        'isSimulated': bool(getattr(config.session, 'is_simulation', False)),
+        'isSimulated': _is_paper(),
         # botId 가 없으면 서버가 사용자당 한 칸에 상태를 겹쳐 쓴다 — HTS 를 여러 대
-        # 돌릴 때 실전봇의 죽음이 모의봇 Ping 에 가려지고, 재동기화 명령도 아무
+        # 돌릴 때 실전봇의 죽음이 가상봇 Ping 에 가려지고, 재동기화 명령도 아무
         # 봇이나 채간다.
         'botId': _bot_id(),
         'label': _bot_label(),
@@ -1103,7 +1123,7 @@ def _fetch_last_sync():
     """
     res = _request('GET', '/api/v1/trades/last-sync',
                    params={'source': _source(),
-                           'isSimulated': 'true' if _sync_simulation() else 'false'})
+                           'isSimulated': 'true' if _is_paper() else 'false'})
     if res is None:
         return None
     if res.status_code == 403:

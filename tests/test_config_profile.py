@@ -32,9 +32,9 @@ def _write(path, data):
 
 def test_mode_to_profile_mapping():
     assert config.profile_for_mode('2') is None      # 실전 = 기준 파일
-    assert config.profile_for_mode('1') == 'sim'
+    assert config.profile_for_mode('1') == 'paper'
     assert config.profile_for_mode('3') == 'toss'
-    assert config.profile_for_mode('4') == 'paper'
+    assert config.profile_for_mode('4') is None      # 폐기된 옛 번호 — 세션이 기동을 막는다
     assert config.profile_for_mode('알수없음') is None  # 모르면 실전으로 본다(보수적)
 
 

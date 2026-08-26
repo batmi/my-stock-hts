@@ -86,10 +86,10 @@ def _get_telegram_footer():
     elif config.session.is_toss:
         acc_label = "토스"
     else:
-        acc_label = "모의" if config.session.is_simulation else "실전"
+        acc_label = "실전"
         # 시스템 트레이딩 컨텍스트(AUTO 계좌) 확인.
         #  실전만 수동/자동 계좌가 나뉘므로 라벨이 계좌를 가리키는 이름이 된다.
-        if not config.session.is_simulation and getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
+        if getattr(context.trade_context, 'use_auto_account', False) and config.session.auto_cano:
             cano = config.session.auto_cano
             acnt = config.session.auto_acnt_prdt_cd
             acc_label = "자동"

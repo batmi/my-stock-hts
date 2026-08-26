@@ -337,7 +337,7 @@ def test_paper_footer_shows_virt_account(paper, monkeypatch):
     monkeypatch.setattr(config, 'TELEGRAM_INSTANCE_NAME', "TEST", raising=False)
     for attr, val in (('cano', 'PAPER'), ('acnt_prdt_cd', ''),
                       ('auto_cano', 'PAPER'), ('auto_acnt_prdt_cd', ''),
-                      ('is_simulation', False), ('is_toss', False),
+                      ('is_toss', False),
                       ('virt_cano', '43486025'), ('virt_acnt_prdt_cd', '01')):
         monkeypatch.setattr(config.session, attr, val, raising=False)
 
@@ -376,15 +376,15 @@ def test_inactive_mode_does_not_intercept(monkeypatch):
         assert res['output']['ODNO'] == 'REAL1'
 
 
-def test_journal_sync_disabled_in_paper_mode(monkeypatch):
-    """가상 체결이 매매일지 웹 연동으로 새어나가지 않는다."""
+def test_journal_sync_follows_toggle_in_paper_mode(monkeypatch):
+    """가상투자 기동이 매매일지 스위치를 임의로 내리지 않는다 (설정이 정한다)."""
     tmpdir = tempfile.mkdtemp()
     original_path = db_manager.db.db_path
     monkeypatch.setattr(config, 'PAPER_DB_FILE_PATH', os.path.join(tmpdir, "p.db"), raising=False)
     monkeypatch.setattr(config.settings, 'JOURNAL_SYNC_USE', True, raising=False)
     try:
         config.session._activate_paper_mode()
-        assert config.settings.JOURNAL_SYNC_USE is False
+        assert config.settings.JOURNAL_SYNC_USE is True
     finally:
         db_manager.db.close_all_connections()
         db_manager.db.switch_path(original_path)

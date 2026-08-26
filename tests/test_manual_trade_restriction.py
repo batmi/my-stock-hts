@@ -29,7 +29,7 @@ def mock_dependencies():
         mock_config.session.acnt_prdt_cd = "01"
         mock_config.session.auto_cano = "12345678"
         mock_config.session.auto_acnt_prdt_cd = "01"
-        mock_config.session.is_simulation = False
+
         mock_config.session.is_toss = False
         # [필수] MagicMock의 임의 속성은 truthy다. is_paper를 명시하지 않으면
         #  _check_conclusions 첫 줄의 관찰모드 가드에 걸려 _check_paper_conclusions로
