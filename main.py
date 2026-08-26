@@ -1150,6 +1150,7 @@ def main():
     # [추가] 로깅 설정 초기화
     config.setup_logging()
 
+    chart_proc = None
     if args.webchart:
         import subprocess
         import atexit
@@ -1667,6 +1668,13 @@ def main():
 
         config.console.print("[yellow]프로그램을 종료합니다.[/yellow]")
         config.console.print()
+        
+        # [추가] atexit이 무시되는 os._exit(0) 직전에 웹서버 프로세스를 확실히 종료
+        if chart_proc is not None:
+            try:
+                chart_proc.terminate()
+            except Exception: pass
+            
         os._exit(0) # [추가] 스레드 대기 없이 즉시 종료 (KeyboardInterrupt Traceback 방지)
         
 if __name__ == "__main__":
