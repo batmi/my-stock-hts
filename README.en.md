@@ -525,7 +525,7 @@ my-stock-hts/
 │   └── prompts.py          # AI prompt templates
 │
 ├── tools/                  # Diagnostics and utilities (109 files)
-│   ├── web_server.py       #   Lightweight Flask web server for chart dashboard
+│   ├── web_server.py       #   Lightweight built-in web server for chart dashboard
 │   ├── hts_watchdog.py     #   Process watchdog (cron) — alerts only, no restarts
 │   ├── get_telegram_chat_id.py  # Verify Telegram Chat ID helper
 │   ├── update_holidays.sh  #   Periodic holiday-library refresh

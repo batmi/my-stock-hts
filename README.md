@@ -524,7 +524,7 @@ my-stock-hts/
 │   └── prompts.py          # AI 프롬프트 템플릿
 │
 ├── tools/                  # 진단·검증 도구 (109개)
-│   ├── web_server.py       #   차트 대시보드용 경량 웹서버 (Flask)
+│   ├── web_server.py       #   차트 대시보드용 경량 웹서버 (파이썬 내장 모듈)
 │   ├── hts_watchdog.py     #   프로세스 사망 감시 (cron) — 알림만, 재기동 없음
 │   ├── get_telegram_chat_id.py  # 텔레그램 Chat ID 확인
 │   ├── update_holidays.sh  #   휴장일 라이브러리 주기 갱신

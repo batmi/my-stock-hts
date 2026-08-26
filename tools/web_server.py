@@ -1,19 +1,30 @@
-import os
 import sys
+import os
 import argparse
-import logging
-from flask import Flask, send_from_directory
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
-app = Flask(__name__)
-CHART_DIR = "."
+class TimeoutHTTPRequestHandler(SimpleHTTPRequestHandler):
+    # 브라우저가 연결(Keep-Alive 세션)을 맺어두고 요청을 보내지 않을 때
+    # 5초 뒤에 안 쓰는 세션(소켓)을 자동으로 정리하여 메모리와 자원을 반환합니다.
+    timeout = 5
 
-@app.route('/')
-def serve_index():
-    return send_from_directory(CHART_DIR, 'index.html')
-
-@app.route('/<path:path>')
-def serve_static(path):
-    return send_from_directory(CHART_DIR, path)
+def run(port, directory):
+    # Change to the target directory so SimpleHTTPRequestHandler serves it
+    os.chdir(directory)
+    
+    # Use ThreadingHTTPServer to handle multiple concurrent requests without hanging
+    server_address = ('0.0.0.0', port)
+    httpd = ThreadingHTTPServer(server_address, TimeoutHTTPRequestHandler)
+    
+    # 메인 프로세스 종료 시 백그라운드 세션 스레드들도 함께 즉시 정리되도록 설정
+    httpd.daemon_threads = True
+    
+    print(f"Serving HTTP on 0.0.0.0 port {port} (http://0.0.0.0:{port}/) ...")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\nKeyboard interrupt received, exiting.")
+        sys.exit(0)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -21,14 +32,4 @@ if __name__ == '__main__':
     parser.add_argument('--directory', type=str, default='.')
     args = parser.parse_args()
     
-    CHART_DIR = os.path.abspath(args.directory)
-    
-    # Flask 로깅 최소화 (불필요한 접속 로그로 콘솔이 지저분해지는 것 방지)
-    log = logging.getLogger('werkzeug')
-    log.setLevel(logging.ERROR)
-    
-    print(f"Starting Flask Web Server for Charts on 0.0.0.0:{args.port} ...")
-    try:
-        app.run(host='0.0.0.0', port=args.port, threaded=True)
-    except KeyboardInterrupt:
-        sys.exit(0)
+    run(args.port, args.directory)
