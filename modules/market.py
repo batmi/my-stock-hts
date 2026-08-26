@@ -102,33 +102,11 @@ KRX_GOLD_INDEX = "KRX 금현물"
 
 # 개장 중인 지수 이름 뒤에 붙는 표시자(U+2219). 표 본문과 하단 범례가 같은 값을 봐야 한다.
 INDEX_OPEN_MARK = "∙"   # U+2219 BULLET OPERATOR
-INDEX_SETTLED_MARK = "="  # 장은 열려 있으나 값은 직전 확정치(실시간 아님)
 
-# KRX 공식 경로로 받는 지수 — data.krx.co.kr 은 **마감 후 확정 봉만** 준다.
-#  모드 2(KIS 실전)에서는 실시간이지만, 모드 3·1에서는 KRX 가 유일한 소스라 KRX 정규장
-#  시간(09:00~15:30)에는 직전 확정치가 나온다. 그 사실을 화면에 드러내려고 개장 표시(∙)
-#  대신 확정 표시(=)를 붙인다.
-#  ※ 코스피200선물은 이 목록에 없다 — 아예 모드 3·1 목록에서 뺐다(KRX_REPLACEABLE_INDICES).
-_KRX_SETTLED_ONLY_INDICES = ("V코스피200",)
-
-
-def _is_krx_settled_value(name, df):
-    """이 행의 값이 '실시간'이 아니라 '직전 확정치'인가.
-
-    [왜 필요한가 · 2026-08-25] 야간장이 도는 01:47 에 모드 2 는 1,034.85(실시간)를,
-     모드 3 은 1,074.55(직전 확정 야간 종가)를 보여 40포인트(3.8%) 벌어졌다. 그런데 두
-     화면 모두 개장 표시(∙)가 붙어 '실시간으로 움직이는 지수'라고 말하고 있었다.
-     값이 묵었다는 사실을 숨기면 매매 판단을 오도한다 — 표시를 갈라 놓는다.
-
-    판정을 **KRX 전용 지수 + source=='KRX'** 로 좁힌 이유: '마지막 봉이 오늘인가'로
-     일반화하면 해외 지수가 걸린다(현지 날짜가 KST 기준 어제일 수 있다).
-    """
-    if name not in _KRX_SETTLED_ONLY_INDICES:
-        return False
-    try:
-        return df is not None and not df.empty and str(df.attrs.get('source', '')) == 'KRX'
-    except Exception:       # noqa: BLE001 - 판정 실패는 종전 표시(개장 중)로 둔다
-        return False
+# [2026-08-26] 확정 표시(=)는 제거했다. KRX 확정 봉이 장중에 실시간인 척하는 것을 표시자로
+#  알리려던 장치인데, 그런 값을 **보여 주지 않기로** 하면서(V코스피200·코스피200선물을
+#  토스 모드 목록에서 제외) 붙을 자리가 사라졌다. 묵은 값은 표시로 덮는 것이 아니라 빼는 게
+#  이 프로젝트의 선택이다 — 표시자만 남기면 다시 붙일 이유부터 찾게 된다.
 
 # 아시아 지수의 KST 장 시간. 현지 시각대가 KST와 0~1시간 차(도쿄 UTC+9, 대만·홍콩·상해
 #  UTC+8)라 장이 KST 낮 안에 들어온다 — 자정을 넘지 않으므로 KST 날짜·요일로 판정해도
@@ -344,49 +322,27 @@ DOMESTIC_INDEX_SOURCE_MAP = {
     "코스닥": "KOSDAQ", "코스닥150": "KOSDAQ150", "V코스피200": "VKOSPI",
 }
 
-# KIS '실전' 서버 전용 지수 — 모의서버는 해당 TR 미지원/불안정하고 모의 모드에서 실전
-#  서버는 사용하지 않으며 토스는 대체 소스가 없다 → 토스(3)·모의(1)에서는 목록에서 제외.
+# KIS '실전' 서버 전용 지수 — 토스는 대체 소스가 없다 → 모드 3에서는 목록에서 제외.
+#  (모드 1 가상투자는 KIS 실전 시세를 그대로 쓰므로 해당 없음)
+#
+#  [KRX 공식으로 대신하지 않는다 · 2026-08-26] data.krx.co.kr 은 둘 다 주지만 **마감 후
+#  확정 봉만** 준다. 코스피200선물은 세션이 하루를 거의 덮어(주간 09:00~15:45 · 야간
+#  18:00~익일 06:00) 장중 내내 최대 하루 묵은다 — 실측 2026-08-25 01:47(야간장 진행 중)
+#  모드 2(KIS 실시간) 1,034.85 vs KRX 확정 1,074.55 로 40포인트(3.8%) 벌어졌다.
+#  V코스피200 은 값 자체는 KIS 0503 과 일치하지만(2026-08-25 확인) 같은 이유로 장중에는
+#  직전 확정치가 나온다. **변동성지수를 묵은 값으로 보는 것은 안 보는 것보다 낫지 않다** —
+#  하필 변동성이 튀는 순간에 화면만 조용하기 때문이다. 표시자로 알리는 것보다 빼는 쪽을 택한다.
+#  (2026-08-25~08-26 사이에만 모드 3에 열려 있었다)
 KIS_LIVE_ONLY_INDICES = ("V코스피200", "코스피200선물")
-
-
-# KIS 전용이던 둘 중 **KRX 공식으로 대신할 수 있는 것**.
-#  코스피200선물은 여기 없다 — KRX 도 마감 후 확정 봉만 주는데 선물은 세션이 하루를 거의
-#  덮어(주간 09:00~15:45 · 야간 18:00~익일 06:00) 장중 내내 최대 하루 묵은 값이 나온다.
-#  실측 2026-08-25 01:47(야간장 진행 중): 모드 2(KIS 실시간) 1,034.85 vs KRX 확정 1,074.55 —
-#  40포인트(3.8%) 차이에 등락률도 엉뚱한 기준으로 계산됐다. 토스는 선물을 제공하지 않고
-#  tvDatafeed 는 심볼 검색이 막혀 있어(실측 0건) 살릴 방법이 없다.
-#  **부정확하거나 오해를 부르는 값은 아예 보여 주지 않는다**는 것이 이 프로젝트의 선택이다.
-#  V코스피200 은 남긴다 — 값 자체가 KIS 0503 과 일치함을 확인했고(지수·등락·EMA5/20/60 동일),
-#  장중에는 아래 확정 표시(=)가 붙어 실시간이 아님이 화면에 드러난다.
-KRX_REPLACEABLE_INDICES = ("V코스피200",)
-
-
-def krx_covers_kis_only_indices():
-    """KIS 전용이던 지수를 KRX 공식으로 대신할 수 있는가(자격증명 유무).
-
-    [2026-08-25] data.krx.co.kr 로그인이 생기면서 V코스피200 을 받을 수 있게 됐다 —
-     변동성지수 선물 응답의 SPOT_PRC 가 현물값이다. 그래서 모드 3(토스)·모드 1(모의)에서도
-     목록에 넣을 수 있다. 자격증명이 없으면 종전대로 뺀다 — 조회 못 하는 행을 보여 주는
-     것보다 낫다.
-    """
-    try:
-        from modules import krx_data
-        return krx_data.is_available()
-    except Exception:       # noqa: BLE001 - 판단 불가는 '못 쓴다'로 둔다(종전 동작)
-        return False
 
 
 def blocked_kis_only_indices():
     """이 모드에서 지수 목록에 넣으면 안 되는 이름들.
 
-    목록·화면·워커 세 곳이 이 함수 하나를 본다 — 갈라지면 목록에는 있는데 워커가
-    건너뛰어 화면에 빈 행이 남는다.
+    목록·화면·워커·텔레그램 네 곳이 이 함수 하나를 본다 — 갈라지면 목록에는 있는데
+    워커가 건너뛰어 화면에 빈 행이 남는다.
     """
-    if not (config.session.is_toss):
-        return ()
-    if krx_covers_kis_only_indices():
-        return tuple(n for n in KIS_LIVE_ONLY_INDICES if n not in KRX_REPLACEABLE_INDICES)
-    return KIS_LIVE_ONLY_INDICES
+    return KIS_LIVE_ONLY_INDICES if config.session.is_toss else ()
 
 
 def selectable_indices():
@@ -531,11 +487,10 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                 fut_div = "CM" if _k200_night_session() else "F"
                 m_type = f"K200FUT_{fut_div}"
 
-            # [추가] V코스피200·코스피200선물은 KIS 실전 전용이었다 — 토스는 대체 소스가 없고,
-            #  모의서버는 해당 TR 미지원/불안정 + 모의 모드에서 실전 서버 미사용(운영 방침) → 스킵.
-            #  [2026-08-25] KRX 공식(data.krx.co.kr)이 둘 다 주므로 자격증명이 있으면 스킵하지
-            #   않는다. 판정은 selectable_indices()와 같은 함수를 쓴다 — 목록에는 있는데 워커가
-            #   건너뛰면 화면에 빈 행이 남는다.
+            # [추가] V코스피200·코스피200선물은 KIS 실전 전용이다 — 토스는 대체 소스가 없고
+            #  KRX 공식은 확정 봉뿐이라 장중에 묵는다(KIS_LIVE_ONLY_INDICES 주석 참조) → 스킵.
+            #  판정은 selectable_indices()와 같은 함수를 쓴다 — 목록에는 있는데 워커가
+            #  건너뛰면 화면에 빈 행이 남는다.
             if name in blocked_kis_only_indices():
                 return {'status': 'skipped', 'name': name}
 
@@ -1182,18 +1137,12 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         if is_proxy_yield:
             display_name += " [dim](F)[/dim]"
 
-        is_settled_value = False
         if is_market_open_for_index(name):
-            if _is_krx_settled_value(name, df_daily):
-                # 장은 열려 있지만 이 값은 실시간이 아니다 — 아래 함수 주석 참조.
-                is_settled_value = True
-                display_name += f"[dim]{INDEX_SETTLED_MARK}[/dim]"
-            else:
-                # [표기] 개장 중 표시자. '*'는 대문자 높이의 조밀한 글리프라 지수명 옆에서
-                #  과하게 튀었다. U+2219(BULLET OPERATOR)는 더 작고 조용하면서, East Asian
-                #  Width가 Neutral이라 한글 터미널에서도 폭 1이 확정된다(Ambiguous인 '·'·'•'는
-                #  CJK 폭 설정에 따라 폭 2로 그려져 표가 밀린다).
-                display_name += f"[dim]{INDEX_OPEN_MARK}[/dim]"
+            # [표기] 개장 중 표시자. '*'는 대문자 높이의 조밀한 글리프라 지수명 옆에서
+            #  과하게 튀었다. U+2219(BULLET OPERATOR)는 더 작고 조용하면서, East Asian
+            #  Width가 Neutral이라 한글 터미널에서도 폭 1이 확정된다(Ambiguous인 '·'·'•'는
+            #  CJK 폭 설정에 따라 폭 2로 그려져 표가 밀린다).
+            display_name += f"[dim]{INDEX_OPEN_MARK}[/dim]"
 
 
 
@@ -1206,8 +1155,6 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             'mismatch_msg': mismatch_msg,
             'is_kis_source': is_kis_source,
             'is_delayed': is_delayed,
-            # 장중인데 값이 직전 확정치인 행이 있었는가 — 하단 범례를 그때만 띄운다.
-            'is_settled_value': is_settled_value
         }
     except Exception as e:
         return {'status': 'error', 'name': name, 'error': e}
@@ -1228,12 +1175,10 @@ def _show_market_indices_core(target_indices=None):
     #  토스 API는 이 지수 시세를 제공하지 않으므로 analysis._fetch_domestic_index_data가
     #  TradingView(tvDatafeed)로 보강한다(모드 무관 출력). 조회 대상에서 더 이상 제외하지 않는다.
 
-    # [추가] V코스피200(업종코드 0503)·코스피200선물(선물 TR)은 KIS 실전 전용이었다 — 대체 소스
-    #  (yfinance/tvDatafeed)가 없고, 모의서버는 해당 TR 미지원/불안정(MCI 오류)이며 모의 모드에서
-    #  실전 서버는 사용하지 않는다(운영 방침) → 토스(3)·모의(1) 모드에서는 목록에서 제외했다.
-    #  [2026-08-25] KRX 공식(data.krx.co.kr)이 둘 다 주므로 자격증명이 있으면 그대로 둔다.
-    #   판정은 selectable_indices()·_process_index_worker와 같은 함수를 쓴다(세 곳이 갈라지면
-    #   목록·화면·워커가 서로 다른 지수 집합을 본다).
+    # [추가] V코스피200(업종코드 0503)·코스피200선물(선물 TR)은 KIS 실전 전용이다 — 대체 소스
+    #  (yfinance/tvDatafeed)가 없고 KRX 공식은 확정 봉뿐이라 장중에 묵는다 → 모드 3에서 제외.
+    #  판정은 selectable_indices()·_process_index_worker와 같은 함수를 쓴다(갈라지면
+    #  목록·화면·워커가 서로 다른 지수 집합을 본다).
     for _blocked in blocked_kis_only_indices():
         indices_map.pop(_blocked, None)
 
@@ -1558,10 +1503,6 @@ def _show_market_indices_core(target_indices=None):
     
     # [하단 경고 출력]
     config.console.print(f" [dim]※ ( [/dim]{INDEX_OPEN_MARK}[dim] ) 현재 장이 열려 실시간으로 움직이는 지수[/dim]")
-    if any(isinstance(r, dict) and r.get('is_settled_value') for r in results_dict.values()):
-        config.console.print(
-            f" [dim]※ ( [/dim]{INDEX_SETTLED_MARK}[dim] ) 장은 열려 있으나 값은 직전 확정치 — "
-            f"KRX 공식 소스는 마감 후 확정 봉만 제공합니다(실시간은 모드 2)[/dim]")
     
     if patched_tickers:
         targets = ", ".join(patched_tickers)

@@ -255,7 +255,8 @@ def _fetch_index_via_krx(market_type):
     """data.krx.co.kr 공식 지수·파생 일봉. 자격증명 없음·실패 시 None.
 
     지수(코스피 계열)·V코스피200·코스피200 선물(주간/야간)을 한 입구로 모은다 —
-    호출부가 소스 종류를 몰라도 되게 하려는 것이다.
+    호출부가 소스 종류를 몰라도 되게 하려는 것이다. (V코스피200·선물은 확정 봉뿐이라
+    화면 경로에서는 쓰지 않는다 — `_fetch_domestic_index_data` 주석 참조)
     """
     try:
         from modules import krx_data
@@ -1587,7 +1588,12 @@ def _fetch_domestic_index_data(market_type):
         yf_ticker = "^KQ150"
     elif market_type == "VKOSPI":
         # V코스피200(코스피200 변동성지수): KIS 업종코드 0503 전용.
-        # yfinance/tvDatafeed 모두 미제공 → 폴백 없음(토스 모드에서는 조회 불가).
+        #  yfinance/tvDatafeed 미제공이고, KRX 공식은 **마감 후 확정 봉만** 주므로 장중에는
+        #  직전 확정치가 나온다. 변동성지수를 묵은 값으로 보는 것은 안 보는 것보다 낫지 않다 —
+        #  하필 변동성이 튀는 순간에 화면만 조용하기 때문이다. 그래서 폴백하지 않고,
+        #  토스 모드에서는 목록에서도 뺀다(market.blocked_kis_only_indices). 선물과 같은 정책.
+        if config.session.is_toss:
+            return None
         kis_code = "0503"
         yf_ticker = None
 
@@ -1661,13 +1667,6 @@ def _fetch_domestic_index_data(market_type):
                 df = yf_df
         except Exception as e:
             logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} yfinance 폴백 실패: {e}")
-
-    # 4) V코스피200 — KIS 업종코드 0503 전용이라 토스·모의 모드에서는 위 체인이 전부 비어 있다.
-    #    KRX가 변동성지수 선물 응답의 SPOT_PRC로 현물값을 주므로 그걸 쓴다(종가만·OHLC 없음).
-    if _insufficient(df) and market_type == "VKOSPI":
-        krx_vk = _fetch_index_via_krx(market_type)
-        if krx_vk is not None and not krx_vk.empty:
-            df = krx_vk
 
     return _merge_index_history(krx_hist, df)
 

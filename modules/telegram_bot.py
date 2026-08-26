@@ -1764,10 +1764,12 @@ class TelegramCommander:
         # [수정] 통합 지수 리스트 사용
         targets = market.ALL_INDICES
 
-        # [추가] KIS 실전 전용 지수(코스피200선물·V코스피200)는 모의(1)/토스(3) 모드에서 제외
-        #  (모의서버는 해당 TR 미지원/불안정, 토스는 대체 소스 없음 — 화면 출력 정책과 동일)
-        if config.session.is_toss:
-            targets = [(n, c) for n, c in targets if n not in ("코스피200선물", "V코스피200")]
+        # [추가] KIS 실전 전용 지수(코스피200선물·V코스피200)는 토스(3) 모드에서 제외.
+        #  이름을 여기 다시 적지 않고 market 의 판정 함수를 그대로 쓴다 — 목록이 갈라지면
+        #  화면과 텔레그램이 서로 다른 지수 집합을 보고, 어느 쪽이 맞는지 알 수 없게 된다.
+        _blocked = market.blocked_kis_only_indices()
+        if _blocked:
+            targets = [(n, c) for n, c in targets if n not in _blocked]
 
         # [수정] 지수별 시세 산출은 market.fetch_index_quote 공용 함수 사용 —
         #  메뉴 1과 소스 선택(코스피200선물 TR/국내 KIS/국채 현물/해외 fast_info)이 항상 일치한다.

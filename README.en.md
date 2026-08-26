@@ -415,11 +415,10 @@ What these credentials switch on — without them everything **falls back silent
 | Historical investor flows | Range queries | The KIS flow API returns **only the last 30 trading days**, so multi-year backtests run with "smart money" switched off outside that window |
 | KRX spot gold | Real OHLC + volume | Naver provides **close only** → bars must be flattened (distorting ATR/ADX) and OBV is impossible without volume |
 | KOSPI200 / KOSDAQ150 daily | Settled bars + volume | tvDatafeed returns intermittent empty responses and zero index volume. **KOSDAQ150 has no ticker on Yahoo or FDR**, making tvDatafeed a single point of failure |
-| VKOSPI200 | Available in every mode | Previously KIS-live-only (mode 2), so it was absent from the index list in other modes |
 | Listed-symbol master | Names and market caps | Used to validate ticker codes in AI output (KONEX is filled in from FDR) |
 
-> KRX only publishes **settled bars after the close**, so intraday prices still come from the existing real-time sources. VKOSPI200 has no alternative real-time source, so during the session it shows the last settled value, and the index screen marks it with a **settled indicator (`=`)** instead of the open indicator (`∙`).
-> **KOSPI200 futures remain mode-2 only** — futures sessions cover nearly the whole day (day 09:00–15:45, night 18:00–06:00), so settled-only data would be up to a full day stale throughout the session (measured 40-point divergence during a night session). Rather than display an inaccurate number, it is omitted from the list.
+> KRX only publishes **settled bars after the close**, so intraday prices still come from the existing real-time sources.
+> **VKOSPI200 and KOSPI200 futures are mode-2 (KIS live) only.** Neither has an alternative real-time source, and filling the gap with settled bars leaves a stale number for the whole session — futures sessions cover nearly the whole day (day 09:00–15:45, night 18:00–06:00), drifting up to a full day (measured 40-point divergence during a night session), and a volatility index goes quiet precisely when volatility spikes. Rather than display an inaccurate number, both are omitted from the index list in Toss mode.
 
 ### 6.9 Trading journal web sync
 

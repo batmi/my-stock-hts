@@ -77,45 +77,67 @@ def test_미국채_티커맵은_지수목록과_정합적이다():
 
 # ---------------------------------------------------------------- 목록 노출 정책
 
-def test_KIS실전전용_지수는_KRX가_없을_때만_목록에서_빠진다():
-    """KRX 자격증명이 없으면 종전대로 뺀다 — 조회 못 하는 행을 보여 주지 않기 위해서다."""
+def test_KIS실전전용_지수는_토스모드_목록에서_빠진다():
+    """토스는 대체 소스가 없다 — 조회 못 하는 행을 보여 주지 않기 위해서다."""
     config.session.is_toss = False
     assert [n for n, _ in market.selectable_indices()] == [n for n, _ in market.ALL_INDICES]
 
-    with patch.object(market, 'krx_covers_kis_only_indices', return_value=False):
-        for mode_attr in ('is_toss',):
-            config.session.is_toss = False
-            setattr(config.session, mode_attr, True)
-            names = [n for n, _ in market.selectable_indices()]
-            assert "V코스피200" not in names
-            assert "코스피200선물" not in names
-            assert "코스피200" in names  # 대체 소스가 있는 지수는 남는다
+    config.session.is_toss = True
+    try:
+        names = [n for n, _ in market.selectable_indices()]
+        assert "V코스피200" not in names
+        assert "코스피200선물" not in names
+        assert "코스피200" in names  # 대체 소스가 있는 지수는 남는다
+    finally:
+        config.session.is_toss = False
 
 
-def test_KRX가_열려_있으면_V코스피200은_토스_모의모드에서도_보인다():
-    """V코스피200은 값이 KIS 0503과 일치함을 확인했다(지수·등락·EMA5/20/60 동일)."""
-    with patch.object(market, 'krx_covers_kis_only_indices', return_value=True):
-        for mode_attr in ('is_toss',):
-            config.session.is_toss = False
-            setattr(config.session, mode_attr, True)
-            names = [n for n, _ in market.selectable_indices()]
-            assert "V코스피200" in names
+def test_V코스피200은_KRX로_대신하지_않는다():
+    """KRX 는 확정 봉만 준다 — 변동성지수를 묵은 값으로 보는 것은 안 보는 것보다 낫지 않다.
+
+    2026-08-25~08-26 사이 잠깐 모드 3 에 열려 있었다. 값 자체는 KIS 0503 과 일치하지만
+    장중에는 직전 확정치라, 하필 변동성이 튀는 순간에 화면만 조용하다.
+    """
+    config.session.is_toss = True
+    try:
+        assert "V코스피200" in market.blocked_kis_only_indices()
+        assert "V코스피200" not in [n for n, _ in market.selectable_indices()]
+    finally:
+        config.session.is_toss = False
+    # 모드 2(실전)에서는 KIS 0503 실시간이라 그대로 보인다
+    assert "V코스피200" in [n for n, _ in market.selectable_indices()]
 
 
-def test_코스피200선물은_KRX가_있어도_토스_모의모드에서_빠진다():
+def test_코스피200선물은_토스모드에서_빠진다():
     """KRX도 확정 봉만 주는데 선물은 세션이 하루를 덮어 장중 내내 최대 하루 묵는다.
     야간장 01:47 실측 KIS 1,034.85 vs KRX 확정 1,074.55 — 부정확한 값은 보여 주지 않는다."""
-    assert "코스피200선물" not in market.KRX_REPLACEABLE_INDICES
-    for covered in (True, False):
-        with patch.object(market, 'krx_covers_kis_only_indices', return_value=covered):
-            for mode_attr in ('is_toss',):
-                config.session.is_toss = False
-                setattr(config.session, mode_attr, True)
-                names = [n for n, _ in market.selectable_indices()]
-                assert "코스피200선물" not in names, (mode_attr, covered)
+    config.session.is_toss = True
+    try:
+        assert "코스피200선물" not in [n for n, _ in market.selectable_indices()]
+    finally:
+        config.session.is_toss = False
     # 모드 2(실전)에서는 그대로 보인다
-    config.session.is_toss = False
     assert "코스피200선물" in [n for n, _ in market.selectable_indices()]
+
+
+def test_토스모드_V코스피200_조회는_KRX로_폴백하지_않는다():
+    """목록에서 빠졌더라도 조회 경로가 열려 있으면 묵은 값이 다른 화면으로 샌다."""
+    config.session.is_toss = True
+    try:
+        with patch.object(analysis, '_fetch_index_via_krx') as krx:
+            assert analysis._fetch_domestic_index_data("VKOSPI") is None
+        krx.assert_not_called()
+    finally:
+        config.session.is_toss = False
+
+
+def test_텔레그램도_같은_제외목록을_쓴다():
+    """이름을 따로 적으면 화면과 텔레그램이 서로 다른 지수 집합을 보게 된다."""
+    import inspect
+    from modules import telegram_bot
+    src = inspect.getsource(telegram_bot.TelegramCommander._get_market_status)
+    assert 'blocked_kis_only_indices' in src
+    assert '"V코스피200"' not in src
 
 
 def test_토스모드_선물조회는_KRX로_폴백하지_않는다():
@@ -133,7 +155,7 @@ def test_목록과_워커의_판정이_같은_함수를_쓴다():
     """목록에는 있는데 워커가 건너뛰면 화면에 빈 행이 남는다 — 두 곳이 갈라지면 안 된다."""
     config.session.is_toss = True
     try:
-        with patch.object(market, 'krx_covers_kis_only_indices', return_value=True) as gate, \
+        with patch.object(market, 'blocked_kis_only_indices', return_value=()) as gate, \
              patch.object(analysis, 'get_domestic_index_data', return_value=_src_df()), \
              patch.object(market, 'is_market_open_for_index', return_value=False):
             res = market._process_index_worker("V코스피200", "^VKOSPI",
@@ -260,61 +282,40 @@ def test_지수화면_목록도_같은_게이트를_쓴다():
     """게이트가 세 곳(목록·화면·워커)에 있다 — 갈라지면 서로 다른 지수 집합을 본다."""
     config.session.is_toss = True
     try:
-        with patch.object(market, 'krx_covers_kis_only_indices', return_value=False) as gate:
+        with patch.object(market, 'blocked_kis_only_indices',
+                          wraps=market.blocked_kis_only_indices) as gate:
             assert market._show_market_indices_core(target_indices=["V코스피200"]) == []
             assert gate.called
     finally:
         config.session.is_toss = False
 
 
-# ---------------------------------------------------------------- 확정치 표시
-#  2026-08-25: 야간장 중 모드 2는 1,034.85(실시간), 모드 3은 1,074.55(직전 확정 야간 종가)로
-#  40포인트 벌어졌는데 두 화면 모두 개장 표시(∙)가 붙어 '실시간'이라고 말하고 있었다.
+# ---------------------------------------------------------------- 개장 표시
+#  2026-08-26: 확정 표시(=)는 제거했다. KRX 확정 봉이 장중에 실시간인 척하는 것을 표시자로
+#  알리려던 장치인데, 그런 값을 아예 안 보여 주기로 하면서 붙을 자리가 사라졌다.
 
-def test_KRX_확정치는_개장표시_대신_확정표시를_받는다():
-    """모드 3의 V코스피200은 KRX 정규장 시간에 직전 확정치다 — 실시간이라고 말하면 안 된다."""
+def test_개장중_지수에는_개장표시가_붙는다():
+    """실시간으로 움직이는 지수만 표시자를 받는다 — 하단 범례가 이 값을 설명한다."""
     df = _src_df()
-    df.attrs['source'] = 'KRX'
-    assert market._is_krx_settled_value("V코스피200", df) is True
-
-
-def test_실시간_소스는_확정표시를_받지_않는다():
-    """모드 2(KIS)·토스·tvDatafeed 값은 실시간이므로 종전 개장 표시 그대로여야 한다."""
-    for src in ('KIS', 'TOSS', 'TVDATAFEED', 'YFINANCE'):
-        df = _src_df()
-        df.attrs['source'] = src
-        assert market._is_krx_settled_value("코스피200선물", df) is False
-
-
-def test_KRX_전용지수가_아니면_확정표시_대상이_아니다():
-    """'마지막 봉이 오늘인가'로 일반화하면 해외 지수가 걸린다(현지 날짜가 KST로 어제다)."""
-    df = _src_df()
-    df.attrs['source'] = 'KRX'
-    for other in ("코스피", "코스피200", "코스닥150", "나스닥", "KRX 금현물"):
-        assert market._is_krx_settled_value(other, df) is False
-
-
-def test_확정표시는_개장중일_때만_붙는다():
-    """장이 닫혀 있으면 모든 값이 확정치다 — 그때 표시를 붙이면 의미가 없다."""
-    df = _src_df()
-    df.attrs['source'] = 'KRX'
     config.session.is_toss = False          # 앞 테스트가 남긴 모드 상태를 지운다(워커 스킵 방지)
-    with patch.object(market, 'is_market_open_for_index', return_value=False), \
-         patch.object(analysis, 'get_domestic_index_data', return_value=df):
-        res = market._process_index_worker("V코스피200", "^VKOSPI", pd.DataFrame(), pd.DataFrame())
-    assert res['status'] == 'success'
-    assert res.get('is_settled_value') is False
-    assert market.INDEX_SETTLED_MARK not in res['row_data'][0]
-
-
-def test_장중_KRX값에는_확정표시가_붙는다():
-    df = _src_df()
-    df.attrs['source'] = 'KRX'
-    config.session.is_toss = False
     with patch.object(market, 'is_market_open_for_index', return_value=True), \
          patch.object(analysis, 'get_domestic_index_data', return_value=df):
-        res = market._process_index_worker("V코스피200", "^VKOSPI", pd.DataFrame(), pd.DataFrame())
+        res = market._process_index_worker("코스피200", "^KS200", pd.DataFrame(), pd.DataFrame())
     assert res['status'] == 'success'
-    assert res['is_settled_value'] is True
-    assert market.INDEX_SETTLED_MARK in res['row_data'][0]
-    assert market.INDEX_OPEN_MARK not in res['row_data'][0]   # 둘이 같이 붙으면 안 된다
+    assert market.INDEX_OPEN_MARK in res['row_data'][0]
+
+
+def test_장이_닫혀_있으면_표시자가_없다():
+    df = _src_df()
+    config.session.is_toss = False
+    with patch.object(market, 'is_market_open_for_index', return_value=False), \
+         patch.object(analysis, 'get_domestic_index_data', return_value=df):
+        res = market._process_index_worker("코스피200", "^KS200", pd.DataFrame(), pd.DataFrame())
+    assert res['status'] == 'success'
+    assert market.INDEX_OPEN_MARK not in res['row_data'][0]
+
+
+def test_확정표시_장치는_남아있지_않다():
+    """묵은 값은 표시로 덮는 게 아니라 목록에서 뺀다 — 표시자만 남기면 다시 붙일 이유부터 찾게 된다."""
+    for gone in ('INDEX_SETTLED_MARK', '_is_krx_settled_value', '_KRX_SETTLED_ONLY_INDICES'):
+        assert not hasattr(market, gone), gone
