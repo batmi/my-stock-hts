@@ -764,9 +764,15 @@ def _print_saved_positions(positions):
     for i, p in enumerate(positions, 1):
         unit = "$" if p['is_overseas'] else "원"
         price = f"{p['buy_price']:,.2f}{unit}" if p['is_overseas'] else f"{p['buy_price']:,.0f}{unit}"
+        
+        qty_unit = _qty_unit(p['code'])
+        # '주'(전각, 2칸)와 'g'(반각, 1칸)의 우측 정렬 시 숫자 위치를 맞추기 위해 뒤에 공백(1칸) 추가
+        # rich 라이브러리가 우측 공백을 지우는 것을 방지하기 위해 Zero-width space(\u200b) 사용
+        qty_str = f"{p['qty']:,}{qty_unit} \u200b" if qty_unit == "g" else f"{p['qty']:,}{qty_unit}"
+        
         table.add_row(
             str(i), p['name'], p['code'], "해외" if p['is_overseas'] else "국내",
-            price, f"{p['qty']:,}{_qty_unit(p['code'])}",
+            price, qty_str,
             p['buy_date'].strftime("%Y-%m-%d") if p.get('buy_date') else "[dim]-[/dim]",
         )
 
