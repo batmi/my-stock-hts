@@ -282,7 +282,7 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
             ax_vp.set_zorder(ax1.get_zorder() + 1)
             ax_vp.patch.set_visible(False)
             bin_height = (df['high'].max() - df['low'].min()) / 50 * 0.8
-            ax_vp.barh(bin_centers, volumes, height=bin_height, color='slategray', alpha=0.4, align='center')
+            ax_vp.barh(bin_centers, volumes, height=bin_height, color='slategray', alpha=0.2, align='center')
             # 가장 긴 막대가 차트의 50%만 차지하도록 x축 최대값 설정
             max_vol = max(volumes) if max(volumes) > 0 else 1
             ax_vp.set_xlim(0, max_vol * 2)

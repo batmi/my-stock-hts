@@ -278,8 +278,8 @@ def update_chart_index(chart_dir):
         anim_delay = (idx % 10) * 0.1
         
         cards_html += f'''
-        <div class="card" style="animation-delay: {anim_delay}s" onclick="openLightbox('{filename}')">
-            <img src="{filename}" alt="{alt_text}" loading="lazy">
+        <div class="card" style="animation-delay: {anim_delay}s" onclick="openLightbox('{filename}?v={int(mtime)}')">
+            <img src="{filename}?v={int(mtime)}" alt="{alt_text}" loading="lazy">
             <div class="card-info">
                 <h3 class="card-title">{title_html}</h3>
                 <div class="card-meta">
