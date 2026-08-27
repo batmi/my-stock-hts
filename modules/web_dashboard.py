@@ -199,7 +199,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </head>
 <body>
     <header>
-        <h1>Quantitative Chart Dashboard</h1>
+        <h1>Chart Dashboard</h1>
     </header>
     <div class="gallery">
         <!-- INJECT_CARDS -->
