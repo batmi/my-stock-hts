@@ -141,6 +141,7 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
             config.console.print("[yellow]해당 지수는 시봉·분봉 차트를 제공하지 않습니다. 일봉 또는 주봉을 이용해주세요.[/yellow]")
         return
 
+    import pandas as pd
     setup_korean_font()
     
     # [로그] 차트 생성 요청 시작
@@ -238,9 +239,9 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
         fig, (ax1, ax_ha, ax6, ax2, ax3, ax4, ax5) = plt.subplots(7, 1, figsize=(20, 28), sharex=True, gridspec_kw={'height_ratios': [4, 1, 1, 1, 1, 1, 1]})
 
         # [1] Price Chart
-        ax1.plot(df.index, df['BB_up'], color='gray', linestyle=':', linewidth=1, alpha=0.3)
-        ax1.plot(df.index, df['BB_low'], color='gray', linestyle=':', linewidth=1, alpha=0.3)
-        ax1.fill_between(df.index, df['BB_low'], df['BB_up'], color='gray', alpha=0.05)
+        ax1.plot(df.index, df['BB_up'], color='gray', linestyle=':', linewidth=1, alpha=0.4)
+        ax1.plot(df.index, df['BB_low'], color='gray', linestyle=':', linewidth=1, alpha=0.4)
+        ax1.fill_between(df.index, df['BB_low'], df['BB_up'], color='gray', alpha=0.07)
         # [1] Price Chart (캔들차트)
         up = df[df['close'] >= df['open']]
         down = df[df['close'] < df['open']]
@@ -267,6 +268,26 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
         
         sar_color = np.where(df['close'] > df['SAR'], 'red', 'blue')
         ax1.scatter(df.index, df['SAR'], s=5, c=sar_color, alpha=0.4, label='SAR')
+
+        # [매물대] Volume Profile 표시 (좌측 오버랩)
+        try:
+            # 표시 구역의 가격 범위 분할 (50 구간)
+            price_bins = pd.cut(df['close'], bins=50)
+            vp = df.groupby(price_bins, observed=False)['volume'].sum()
+            bin_centers = [b.mid for b in vp.index]
+            volumes = vp.values
+            
+            # 메인 차트(ax1)와 y축 공유, 독립적인 x축(매물대용)
+            ax_vp = ax1.twiny()
+            bin_height = (df['high'].max() - df['low'].min()) / 50 * 0.8
+            ax_vp.barh(bin_centers, volumes, height=bin_height, color='slategray', alpha=0.2, align='center')
+            # 가장 긴 막대가 차트의 50%만 차지하도록 x축 최대값 설정
+            max_vol = max(volumes) if max(volumes) > 0 else 1
+            ax_vp.set_xlim(0, max_vol * 2)
+            ax_vp.axis('off')
+        except Exception as e:
+            if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+                config.console.print(f"[dim red][TRACE] 매물대 생성 실패: {e}[/dim red]")
 
         # [박스권] 최근 횡보 구간을 적응적으로 탐지 + 현재가 돌파/이탈 판정
         try:
