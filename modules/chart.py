@@ -271,17 +271,48 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
 
         # [매물대] Volume Profile 표시 (좌측 오버랩)
         try:
-            # 표시 구역의 가격 범위 분할 (50 구간)
-            price_bins = pd.cut(df['close'], bins=50)
-            vp = df.groupby(price_bins, observed=False)['volume'].sum()
-            bin_centers = [b.mid for b in vp.index]
-            volumes = vp.values
+            min_price = df['low'].min()
+            max_price = df['high'].max()
+            
+            # 고가와 저가가 완전히 동일한 경우(거래정지 등 특이 케이스) 방어 로직
+            if min_price == max_price:
+                bin_centers = [min_price]
+                volumes = [df['volume'].sum()]
+                bin_height = min_price * 0.01 if min_price > 0 else 1 # 임의의 높이
+            else:
+                # 50개 구간을 정의하는 51개의 경계값 생성
+                bins = np.linspace(min_price, max_price, 51)
+                bin_centers = (bins[:-1] + bins[1:]) / 2
+                volumes = np.zeros(50)
+                
+                # 각 캔들의 거래량을 저가~고가 범위 내의 매물대 구간에 골고루 분배
+                for _, row in df.iterrows():
+                    h, l, v = row['high'], row['low'], row['volume']
+                    if pd.isna(v) or v == 0:
+                        continue
+                    if h == l:
+                        # 캔들의 고가와 저가가 같은 경우 (점상한가 등)
+                        bin_idx = np.digitize(row['close'], bins) - 1
+                        bin_idx = max(0, min(49, bin_idx))
+                        volumes[bin_idx] += v
+                    else:
+                        # 각 구간(bin)과 캔들의 가격 범위(low~high)가 겹치는 영역 계산
+                        overlap_bottom = np.maximum(l, bins[:-1])
+                        overlap_top = np.minimum(h, bins[1:])
+                        overlap = overlap_top - overlap_bottom
+                        
+                        # 겹치는 구간이 있는(0보다 큰) bin에 대해서만 거래량 분배
+                        valid = overlap > 0
+                        volumes[valid] += v * (overlap[valid] / (h - l))
             
             # 메인 차트(ax1)와 y축 공유, 독립적인 x축(매물대용)
             ax_vp = ax1.twiny()
             ax_vp.set_zorder(ax1.get_zorder() + 1)
             ax_vp.patch.set_visible(False)
-            bin_height = (df['high'].max() - df['low'].min()) / 50 * 0.8
+            
+            if min_price != max_price:
+                bin_height = (max_price - min_price) / 50 * 0.8
+                
             ax_vp.barh(bin_centers, volumes, height=bin_height, color='slategray', alpha=0.2, align='center')
             # 가장 긴 막대가 차트의 50%만 차지하도록 x축 최대값 설정
             max_vol = max(volumes) if max(volumes) > 0 else 1
