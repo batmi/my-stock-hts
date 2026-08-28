@@ -169,6 +169,8 @@ class TelegramCommander:
             "🟡 상태 요약": "/status",
             "⚪ 상태 요약": "/status",
             "🔴 상태 요약": "/status",
+            "🟠 상태 요약": "/status",
+            "🔷 상태 요약": "/status",
             "💰 계좌 잔고": "/balance",
             "💼 보유 종목": "/holdings",
             "📝 관심 종목": "/stocks",
@@ -1734,17 +1736,16 @@ class TelegramCommander:
             return None
             
         try:
-            from modules import settings
-            preset = settings.check_and_update_active_preset()
+            from modules import analysis
+            regime, _ = analysis.get_market_regime("KOSPI")
+            if regime == 'Bull': emoji = "🔴"
+            elif regime == 'PendUp': emoji = "🟠"
+            elif regime == 'Sideways': emoji = "🟡"
+            elif regime == 'PendDown': emoji = "🔷"
+            elif regime == 'Bear': emoji = "🔵"
+            else: emoji = "⚪"
         except Exception:
-            preset = getattr(config, 'ACTIVE_PRESET', 'default')
-            
-        if preset == 'bull': emoji = "🔴"
-        elif preset == 'bear': emoji = "🔵"
-        elif preset == 'sideways': emoji = "🟡"
-        elif preset == 'default': emoji = "🟢"
-        elif preset == 'custom': emoji = "⚪"
-        else: emoji = "⚪"
+            emoji = "⚪"
             
         toggle_btn = {"text": "🛑 거래 정지"} if self.trader.is_running else {"text": "▶️ 거래 시작"}
         return {
