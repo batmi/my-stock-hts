@@ -1218,16 +1218,75 @@ class AutoTrader:
             
             realized_rate = (realized_profit / self.initial_asset * 100) if self.initial_asset > 0 else 0.0
             msg += f"오늘 실현 손익: {realized_profit:+,}원 ({realized_rate:+.2f}%)\n"
+            msg += f"주문 가능 금액: {deposit:,}원\n"
             msg += f"증권 평가 자산: {tot_evlu:,}원\n"
             msg += f"증권 평가 손익: {tot_profit:+,}원 ({rate:+.2f}%)\n"
-            msg += f"주문 가능 금액: {deposit:,}원\n"
         else:
             msg += "자산 정보 조회 실패\n"
             
-        # [수정] 현재 시장 상황 정보
+        # [시장 지수 및 필터링 데이터 준비]
+        use_filter = getattr(config, 'USE_MARKET_FILTER', True)
+        filter_str = "ON" if use_filter else "OFF"
+        filter_ma = getattr(config, 'MARKET_FILTER_MA', 80)
+        filter_band = getattr(config, 'MARKET_FILTER_BAND', 1.0)
+        band_txt = f" ±{filter_band:g}%" if filter_band else ""
+
+        is_healthy_k = True
+        is_healthy_q = True
+        
+        market_idx_msgs = []
+        market_flt_msgs = []
+
+        try:
+            for name, m_type in [("KOSPI", "KOSPI"), ("KOSDAQ", "KOSDAQ")]:
+                df = analysis.get_domestic_index_data(m_type)
+                if df is not None and not df.empty:
+                    curr = df.iloc[-1]['close']
+                    prev = df.iloc[-2]['close'] if len(df) > 1 else curr
+                    rate = ((curr - prev) / prev) * 100
+                    market_idx_msgs.append(f"• {name}: {curr:,.2f} ({rate:+.2f}%)")
+                    
+                    filter_status = "허용"
+                    # 시스템 루프의 상태 캐시(market_index_status)를 우선 적용
+                    cached_stat = self.market_index_status.get(m_type)
+                    
+                    if isinstance(cached_stat, dict) and cached_stat.get('unknown'):
+                        is_healthy = False
+                        filter_status = "보류 (판단불가)"
+                    elif cached_stat and isinstance(cached_stat, dict) and cached_stat.get('current', 0) > 0:
+                        is_healthy = cached_stat.get('is_healthy', True)
+                        filter_status = "허용" if is_healthy else "보류"
+                    else:
+                        ma_period = getattr(config, 'MARKET_FILTER_MA', 80)
+                        if len(df) >= ma_period:
+                            is_healthy = not bool(indicators.get_market_filter_blocked(
+                                df['close'], ma_period,
+                                getattr(config, 'MARKET_FILTER_BAND', 1.0)).iloc[-1])
+                            filter_status = "허용" if is_healthy else "보류"
+                        else:
+                            is_healthy = False
+                            filter_status = "보류 (데이터부족)"
+                            
+                    if m_type == "KOSPI":
+                        is_healthy_k = is_healthy
+                    elif m_type == "KOSDAQ":
+                        is_healthy_q = is_healthy
+                        
+                    market_flt_msgs.append(f"• {name}: {filter_status}")
+                else:
+                    market_idx_msgs.append(f"• {name}: 확인 불가")
+                    market_flt_msgs.append(f"• {name}: 확인 불가")
+        except Exception: pass
+        
+        # [시장 지수] 섹션 출력
+        msg += "\n[시장 지수]\n"
+        if market_idx_msgs:
+            msg += "\n".join(market_idx_msgs) + "\n"
+        else:
+            msg += "• 지수 데이터 확인 불가\n"
+
+        # [시장 상황] 섹션 출력
         msg += "\n[시장 상황]\n"
-        # 하락축은 🔷(미확정) → 🔵(확정)로 단계를 표현 — 화면 색상(sky_blue3 → blue)과 동일 계열
-        #  (하늘색 원형 이모지는 유니코드에 없어 밝은 파랑 마름모로 대체)
         emoji_map = {"Bull": "🔴", "PendUp": "🟠", "PendDown": "🔷", "Bear": "🔵", "Sideways": "🟡"}
         rp = config.MARKET_REGIME_PARAMS
         ema_desc = f"EMA {rp.get('REGIME_EMA_FAST', 9)}/{rp.get('REGIME_EMA_SLOW', 41)}"
@@ -1237,67 +1296,21 @@ class AutoTrader:
                 info = analysis.get_market_regime_detail(m_type)
                 regime = info['regime']
                 regime_str = f"{emoji_map.get(regime, '🟡')} {analysis.format_regime(regime, markup=False)}"
-                msg += f"• {label}: {regime_str} (교차 후 {info['moved_pct']:+.1f}%, {ema_desc} 기준)\n"
+                msg += f"• {label}: {regime_str} ({info['moved_pct']:+.1f}%, {ema_desc} 기준)\n"
             except Exception:
                 msg += f"• {label}: 확인 불가\n"
 
-        # [추가] 시장 지수 요약 정보 및 필터링 상태 (시장 상황 아래 배치)
-        use_filter = getattr(config, 'USE_MARKET_FILTER', True)
-        filter_str = "ON" if use_filter else "OFF"
-        filter_ma = getattr(config, 'MARKET_FILTER_MA', 80)
-        filter_band = getattr(config, 'MARKET_FILTER_BAND', 1.0)
-        band_txt = f" ±{filter_band:g}%" if filter_band else ""
-        msg += f"\n[시장 지수 및 필터링 (필터: {filter_str}, SMA {filter_ma}일{band_txt} 기준)]\n"
-        
-        is_healthy_k = True
-        is_healthy_q = True
+        # [시장 필터링] 섹션 출력
+        msg += f"\n[시장 필터링] ({filter_str}, SMA {filter_ma}일{band_txt} 기준)\n"
+        if market_flt_msgs:
+            msg += "\n".join(market_flt_msgs) + "\n"
+        else:
+            msg += "• 필터링 상태 확인 불가\n"
 
-        try:
-            for name, m_type in [("KOSPI", "KOSPI"), ("KOSDAQ", "KOSDAQ")]:
-                df = analysis.get_domestic_index_data(m_type)
-                if df is not None and not df.empty:
-                    curr = df.iloc[-1]['close']
-                    prev = df.iloc[-2]['close'] if len(df) > 1 else curr
-                    rate = ((curr - prev) / prev) * 100
-                    
-                    filter_msg = ""
-                    if use_filter:
-                        # 시스템 루프의 상태 캐시(market_index_status)를 우선 적용하여 보류 카운트와 상태 불일치 방지
-                        cached_stat = self.market_index_status.get(m_type)
-                        
-                        if isinstance(cached_stat, dict) and cached_stat.get('unknown'):
-                            # [Fix] 판단 불가 = 매수 보류(fail-closed). '약세 보류'와 원인을 구분해 표시한다.
-                            is_healthy = False
-                            filter_msg = " [🚫보류(판단불가)]"
-                        elif cached_stat and isinstance(cached_stat, dict) and cached_stat.get('current', 0) > 0:
-                            is_healthy = cached_stat.get('is_healthy', True)
-                            filter_msg = " [🟢허용]" if is_healthy else " [🚫보류]"
-                        else:
-                            # 대기 상태(WAITING) 등 캐시가 없을 때만 실시간 계산
-                            #  (밴드 히스테리시스 포함 — 시스템 루프와 같은 판정식을 써야 표시가 어긋나지 않는다)
-                            ma_period = getattr(config, 'MARKET_FILTER_MA', 80)
-                            if len(df) >= ma_period:
-                                is_healthy = not bool(indicators.get_market_filter_blocked(
-                                    df['close'], ma_period,
-                                    getattr(config, 'MARKET_FILTER_BAND', 1.0)).iloc[-1])
-                                filter_msg = " [🟢허용]" if is_healthy else " [🚫보류]"
-                            else:
-                                is_healthy = False
-                                filter_msg = " [🚫보류(데이터부족)]"
-                                
-                        if m_type == "KOSPI":
-                            is_healthy_k = is_healthy
-                        elif m_type == "KOSDAQ":
-                            is_healthy_q = is_healthy
-                            
-                    msg += f"• {name}: {curr:,.2f} ({rate:+.2f}%){filter_msg}\n"
-        except Exception: pass
-        
         if use_filter:
             skip_k = self.skipped_by_market_filter_count.get("KOSPI", 0)
             skip_q = self.skipped_by_market_filter_count.get("KOSDAQ", 0)
             
-            # [추가] 분석 루프가 돌지 않았을 경우(0건) stock.json 기준으로 실제 보류 대상 개수 산출
             if (not is_healthy_k and skip_k == 0) or (not is_healthy_q and skip_q == 0):
                 calc_k, calc_q = self._get_skipped_stocks_count(holdings)
                 if not is_healthy_k and skip_k == 0: skip_k = calc_k
