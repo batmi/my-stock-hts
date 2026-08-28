@@ -3018,13 +3018,14 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     table_tech.add_row("주요 이평선", f"5선: {e5_disp} | 20선: {e20_disp} | 60선: {e60_disp} | 120선: {e120_disp}", "지수이동평균(EMA) 가격")
 
     # 이격도
+    d_5 = (current_price / ind['ema_5'] * 100) if ind.get('ema_5') is not None else 0
     d_20 = (current_price / ind['ema_20'] * 100) if ind['ema_20'] is not None else 0
     d_60 = (current_price / ind['ema_60'] * 100) if ind['ema_60'] is not None else 0
     d_120 = (current_price / ind['ema_120'] * 100) if ind['ema_120'] is not None else 0
     
     def dc(val): return "[red]" if val >= 100 else "[blue]"
     
-    disp_msg = f"20선({dc(d_20)}{d_20:.1f}%[/]) 60선({dc(d_60)}{d_60:.1f}%[/]) 120선({dc(d_120)}{d_120:.1f}%[/])"
+    disp_msg = f"5선({dc(d_5)}{d_5:.1f}%[/]) 20선({dc(d_20)}{d_20:.1f}%[/]) 60선({dc(d_60)}{d_60:.1f}%[/]) 120선({dc(d_120)}{d_120:.1f}%[/])"
     
     disp_upper = config.ANALYSIS_THRESHOLDS.get("DISPARITY_UPPER", 110)
     disp_lower = config.ANALYSIS_THRESHOLDS.get("DISPARITY_LOWER", 90)
