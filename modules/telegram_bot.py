@@ -172,12 +172,12 @@ class TelegramCommander:
             "🟠 상태 요약": "/status",
             "🔷 상태 요약": "/status",
             "💰 계좌 잔고": "/balance",
-            "💼 보유 종목": "/holdings",
+            "📅 투자 일정": "/calendar",
             "📝 관심 종목": "/stocks",
             "📈 시장 지수": "/market",
             "🔎 종목 스캔": "/scan k",
             "❓ 도움말": "/help",
-            "📅 일간 손익": "/profit d",
+            "💵 일간 손익": "/profit d",
             "📜 주간 거래": "/history w",
             "📊 월간 성과": "/report m",
             "🎯 포지션": "/position",
@@ -1751,8 +1751,8 @@ class TelegramCommander:
         return {
             "keyboard": [
                 [{"text": "❓ 도움말"}, {"text": "📈 시장 지수"}, {"text": "💰 계좌 잔고"}],
-                [{"text": "📝 관심 종목"}, {"text": "💼 보유 종목"}, {"text": "🎯 포지션"}],
-                [{"text": "📅 일간 손익"}, {"text": "📜 주간 거래"}, {"text": "📊 월간 성과"}],
+                [{"text": "📝 관심 종목"}, {"text": "🎯 포지션"}, {"text": "📅 투자 일정"}],
+                [{"text": "💵 일간 손익"}, {"text": "📜 주간 거래"}, {"text": "📊 월간 성과"}],
                 [{"text": f"{emoji} 상태 요약"}, toggle_btn]
             ],
             "resize_keyboard": True
