@@ -172,6 +172,19 @@ def _get_preset_emoji():
     elif preset == 'custom': return "⚪"
     else: return "⚪"
 
+def _get_market_state_emoji(market_type="KOSPI"):
+    try:
+        from modules import analysis
+        regime, _ = analysis.get_market_regime(market_type)
+        if regime == 'Bull': return "🔴"
+        elif regime == 'PendUp': return "🟠"
+        elif regime == 'Sideways': return "🟡"
+        elif regime == 'PendDown': return "🔷"
+        elif regime == 'Bear': return "🔵"
+        else: return "⚪"
+    except Exception:
+        return "⚪"
+
 def _custom_print_breadcrumb():
     """커스텀 브레드크럼 출력 함수"""
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -182,7 +195,9 @@ def _custom_print_breadcrumb():
         env_str = "[토스증권]"; env_color = "bold magenta"
     else:
         env_str = "[한투증권]"; env_color = "bold red"
-    emoji = _get_preset_emoji()
+        
+    # 기존 프리셋 이모지 대신 KOSPI 시장 상태 이모지를 출력하도록 임시 변경
+    emoji = _get_market_state_emoji("KOSPI")
     
     config.console.print("\n[dim]" + "─"*50 + "[/dim]")
     config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/] {emoji}")
@@ -648,11 +663,14 @@ def show_help():
             transient=True
         ) as progress:
             progress.add_task("[cyan]현재 시장 상태 및 필터링 분석 중...[/cyan]", total=None)
-            kospi_regime, kospi_adj = analysis.get_market_regime("KOSPI")
-            kosdaq_regime, kosdaq_adj = analysis.get_market_regime("KOSDAQ")
+            kospi_info = analysis.get_market_regime_detail("KOSPI")
+            kosdaq_info = analysis.get_market_regime_detail("KOSDAQ")
+            
+            kospi_regime, kospi_adj = kospi_info['regime'], kospi_info['score_adj']
+            kosdaq_regime, kosdaq_adj = kosdaq_info['regime'], kosdaq_info['score_adj']
         
-            k_r_str = analysis.format_regime(kospi_regime) + "*"
-            q_r_str = analysis.format_regime(kosdaq_regime) + "*"
+            k_r_str = f"{analysis.format_regime(kospi_regime)} ({kospi_info['moved_pct']:+.1f}%)"
+            q_r_str = f"{analysis.format_regime(kosdaq_regime)} ({kosdaq_info['moved_pct']:+.1f}%)"
 
             market_status_info = {
                 "kospi_str": k_r_str, "kospi_adj": kospi_adj,
