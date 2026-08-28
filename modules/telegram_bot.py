@@ -1805,8 +1805,12 @@ class TelegramCommander:
             try:
                 display_name, current, prev = market.fetch_index_quote(name, code)
 
+                # [수정] 장 중인 경우 지수명 앞 구분자를 '*'로, 아니면 '•'로 표시
+                is_open = market.is_market_open_for_index(name)
+                prefix = "*" if is_open else "•"
+
                 if current is None or prev is None:
-                    msg += f"\n• {display_name}: 데이터 조회 실패"
+                    msg += f"\n{prefix} {display_name}: 데이터 조회 실패"
                     continue
 
                 diff = current - prev
@@ -1814,14 +1818,14 @@ class TelegramCommander:
 
                 if "미국채" in display_name:
                     # 지수 화면과 동일하게 소수점 3자리 (선물적용 폴백 표기 포함)
-                    msg += f"\n• {display_name} {current:,.3f}% ({diff:+.3f}p)"
+                    msg += f"\n{prefix} {display_name} {current:,.3f}% ({diff:+.3f}p)"
                 elif code == "^KRXGOLD":
                     # KRX 금현물은 원/g 정수 호가 — 지수 화면과 같은 표기를 쓴다
-                    msg += f"\n• {display_name} {current:,.0f} ({rate:+.2f}%)"
+                    msg += f"\n{prefix} {display_name} {current:,.0f} ({rate:+.2f}%)"
                 else:
                     val_fmt = f"{current:,.2f}"
                     if code == "KRW=X": val_fmt += "원"
-                    msg += f"\n• {display_name} {val_fmt} ({rate:+.2f}%)"
+                    msg += f"\n{prefix} {display_name} {val_fmt} ({rate:+.2f}%)"
 
             except Exception:
                 msg += f"\n• {name}: 오류"
