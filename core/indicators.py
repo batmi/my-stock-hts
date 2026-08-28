@@ -488,7 +488,10 @@ def calculate_indicators(df):
     if df is None or df.empty: return indicators
 
     if len(df) >= 5: indicators['ema_5'] = df['close'].ewm(span=5, adjust=False).mean().iloc[-1]
-    if len(df) >= 20: indicators['ema_20'] = df['close'].ewm(span=20, adjust=False).mean().iloc[-1]
+    if len(df) >= 20:
+        ema20_s = df['close'].ewm(span=20, adjust=False).mean()
+        indicators['ema_20'] = ema20_s.iloc[-1]
+        if len(ema20_s) > 1: indicators['prev_ema_20'] = ema20_s.iloc[-2]
     if len(df) >= 60: indicators['ema_60'] = df['close'].ewm(span=60, adjust=False).mean().iloc[-1]
     if len(df) >= 120: indicators['ema_120'] = df['close'].ewm(span=120, adjust=False).mean().iloc[-1]
 

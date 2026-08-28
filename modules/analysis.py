@@ -1803,7 +1803,7 @@ def format_adx_cell(adx_val, plus_di=None, minus_di=None, digits=0):
     return f"{adx_str} {icon}" if icon else adx_str
 
 
-def price_trend_color(price, ema20, ema60):
+def price_trend_color(price, ema20, ema60, ind=None):
     """현재가 색상: 중장기 추세(EMA20 vs EMA60) × 단기 위치(현재가 vs EMA20).
 
     지수 화면(market.py)과 종목 표(analysis.print_table)가 같은 규칙을 쓰도록 분리했다.
@@ -1816,7 +1816,34 @@ def price_trend_color(price, ema20, ema60):
       혼조(ema20 == ema60)는 "[white]", 산출 불가(값 없음)는 "[dim]"로 구분한다.
     """
     if price is None or ema20 is None or ema60 is None:
-        return "[dim]"  # 데이터 부족 — 눌림목(노란색)과 구분한다
+        return "[dim]"  # 데이터 부족
+
+    # [추세추종] 인디케이터 전체(ind)가 전달되어 5일선과 전일 20일선 기울기를 판단할 수 있는 경우
+    if ind is not None:
+        ema5 = ind.get('ema_5')
+        prev_ema20 = ind.get('prev_ema_20')
+        
+        if ema5 is not None and prev_ema20 is not None:
+            is_ema20_up = ema20 > prev_ema20
+            disp_ratio = (price / ema20 * 100) if ema20 > 0 else 0
+            
+            if ema5 > ema20 > ema60:
+                if disp_ratio >= 110:
+                    return "[magenta]"  # 과열: 신규 진입 자제, 익절 고려
+                if is_ema20_up:
+                    return "[red]"      # 강세: 20일선 우상향 & 완전 정배열
+                if price < ema5:
+                    return "[yellow]"   # 눌림목: 추세 속 단기 하락
+            elif ema20 > ema60 and price < ema5:
+                return "[yellow]"       # 눌림목: 장기 상승 추세 속 단기 휴식
+            elif ema20 < ema60 and price > ema20 and is_ema20_up:
+                return "[orange3]"      # 반등 시도: 하락 추세 중 20일선 돌파 및 20일선 턴(우상향)
+            elif ema5 < ema20 < ema60:
+                return "[blue]"         # 약세: 완벽한 역배열 하락 추세
+                
+            return "[white]"            # 혼조: 방향 판단 보류
+
+    # [기본 로직] ind 파라미터가 없거나 데이터가 부족한 경우 폴백
     if ema20 > ema60:
         # 상승 추세: 20일선 위면 강세, 아래면 눌림목 조정
         color = "[red]" if price > ema20 else "[yellow]"
@@ -2774,7 +2801,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
 
     # 현재가 ([통일] 지수 화면·종목 표와 동일 규칙 — price_trend_color 단일 소스)
     #  [표시] display_price는 NXT 거래시간에만 current_price와 갈린다(그 외에는 동일 값).
-    curr_price_color = price_trend_color(display_price, ind.get('ema_20'), ind.get('ema_60'))
+    curr_price_color = price_trend_color(display_price, ind.get('ema_20'), ind.get('ema_60'), ind=ind)
 
     if is_index:
         price_str_tech = f"{display_price:,.0f}" if display_price >= 1000 else f"{display_price:,.2f}"
@@ -5143,7 +5170,7 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
             def fmt_idx(val): return f"{int(val):,}" if val is not None else "[dim]-[/dim]"
 
             # [통일] 지수 화면과 동일 규칙 — price_trend_color 단일 소스
-            curr_price_color = price_trend_color(curr, ind.get('ema_20'), ind.get('ema_60'))
+            curr_price_color = price_trend_color(curr, ind.get('ema_20'), ind.get('ema_60'), ind=ind)
             curr_str = f"{curr_price_color}{curr_fmt}[/]"
 
             # [수정] 이평선 색상 규칙 단순화 (계층적 분석)

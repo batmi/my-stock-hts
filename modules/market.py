@@ -905,7 +905,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
 
             # [통일] 현재가 색상은 종목 표와 동일 규칙 — analysis.price_trend_color 단일 소스
             #  자산 종류와 무관하게 '값 자체의 방향'만 나타낸다(등락률·52주 고점대비와 동일 문법).
-            curr_price_color = analysis.price_trend_color(eval_price, ema20, ema60)
+            curr_price_color = analysis.price_trend_color(eval_price, ema20, ema60, ind=ind)
             curr_str = f"{curr_price_color}{curr_fmt}[/]"
 
             h_color = "[white]"
