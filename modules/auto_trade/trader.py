@@ -1274,8 +1274,15 @@ class AutoTrader:
                         
                     market_flt_msgs.append(f"• {name}: {filter_status}")
                 else:
+                    # [fail-closed] 지수를 못 읽으면 표시도 '보류(판단불가)'다. 종전에는
+                    #  화면만 '확인 불가'로 찍고 is_healthy_* 는 기본값 True 로 남아,
+                    #  아래 보류 종목 수 집계와 이 줄이 서로 다른 말을 했다.
+                    if m_type == "KOSPI":
+                        is_healthy_k = False
+                    elif m_type == "KOSDAQ":
+                        is_healthy_q = False
                     market_idx_msgs.append(f"• {name}: 확인 불가")
-                    market_flt_msgs.append(f"• {name}: 확인 불가")
+                    market_flt_msgs.append(f"• {name}: 보류 (판단불가)")
         except Exception: pass
         
         # [시장 지수] 섹션 출력
@@ -1301,8 +1308,12 @@ class AutoTrader:
                 msg += f"• {label}: 확인 불가\n"
 
         # [시장 필터링] 섹션 출력
+        #  필터가 꺼져 있으면 판정 결과를 줄줄이 찍지 않는다 — 매수를 막지 않는데
+        #  '보류'라고 적히면 오독한다(종전에는 OFF 여도 종목별 상태를 그대로 찍었다).
         msg += f"\n[시장 필터링] ({filter_str}, SMA {filter_ma}일{band_txt} 기준)\n"
-        if market_flt_msgs:
+        if not use_filter:
+            msg += "• 필터 비활성 — 시장 상태와 무관하게 매수를 허용합니다\n"
+        elif market_flt_msgs:
             msg += "\n".join(market_flt_msgs) + "\n"
         else:
             msg += "• 필터링 상태 확인 불가\n"

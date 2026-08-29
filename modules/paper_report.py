@@ -166,6 +166,31 @@ def _holding_days(started):
     return None
 
 
+def _position_indicators(code, current_price):
+    """관찰모드 보유 종목의 기술적 지표. 실패하면 None(호출부는 고정 임계값으로 폴백).
+
+    9-2 잔고 화면(engine.analyze_holdings)과 **같은 순서**로 만든다:
+      ① 일봉 조회 → ② 당일 봉을 실시간가로 덮음 → ③ 지표 산출
+    한 단계라도 빠지면 같은 포지션의 TS 상태가 화면마다 갈린다.
+
+    관찰모드는 국내 전용이다(paper_broker 전 경로가 is_overseas=False).
+    """
+    try:
+        import api
+        from modules import backtest
+        from modules.auto_trade import indicators
+
+        # days 는 워밍업 길이를 정할 뿐 잘라내지 않는다(get_backtest_data: days + 400).
+        df = backtest.get_backtest_data(code, is_overseas=False, days=60)
+        if df is None or df.empty:
+            return None
+        indicators.apply_realtime_price(df, api.chart_overlay_price(current_price, False))
+        return indicators.calculate_indicators(df)
+    except Exception as e:
+        logger.debug(f"[PAPER] 지표 산출 실패 ({code}): {e}")
+        return None
+
+
 def _print_verification_detail(perf):
     """검증용 상세 — '지금 무엇이 돌고 있나'를 청산 없이도 확인할 수 있게 한다.
 
@@ -236,19 +261,18 @@ def _print_verification_detail(perf):
 
         ts = None
         if high:
-            # 트레일링 스탑 계산에 필요한 기술적 지표(ATR) 산출
-            #  변동성을 반영하지 않으면 고정 발동선(5%)이 적용되어 상태가 어긋난다 (메뉴 9-2 '대기' vs 9-6 '무장').
-            #  최근 데이터만 가져와서 지표를 빠르게 구한다.
-            ind = None
-            try:
-                from modules import backtest
-                from modules.auto_trade import indicators
-                df = backtest.get_backtest_data(p["code"], is_overseas=False, days=60)
-                if df is not None and not df.empty:
-                    ind = indicators.calculate_indicators(df)
-            except Exception as e:
-                logger.debug(f"[PAPER] 지표 산출 실패 ({p['code']}): {e}")
-
+            # 트레일링 스탑 계산에 필요한 기술적 지표(ATR)를 구한다.
+            #  변동성을 반영하지 않으면 전역 고정 발동선(5%)으로 폴백해 9-2 화면('대기')과
+            #  이 화면('무장')이 갈린다.
+            #
+            #  [당일 봉 반영 · 2026-08-29] 9-2(analyze_holdings)는 차트를 받은 뒤
+            #   apply_realtime_price 로 당일 봉을 실시간가로 덮고 지표를 낸다. 여기서
+            #   그 한 줄을 빠뜨리면 소스가 pykrx/FDR 이라 **장중 당일이 통째로 빠진 채**
+            #   ATR 이 계산된다(krx_daily 주석: pykrx·FDR 은 장중 당일 값을 주지 않는다).
+            #   변동성이 큰 날 — 정확히 이 표기를 고치게 만든 상황 — 에 발동선이 다시
+            #   어긋나므로 같은 보정을 태운다. chart_overlay_price 가 정규장 밖에서는
+            #   0.0 을 돌려주므로 장 종료 후에는 KRX 확정 종가가 그대로 남는다.
+            ind = _position_indicators(p["code"], cur)
             ts = engine.compute_trailing_stop(high, p["avg_price"], cur, ind=ind)
 
         if ts is None:

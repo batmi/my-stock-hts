@@ -327,8 +327,17 @@ def show_help():
     config.console.print("[dim]※ 이름 색은 두 축입니다 — 방향성 자산은 '국면'(빨강/주황/하늘/파랑), 수준 자체가 매크로 의미인 자산(VIX·미국채·달러·유가/가스/밀)은 '위험도 밴드'(초록·보라 포함)입니다.[/dim]")
     config.console.print("[dim]※ 값 색은 자산 종류와 무관하게 '값 자체의 방향'만 나타냅니다(빨강=상승/강세). VIX·금리·달러처럼 오를수록 시장에 불리한 자산은 값이 빨개도 위험 신호이며, 그 해석은 지수명(위험도 밴드) 색으로 확인하세요.[/dim]")
     table = Table(title="지수 및 종목 상태별 색상 조건", box=box.HORIZONTALS, header_style="dim", border_style="dim")
-    table.add_column("항목", style="bold"); table.add_column("조건", justify="left")
-    table.add_column("색상", justify="center"); table.add_column("비고", justify="left")
+    # [폭] 항목 컬럼은 가장 긴 라벨(지수명 묶음, 40칸)에 맞춰 잡히는데 대부분의 행은 비어
+    #  있다. 그 여유가 조건·비고를 밀어내 멀쩡한 문장을 두 줄로 쪼갰다. 라벨은 원래
+    #  여러 행에 걸쳐 이어 쓰는 구조라 좁혀도 읽는 데 지장이 없다.
+    #  라벨 대부분은 26칸 안에 들어가고, 그보다 긴 지수명 묶음만 두 줄로 접힌다
+    #  (원래도 여러 행에 나눠 쓰던 라벨이라 읽는 데 지장이 없다).
+    # [말줄임 금지] overflow="fold" — 폭이 모자라면 '…'로 자르지 말고 다음 줄로 접는다.
+    #  잘린 문장은 뜻이 사라지지만 접힌 문장은 그대로 읽을 수 있다.
+    table.add_column("항목", style="bold", max_width=26, overflow="fold")
+    table.add_column("조건", justify="left", overflow="fold")
+    table.add_column("색상", justify="center", overflow="fold")
+    table.add_column("비고", justify="left", overflow="fold")
 
     # [수정] 설정값 로드하여 동적 표시
     _rp = config.MARKET_REGIME_PARAMS
@@ -338,10 +347,12 @@ def show_help():
     obv_period = config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 5)
 
     table.add_row("시장 지수명", f"EMA{ema_fast} > EMA{ema_slow} & 교차 후 {confirm_pct:+g}% 진행", "[red]빨간색[/]", "강세장 (Bull) - 확정 상승추세")
-    table.add_row("(국내/미국/유럽/아시아 지수, KRX 금현물,", f"EMA{ema_fast} > EMA{ema_slow} & {confirm_pct:g}% 미달", "[orange3]주황색[/]", "상승 미확정 (PendUp)")
-    table.add_row(" MSCI, 섹터지수 9종,", f"EMA{ema_fast} < EMA{ema_slow} & {confirm_pct:g}% 미달", "[sky_blue3]하늘색[/]", "하락 미확정 (PendDown) - 추세 붕괴 초기")
-    table.add_row(" 금·은·구리, 암호화폐)", f"EMA{ema_fast} < EMA{ema_slow} & 교차 후 {-confirm_pct:+g}% 진행", "[blue]파란색[/]", "약세장 (Bear) - 확정 하락추세")
-    table.add_row("", "데이터 부족으로 판정 불가", "[yellow]노란색[/]", "판정 보류 (Sideways)")
+    # [폭] 항목 라벨은 컬럼 폭(28칸) 안에서 행을 나눠 이어 쓴다 — 셀이 스스로 접히면
+    #  조건·비고와 줄이 어긋나 읽기 어려워진다.
+    table.add_row("(국내/미국/유럽/아시아", f"EMA{ema_fast} > EMA{ema_slow} & {confirm_pct:g}% 미달", "[orange3]주황색[/]", "상승 미확정 (PendUp)")
+    table.add_row(" 지수, KRX 금현물, MSCI,", f"EMA{ema_fast} < EMA{ema_slow} & {confirm_pct:g}% 미달", "[sky_blue3]하늘색[/]", "하락 미확정 (PendDown) - 추세 붕괴 초기")
+    table.add_row(" 섹터지수 9종, 금·은·구리,", f"EMA{ema_fast} < EMA{ema_slow} & 교차 후 {-confirm_pct:+g}% 진행", "[blue]파란색[/]", "약세장 (Bear) - 확정 하락추세")
+    table.add_row(" 암호화폐)", "데이터 부족으로 판정 불가", "[yellow]노란색[/]", "판정 보류 (Sideways)")
     table.add_section()
 
     # [수정] 미국채 금리 밴드는 config.US_TREASURY_YIELD_BANDS 단일 소스에서 생성한다
@@ -471,7 +482,7 @@ def show_help():
         table.add_row("", f"{buy_score}점 이상 & RSI<{buy_rsi}", "[red]매수[/]", "강력 매수 구간 (분할 진입)")
     else:
         table.add_row("종목 분류", f"{buy_score}점 이상 & RSI<{buy_rsi}", "[red]매수[/]", "강력 매수 구간 (분할 진입)")
-    table.add_row("", f"{buy_score}점 이상 & RSI≥{buy_rsi} (과열)", "[orange3]대기[/]", "매수 직전 — 점수는 충족, RSI 식으면 매수 (눌림목 매수 대기)")
+    table.add_row("", f"{buy_score}점 이상 & RSI≥{buy_rsi} (과열)", "[orange3]대기[/]", "매수 직전 — 점수 충족, RSI 식으면 매수 (눌림목 대기)")
     table.add_row("", f"{rise_score} ~ {buy_score}점 미만 (상승 추세)", "[orange3]상승[/]", "상승 초입/지속 (점수 축적 대기/소량)")
     table.add_row("", "정렬 미완성 + 추세전환 초기신호 ≥3개 (위험신호 없음)", "[green]관심[/]", "태동 단계/수동 스윙 모니터링 (120일선 아래도 포착)")
     table.add_row("", "방향성 불명확 단계", "[white]관망[/]", "방향성 탐색 (거래 비권장)")
@@ -498,8 +509,11 @@ def show_help():
         _upper, _label = _tq[i]
         _tq_rows.append((f"{_tq[i-1][0]:g} ~ {_upper:g} 미만" if i else f"{_upper:g} 미만", _label))
     _tq_rows.append((f"거래일 {tq_lookback}일 미만", "이력부족"))
+    # [폭] 부제는 항목 컬럼 안에서 두 행에 나눠 쓴다 — 한 줄로 두면 컬럼 폭에 걸려
+    #  셀이 스스로 접히고, 그러면 조건·비고와 줄이 어긋나 읽기 어려워진다.
+    _tq_label = {0: "추세품질 (TQ)", 1: "(Clenow 모멘텀 ·", 2: f" 최근 {tq_lookback}일)"}
     for i, (_cond, _label) in enumerate(_tq_rows):
-        col1 = "추세품질 (TQ)" if i == 0 else (f"(Clenow 모멘텀 · 최근 {tq_lookback}일)" if i == 1 else "")
+        col1 = _tq_label.get(i, "")
         table.add_row(col1, _cond, f"[{tq_color[_label]}]{_label}[/]",
                       tq_note.get(_label, "이력이 짧아 판정 불가 — 동점 시 최하순위"))
     table.add_row("", "[dim]연환산 기울기(%) × R²[/dim]", "",
@@ -512,7 +526,7 @@ def show_help():
     # [추가] 보유 분석([9]-2 잔고 '상태' 컬럼) — 종목 분류와 달리 포지션 컨텍스트까지 반영한다
     table.add_row("보유 분석", "익절/손절/시간청산/트레일링스탑/추세이탈 중 하나 충족", "[blue]청산[/]",
                   "[9]-2 잔고 '상태' 컬럼 — 시스템 매도 신호 (사유는 표 아래 각주)")
-    table.add_row("([9]-2 잔고,", "청산 조건 미충족", "위 종목 분류 색", "보유 유지 — 상태/점수를 그대로 표시")
+    table.add_row("([9]-2 잔고,", "청산 조건 미충족", "위와 동일", "보유 유지 — 상태/점수를 그대로 표시")
     table.add_row(" [9]-5 수동 분석)", "잔고에 없는 포지션을 직접 입력", "", "[9]-5 — 매수단가·수량·매수일 입력, 판정 기준은 [9]-2와 동일")
     table.add_row("", "트레이딩 제한 / ETF 제외 설정 / 해외 종목", "[yellow]수동[/]",
                   "시스템 자동 매도 대상 아님 — 청산 신호가 떠도 직접 처리해야 함")
@@ -520,12 +534,14 @@ def show_help():
     table.add_section()
 
     # [통일] 지수 화면·종목 표·개별 분석이 analysis.price_trend_color 단일 소스를 공유한다
-    table.add_row("지수값·종목 현재가", "5일선>20일선>60일선 & 이격도≥110%", "[magenta]보라색[/]", "장기 상승 추세 속 단기 과열 (신규 진입 자제, 익절 고려)")
-    table.add_row("(추세)", "5일선>20일선>60일선 & 20일선 우상향", "[red]빨간색[/]", "완벽한 정배열 상승 추세 (홀딩 및 추세 추종 구간)")
-    table.add_row("", "20일선<60일선 & 현재가>20일선 & 20일선 우상향", "[orange3]주황색[/]", "하락 추세 중 20일선을 돌파하며 추세 전환 시도")
-    table.add_row("", "20일선>60일선 & 현재가<5일선", "[yellow]노란색[/]", "장기 상승 추세 속 단기 휴식 (매수 기회 탐색 구간)")
-    table.add_row("", "5일선<20일선<60일선", "[blue]파란색[/]", "완벽한 역배열 하락 추세 (관망)")
-    table.add_row("", "그 외 (방향 혼조)", "[white]흰색[/]", "방향 판단 보류 (기본 로직 폴백 포함)")
+    # [폭] '구조'(20일선 vs 60일선)를 항목 라벨에서 한 번 정의하고, 조건에서는 반복하지
+    #  않는다. 종전에는 행마다 '20일선<60일선'을 되풀이해 노란색 조건이 두 줄로 접혔다.
+    table.add_row("지수값·종목 현재가", "[상승] 5일선>20일선>60일선 & 20일선 이격도 ≥ 상한", "[magenta]보라색[/]", "정배열 속 단기 과열 (신규 진입만 자제 · 보유는 TS에 맡김)")
+    table.add_row("(추세)", "[상승] 5일선>20일선>60일선 & 20일선 우상향(5봉)", "[red]빨간색[/]", "완벽한 정배열 상승 추세 (홀딩 및 추세 추종 구간)")
+    table.add_row(" 구조=20일선vs60일선", "[상승] 위 두 조건에 못 미침", "[orange3]주황색[/]", "장기 상승 추세 속 단기 휴식·조정 (매수 기회 탐색 구간)")
+    table.add_row("", "[하락] 현재가>20일선 & 20일선 우상향(5봉)", "[yellow]노란색[/]", "하락 추세 속 되돌림 (실측상 전 색 중 최약 — 진입 부적합)")
+    table.add_row("", "[하락] 위 조건에 못 미침", "[blue]파란색[/]", "하락 추세 관망")
+    table.add_row("", "20일선 == 60일선 (혼조)", "[white]흰색[/]", "방향 판단 보류")
     table.add_row("", "이평선 산출 불가 (데이터 부족)", "[dim]회색[/]", "판정 불가")
     table.add_section()
 
@@ -773,7 +789,7 @@ def show_help():
     score_table.add_section()
     score_table.add_row("점수대별 의미", f"{_super}점 이상 & 52주 고점 90%↑", "[magenta]강매수[/]", "슈퍼 모멘텀 — 주도주 랠리 추종 (매수 RSI 상향 허용)")
     score_table.add_row("", f"{_buy}점 이상", "[red]매수[/]", "강력 매수 구간 (분할 진입)")
-    score_table.add_row("", f"{_buy}점 이상 & RSI 과열", "[orange3]대기[/]", "매수 직전 — 점수는 충족, RSI 식으면 매수 (눌림목 매수 대기)")
+    score_table.add_row("", f"{_buy}점 이상 & RSI 과열", "[orange3]대기[/]", "매수 직전 — 점수 충족, RSI 식으면 매수 (눌림목 대기)")
     score_table.add_row("", f"{_rise} ~ {_buy}점", "[orange3]상승[/]", "상승 초입/지속 (점수 축적 대기 또는 소량)")
     score_table.add_row("", f"{_sell}점 미만 & 60일선 이탈", "[blue]매도[/]", "추세이탈 청산 (두 조건 동시 충족 시)")
     score_table.add_row("", "그 외 구간", "[white]관망[/]", "방향성 탐색 (거래 비권장)")
@@ -810,7 +826,7 @@ def show_help():
     ma_period = getattr(config, 'MARKET_FILTER_MA', 80)
     _band = getattr(config, 'MARKET_FILTER_BAND', 1.0)
     _band_cond = f" -{_band:g}% 이탈 (회복은 +{_band:g}%)" if _band else ""
-    score_table.add_row(f"시장 필터링 ({filter_status})", f"KOSPI/KOSDAQ 지수 < SMA {ma_period}일 이평선{_band_cond}", "[blue]보류[/]", "하락장 감지 시 신규 매수 중단")
+    score_table.add_row(f"시장 필터링 ({filter_status})", f"KOSPI/KOSDAQ < SMA {ma_period}일{_band_cond}", "[blue]보류[/]", "하락장 감지 시 신규 매수 중단")
     
     if filter_info is None and getattr(config, 'USE_MARKET_FILTER', True):
         score_table.add_row("현재 시장 필터링 상태", "확인 불가", "-", "-")
@@ -870,7 +886,7 @@ def show_help():
     super_w52 = config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0)
     super_buy_rsi = config.ANALYSIS_THRESHOLDS.get("SUPER_BUY_RSI_MAX", 80.0)
     super_sell_rsi = config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 90.0)
-    score_table.add_row(f"매수 - 슈퍼 모멘텀 ({super_status})", f"종합 점수 ≥ {super_score}점 & 52주 고점 {super_w52}% 이상 근접", "[magenta]강매수[/]", f"주도주 랠리 추종. 매수 RSI {super_buy_rsi}, 과열 매도 RSI {super_sell_rsi} 까지 허용")
+    score_table.add_row(f"매수 - 슈퍼 모멘텀 ({super_status})", f"종합 점수 ≥ {super_score}점 & 52주 고점 {super_w52}% 이상 근접", "[magenta]강매수[/]", f"주도주 랠리 추종 — RSI 매수 {super_buy_rsi} / 매도 {super_sell_rsi} 까지 허용")
 
     score_table.add_row("대기 - 눌림", f"종합 점수 ≥ {buy_score}점 & RSI ≥ {buy_rsi_max} (과열)", "[orange3]대기[/]", "매수 직전 — RSI 식으면 매수 (눌림목 매수 대기)")
     score_table.add_row("관망 - 상승", f"{rise_score}점 ≤ 종합 점수 < {buy_score}점", "[orange3]상승[/]", "상승 초입/지속 (점수 축적 대기/소량)")
@@ -1163,7 +1179,9 @@ def main():
     parser.add_argument('--allow-duplicate', action='store_true',
                         help='같은 모드 중복 실행 차단을 해제 (조회 전용 인스턴스를 하나 더 띄울 때만 사용)')
     parser.add_argument('--webchart', action='store_true',
-                        help='실행 시 차트 대시보드 열람을 위한 웹서버(6000 포트)를 백그라운드로 함께 구동합니다.')
+                        help='차트 갤러리 웹 대시보드를 함께 띄웁니다 (기본 9095 포트).\n'
+                             'SSH·헤드리스 환경에서 이미지 뷰어 없이 브라우저로 차트를 볼 때 씁니다.\n'
+                             '포트·바인딩은 WEBCHART_PORT / WEBCHART_HOST 환경변수로 바꿉니다.')
     args = parser.parse_args()
 
     # [추가] 로깅 설정 초기화
@@ -1172,14 +1190,21 @@ def main():
     if args.webchart:
         import atexit
         from modules import web_dashboard
-        config.WEBCHART_ACTIVE = True
-        
-        web_dashboard.start_web_server()
-        atexit.register(web_dashboard.stop_web_server)
-        
-        web_log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "web_server.log")
-        config.console.print("\n[bold cyan]🌐 차트 웹 대시보드 서버가 백그라운드에 활성화되었습니다 (포트: 6000). 브라우저로 접속해 보세요![/bold cyan]")
-        config.console.print(f"[dim]   (차트 생성 시 리소스 확보를 위해 자동 재시작됨 / 로그: {web_log_path})[/dim]")
+
+        # 기동 직후 인덱스를 한 번 만든다. 없으면 첫 차트를 그리기 전까지 갤러리 대신
+        #  디렉터리 목록이 뜬다(파일이 없으면 '아직 생성된 차트가 없습니다' 안내가 나온다).
+        try:
+            web_dashboard.update_chart_index(config.CHART_DIR)
+        except Exception as e:
+            config.console.print(f"[yellow]차트 갤러리 인덱스 생성 실패: {e}[/yellow]")
+
+        if web_dashboard.start_web_server():
+            config.WEBCHART_ACTIVE = True
+            atexit.register(web_dashboard.stop_web_server)
+            config.console.print(
+                f"\n[bold cyan]🌐 차트 웹 대시보드가 켜졌습니다 — {web_dashboard.web_server_url()}[/bold cyan]")
+            config.console.print(
+                "[dim]   (차트를 만들면 갤러리에 자동으로 쌓입니다. 포트 변경: WEBCHART_PORT)[/dim]")
 
     # [추가] 프로그램 구동 시작 로그 기록 (mystock.log 생성 보장)
     # [수정] 루트 로거로 남기면 FILE_DEBUG_LEVEL 이 기본값(WARNING)일 때 이 한 줄이 통째로
@@ -1688,7 +1713,9 @@ def main():
         config.console.print("[yellow]프로그램을 종료합니다.[/yellow]")
         config.console.print()
         
-        # [추가] atexit이 무시되는 os._exit(0) 직전에 웹서버 프로세스를 확실히 종료
+        # atexit 이 무시되는 os._exit(0) 직전에 웹서버를 확실히 내린다.
+        #  (데몬 스레드라 두고 나가도 남지는 않지만, 소켓을 제때 반납해 재기동 시
+        #   같은 포트를 바로 잡을 수 있게 한다)
         if args.webchart:
             try:
                 from modules import web_dashboard

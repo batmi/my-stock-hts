@@ -186,3 +186,63 @@ def test_pyramiding_fill_also_tagged(bot):
     reason = "피라미딩 2차 (수익률:+15.0%, 점수:9.0, 상태:강매수)"
     msg = _history(bot, [_row("buy(AUTO)", reason=reason, status="체결")])
     assert "[추가매수]" in msg, msg
+
+
+# ==========================================================
+# [단일 소스] core.trade_tags — 잔고 화면(메뉴 9)과 텔레그램 /history 가 공유한다
+# ==========================================================
+def test_buy_tag_vocabulary():
+    """매수 사유 어휘. 피라미딩이 가장 먼저 걸려야 한다(증액 ≠ 신규 진입)."""
+    from core import trade_tags as tt
+    assert tt.classify_buy_reason("피라미딩 2차 매수") == "추가매수"
+    assert tt.classify_buy_reason("PYRAMID add") == "추가매수"
+    assert tt.classify_buy_reason("슈퍼모멘텀 돌파") == "돌파매수"
+    assert tt.classify_buy_reason("역매수 진입") == "눌림목"
+    assert tt.classify_buy_reason("조건 만족 (SCORE 5.2)") == "추세매수"
+    assert tt.classify_buy_reason("수동 매수") == "수동매수"
+    assert tt.classify_buy_reason("알 수 없는 사유") == ""
+    assert tt.classify_buy_reason("") == ""
+    assert tt.classify_buy_reason(None) == ""
+
+
+def test_sell_tag_vocabulary():
+    """매도 사유 어휘. ATR손절이 손절보다 먼저여야 세부 사유가 뭉개지지 않는다."""
+    from core import trade_tags as tt
+    assert tt.classify_sell_reason("ATR 손절선 이탈") == "ATR손절"
+    assert tt.classify_sell_reason("손절선 이탈") == "손절"
+    assert tt.classify_sell_reason("반익절 실행") == "반익절"
+    assert tt.classify_sell_reason("트레일링 스탑 청산") == "트레일링스탑"
+    assert tt.classify_sell_reason("시간 청산") == "시간청산"
+    assert tt.classify_sell_reason("점수 하락 매도진입") == "추세이탈"
+
+
+def test_buy_tag_merges_after_state_tag():
+    """`[강매수]` 등 스냅샷 상태 태그가 앞에 있으면 그 **뒤에** 끼운다."""
+    from core import trade_tags as tt
+    assert tt.apply_buy_tag("[강매수] 슈퍼모멘텀 돌파") == "[강매수] [돌파매수] 슈퍼모멘텀 돌파"
+    assert tt.apply_buy_tag("조건 만족") == "[추세매수] 조건 만족"
+    # 이미 붙어 있으면 두 번 붙이지 않는다.
+    assert tt.apply_buy_tag("[추가매수] 피라미딩 2차") == "[추가매수] 피라미딩 2차"
+
+
+def test_sell_tag_leaves_prefixed_reason_alone():
+    """매도 사유의 선행 대괄호는 사유 그 자체인 경우가 많아 덧붙이지 않는다."""
+    from core import trade_tags as tt
+    assert tt.apply_sell_tag("[익절] 목표 도달") == "[익절] 목표 도달"
+    assert tt.apply_sell_tag("트레일링 스탑") == "[트레일링스탑] 트레일링 스탑"
+
+
+def test_history_screens_share_one_tag_source():
+    """두 화면이 각자 사다리를 복붙하지 않는지 고정한다.
+
+    [회귀 · 2026-08-26] 같은 if-elif 사다리가 account.py 와 telegram_bot.py 에 글자
+    그대로 복제돼 있어 피라미딩 태그 누락을 두 곳에서 똑같이 고쳐야 했다. 어휘가 하나
+    늘 때마다 한쪽이 빠질 자리가 남는다.
+    """
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent
+    for name in ("modules/account.py", "modules/telegram_bot.py"):
+        src = (root / name).read_text(encoding="utf-8")
+        assert "trade_tags" in src, f"{name} 이 단일 소스를 쓰지 않는다"
+        assert 'buy_tag = "돌파매수"' not in src, f"{name} 에 매수 태그 사다리가 복제돼 있다"
+        assert 'sell_tag = "ATR손절"' not in src, f"{name} 에 매도 태그 사다리가 복제돼 있다"

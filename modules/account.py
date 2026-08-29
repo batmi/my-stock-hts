@@ -14,6 +14,7 @@ from core import context # [추가]
 from core import utils
 import api
 from core import jsonio
+from core import trade_tags
 from modules import db_manager
 import json
 import pandas as pd
@@ -2108,39 +2109,11 @@ def view_trade_history():
                             reason_display += f" [{', '.join(add_info)}]"
                 except Exception: pass
 
-            # [추가] 매수 사유 분류 커스텀 태그 적용
+            # [사유 태그] 분류 어휘는 core.trade_tags 단일 소스 — 텔레그램 /history 와 공유한다.
             if is_buy and reason_display != "-":
-                buy_tag = ""
-                # [주의] 피라미딩을 가장 먼저 가른다 — 증액은 신규 진입과 사유의 결이 다르다.
-                if "피라미딩" in reason_display or "PYRAMID" in reason_display.upper(): buy_tag = "추가매수"
-                elif "슈퍼모멘텀" in reason_display or "BREAKOUT" in reason_display: buy_tag = "돌파매수"
-                elif "역매수" in reason_display or "역추세" in reason_display or "TRAILING_BUY" in reason_display: buy_tag = "눌림목"
-                elif "조건 만족" in reason_display or "SCORE" in reason_display: buy_tag = "추세매수"
-                elif "수동" in reason_display: buy_tag = "수동매수"
-                
-                if buy_tag and f"[{buy_tag}]" not in reason_display:
-                    if reason_display.startswith("["): # [강매수] 등 스냅샷 태그 뒤에 병합
-                        close_idx = reason_display.find("]")
-                        if close_idx != -1:
-                            reason_display = f"{reason_display[:close_idx+1]} [{buy_tag}]{reason_display[close_idx+1:]}"
-                    else:
-                        reason_display = f"[{buy_tag}] {reason_display}"
-
-            # [추가] 매도 사유 분류 태그 적용
+                reason_display = trade_tags.apply_buy_tag(reason_display)
             if is_sell and reason_display != "-":
-                sell_tag = ""
-                if "반익절" in reason_display: sell_tag = "반익절"
-                elif "과열" in reason_display: sell_tag = "과열매도"
-                elif "익절" in reason_display: sell_tag = "익절"
-                elif "ATR" in reason_display and "손절" in reason_display: sell_tag = "ATR손절"
-                elif "손절" in reason_display: sell_tag = "손절"
-                elif "트레일링" in reason_display: sell_tag = "트레일링스탑"
-                elif "시간" in reason_display and "청산" in reason_display: sell_tag = "시간청산"
-                elif "추세" in reason_display or "점수" in reason_display or "매도진입" in reason_display: sell_tag = "추세이탈"
-                elif "수동" in reason_display: sell_tag = "수동매도"
-                
-                if sell_tag and not reason_display.startswith("["):
-                    reason_display = f"[{sell_tag}] {reason_display}"
+                reason_display = trade_tags.apply_sell_tag(reason_display)
 
             # [추가] 기간만료/발동실패 상태 사유 태그 적용
             if reason_display != "-" and ("기간만료" in raw_status_str or "발동실패" in raw_status_str):

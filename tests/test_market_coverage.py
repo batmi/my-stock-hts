@@ -1,3 +1,6 @@
+import time
+import types
+
 import pytest
 from unittest.mock import patch, MagicMock
 from modules import market
@@ -44,8 +47,16 @@ def test_show_market_indices_auto_refresh(mock_ask, mock_core):
     mock_ask.return_value = "1@"
     mock_core.return_value = []
     
-    # 무한 루프 방지를 위해 time.sleep에서 예외 발생
-    with patch('time.sleep', side_effect=KeyboardInterrupt):
+    # 무한 루프 방지를 위해 sleep에서 예외 발생.
+    #  [범위 · 2026-08-29] `patch('time.sleep', ...)` 도, `patch('modules.market.time.sleep', ...)`
+    #   도 **프로세스 전역**이다 — 둘 다 같은 time 모듈 객체의 속성을 바꾸기 때문이다.
+    #   그러면 그 순간 잠들어 있던 배경 스레드(전역 스레드 풀·스케줄러 등)에도
+    #   KeyboardInterrupt 가 꽂혀, 실제로 xdist 워커가 여기서 크래시해 스위트 전체가
+    #   중단됐다(`worker 'gwN' crashed` → 절반만 실행되고 끝난다).
+    #   market 의 네임스페이스에 있는 `time` **이름만** 바꿔 끼워 진짜로 좁힌다.
+    fake_time = types.SimpleNamespace(now=time.time, strptime=time.strptime)
+    fake_time.sleep = MagicMock(side_effect=KeyboardInterrupt)
+    with patch.object(market, 'time', fake_time):
         market.show_market_indices()
         
     assert mock_core.called

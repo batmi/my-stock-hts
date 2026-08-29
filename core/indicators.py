@@ -483,6 +483,17 @@ def calculate_psar_series(df, af_start=None, af_step=None, af_max=None):
     psar = get_psar_full_series(df, af_start, af_step, af_max)
     return psar[-1] if psar else None
 
+# 20일선이 '우상향'인지 볼 때 몇 봉 전과 비교할 것인가.
+#  [왜 1이 아닌가 · 2026-08-29] 전일 대비(1봉)로 보면 하루 등락에 기울기 부호가 뒤집혀,
+#   현재가 색상이 **평균 5.8거래일마다** 바뀌었다(39종목 5년 43,792관측, 연 42.2회).
+#   추세를 나타내는 라벨이 그 속도로 번복되면 라벨 자체가 정보를 잃는다.
+#   5봉으로 늘리면 연 29.2회(8.4거래일마다)로 31% 줄면서 변별력은 그대로다 —
+#   빨강 60일 승률 57.9%→58.1%, 주황 60.3% 유지, 60일 평균 수익도 사실상 불변.
+#   10봉은 26.2회로 추가 감소가 작고 변별력 이득도 없어 5봉을 쓴다.
+#  색상 표시 전용이며 매매 판정에는 들어가지 않는다.
+EMA20_SLOPE_LOOKBACK = 5
+
+
 def calculate_indicators(df):
     indicators = {'ema_5': None, 'ema_20': None, 'ema_60': None, 'ema_120': None, 'rsi': None, 'obv': 0, 'cci': None, 'adx': None, 'plus_di': None, 'minus_di': None, 'atr': 0, 'psar': None, 'obv_trend': False, 'macd': None, 'macd_signal': None, 'macd_hist': None}
     if df is None or df.empty: return indicators
@@ -491,7 +502,11 @@ def calculate_indicators(df):
     if len(df) >= 20:
         ema20_s = df['close'].ewm(span=20, adjust=False).mean()
         indicators['ema_20'] = ema20_s.iloc[-1]
-        if len(ema20_s) > 1: indicators['prev_ema_20'] = ema20_s.iloc[-2]
+        # 20일선 기울기 판정의 기준점 — EMA20_SLOPE_LOOKBACK 봉 전 값.
+        #  창이 모자라면 있는 만큼 뒤로 간다(최소 1봉).
+        if len(ema20_s) > 1:
+            back = min(EMA20_SLOPE_LOOKBACK, len(ema20_s) - 1)
+            indicators['ema_20_slope_ref'] = ema20_s.iloc[-1 - back]
     if len(df) >= 60: indicators['ema_60'] = df['close'].ewm(span=60, adjust=False).mean().iloc[-1]
     if len(df) >= 120: indicators['ema_120'] = df['close'].ewm(span=120, adjust=False).mean().iloc[-1]
 

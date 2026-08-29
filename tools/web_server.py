@@ -1,35 +1,50 @@
-import sys
-import os
+"""차트 갤러리 웹서버 CLI — 로직은 modules/web_dashboard.py 가 갖는다.
+
+[규약] 실행 중인 기능이 이 스크립트를 subprocess 로 띄우지 않는다. HTS 본체는
+같은 프로세스의 데몬 스레드로 서버를 돌린다(web_dashboard.start_web_server).
+이 파일은 '차트만 따로 띄워 보고 싶을 때' 쓰는 얇은 사용자다.
+
+  python tools/web_server.py                 # config.WEBCHART_PORT 로 기동
+  python tools/web_server.py --port 9096     # 포트 지정
+  python tools/web_server.py --host 127.0.0.1
+"""
 import argparse
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+import os
+import sys
 
-class TimeoutHTTPRequestHandler(SimpleHTTPRequestHandler):
-    # 브라우저가 연결(Keep-Alive 세션)을 맺어두고 요청을 보내지 않을 때
-    # 5초 뒤에 안 쓰는 세션(소켓)을 자동으로 정리하여 메모리와 자원을 반환합니다.
-    timeout = 5
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-def run(port, directory):
-    # Change to the target directory so SimpleHTTPRequestHandler serves it
-    os.chdir(directory)
-    
-    # Use ThreadingHTTPServer to handle multiple concurrent requests without hanging
-    server_address = ('0.0.0.0', port)
-    httpd = ThreadingHTTPServer(server_address, TimeoutHTTPRequestHandler)
-    
-    # 메인 프로세스 종료 시 백그라운드 세션 스레드들도 함께 즉시 정리되도록 설정
-    httpd.daemon_threads = True
-    
-    print(f"Serving HTTP on 0.0.0.0 port {port} (http://0.0.0.0:{port}/) ...")
+import config
+from modules import web_dashboard
+
+
+def main():
+    parser = argparse.ArgumentParser(description="차트 갤러리 웹서버")
+    parser.add_argument('--port', type=int, default=config.WEBCHART_PORT)
+    parser.add_argument('--host', type=str, default=config.WEBCHART_HOST)
+    parser.add_argument('--directory', type=str, default=config.CHART_DIR)
+    parser.add_argument('--no-index', action='store_true',
+                        help='기동 시 index.html 을 새로 만들지 않는다')
+    args = parser.parse_args()
+
+    config.CHART_DIR = args.directory
+    if not args.no_index:
+        web_dashboard.update_chart_index(args.directory)
+
+    if not web_dashboard.start_web_server(port=args.port, host=args.host):
+        return 1
+
+    print(f"Serving charts from {args.directory} on http://{args.host}:{args.port}/ ... (Ctrl+C 로 종료)")
     try:
-        httpd.serve_forever()
+        # 서버는 데몬 스레드라 메인이 살아 있어야 한다.
+        import threading
+        threading.Event().wait()
     except KeyboardInterrupt:
-        print("\nKeyboard interrupt received, exiting.")
-        sys.exit(0)
+        print("\n종료합니다.")
+    finally:
+        web_dashboard.stop_web_server()
+    return 0
+
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--port', type=int, default=6000)
-    parser.add_argument('--directory', type=str, default='.')
-    args = parser.parse_args()
-    
-    run(args.port, args.directory)
+    sys.exit(main())

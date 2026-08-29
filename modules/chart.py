@@ -11,6 +11,8 @@ from datetime import datetime
 from contextlib import nullcontext
 from modules import web_dashboard
 
+logger = logging.getLogger(__name__)
+
 # [메모리 최적화] matplotlib/numpy 지연 로딩
 # matplotlib+numpy는 import만으로도 RSS를 수십~100MB 이상 점유한다. 차트는 자동매매 중
 # 텔레그램 전송 등 '실제로 그릴 때'만 필요하므로, 모듈 import 시점이 아니라 호출 시점에 적재한다.
@@ -52,13 +54,41 @@ def setup_korean_font():
     except Exception: pass
     plt.rcParams['axes.unicode_minus'] = False
 
+def _release_render_memory():
+    """렌더링이 잡고 있던 메모리를 즉시 돌려준다.
+
+    [왜 close() 만으로 부족한가 · 2026-08-29] savefig 는 캔버스 RGBA 버퍼를 잡는데
+    300 DPI(4800x2700)면 그것만 52MB 다. plt.close() 는 Figure 를 pyplot 레지스트리에서
+    떼어낼 뿐이고, 실제 반환은 GC 가 돌아야 일어난다. 1GB 라즈베리파이에서는 그 사이의
+    봉우리가 OOM Killer 를 부른다(2026-08-26 실측: 웹서버 프로세스가 이 이유로 죽었다).
+    close('all') 로 남은 Figure 까지 정리하고 수집을 앞당긴다.
+    """
+    try:
+        plt.close('all')
+    except Exception:
+        pass
+    try:
+        import gc
+        gc.collect()
+    except Exception:
+        pass
+
+
 def _is_before_krx_open():
     """현재(KST 로컬 시각)가 KRX 정규장 시작(09:00) 이전인지 여부."""
     now = datetime.now()
     return (now.hour, now.minute) < (9, 0)
 
 def _needs_web_dashboard():
-    """현재 환경이 SSH 접속이거나 GUI가 없는 헤드리스 환경인지 확인한다."""
+    """갤러리 index.html 을 갱신해야 하는가.
+
+    [왜 두 조건인가 · 2026-08-29] 종전에는 'SSH·헤드리스인가'만 봤는데, 서버를 띄우는
+    조건은 `--webchart` 플래그라서 둘이 어긋났다. GUI 가 있는 맥에서 `--webchart` 를
+    주면 서버는 뜨는데 index.html 이 영영 만들어지지 않아, 접속하면 갤러리 대신
+    디렉터리 목록이 나왔다. 서버가 떠 있으면 무조건 인덱스를 갱신한다.
+    """
+    if getattr(config, 'WEBCHART_ACTIVE', False):
+        return True
     if os.environ.get("SSH_CLIENT") or os.environ.get("SSH_TTY"):
         return True
     if platform.system() == "Linux" and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
@@ -107,25 +137,15 @@ def open_image_viewer(file_path):
             config.console.print(f"[yellow]이미지 뷰어 실행에 실패했습니다({e}). 저장된 파일을 직접 확인해주세요: {file_path}[/yellow]")
         return False
 
-import functools
-
-def pause_web_server_while_running(func):
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        was_active = getattr(config, 'WEBCHART_ACTIVE', False)
-        if was_active:
-            from modules import web_dashboard
-            web_dashboard.stop_web_server()
-        try:
-            return func(*args, **kwargs)
-        finally:
-            if was_active:
-                from modules import web_dashboard
-                web_dashboard.start_web_server()
-    return wrapper
-
-@pause_web_server_while_running
-def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quiet=False, period_type='daily', months=6):
+# [삭제 · 2026-08-29] pause_web_server_while_running
+#  차트를 그리는 동안 웹서버를 죽여 메모리를 회수하던 장치였다. 회수 대상은 별도
+#  파이썬 인터프리터(subprocess)였는데, 웹서버가 같은 프로세스의 데몬 스레드로 바뀌면서
+#  회수할 것이 사라졌다(서버 객체는 수 KB). 남는 것은 부작용뿐이었다 —
+#   · 갤러리를 보는 중에 차트가 생성되면 그동안 접속이 거부된다
+#   · 락이 없어, 메뉴 스레드와 텔레그램 폴링 스레드가 동시에 그리면 안쪽 호출의
+#     finally 가 바깥쪽 렌더링 도중에 서버를 되살렸다
+#  차트 렌더링의 실제 메모리 부담은 matplotlib 이고, 그건 이미 지연 로딩으로 다룬다.
+def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=None, quiet=False, period_type='daily', months=6):
     # [토스] 시봉(시간봉) 미제공 → KIS 데이터 없음. 일반 실패 대신 명확한 안내 후 종료.
     # (matplotlib 적재 전에 차단하여 라즈베리파이 메모리 점유도 방지)
     if period_type == 'hourly' and config.session.is_toss:
@@ -142,6 +162,10 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
         return
 
     import pandas as pd
+    # dpi 를 명시하지 않으면 설정값을 쓴다(기본 300). 텔레그램 전송 경로처럼 호출부가
+    #  직접 지정하면 그 값이 이긴다.
+    if dpi is None:
+        dpi = getattr(config, 'CHART_DPI', 300)
     setup_korean_font()
     
     # [로그] 차트 생성 요청 시작
@@ -285,25 +309,33 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
                 bin_centers = (bins[:-1] + bins[1:]) / 2
                 volumes = np.zeros(50)
                 
-                # 각 캔들의 거래량을 저가~고가 범위 내의 매물대 구간에 골고루 분배
-                for _, row in df.iterrows():
-                    h, l, v = row['high'], row['low'], row['volume']
-                    if pd.isna(v) or v == 0:
-                        continue
-                    if h == l:
-                        # 캔들의 고가와 저가가 같은 경우 (점상한가 등)
-                        bin_idx = np.digitize(row['close'], bins) - 1
-                        bin_idx = max(0, min(49, bin_idx))
-                        volumes[bin_idx] += v
-                    else:
-                        # 각 구간(bin)과 캔들의 가격 범위(low~high)가 겹치는 영역 계산
-                        overlap_bottom = np.maximum(l, bins[:-1])
-                        overlap_top = np.minimum(h, bins[1:])
-                        overlap = overlap_top - overlap_bottom
-                        
-                        # 겹치는 구간이 있는(0보다 큰) bin에 대해서만 거래량 분배
-                        valid = overlap > 0
-                        volumes[valid] += v * (overlap[valid] / (h - l))
+                # 각 캔들의 거래량을 저가~고가 범위 내의 매물대 구간에 골고루 분배한다.
+                #  [벡터화 · 2026-08-29] 종전에는 df.iterrows() 로 봉마다 파이썬 루프를
+                #   돌았다. 분봉 차트는 봉이 수천 개라 라즈베리파이에서 체감됐다.
+                #   (봉수 × 50) 행렬 하나로 한 번에 계산한다 — 5,000봉이라도 25만 칸,
+                #   float64 로 2MB 남짓이다.
+                vp_hi = pd.to_numeric(df['high'], errors='coerce').to_numpy(dtype=float)
+                vp_lo = pd.to_numeric(df['low'], errors='coerce').to_numpy(dtype=float)
+                vp_cl = pd.to_numeric(df['close'], errors='coerce').to_numpy(dtype=float)
+                vp_vol = np.nan_to_num(
+                    pd.to_numeric(df['volume'], errors='coerce').to_numpy(dtype=float), nan=0.0)
+
+                usable = (vp_vol > 0) & np.isfinite(vp_hi) & np.isfinite(vp_lo)
+                # 고가 == 저가(점상한가·거래정지)는 종가가 속한 한 구간에 전량 넣는다.
+                flat = usable & (vp_hi <= vp_lo) & np.isfinite(vp_cl)
+                spread = usable & (vp_hi > vp_lo)
+
+                if np.any(spread):
+                    # 각 구간(bin)과 캔들의 가격 범위(low~high)가 겹치는 영역
+                    overlap = (np.minimum(vp_hi[spread, None], bins[None, 1:])
+                               - np.maximum(vp_lo[spread, None], bins[None, :-1]))
+                    np.clip(overlap, 0, None, out=overlap)
+                    weight = overlap / (vp_hi[spread] - vp_lo[spread])[:, None]
+                    volumes += (weight * vp_vol[spread][:, None]).sum(axis=0)
+
+                if np.any(flat):
+                    idx = np.clip(np.digitize(vp_cl[flat], bins) - 1, 0, 49)
+                    np.add.at(volumes, idx, vp_vol[flat])
             
             # 메인 차트(ax1)와 y축 공유, 독립적인 x축(매물대용)
             ax_vp = ax1.twiny()
@@ -543,7 +575,8 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
         safe_code = re.sub(r'[=\-\.\^]', '', code)
         file_name = f"analysis_{safe_code}_{period_type}.png"
         file_path = os.path.join(config.CHART_DIR, file_name)
-        plt.savefig(file_path, dpi=dpi); plt.close()
+        plt.savefig(file_path, dpi=dpi)
+        _release_render_memory()
         
         # 갤러리 웹 대시보드 인덱스 생성 (헤드리스/SSH 환경에서만)
         if _needs_web_dashboard():
@@ -557,6 +590,23 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=300, quie
 
     # [AI 분석] 생성된 차트 PNG 경로를 반환해 Gemini 비전 분석 등 후속 처리에 활용할 수 있게 한다.
     return file_path
+
+def _purge_legacy_mc_charts(safe_code):
+    """옛 규약 `mc_dist_{code}_{YYYYMMDD}_{HHMMSS}.png` 로 쌓인 같은 종목 파일을 지운다.
+
+    새 규약은 `mc_dist_{code}.png` 한 장이라 덮어쓰기만으로 정리되지만, 이미 쌓인
+    파일은 그대로 남는다. 그리는 김에 같은 종목 것만 걷어낸다 — 다른 종목이나 분석
+    차트는 건드리지 않는다. 실패해도 차트 생성은 계속한다.
+    """
+    import glob
+    pattern = os.path.join(config.CHART_DIR, f"mc_dist_{safe_code}_*.png")
+    for old_path in glob.glob(pattern):
+        try:
+            os.remove(old_path)
+            logger.debug(f"[차트] 옛 몬테카를로 파일 정리: {os.path.basename(old_path)}")
+        except OSError as e:
+            logger.debug(f"[차트] 옛 몬테카를로 파일 정리 실패({old_path}): {e}")
+
 
 def generate_monte_carlo_histogram(returns, name, code, open_file=True):
     """Monte Carlo 시뮬레이션 수익률 분포 히스토그램 생성"""
@@ -582,13 +632,20 @@ def generate_monte_carlo_histogram(returns, name, code, open_file=True):
     plt.legend(loc='upper right')
     
     # 파일 저장
+    #  [덮어쓰기 · 2026-08-29] 종전에는 파일명에 타임스탬프를 붙여 실행할 때마다 새 파일이
+    #   쌓였다(같은 종목을 열 번 돌리면 열 장). 갤러리 인덱스는 차트를 그릴 때마다 다시
+    #   쓰이므로 파일이 늘수록 인덱스 생성도 함께 무거워지고, chart/ 는 지우기 전까지
+    #   줄지 않는다. 분석 차트(analysis_{code}_{period})와 같은 규약으로 맞춰 **종목당
+    #   한 장**만 두고 다시 그릴 때 덮어쓴다.
     safe_code = re.sub(r'[=\-\.\^]', '', code)
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    file_name = f"mc_dist_{safe_code}_{timestamp}.png"
+    file_name = f"mc_dist_{safe_code}.png"
     file_path = os.path.join(config.CHART_DIR, file_name)
-    
+
+    # 옛 규약(타임스탬프)으로 쌓여 있던 같은 종목의 파일을 걷어낸다.
+    _purge_legacy_mc_charts(safe_code)
+
     plt.savefig(file_path, dpi=100)
-    plt.close()
+    _release_render_memory()
     
     # 갤러리 웹 대시보드 인덱스 업데이트 (헤드리스/SSH 환경에서만)
     if _needs_web_dashboard():

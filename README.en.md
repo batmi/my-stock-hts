@@ -253,11 +253,18 @@ chmod +x run.sh                    # first time only
 ./run.sh                           # interactive menu
 ./run.sh --help                    # options
 ./run.sh --mode 1 --auto           # start auto-trading immediately in paper mode
+./run.sh --webchart                # also serve the chart gallery web dashboard
 ```
 
 - `run.sh` activates the virtual environment and installs dependencies for you. **`requirements.txt` is the single source of truth** for dependencies, and `run.sh` reads that file.
 - The `holidays` package is **not** auto-upgraded at startup — if the holiday calendar changed silently on every launch, trading-hour decisions would change without anyone noticing. Run `tools/update_holidays.sh` from cron weekly instead.
 - **One instance per mode, per host.** A second launch names the process already holding the mode and exits — two instances fight over Telegram polling (409), the KIS rate/websocket/token budget, and the same DB file. Add `--allow-duplicate` for a read-only second instance (the account lock still blocks live orders).
+- **Chart web dashboard (`--webchart`)** — view generated charts in a browser when no image viewer is available (SSH / headless). It is a static file server running as a daemon thread inside the same process, serving `chart/` only, at `http://<server IP>:9095/` by default.
+  - Change the port/binding with the `WEBCHART_PORT` / `WEBCHART_HOST` environment variables. **Avoid 6000, 6566, 6665-6669, 6697 and 10080** — browsers block those ports and return `ERR_UNSAFE_PORT`.
+  - **There is no authentication.** The default binding is `0.0.0.0` (reachable from other devices on the same network); on an untrusted network set `WEBCHART_HOST=127.0.0.1` and use an SSH tunnel.
+  - To serve charts on their own, run `python tools/web_server.py`.
+  - The server **stays up while charts are being rendered** (it is a thread in the same process). It used to be stopped and restarted around rendering, which only made sense while it was a separate process being reclaimed for memory.
+- **Raspberry Pi memory (`CHART_DPI`)** — the memory spike during rendering grows with the square of the DPI. Measured (16x9 inches, RSS delta): `100`->+9MB, `150`->+13MB, `200`->+22MB, `300`->+53MB. matplotlib itself already holds ~145MB, so on a 1GB Pi a 300 DPI spike invites the Linux OOM killer (on 2026-08-26 it did kill the web server process for exactly this reason). On a Pi, prefer `CHART_DPI=150` — a quarter of the spike, and 2400x1350 is plenty readable. The default is unchanged at `300`.
 - Use `run.bat` on Windows; for always-on Linux hosts see `tools/stock-hts` (tmux session setup).
 
 ---
@@ -458,6 +465,7 @@ my-stock-hts/
 │   ├── caching.py          #   TTL cache (item caps, auto eviction)
 │   ├── executors.py        #   Global thread pools (AI, IO, Telegram)
 │   ├── trading_cost.py     #   Single source for fees and taxes
+│   ├── trade_tags.py       #   Single source for trade-reason tags (balance screen + Telegram)
 │   ├── session.py          #   Session, token, and mode management
 │   └── context.py          #   Thread-global state and locks
 │
@@ -525,7 +533,7 @@ my-stock-hts/
 │   └── prompts.py          # AI prompt templates
 │
 ├── tools/                  # Diagnostics and utilities (109 files)
-│   ├── web_server.py       #   Lightweight built-in web server for chart dashboard
+│   ├── web_server.py       #   Thin CLI to serve the chart gallery standalone (logic lives in web_dashboard)
 │   ├── hts_watchdog.py     #   Process watchdog (cron) — alerts only, no restarts
 │   ├── get_telegram_chat_id.py  # Verify Telegram Chat ID helper
 │   ├── update_holidays.sh  #   Periodic holiday-library refresh
@@ -546,7 +554,7 @@ my-stock-hts/
 │   └── dart_corp_map.json         # DART corp-code mapping cache
 ├── db/                     # [auto] SQLite (trades, reserved orders, signal ledger)
 ├── logs/                   # [auto] logs and heartbeat.json
-├── chart/                  # [auto] chart images
+├── chart/                  # [auto] chart images (one per stock+period, overwritten on redraw)
 └── data/                   # [auto] Excel/CSV exports, intraday cache
 ```
 

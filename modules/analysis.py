@@ -1812,36 +1812,79 @@ def price_trend_color(price, ema20, ema60, ind=None):
     자산 종류와 무관하게 '값 자체의 방향'만 나타낸다 — VIX·금리·달러를 반전하던
     규칙은 같은 줄의 등락률(반전 없음)과 색이 엇갈려 폐기했다(config 색상 규칙 주석 참조).
 
+    `ind`(calculate_indicators 결과)를 주면 5일선과 20일선 기울기까지 반영한 5단계로
+    판정하고, 없으면 20일선 단면만 보는 폴백을 쓴다. 두 경로 모두 중장기 구조를 먼저
+    가르므로 상승 구조가 파랑으로, 하락 구조가 빨강으로 뒤집히는 일은 없다.
+
     Returns: rich 색상 태그 문자열 ("[red]" 등).
       혼조(ema20 == ema60)는 "[white]", 산출 불가(값 없음)는 "[dim]"로 구분한다.
     """
     if price is None or ema20 is None or ema60 is None:
         return "[dim]"  # 데이터 부족
 
-    # [추세추종] 인디케이터 전체(ind)가 전달되어 5일선과 전일 20일선 기울기를 판단할 수 있는 경우
+    # [추세추종] ind 가 오면 5일선과 20일선 기울기(5봉 차분)까지 본다.
+    #  [구조] 바깥은 **중장기 구조**(ema20 vs ema60)가 가르고, 안쪽에서 단기 상태를 나눈다.
+    #   구조가 정해지면 색은 그 구조 안에서만 움직인다 — 상승 구조는 red/yellow(과열이면
+    #   magenta), 하락 구조는 orange/blue. **white 는 ema20 == ema60 에만 남긴다.**
+    #
+    #  [왜 이렇게 닫았나 · 2026-08-29] 종전 구현은 조건을 평평하게 늘어놓고 아무 데도
+    #   걸리지 않으면 white 로 떨어뜨렸는데, 그 '아무 데도'가 매우 넓었다:
+    #    · 상승 구조 + 5일선이 20일선 아래 + 현재가가 5일선 위 → white
+    #      (장기 상승 추세에서 5일선을 막 회복한 눌림목 반등 초입 — 추세추종에서 가장
+    #       값진 진입 후보 구간이 '방향 판단 보류'로 찍혔다)
+    #    · 완전 정배열인데 20일선이 하루 눌림 + 현재가가 5일선 위 → white
+    #      (휩소를 줄이려던 규칙이 오히려 하루짜리 기울기 스위치로 번복을 만들었다)
+    #   합성 분포에서 white 가 33% 를 먹었고 그중 10%p 는 종전 red, 10%p 는 종전 orange 였다.
+    #   화면 색은 국면을 읽는 1차 수단이라 '보류'가 최빈값이 되면 그 자체로 정보가 죽는다.
     if ind is not None:
         ema5 = ind.get('ema_5')
-        prev_ema20 = ind.get('prev_ema_20')
-        
-        if ema5 is not None and prev_ema20 is not None:
-            is_ema20_up = ema20 > prev_ema20
+        slope_ref = ind.get('ema_20_slope_ref')
+
+        if ema5 is not None and slope_ref is not None:
+            # 기울기는 전일이 아니라 EMA20_SLOPE_LOOKBACK(5)봉 전과 비교한다 —
+            #  하루 등락으로 색이 뒤집히던 번복을 줄인다(core.indicators 주석 참조).
+            is_ema20_up = ema20 > slope_ref
             disp_ratio = (price / ema20 * 100) if ema20 > 0 else 0
-            
-            if ema5 > ema20 > ema60:
-                if disp_ratio >= 110:
-                    return "[magenta]"  # 과열: 신규 진입 자제, 익절 고려
-                if is_ema20_up:
-                    return "[red]"      # 강세: 20일선 우상향 & 완전 정배열
-                if price < ema5:
-                    return "[yellow]"   # 눌림목: 추세 속 단기 하락
-            elif ema20 > ema60 and price < ema5:
-                return "[yellow]"       # 눌림목: 장기 상승 추세 속 단기 휴식
-            elif ema20 < ema60 and price > ema20 and is_ema20_up:
-                return "[orange3]"      # 반등 시도: 하락 추세 중 20일선 돌파 및 20일선 턴(우상향)
-            elif ema5 < ema20 < ema60:
-                return "[blue]"         # 약세: 완벽한 역배열 하락 추세
-                
-            return "[white]"            # 혼조: 방향 판단 보류
+            # [단일 소스] 같은 화면의 개별 분석(이격도 행)이 쓰는 값과 같아야 한다.
+            #  종전에는 여기만 110 을 박아 둬, 설정을 바꾸면 표와 색이 갈렸다.
+            disp_upper = config.ANALYSIS_THRESHOLDS.get("DISPARITY_UPPER", 110)
+
+            if ema20 > ema60:
+                # 상승 구조 — 정배열이고 20일선이 우상향일 때만 '강세(red)'다.
+                if ema5 > ema20:
+                    if disp_ratio >= disp_upper:
+                        # 과열 = **신규 진입을 자제할 구간**이지, 파는 구간이 아니다.
+                        #  [실측 2026-08-29 · 39종목 5년, 43,792관측] 보라 구간의 전방
+                        #   수익은 전 색 중 가장 높다 — 60일 평균 +14.21%, 승률 58.3%
+                        #   (빨강 +9.32%, 주황 +11.51%, 파랑 +4.91%). 평균이 중앙값
+                        #   (+1.12%)보다 훨씬 큰 것은 이 구간이 꼬리를 물고 있다는 뜻이고,
+                        #   추세추종이 먹는 것이 바로 그 꼬리다.
+                        #  그래서 여기서 '익절'을 권하면 시스템 정책(고정 익절 기본 OFF,
+                        #   샹들리에 TS 주청산)과도, 실측과도 반대가 된다.
+                        #  진입 차단 쪽은 근거가 있다 — TREND_QUALITY_MAX(300) 상한과
+                        #   BUY_RSI_MAX(70) 가 같은 취지다.
+                        return "[magenta]"  # 과열: 신규 진입 자제 (보유는 TS 에 맡긴다)
+                    if is_ema20_up:
+                        return "[red]"      # 강세: 완전 정배열 + 20일선 우상향
+                # 정배열이 아니거나(5일선이 20일선 아래) 20일선이 꺾였으면 '조정'이다.
+                #  구조는 살아 있으므로 관망(blue)도 보류(white)도 아니다.
+                #  [색 배정] 상승 구조 쪽이 주황이다 — 빨강(강세)에 인접한 난색이라
+                #   '추세는 살아 있고 잠시 쉬는 중'이 색만 보고도 읽힌다.
+                return "[orange3]"          # 눌림목: 장기 상승 추세 속 단기 휴식
+
+            if ema20 < ema60:
+                # 하락 구조 — 20일선을 되찾고 그 20일선이 턴했을 때만 '반등 시도(yellow)'다.
+                if price > ema20 and is_ema20_up:
+                    # [주의] '전환 시도'는 기대일 뿐 우위가 아니다.
+                    #  실측(위와 같은 표본): 이 구간의 60일 전방 수익은 평균 +2.71%,
+                    #  승률 49.0% 로 **전 색 중 가장 나쁘다**(관망인 파랑조차 +4.91%,
+                    #  53.7%). 역배열 되돌림이 열위라는 기존 결론과 같은 방향이다
+                    #  (역배열 데드캣 매수 승률 18% — 시너지 게이트 주석 참조).
+                    #  색은 남기되 '진입 후보'로 읽히지 않게 라벨을 낮춰 둔다.
+                    return "[yellow]"       # 되돌림: 하락 구조 속 20일선 회복 (진입 부적합)
+                return "[blue]"             # 약세: 하락 추세 관망
+
+            return "[white]"                # ema20 == ema60 — 방향 판단 보류
 
     # [기본 로직] ind 파라미터가 없거나 데이터가 부족한 경우 폴백
     if ema20 > ema60:
