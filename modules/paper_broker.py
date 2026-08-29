@@ -64,6 +64,15 @@ def init_tables():
                        odno TEXT)''')
     cur.execute('''CREATE TABLE IF NOT EXISTS paper_equity (
                        date TEXT PRIMARY KEY, cash REAL, stock_value REAL, total REAL)''')
+    # [마이그레이션] 스냅샷 시점의 시드(누적 투입원금). 누적 수익률의 분모다.
+    #  현재 시드로 과거 행을 나누면 입출금 전 구간의 수익률이 왜곡된다 — 같은 계열의 사고를
+    #  daily_asset_history 에서 겪었다([[daily-asset-baseline-transfers]]). 분모는 그 시점 값을
+    #  함께 굳혀야 한다. 옛 행은 NULL로 남고, 표시부가 '현재 시드로 근사'임을 밝힌다.
+    cols = {r[1] for r in cur.execute("PRAGMA table_info(paper_equity)")}
+    if "seed" not in cols:
+        cur.execute("ALTER TABLE paper_equity ADD COLUMN seed REAL")
+        conn.commit()
+        logger.info("[PAPER] paper_equity.seed 컬럼 추가")
     conn.commit()
 
     seed = int(getattr(config, 'PAPER_SEED_CAPITAL', 10_000_000))
@@ -332,9 +341,11 @@ def snapshot_equity():
         s = output2[0]
         cash = float(s['dnca_tot_amt'])
         stock = float(s['scts_evlu_amt'])
+        # 시드를 함께 굳힌다 — 누적 수익률의 분모는 '그 시점' 투입원금이어야 한다.
         _db().execute_query(
-            "INSERT OR REPLACE INTO paper_equity (date, cash, stock_value, total) VALUES (?,?,?,?)",
-            (datetime.now().strftime('%Y-%m-%d'), cash, stock, cash + stock))
+            "INSERT OR REPLACE INTO paper_equity (date, cash, stock_value, total, seed) "
+            "VALUES (?,?,?,?,?)",
+            (datetime.now().strftime('%Y-%m-%d'), cash, stock, cash + stock, get_seed()))
     except Exception as e:
         logger.debug(f"[PAPER] 자산 스냅샷 실패: {e}")
 
@@ -371,10 +382,33 @@ def get_fill_by_odno(odno):
 
 
 def get_equity_curve():
+    """일별 자산 스냅샷. seed는 그 시점 투입원금(옛 행은 None — 표시부가 근사임을 밝힌다)."""
     rows = _db().execute_query(
-        "SELECT date, cash, stock_value, total FROM paper_equity ORDER BY date", fetch='all') or []
-    return [{"date": r[0], "cash": float(r[1]), "stock_value": float(r[2]), "total": float(r[3])}
-            for r in rows]
+        "SELECT date, cash, stock_value, total, seed FROM paper_equity ORDER BY date",
+        fetch='all') or []
+    return [{"date": r[0], "cash": float(r[1]), "stock_value": float(r[2]), "total": float(r[3]),
+             "seed": (float(r[4]) if r[4] is not None else None)} for r in rows]
+
+
+def holdings_count_by_date():
+    """날짜별 보유 종목 수. 체결 원장을 누적해 되짚는다.
+
+    [왜 원장에서 세는가] paper_positions 는 '지금'만 안다. 자산 곡선은 과거 행도 보여주므로
+    그 시점의 슬롯 사용률을 알려면 체결을 되감는 수밖에 없다. reset()이 paper_fills 와
+    paper_equity 를 함께 지우므로 두 표는 항상 같은 계좌를 가리킨다.
+
+    반환: {'YYYY-MM-DD': 그날 장 마감 시점의 보유 종목 수}. 매매가 없던 날은 빠지므로
+    호출부가 직전 값을 이어 쓴다(보유는 매매가 없으면 변하지 않는다).
+    """
+    rows = _db().execute_query(
+        "SELECT time, type, code, qty FROM paper_fills ORDER BY id", fetch='all') or []
+    held, by_date = {}, {}
+    for t, type_str, code, qty in rows:
+        held[code] = held.get(code, 0) + (int(qty) if type_str == '매수' else -int(qty))
+        if held[code] <= 0:
+            held.pop(code, None)
+        by_date[str(t)[:10]] = len(held)
+    return by_date
 
 
 def get_performance():

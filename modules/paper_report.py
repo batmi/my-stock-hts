@@ -388,21 +388,56 @@ def _show_equity_curve():
         utils.pause()
         return
     peak = curve[0]["total"]
+    # 보유 종목 수는 체결 원장을 되감아 얻는다. 매매가 없던 날은 직전 값을 잇는다.
+    held_map = paper_broker.holdings_count_by_date()
+    slots = getattr(config, 'SYSTEM_MAX_HOLDINGS', 4)
+    cur_seed = paper_broker.get_seed()
+    seed_approx = any(e.get("seed") is None for e in curve[-40:])
+
     t = Table(title="\n일별 가상 자산 추이", box=box.HORIZONTALS, header_style="dim", border_style="dim")
-    for col in ("일자", "현금", "주식평가", "총자산", "고점대비"):
+    # '변동'은 전일이 아니라 **직전 스냅샷** 대비다 — 이 표는 트레이딩 루프가 돈 날만 있어
+    #  주말·미실행일이 통째로 빠진다(예: 금 → 월). '전일대비'로 적으면 거짓말이 된다.
+    for col in ("일자", "현금", "주식평가", "총자산", "변동", "누적", "주식비중", "보유", "고점대비"):
         t.add_column(col, justify="left" if col == "일자" else "right")
     rows = curve[-40:]
+    prev_total, held = None, 0
     for e in rows:
         peak = max(peak, e["total"])
         dd = (e["total"] - peak) / peak * 100 if peak else 0.0
         c = "blue" if dd < 0 else "white"
+
+        if prev_total:
+            chg = (e["total"] - prev_total) / prev_total * 100
+            chg_txt = f"[{'red' if chg > 0 else 'blue' if chg < 0 else 'white'}]{chg:+.2f}%[/]"
+        else:
+            chg_txt = "[dim]-[/]"
+
+        seed = e.get("seed") or cur_seed
+        cum = (e["total"] - seed) / seed * 100 if seed else 0.0
+        cum_txt = f"[{'red' if cum > 0 else 'blue' if cum < 0 else 'white'}]{cum:+.2f}%[/]"
+
+        # 주식비중 = 노출. 슬롯이 다 차도 사이징 층(기초비중 × 변동성 배수)이 상한을 정한다.
+        expo = (e["stock_value"] / e["total"] * 100) if e["total"] else 0.0
+        held = held_map.get(e["date"], held)
+
         t.add_row(e["date"], f"{e['cash']:,.0f}", f"{e['stock_value']:,.0f}",
-                  f"{e['total']:,.0f}", f"[{c}]{dd:.2f}%[/]")
+                  f"{e['total']:,.0f}", chg_txt, cum_txt,
+                  f"{expo:.0f}%", f"{held}/{slots}", f"[{c}]{dd:.2f}%[/]")
+        prev_total = e["total"]
         # 5행마다 구분선 — 다른 목록 표(종목 표·테마 표)와 같은 규칙. 마지막 행 뒤에는
         #  넣지 않는다(표 하단 테두리와 겹쳐 두 줄로 보인다).
         if t.row_count % 5 == 0 and t.row_count < len(rows):
             t.add_section()
     config.console.print(t)
+    config.console.print(
+        "[dim]※ 변동=직전 스냅샷 대비(휴장·미실행일은 행이 없어 하루가 아닐 수 있음) · "
+        "누적=시드 대비 · 주식비중=총자산 중 주식 평가액(노출) · 고점대비=자산 고점 대비 하락률[/dim]")
+    if seed_approx:
+        # 옛 행에는 그 시점 시드가 없다. 입출금이 있었다면 누적 열이 그만큼 틀어진다 —
+        #  분모를 숨기지 않고 밝힌다(모르는 것을 아는 척하지 않는다).
+        config.console.print(
+            f"[dim yellow]※ 시드 기록이 없는 과거 행은 현재 시드({cur_seed:,.0f}원)로 누적을 계산했습니다 "
+            f"— 그 사이 입출금이 있었다면 해당 행의 누적은 부정확합니다.[/dim yellow]")
     if len(curve) > 40:
         config.console.print(f"[dim]※ 최근 40일만 표시 (전체 {len(curve)}일)[/dim]")
     utils.pause()

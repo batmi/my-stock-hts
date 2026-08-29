@@ -259,6 +259,34 @@ def test_deposit_shifts_drawdown_baseline(paper):
     assert db.get_max_daily_asset("2026-08-01", key) == pytest.approx(5_100_000)
 
 
+def test_equity_snapshot_freezes_seed_of_that_day(paper):
+    """스냅샷은 **그 시점 시드**를 함께 굳힌다 — 누적 수익률의 분모가 흔들리면 안 된다.
+
+    시드는 입출금으로 변한다. 나중에 현재 시드로 과거 행을 나누면 입출금 전 구간의
+    수익률이 통째로 틀어진다 — daily_asset_history 에서 겪은 것과 같은 계열의 함정이다
+    (그쪽은 HWM 이 오염돼 가짜 드로다운이 됐다).
+    """
+    api.place_order("domestic", "buy", "005930", 10, 70000, "00")
+    paper.snapshot_equity()
+    assert paper.get_equity_curve()[-1]["seed"] == pytest.approx(5_000_000)
+
+    # 입금해도 **이미 찍힌 행의 분모는 그대로**여야 한다.
+    paper.adjust_seed(2_000_000)
+    assert paper.get_equity_curve()[-1]["seed"] == pytest.approx(5_000_000)
+
+
+def test_holdings_count_by_date_tracks_open_positions(paper):
+    """날짜별 보유 종목 수는 체결 원장을 되감아 얻는다(과거 행의 슬롯 사용률)."""
+    api.place_order("domestic", "buy", "005930", 10, 70000, "00")
+    api.place_order("domestic", "buy", "000660", 5, 180000, "00")
+    by_date = paper.holdings_count_by_date()
+    assert list(by_date.values())[-1] == 2
+
+    # 전량 매도하면 그 종목은 빠진다 — 부분 매도는 유지된다.
+    api.place_order("domestic", "sell", "005930", 10, 71000, "00")
+    assert list(paper.holdings_count_by_date().values())[-1] == 1
+
+
 def test_reset_clears_everything(paper):
     """초기화하면 포지션·체결·자산곡선이 지워지고 시드가 복원된다."""
     api.place_order("domestic", "buy", "005930", 10, 70000, "00")
