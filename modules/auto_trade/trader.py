@@ -1294,7 +1294,6 @@ class AutoTrader:
 
         # [시장 상황] 섹션 출력
         msg += "\n[시장 상황]\n"
-        emoji_map = {"Bull": "🔴", "PendUp": "🟠", "PendDown": "🔷", "Bear": "🔵", "Sideways": "🟡"}
         rp = config.MARKET_REGIME_PARAMS
         ema_desc = f"EMA {rp.get('REGIME_EMA_FAST', 9)}/{rp.get('REGIME_EMA_SLOW', 41)}"
 
@@ -1302,7 +1301,8 @@ class AutoTrader:
             try:
                 info = analysis.get_market_regime_detail(m_type)
                 regime = info['regime']
-                regime_str = f"{emoji_map.get(regime, '🟡')} {analysis.format_regime(regime, markup=False)}"
+                # 이모지·라벨 모두 analysis 단일 소스에서 받는다(메뉴 헤더·텔레그램 버튼과 공유).
+                regime_str = f"{analysis.regime_emoji(regime)} {analysis.format_regime(regime, markup=False)}"
                 msg += f"• {label}: {regime_str} ({info['moved_pct']:+.1f}%, {ema_desc} 기준)\n"
             except Exception:
                 msg += f"• {label}: 확인 불가\n"

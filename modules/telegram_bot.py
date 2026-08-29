@@ -22,6 +22,20 @@ from modules.scheduler import SystemScheduler
 logger = logging.getLogger(__name__)
 console = config.console
 
+def _status_button_emojis():
+    """'상태 요약' 버튼에 붙을 수 있는 모든 이모지.
+
+    analysis.all_regime_emojis() 가 단일 소스다. import 가 실패해도 버튼이 죽지 않도록
+    최소 집합으로 폴백한다(그 경우 이모지가 늘어난 국면은 매핑에서 빠질 수 있으나,
+    아래 button_map 에 고정 키가 함께 있어 최소한의 동작은 유지된다).
+    """
+    try:
+        from modules import analysis
+        return analysis.all_regime_emojis()
+    except Exception:
+        return ["🔴", "🟠", "🔷", "🔵", "🟡", "⚪"]
+
+
 class TelegramCommander:
     """텔레그램 명령어를 수신하고 처리하는 클래스"""
     _instance = None
@@ -163,15 +177,13 @@ class TelegramCommander:
             return
 
         # [추가] 하단 고정 메뉴 버튼 텍스트 매핑
-        button_map = {
-            "📊 상태 요약": "/status",
-            "🟢 상태 요약": "/status",
-            "🔵 상태 요약": "/status",
-            "🟡 상태 요약": "/status",
-            "⚪ 상태 요약": "/status",
-            "🔴 상태 요약": "/status",
-            "🟠 상태 요약": "/status",
-            "🔷 상태 요약": "/status",
+        #  '상태 요약' 버튼의 이모지는 KOSPI 국면에 따라 바뀌므로, 나올 수 있는 값을
+        #  analysis.all_regime_emojis() 에서 받아 매핑을 만든다. 손으로 나열하면 국면이
+        #  늘거나 이모지를 바꿀 때 한 줄이 빠져 버튼이 조용히 안 먹는다.
+        button_map = {f"{e} 상태 요약": "/status" for e in _status_button_emojis()}
+        button_map.update({
+            "📊 상태 요약": "/status",   # 이모지 판정 전(기동 직후) 기본 버튼
+            "🟢 상태 요약": "/status",   # 옛 프리셋 이모지로 만들어진 키보드 호환
             "💰 계좌 잔고": "/balance",
             "📅 투자 일정": "/calendar",
             "📝 관심 종목": "/stocks",
@@ -183,8 +195,8 @@ class TelegramCommander:
             "📊 월간 성과": "/report m",
             "🎯 포지션": "/position",
             "🛑 거래 정지": "/stop",
-            "▶️ 거래 시작": "/start"
-        }
+            "▶️ 거래 시작": "/start",
+        })
         if text in button_map:
             text = button_map[text]
 
@@ -1739,14 +1751,9 @@ class TelegramCommander:
         try:
             from modules import analysis
             regime, _ = analysis.get_market_regime("KOSPI")
-            if regime == 'Bull': emoji = "🔴"
-            elif regime == 'PendUp': emoji = "🟠"
-            elif regime == 'Sideways': emoji = "🟡"
-            elif regime == 'PendDown': emoji = "🔷"
-            elif regime == 'Bear': emoji = "🔵"
-            else: emoji = "⚪"
+            emoji = analysis.regime_emoji(regime)
         except Exception:
-            emoji = "⚪"
+            emoji = "⚪"   # analysis 를 못 불러온 경우까지 대비 (analysis.REGIME_EMOJI_UNKNOWN)
             
         toggle_btn = {"text": "🛑 거래 정지"} if self.trader.is_running else {"text": "▶️ 거래 시작"}
         return {

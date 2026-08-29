@@ -92,12 +92,16 @@ def test_reset_all_settings_clears_ghost_vars(setup_temp_config):
     assert config.settings.ENABLE_TELEGRAM is True
     assert config.settings.TELEGRAM_INSTANCE_NAME == "HTS"
 
-def test_dynamic_preset_and_emoji_evaluation(setup_temp_config):
-    """동적 전략 프리셋 일치 여부 평가 및 이모티콘 상태 매핑 검증"""
+def test_dynamic_preset_evaluation(setup_temp_config):
+    """동적 전략 프리셋 일치 여부 평가.
+
+    [2026-08-29] 메뉴 헤더 이모지는 프리셋이 아니라 KOSPI 시장 국면을 나타내도록 바뀌어
+    main._get_preset_emoji 는 사라졌다(국면 이모지는 test_market_state_emoji.py 가 본다).
+    프리셋 판정 자체는 설정 화면이 계속 쓰므로 여기서 그대로 고정한다.
+    """
     # 기본 설정 상태일 때
     assert settings.check_and_update_active_preset() == "default"
-    
+
     # 커스텀 변경이 발생했을 때
     config.ANALYSIS_THRESHOLDS["BUY_SCORE"] = 9.9
     assert settings.check_and_update_active_preset() == "custom"
-    assert main._get_preset_emoji() == "⚪"

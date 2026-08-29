@@ -158,32 +158,37 @@ rich.console.Console.input = _custom_console_input
 # =========================================================================
 _original_print_breadcrumb = utils.print_breadcrumb
 
-def _get_preset_emoji():
-    try:
-        from modules import settings
-        preset = settings.check_and_update_active_preset()
-    except Exception:
-        preset = getattr(config, 'ACTIVE_PRESET', 'default')
-    
-    if preset == 'bull': return "🔴"
-    elif preset == 'bear': return "🔵"
-    elif preset == 'sideways': return "🟡"
-    elif preset == 'default': return "🟢"
-    elif preset == 'custom': return "⚪"
-    else: return "⚪"
+# 브레드크럼 이모지 메모 {market_type: (찍은 시각, 이모지)}.
+#  [왜 여기서 또 캐시하나 · 2026-08-29] analysis.get_market_regime 은 성공했을 때만
+#   60초 캐시에 넣는다 — 조회에 실패하면 캐시하지 않고 중립을 돌려준다. 그건 '사용자가
+#   지수 화면을 직접 열어 재시도한다'를 전제로 한 의도적 설계다(analysis._lookup_index_cache
+#   주석 참조: 한 번도 성공한 적 없으면 음성 캐시를 걸지 않는다).
+#   그런데 이 이모지는 브레드크럼에 붙고, 브레드크럼은 utils.render_menu 안에 있어
+#   **모든 메뉴 화면**에서 불린다. 자동·고빈도 호출자가 생기면서 그 전제가 깨졌다.
+#   실측: 지수 조회가 한 번도 성공하지 못한 상태에서 브레드크럼 20회 → 조회 시도 20회.
+#   폴백 체인이 KIS → tvDatafeed → yfinance 라, 오프라인·자격증명 오류·지수 피드 장애 때
+#   메뉴를 넘길 때마다 수 초씩 멈추고 ERROR 로그가 반복된다(라즈베리파이에서 체감).
+#   지수 캐시의 설계는 그대로 두고, 자동 호출자인 이쪽만 시간으로 묶는다.
+_MARKET_EMOJI_MEMO = {}
+_MARKET_EMOJI_TTL_SEC = 60.0   # analysis 의 국면 캐시(60초)와 같은 주기
+
 
 def _get_market_state_emoji(market_type="KOSPI"):
+    """메뉴 헤더에 붙일 시장 국면 이모지. 최대 _MARKET_EMOJI_TTL_SEC 마다 한 번만 판정한다."""
+    now = time.monotonic()
+    hit = _MARKET_EMOJI_MEMO.get(market_type)
+    if hit and (now - hit[0]) < _MARKET_EMOJI_TTL_SEC:
+        return hit[1]
+
     try:
         from modules import analysis
         regime, _ = analysis.get_market_regime(market_type)
-        if regime == 'Bull': return "🔴"
-        elif regime == 'PendUp': return "🟠"
-        elif regime == 'Sideways': return "🟡"
-        elif regime == 'PendDown': return "🔷"
-        elif regime == 'Bear': return "🔵"
-        else: return "⚪"
+        emoji = analysis.regime_emoji(regime)
     except Exception:
-        return "⚪"
+        emoji = "⚪"
+
+    _MARKET_EMOJI_MEMO[market_type] = (now, emoji)
+    return emoji
 
 def _custom_print_breadcrumb():
     """커스텀 브레드크럼 출력 함수"""
@@ -195,8 +200,8 @@ def _custom_print_breadcrumb():
         env_str = "[토스증권]"; env_color = "bold magenta"
     else:
         env_str = "[한투증권]"; env_color = "bold red"
-        
-    # 기존 프리셋 이모지 대신 KOSPI 시장 상태 이모지를 출력하도록 임시 변경
+
+    # 헤더 이모지는 KOSPI 시장 국면을 나타낸다(종전에는 전략 프리셋이었다).
     emoji = _get_market_state_emoji("KOSPI")
     
     config.console.print("\n[dim]" + "─"*50 + "[/dim]")

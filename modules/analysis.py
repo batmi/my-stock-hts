@@ -1749,6 +1749,37 @@ REGIME_DISPLAY = {
 }
 
 
+# 국면 문자열 -> 이모지. 위 REGIME_DISPLAY 의 색 계열과 짝을 맞춘다.
+#  [왜 한 곳인가 · 2026-08-29] 같은 if-elif 사다리가 메뉴 헤더(main), 텔레그램 하단 버튼
+#   (telegram_bot), /status 본문(trader) 세 곳에 복제돼 있었다. 게다가 텔레그램 버튼
+#   매핑(button_map)은 그 출력과 손으로 맞춰야 해서, 국면이 하나 늘거나 이모지를 바꾸면
+#   **네 곳**을 함께 고쳐야 했다 — 한 곳만 빠지면 버튼이 조용히 안 먹는다.
+#  하늘색 원형 이모지는 유니코드에 없어 PendDown 만 밝은 파랑 마름모로 대체한다
+#  (REGIME_DISPLAY 의 sky_blue3 에 대응 — 하락축의 '옅은' 단계).
+REGIME_EMOJI = {
+    "Bull": "🔴",
+    "PendUp": "🟠",
+    "PendDown": "🔷",
+    "Bear": "🔵",
+    "Sideways": "🟡",
+}
+# 국면을 알 수 없을 때(조회 실패·미지의 값). 판정 보류(🟡)와 구분한다.
+REGIME_EMOJI_UNKNOWN = "⚪"
+
+
+def regime_emoji(regime):
+    """국면 문자열 -> 이모지. 모르는 값이면 ⚪."""
+    return REGIME_EMOJI.get(regime, REGIME_EMOJI_UNKNOWN)
+
+
+def all_regime_emojis():
+    """regime_emoji 가 낼 수 있는 모든 값.
+
+    텔레그램 버튼 매핑을 이 목록에서 만들어, 이모지를 바꿔도 손으로 맞출 일이 없게 한다.
+    """
+    return list(REGIME_EMOJI.values()) + [REGIME_EMOJI_UNKNOWN]
+
+
 def format_regime(regime, markup=True):
     """국면 문자열을 한글 라벨로 변환. markup=True면 rich 색상 태그를 입힌다."""
     label, color = REGIME_DISPLAY.get(regime, (regime, "yellow"))
