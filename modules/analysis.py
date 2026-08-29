@@ -1834,17 +1834,7 @@ def format_adx_cell(adx_val, plus_di=None, minus_di=None, digits=0):
     return f"{adx_str} {icon}" if icon else adx_str
 
 
-# [색상 상수] 노랑을 '데드캣 반등'과 '바닥 탈출 초기'로 가르는 52주 위치(%) 문턱.
-#  실측(44종목 10년, 노랑 10,794봉)에서 이 축의 60일 전방수익 격차가 가장 크고 일관됐다 —
-#  60% 이상 +6.91% vs 미만 +2.00%, 5개 창 중 4개에서 같은 부호. 같은 자리의 120일선은
-#  +1.52%p·3/5, ADX(+0.10)·DMI(+0.67)는 사실상 못 가른다.
-#  [왜 설정 키가 아닌가] 매매를 바꾸지 않는 표시 전용 값이다. ANALYSIS_THRESHOLDS 에 넣으면
-#   시스템 설정 메뉴에 매매 다이얼처럼 뜬다. 실측으로 정한 상수는 상수 자리에 둔다
-#   (core.indicators.EMA20_SLOPE_LOOKBACK 과 같은 규약).
-COLOR_W52_DEADCAT = 60.0
-
-
-def price_trend_color(price, ema20, ema60, ind=None, w52_pos=None):
+def price_trend_color(price, ema20, ema60, ind=None):
     """현재가 색상: 중장기 추세(EMA20 vs EMA60) × 단기 위치(현재가 vs EMA20).
 
     지수 화면(market.py)과 종목 표(analysis.print_table)가 같은 규칙을 쓰도록 분리했다.
@@ -1856,10 +1846,6 @@ def price_trend_color(price, ema20, ema60, ind=None, w52_pos=None):
     `ind`(calculate_indicators 결과)를 주면 5일선·20일선 기울기·120일선까지 반영한 5단계로
     판정하고, 없으면 20일선 단면만 보는 폴백을 쓴다. 두 경로 모두 중장기 구조를 먼저
     가르므로 상승 구조가 파랑으로, 하락 구조가 빨강으로 뒤집히는 일은 없다.
-
-    w52_pos: 52주 위치(%). 주면 노랑을 '바닥 탈출 초기(노랑)'와 '데드캣 반등(하늘색)'으로
-      가른다. 없으면(지수 화면은 52주 저점을 갖고 있지 않다) 죽이지 않고 노랑 그대로 둔다.
-      `ind['w52_pos']` 로 실어 보내도 같다.
 
     Returns: rich 색상 태그 문자열 ("[red]" 등).
       혼조(ema20 == ema60)는 "[white]", 산출 불가(값 없음)는 "[dim]"로 구분한다.
@@ -1967,27 +1953,14 @@ def price_trend_color(price, ema20, ema60, ind=None, w52_pos=None):
                     #   색을 쪼개는 대신 도움말에 이 갈림을 적어 두고, 판단은 상태 열과
                     #   52주 열에 맡긴다(색 단계를 늘리면 화면의 1차 판독이 무거워진다).
                     #
-                    #  [분리 · 2026-08-29] 위 갈림을 화면에 그대로 낸다. 52주 위치가
-                    #   문턱 미만이면 데드캣 쪽이라 **하늘색(sky_blue3)**, 이상이면 바닥 탈출
-                    #   초기 쪽이라 노랑 그대로 둔다.
-                    #  [왜 하늘색인가] 새 색을 만드는 것이 아니다. sky_blue3 는 이 팔레트에서
-                    #   이미 **'하락축의 옅은/미확정 단계'**로 굳어 있다 —
-                    #     · REGIME_DISPLAY  PendDown = "하락 미확정"
-                    #     · TREND_QUALITY_COLORS  "미검증"
-                    #     · market.py 달러환율 1200~1300 "안정화"(파랑 직전 단계)
-                    #   데드캣 반등은 정확히 그 뜻이다: 하락 구조에서 아직 확정되지 않은 반등.
-                    #   게다가 PendDown 은 국면 실측에서 **진짜 위험구간**이었다 — 이름은
-                    #   '미확정'인데 성적은 최하위인 것까지 이 자리와 같은 모양이다.
-                    #  [왜 dim yellow 가 아닌가] `[dim yellow]` 는 SGR 2(faint) 를 쓰는데
-                    #   이 속성을 무시하는 터미널이 있다. 그러면 두 무리가 똑같이 보여 분리가
-                    #   조용히 사라진다. sky_blue3 는 256색 인덱스라 항상 렌더된다.
-                    #   (cyan(ANSI 6)은 테마마다 달라져 쓰지 않는다 — market.py 주석과 같은 이유.)
-                    #  [폴백] 52주 위치를 모르면(지수 화면은 52주 저점을 갖고 있지 않다)
-                    #   노랑 그대로 둔다 — 없는 정보로 경고 강도를 바꾸면 안 된다.
-                    w52 = w52_pos if w52_pos is not None else ind.get('w52_pos')
-                    if w52 is not None and w52 < COLOR_W52_DEADCAT:
-                        return "[sky_blue3]"    # 데드캣 반등: 하락 미확정 쪽 (60일 +2.0%)
-                    return "[yellow]"       # 바닥 탈출 초기 쪽 (60일 +6.9%) · 미상이면 여기
+                    #  [한 색으로 둔다 · 2026-08-29] 이 구간을 52주 위치로 쪼개 두 색으로
+                    #   찍어 봤다가 되돌렸다. 실측 격차 자체는 크지만(60% 이상 +6.91% vs
+                    #   미만 +2.00%, 5개 창 중 4개 부호 일치) 색을 늘려서 얻을 것이 아니다 —
+                    #   가르는 값이 이미 같은 표의 `52W%` 열에 숫자로 있고, 값 색상의 축은
+                    #   EMA 구조 하나여야 한다(52주는 구조가 아니라 위치다).
+                    #   대신 **모호하다는 사실 자체를 도움말에 적는다** — 색이 두 사건을
+                    #   합쳐 보여준다는 것을 알고 보는 것과 모르고 보는 것은 다르다.
+                    return "[yellow]"       # 되돌림: 데드캣 반등 / 바닥 탈출 초기가 섞인 구간
                 return "[blue]"             # 약세: 하락 추세 관망
 
             return "[white]"                # ema20 == ema60 — 방향 판단 보류
@@ -2950,7 +2923,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
 
     # 현재가 ([통일] 지수 화면·종목 표와 동일 규칙 — price_trend_color 단일 소스)
     #  [표시] display_price는 NXT 거래시간에만 current_price와 갈린다(그 외에는 동일 값).
-    curr_price_color = price_trend_color(display_price, ind.get('ema_20'), ind.get('ema_60'), ind=ind, w52_pos=w52_pos)
+    curr_price_color = price_trend_color(display_price, ind.get('ema_20'), ind.get('ema_60'), ind=ind)
 
     if is_index:
         price_str_tech = f"{display_price:,.0f}" if display_price >= 1000 else f"{display_price:,.2f}"
@@ -5319,7 +5292,7 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
             def fmt_idx(val): return f"{int(val):,}" if val is not None else "[dim]-[/dim]"
 
             # [통일] 지수 화면과 동일 규칙 — price_trend_color 단일 소스
-            curr_price_color = price_trend_color(curr, ind.get('ema_20'), ind.get('ema_60'), ind=ind, w52_pos=w52_pos_val)
+            curr_price_color = price_trend_color(curr, ind.get('ema_20'), ind.get('ema_60'), ind=ind)
             curr_str = f"{curr_price_color}{curr_fmt}[/]"
 
             # [수정] 이평선 색상 규칙 단순화 (계층적 분석)
