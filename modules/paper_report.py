@@ -234,7 +234,23 @@ def _print_verification_detail(perf):
             pyr = -1
         high = float(highs.get(p["code"]) or 0.0)
 
-        ts = engine.compute_trailing_stop(high, p["avg_price"], cur) if high else None
+        ts = None
+        if high:
+            # 트레일링 스탑 계산에 필요한 기술적 지표(ATR) 산출
+            #  변동성을 반영하지 않으면 고정 발동선(5%)이 적용되어 상태가 어긋난다 (메뉴 9-2 '대기' vs 9-6 '무장').
+            #  최근 데이터만 가져와서 지표를 빠르게 구한다.
+            ind = None
+            try:
+                from modules import backtest
+                from modules.auto_trade import indicators
+                df = backtest.get_backtest_data(p["code"], is_overseas=False, days=60)
+                if df is not None and not df.empty:
+                    ind = indicators.calculate_indicators(df)
+            except Exception as e:
+                logger.debug(f"[PAPER] 지표 산출 실패 ({p['code']}): {e}")
+
+            ts = engine.compute_trailing_stop(high, p["avg_price"], cur, ind=ind)
+
         if ts is None:
             ts_txt, ts_ref = "[dim]추적 전[/dim]", "[dim]-[/dim]"
         elif ts["armed"]:
