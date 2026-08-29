@@ -23,12 +23,13 @@ def test_price_trend_color_basic():
     assert analysis.price_trend_color(95, 100, 110) == "[blue]"     # 약세
 
 
-def _ind(ema5, slope_ref):
+def _ind(ema5, slope_ref, ema120=None):
     """색상 판정에 필요한 지표만 담은 최소 dict.
 
     `ema_20_slope_ref` 는 EMA20_SLOPE_LOOKBACK(5)봉 전의 20일선 값이다 — 전일이 아니다.
+    `ema_120` 은 빨강·보라 승격의 장기선 확인용이며, None 이면 조건을 묻지 않는다.
     """
-    return {'ema_5': ema5, 'ema_20_slope_ref': slope_ref}
+    return {'ema_5': ema5, 'ema_20_slope_ref': slope_ref, 'ema_120': ema120}
 
 
 def test_price_trend_color_with_ind_five_tiers():
@@ -269,3 +270,70 @@ def test_overheat_does_not_advise_taking_profit():
     for ln in overheat_rows:
         assert "익절" not in ln, f"과열 행이 익절을 권한다: {ln.strip()}"
     assert "익절 고려" not in rule_src
+
+
+def test_red_requires_price_above_ema120():
+    """[정배열 정의] 빨강·보라는 장기선 위에서만 승격한다.
+
+    단기만 5>20>60 으로 정렬된 '성숙한 베어마켓 랠리'를 강세로 칠하면 라벨이 거짓말을
+    한다. 실측에서 이 구간(빨강의 4.6%)의 60일 전방수익은 나머지의 4분의 1이었다.
+    구조는 살아 있으므로 파랑·흰색이 아니라 주황(조정)으로 내린다.
+    """
+    # 같은 봉인데 120일선만 위/아래 — 색이 갈려야 한다.
+    assert analysis.price_trend_color(106, 103, 95, ind=_ind(104, 102.5, 100)) == "[red]"
+    assert analysis.price_trend_color(106, 103, 95, ind=_ind(104, 102.5, 110)) == "[orange3]"
+    # 과열(보라)도 같은 확인을 받는다.
+    assert analysis.price_trend_color(118, 105, 95, ind=_ind(110, 104.0, 100)) == "[magenta]"
+    assert analysis.price_trend_color(118, 105, 95, ind=_ind(110, 104.0, 120)) == "[orange3]"
+    # 하락 구조는 이 조건과 무관하다 — 장기선 위여도 노랑/파랑 그대로다.
+    assert analysis.price_trend_color(105, 100, 110, ind=_ind(103, 99.5, 100)) == "[yellow]"
+
+
+def test_missing_ema120_does_not_demote():
+    """EMA120 이 없으면(상장 초기·데이터 부족) 조건을 묻지 않는다.
+
+    자료가 없다는 이유로 강세를 조정으로 낮추면 없는 정보를 근거로 색을 바꾸는 셈이다.
+    """
+    assert analysis.price_trend_color(106, 103, 95, ind=_ind(104, 102.5)) == "[red]"
+    assert analysis.price_trend_color(106, 103, 95,
+                                      ind={'ema_5': 104, 'ema_20_slope_ref': 102.5}) == "[red]"
+
+
+def test_yellow_splits_by_w52_position():
+    """[데드캣 분리] 노랑은 52주 위치로 갈린다 — 데드캣 쪽은 하늘색(sky_blue3).
+
+    sky_blue3 는 새 색이 아니라 이 팔레트의 '하락축 옅은/미확정 단계'다(국면 PendDown,
+    추세품질 '미검증'). 실측 격차는 60일 전방 +6.91% vs +2.00%(5개 창 중 4개 부호 일치).
+    """
+    base = _ind(103, 99.5)          # 하락 구조 + 20일선 회복 + 20일선 턴 = 노랑 구간
+    assert analysis.price_trend_color(105, 100, 110, ind=base, w52_pos=75) == "[yellow]"
+    assert analysis.price_trend_color(105, 100, 110, ind=base, w52_pos=40) == "[sky_blue3]"
+    # 문턱은 상수 하나가 정한다 — 화면과 근거가 갈리지 않게.
+    thr = analysis.COLOR_W52_DEADCAT
+    assert analysis.price_trend_color(105, 100, 110, ind=base, w52_pos=thr) == "[yellow]"
+    assert analysis.price_trend_color(105, 100, 110,
+                                      ind=base, w52_pos=thr - 0.1) == "[sky_blue3]"
+    # ind 에 실어 보내도 같다.
+    assert analysis.price_trend_color(
+        105, 100, 110, ind={**base, 'w52_pos': 40}) == "[sky_blue3]"
+
+
+def test_unknown_w52_keeps_plain_yellow():
+    """52주 위치를 모르면 노랑 그대로 둔다 — 없는 정보로 경고 강도를 바꾸면 안 된다.
+
+    지수 화면(market.py)은 52주 저점을 갖고 있지 않아 이 경로로 들어온다.
+    """
+    base = _ind(103, 99.5)
+    assert analysis.price_trend_color(105, 100, 110, ind=base) == "[yellow]"
+    assert analysis.price_trend_color(105, 100, 110, ind=base, w52_pos=None) == "[yellow]"
+
+
+def test_w52_does_not_touch_other_colors():
+    """52주 위치는 노랑 밖에서는 아무것도 바꾸지 않는다 — 축이 번지면 색의 뜻이 흐려진다."""
+    for w in (10, 95):
+        assert analysis.price_trend_color(106, 103, 95,
+                                          ind=_ind(104, 102.5, 100), w52_pos=w) == "[red]"
+        assert analysis.price_trend_color(95, 100, 110,
+                                          ind=_ind(97, 100.5), w52_pos=w) == "[blue]"
+        assert analysis.price_trend_color(102, 103, 95,
+                                          ind=_ind(101, 102.5, 100), w52_pos=w) == "[orange3]"

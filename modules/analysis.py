@@ -1834,7 +1834,17 @@ def format_adx_cell(adx_val, plus_di=None, minus_di=None, digits=0):
     return f"{adx_str} {icon}" if icon else adx_str
 
 
-def price_trend_color(price, ema20, ema60, ind=None):
+# [색상 상수] 노랑을 '데드캣 반등'과 '바닥 탈출 초기'로 가르는 52주 위치(%) 문턱.
+#  실측(44종목 10년, 노랑 10,794봉)에서 이 축의 60일 전방수익 격차가 가장 크고 일관됐다 —
+#  60% 이상 +6.91% vs 미만 +2.00%, 5개 창 중 4개에서 같은 부호. 같은 자리의 120일선은
+#  +1.52%p·3/5, ADX(+0.10)·DMI(+0.67)는 사실상 못 가른다.
+#  [왜 설정 키가 아닌가] 매매를 바꾸지 않는 표시 전용 값이다. ANALYSIS_THRESHOLDS 에 넣으면
+#   시스템 설정 메뉴에 매매 다이얼처럼 뜬다. 실측으로 정한 상수는 상수 자리에 둔다
+#   (core.indicators.EMA20_SLOPE_LOOKBACK 과 같은 규약).
+COLOR_W52_DEADCAT = 60.0
+
+
+def price_trend_color(price, ema20, ema60, ind=None, w52_pos=None):
     """현재가 색상: 중장기 추세(EMA20 vs EMA60) × 단기 위치(현재가 vs EMA20).
 
     지수 화면(market.py)과 종목 표(analysis.print_table)가 같은 규칙을 쓰도록 분리했다.
@@ -1843,9 +1853,13 @@ def price_trend_color(price, ema20, ema60, ind=None):
     자산 종류와 무관하게 '값 자체의 방향'만 나타낸다 — VIX·금리·달러를 반전하던
     규칙은 같은 줄의 등락률(반전 없음)과 색이 엇갈려 폐기했다(config 색상 규칙 주석 참조).
 
-    `ind`(calculate_indicators 결과)를 주면 5일선과 20일선 기울기까지 반영한 5단계로
+    `ind`(calculate_indicators 결과)를 주면 5일선·20일선 기울기·120일선까지 반영한 5단계로
     판정하고, 없으면 20일선 단면만 보는 폴백을 쓴다. 두 경로 모두 중장기 구조를 먼저
     가르므로 상승 구조가 파랑으로, 하락 구조가 빨강으로 뒤집히는 일은 없다.
+
+    w52_pos: 52주 위치(%). 주면 노랑을 '바닥 탈출 초기(노랑)'와 '데드캣 반등(하늘색)'으로
+      가른다. 없으면(지수 화면은 52주 저점을 갖고 있지 않다) 죽이지 않고 노랑 그대로 둔다.
+      `ind['w52_pos']` 로 실어 보내도 같다.
 
     Returns: rich 색상 태그 문자열 ("[red]" 등).
       혼조(ema20 == ema60)는 "[white]", 산출 불가(값 없음)는 "[dim]"로 구분한다.
@@ -1882,7 +1896,27 @@ def price_trend_color(price, ema20, ema60, ind=None):
 
             if ema20 > ema60:
                 # 상승 구조 — 정배열이고 20일선이 우상향일 때만 '강세(red)'다.
-                if ema5 > ema20:
+                #
+                # [장기선 확인 · 2026-08-29] 여기에 `현재가 > EMA120` 을 건다.
+                #  종전에는 빨강을 "완벽한 정배열"이라 부르면서 정작 120일선을 보지 않았다 —
+                #  라벨과 조건이 어긋나 있었고, 추세추종에서 정배열은 장기선 위에서 성립한다.
+                #  실제로 걸리는 것은 **성숙한 베어마켓 랠리**다. 단기는 5>20>60 으로 완전히
+                #  정렬됐는데 장기 추세는 아직 하락인 구간.
+                #  [실측 2026-08-29 · 44종목 10년] 빨강 32,124봉 중 이 조건에 걸리는 1,476봉
+                #   (4.6%)의 60일 전방수익은 +1.63% 로, 나머지 +6.52% 의 4분의 1이다.
+                #   격차 +4.90%p 는 5개 창에서 **전부 같은 부호**로, 이 감사에서 찾은 보조축
+                #   중 유일하게 5/5 다(52주 위치 4/5, ADX·DMI 는 사실상 못 가른다).
+                #   `120일선 위` 축은 빨강·주황·노랑·파랑 **네 색 모두에서 부호가 같다**.
+                #  [왜 색만 고치고 진입은 안 막나] 같은 조건을 진입 게이트로 걸면(G1/G2)
+                #   포트폴리오 짝비교에서 2년 창 5개 중 3승2패, 무작위 대조 순위가 창별로
+                #   6/6(꼴찌)까지 섞여 기각됐다(tools/audit_state_ma120_gate.py).
+                #   게이트는 슬롯 경쟁과 순위 흔들림을 타지만, 색은 매매하지 않고 상태에
+                #   이름만 붙인다 — 표시 규칙의 판단 기준은 신호 분리도다. 모순이 아니다.
+                #  [폴백] EMA120 이 없으면(상장 초기·데이터 부족) 조건을 묻지 않는다.
+                #   자료가 없다고 강세를 조정으로 낮추면 없는 정보를 근거로 색을 바꾸는 것이다.
+                ema120 = ind.get('ema_120')
+                long_ok = not (ema120 is not None and price < ema120)
+                if ema5 > ema20 and long_ok:
                     if disp_ratio >= disp_upper:
                         # 과열 = **신규 진입을 자제할 구간**이지, 파는 구간이 아니다.
                         #  [실측 2026-08-29 · 39종목 5년, 43,792관측] 보라 구간의 전방
@@ -1897,7 +1931,8 @@ def price_trend_color(price, ema20, ema60, ind=None):
                         return "[magenta]"  # 과열: 신규 진입 자제 (보유는 TS 에 맡긴다)
                     if is_ema20_up:
                         return "[red]"      # 강세: 완전 정배열 + 20일선 우상향
-                # 정배열이 아니거나(5일선이 20일선 아래) 20일선이 꺾였으면 '조정'이다.
+                # 정배열이 아니거나(5일선이 20일선 아래) 20일선이 꺾였으면, 또는 장기선
+                #  아래면 '조정'이다.
                 #  구조는 살아 있으므로 관망(blue)도 보류(white)도 아니다.
                 #  [색 배정] 상승 구조 쪽이 주황이다 — 빨강(강세)에 인접한 난색이라
                 #   '추세는 살아 있고 잠시 쉬는 중'이 색만 보고도 읽힌다.
@@ -1912,7 +1947,47 @@ def price_trend_color(price, ema20, ema60, ind=None):
                     #  53.7%). 역배열 되돌림이 열위라는 기존 결론과 같은 방향이다
                     #  (역배열 데드캣 매수 승률 18% — 시너지 게이트 주석 참조).
                     #  색은 남기되 '진입 후보'로 읽히지 않게 라벨을 낮춰 둔다.
-                    return "[yellow]"       # 되돌림: 하락 구조 속 20일선 회복 (진입 부적합)
+                    #
+                    #  [교차 실측 2026-08-29 · 44종목 5년, 51,850관측] 위 수치는 **색만으로
+                    #   나눈 전 봉**의 기저율이다. 상태 판정(점수 7.0 + RSI 캡 + SAR·MACD·DMI
+                    #   방어)이 붙은 부분집합은 다르다 — 노랑 전체 60일 +2.75%(승률 48.9%)가
+                    #   '노랑 & 매수'에서는 +4.14%(51.6%)로 올라간다. 상태 필터가 이 구간
+                    #   안에서 실제로 고르고 있다는 뜻이므로, 같은 줄에 노랑과 '매수'가
+                    #   함께 찍히는 것은 모순이 아니다(도움말 문구도 이에 맞춰 정정).
+                    #   다만 '비노랑 & 매수' +10.48%(57.7%)에는 여전히 크게 못 미치고
+                    #   꼬리(상위10%)가 +29.4% vs +47.4% 로 얇다 — 색의 경고 자체는 유효하다.
+                    #
+                    #  [노랑이 섞고 있는 것] 이 조건 하나에 **데드캣 반등**과 **바닥 탈출
+                    #   초기**가 함께 들어온다. 새 추세가 시작돼도 EMA20 이 EMA60 을 되찾기
+                    #   전 몇 주는 모습이 데드캣과 똑같아서, 구조만으로는 갈 수 없다.
+                    #   둘을 가르는 축을 전 봉(44종목 10년, 노랑 10,794봉)에서 재보면
+                    #   **52주 위치**가 가장 크고 일관되다 — 60% 이상 +6.91% vs 미만 +2.00%
+                    #   (5개 창 중 4개 부호 일치). 120일선은 같은 자리에서 +1.52%p·3/5 로
+                    #   약하고, ADX(+0.10)·DMI(+0.67)는 사실상 못 가른다.
+                    #   색을 쪼개는 대신 도움말에 이 갈림을 적어 두고, 판단은 상태 열과
+                    #   52주 열에 맡긴다(색 단계를 늘리면 화면의 1차 판독이 무거워진다).
+                    #
+                    #  [분리 · 2026-08-29] 위 갈림을 화면에 그대로 낸다. 52주 위치가
+                    #   문턱 미만이면 데드캣 쪽이라 **하늘색(sky_blue3)**, 이상이면 바닥 탈출
+                    #   초기 쪽이라 노랑 그대로 둔다.
+                    #  [왜 하늘색인가] 새 색을 만드는 것이 아니다. sky_blue3 는 이 팔레트에서
+                    #   이미 **'하락축의 옅은/미확정 단계'**로 굳어 있다 —
+                    #     · REGIME_DISPLAY  PendDown = "하락 미확정"
+                    #     · TREND_QUALITY_COLORS  "미검증"
+                    #     · market.py 달러환율 1200~1300 "안정화"(파랑 직전 단계)
+                    #   데드캣 반등은 정확히 그 뜻이다: 하락 구조에서 아직 확정되지 않은 반등.
+                    #   게다가 PendDown 은 국면 실측에서 **진짜 위험구간**이었다 — 이름은
+                    #   '미확정'인데 성적은 최하위인 것까지 이 자리와 같은 모양이다.
+                    #  [왜 dim yellow 가 아닌가] `[dim yellow]` 는 SGR 2(faint) 를 쓰는데
+                    #   이 속성을 무시하는 터미널이 있다. 그러면 두 무리가 똑같이 보여 분리가
+                    #   조용히 사라진다. sky_blue3 는 256색 인덱스라 항상 렌더된다.
+                    #   (cyan(ANSI 6)은 테마마다 달라져 쓰지 않는다 — market.py 주석과 같은 이유.)
+                    #  [폴백] 52주 위치를 모르면(지수 화면은 52주 저점을 갖고 있지 않다)
+                    #   노랑 그대로 둔다 — 없는 정보로 경고 강도를 바꾸면 안 된다.
+                    w52 = w52_pos if w52_pos is not None else ind.get('w52_pos')
+                    if w52 is not None and w52 < COLOR_W52_DEADCAT:
+                        return "[sky_blue3]"    # 데드캣 반등: 하락 미확정 쪽 (60일 +2.0%)
+                    return "[yellow]"       # 바닥 탈출 초기 쪽 (60일 +6.9%) · 미상이면 여기
                 return "[blue]"             # 약세: 하락 추세 관망
 
             return "[white]"                # ema20 == ema60 — 방향 판단 보류
@@ -2875,7 +2950,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
 
     # 현재가 ([통일] 지수 화면·종목 표와 동일 규칙 — price_trend_color 단일 소스)
     #  [표시] display_price는 NXT 거래시간에만 current_price와 갈린다(그 외에는 동일 값).
-    curr_price_color = price_trend_color(display_price, ind.get('ema_20'), ind.get('ema_60'), ind=ind)
+    curr_price_color = price_trend_color(display_price, ind.get('ema_20'), ind.get('ema_60'), ind=ind, w52_pos=w52_pos)
 
     if is_index:
         price_str_tech = f"{display_price:,.0f}" if display_price >= 1000 else f"{display_price:,.2f}"
@@ -5244,7 +5319,7 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
             def fmt_idx(val): return f"{int(val):,}" if val is not None else "[dim]-[/dim]"
 
             # [통일] 지수 화면과 동일 규칙 — price_trend_color 단일 소스
-            curr_price_color = price_trend_color(curr, ind.get('ema_20'), ind.get('ema_60'), ind=ind)
+            curr_price_color = price_trend_color(curr, ind.get('ema_20'), ind.get('ema_60'), ind=ind, w52_pos=w52_pos_val)
             curr_str = f"{curr_price_color}{curr_fmt}[/]"
 
             # [수정] 이평선 색상 규칙 단순화 (계층적 분석)
