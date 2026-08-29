@@ -390,24 +390,37 @@ def get_equity_curve():
              "seed": (float(r[4]) if r[4] is not None else None)} for r in rows]
 
 
-def holdings_count_by_date():
-    """날짜별 보유 종목 수. 체결 원장을 누적해 되짚는다.
+def daily_ledger():
+    """날짜별 체결 요약 — 보유 종목 수·실현손익·매매 이벤트를 한 번에 되짚는다.
 
     [왜 원장에서 세는가] paper_positions 는 '지금'만 안다. 자산 곡선은 과거 행도 보여주므로
     그 시점의 슬롯 사용률을 알려면 체결을 되감는 수밖에 없다. reset()이 paper_fills 와
     paper_equity 를 함께 지우므로 두 표는 항상 같은 계좌를 가리킨다.
 
-    반환: {'YYYY-MM-DD': 그날 장 마감 시점의 보유 종목 수}. 매매가 없던 날은 빠지므로
-    호출부가 직전 값을 이어 쓴다(보유는 매매가 없으면 변하지 않는다).
+    [왜 한 함수인가] 셋 다 같은 원장을 같은 순서로 훑는다. 나눠 두면 같은 루프가 셋이 되고,
+    '매도 시 포지션에서 빼는' 규칙 같은 것이 한쪽에서만 바뀔 수 있다.
+
+    반환: {'YYYY-MM-DD': {'holdings': 그날 마감 보유 종목 수,
+                          'realized': 그날 실현손익 합(원, 비용 반영됨),
+                          'events': ['+한국콜마', '-SK이노베이션', ...]}}
+    매매가 없던 날은 키가 없다 — 보유 수는 호출부가 직전 값을 이어 쓴다(매매가 없으면
+    보유는 변하지 않는다). 실현손익·이벤트는 없는 날이 곧 0/빈 목록이다.
     """
     rows = _db().execute_query(
-        "SELECT time, type, code, qty FROM paper_fills ORDER BY id", fetch='all') or []
+        "SELECT time, type, code, name, qty, profit_amt FROM paper_fills ORDER BY id",
+        fetch='all') or []
     held, by_date = {}, {}
-    for t, type_str, code, qty in rows:
-        held[code] = held.get(code, 0) + (int(qty) if type_str == '매수' else -int(qty))
+    for t, type_str, code, name, qty, profit in rows:
+        d = str(t)[:10]
+        e = by_date.setdefault(d, {"holdings": 0, "realized": 0.0, "events": []})
+        is_buy = type_str == '매수'
+        held[code] = held.get(code, 0) + (int(qty) if is_buy else -int(qty))
         if held[code] <= 0:
             held.pop(code, None)
-        by_date[str(t)[:10]] = len(held)
+        if not is_buy:
+            e["realized"] += float(profit or 0.0)
+        e["events"].append(("+" if is_buy else "-") + (name or code))
+        e["holdings"] = len(held)
     return by_date
 
 

@@ -191,6 +191,79 @@ def _position_indicators(code, current_price):
         return None
 
 
+class _HeatShim:
+    """compute_portfolio_heat 가 참조하는 최소 표면(락·트레일링 고점 캐시).
+
+    [왜 실물 트레이더를 안 쓰는가] 이 화면은 자동매매 루프가 돌지 않아도 열린다.
+    그렇다고 리스크 산식을 여기서 다시 쓰면 화면과 실제 판정이 갈라진다 — 이 파일이
+    TS 표시선에서 이미 겪은 문제다(engine.compute_trailing_stop 을 그대로 쓰는 이유).
+    그래서 산식은 건드리지 않고 **호출에 필요한 껍데기만** 만든다.
+    """
+
+    def __init__(self, highs, equity):
+        import threading
+        self._lock = threading.RLock()
+        self.trailing_stop_cache = dict(highs or {})
+        self.current_total_asset = equity
+        self.initial_asset = equity
+        self.portfolio_heat_amt = 0.0
+        self.portfolio_heat_unknown = False
+        # [리스크 스케일] 실효 캡 = SYSTEM_MAX_PORTFOLIO_RISK × 배수다. 배수를 1.0으로 두면
+        #  화면이 명목 캡(10%)을 보여주는데 엔진은 축소된 캡(예: 8.5%)으로 매수를 막는다 —
+        #  "왜 막혔는지 모르겠다"가 정확히 이 어긋남에서 나온다. 돌고 있는 트레이더가
+        #  있으면 그 값을 그대로 빌리고, 없으면 1.0으로 두되 호출부가 '명목'이라고 밝힌다.
+        self.risk_scale = 1.0
+        self.risk_scale_known = False
+        try:
+            import modules.auto_trade as _at
+            inst = getattr(_at.AutoTrader, "_instance", None)
+            scale = getattr(inst, "risk_scale", None) if inst is not None else None
+            if scale and 0 < float(scale) <= 1.0:
+                self.risk_scale = float(scale)
+                self.risk_scale_known = True
+        except Exception:
+            pass
+
+    def log(self, *a, **k):
+        pass
+
+
+def _position_open_risk(positions):
+    """종목별 오픈 리스크(원)·남은 예산·실효 캡(%)·스케일 반영 여부. 실패 시 ({}, None, None, False).
+
+    [손절선 역산] compute_portfolio_heat 은 손절선이 현재가 위면 리스크를 0으로 자른다
+    (이익 잠김). 그 상태로는 '선이 얼마나 위인지' 알 수 없으므로, 충분히 높은 가격을
+    넣어 클립을 피한 뒤 `손절선 = 넣은 가격 − 리스크` 로 되짚는다. 표시부는 그 선과
+    실제 현재가로 리스크를 다시 계산한다.
+    """
+    from modules import db_manager
+    from modules.auto_trade import engine
+    try:
+        highs = db_manager.db.get_all_trailing_stops() or {}
+        equity = paper_broker.get_performance()["total"]
+        shim = _HeatShim(highs, equity)
+        rm = engine.RiskManager(shim)
+        codes = [p["code"] for p in positions]
+        buy_map = db_manager.db.get_buy_trades_for_current_holdings(codes) or {}
+
+        risks = {}
+        for p in positions:
+            code, qty = p["code"], p["qty"]
+            cur = paper_broker._current_price(code, p["avg_price"])
+            probe = max(cur, float(highs.get(code) or 0.0)) * 10.0
+            one = [{'pdno': code, 'hldg_qty': str(qty),
+                    'pchs_avg_pric': f"{p['avg_price']:.4f}", 'prpr': str(int(probe))}]
+            stop = probe - rm.compute_portfolio_heat(one, {code: buy_map.get(code) or []}) / qty
+            risks[code] = (stop, qty * max(0.0, cur - stop))
+
+        shim.portfolio_heat_amt = sum(r for _s, r in risks.values())
+        return (risks, rm.portfolio_risk_budget_left(), rm.effective_portfolio_cap(),
+                shim.risk_scale_known)
+    except Exception as e:
+        logger.debug(f"[PAPER] 오픈 리스크 산출 실패: {e}")
+        return {}, None, None, False
+
+
 def _print_verification_detail(perf):
     """검증용 상세 — '지금 무엇이 돌고 있나'를 청산 없이도 확인할 수 있게 한다.
 
@@ -242,12 +315,22 @@ def _print_verification_detail(perf):
     use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
 
     pt = Table(title="\n보유 포지션 상세 (판정 상태)", box=box.HORIZONTALS,
-               header_style="dim", border_style="dim")
+               header_style="dim", border_style="dim", collapse_padding=True)
     for col, just in (("종목", "left"), ("보유", "right"), ("평단", "right"),
                       ("현재가", "right"), ("수익률", "right"), ("증액", "right"),
                       ("최고가", "right"), ("TS", "left"), ("TS 기준", "right"),
-                      ("시간청산", "right")):
+                      ("시간청산", "right"), ("손절선", "right"), ("여유", "right"),
+                      ("리스크(예산비)", "right")):
         pt.add_column(col, justify=just, no_wrap=True)
+
+    # [왜 손절선을 함께 보여주는가] 위 TS 열은 '무장 전'이면 아직 없는 선이다. 그 상태에서
+    #  실제로 포지션을 지키는 것은 ATR 손절선인데, 종전 표에는 그것이 없었다 — 4종목 전부
+    #  '대기'인 화면에서 **작동 중인 방어선이 하나도 표시되지 않는** 상태였다.
+    #  오픈 리스크는 그 선까지의 잠재손실(= 히트 캡이 세는 값)이고, 예산비는 그 종목이
+    #  계좌 전체 리스크 예산에서 차지하는 몫이다. 한 종목이 예산을 삼키면 다른 종목의
+    #  신규 진입·증액이 막히므로([[heat-cap-formula-divergence]]) 여기서 보여야 한다.
+    risk_by_code, budget_left, heat_cap, scale_known = _position_open_risk(positions)
+    heat_cap_amt = (perf["total"] * heat_cap / 100.0) if heat_cap else 0.0
 
     for p in positions:
         cur = paper_broker._current_price(p["code"], p["avg_price"])
@@ -292,17 +375,54 @@ def _print_verification_detail(perf):
         else:
             stop_txt = "[dim]-[/dim]"
 
+        # 손절선·오픈리스크. 산출 실패는 '0'이 아니라 '모름'으로 적는다 — 리스크를 0으로
+        #  보여주면 없는 안전을 있는 것처럼 읽힌다(히트 산식의 fail-closed와 같은 이유).
+        sl_price, risk = risk_by_code.get(p["code"], (None, None))
+        if sl_price is None:
+            sl_txt = room_txt = risk_txt = "[dim]?[/dim]"
+        else:
+            room = (sl_price - cur) / cur * 100 if cur else 0.0
+            sl_txt = f"{sl_price:,.0f}"
+            room_txt = f"[blue]{room:.1f}%[/]" if room < 0 else f"[red]+{room:.1f}%[/]"
+            # 예산비 = 이 종목이 계좌 리스크 예산(히트 캡)에서 차지하는 몫.
+            share = f" ({risk / heat_cap_amt * 100:.0f}%)" if heat_cap_amt else ""
+            risk_txt = f"{risk:,.0f}{share}"
+
         pc = "red" if profit > 0 else ("blue" if profit < 0 else "white")
         pt.add_row(f"{p['name']}", f"{held if held is not None else '-'}일",
                    f"{p['avg_price']:,.0f}", f"{cur:,.0f}", f"[{pc}]{profit:+.2f}%[/]",
                    ("?" if pyr < 0 else f"{pyr}차"), f"{high:,.0f}" if high else "[dim]-[/dim]",
-                   ts_txt, ts_ref, stop_txt)
+                   ts_txt, ts_ref, stop_txt, sl_txt, room_txt, risk_txt)
         if pt.row_count % 5 == 0 and pt.row_count < len(positions):
             pt.add_section()
     config.console.print(pt)
+
+    # 리스크 예산 — 개별 행의 '예산비'가 무엇의 몫인지 여기서 분모를 밝힌다.
+    #  캡이 차면 신규 매수도 증액도 막히므로, 막혔을 때 원인을 이 줄에서 바로 읽을 수 있다.
+    total_risk = sum(r for _s, r in risk_by_code.values())
+    if risk_by_code and heat_cap:
+        used = (total_risk / heat_cap_amt * 100) if heat_cap_amt else 0.0
+        color = "red" if used >= 100 else ("yellow" if used >= 80 else "white")
+        left_txt = (f"여유 {budget_left:,.0f}원" if (budget_left or 0) > 0
+                    else "[red]초과 — 신규 매수·증액 차단 중[/red]")
+        # 자동매매가 돌고 있지 않으면 리스크 스케일(약세·드로다운 축소)을 알 수 없다.
+        #  그때는 명목 캡이라고 밝힌다 — 실제 캡은 이보다 작을 수 있다(축소 방향뿐이다).
+        cap_label = "캡" if scale_known else "명목 캡"
+        note = "" if scale_known else " [dim](자동매매 미동작 — 리스크 스케일 미반영)[/dim]"
+        config.console.print(
+            f"  [bold]리스크 예산[/bold] 오픈 리스크 {total_risk:,.0f}원 / "
+            f"{cap_label} {heat_cap:.1f}% {heat_cap_amt:,.0f}원 → "
+            f"[{color}]{used:.0f}% 소진[/] · {left_txt}{note}")
+    elif risk_by_code:
+        config.console.print(
+            f"  [bold]리스크 예산[/bold] 오픈 리스크 {total_risk:,.0f}원 [dim](캡 미사용)[/dim]")
+
     config.console.print(
         "[dim]※ TS 청산선은 실제 청산 판정과 같은 함수(engine.compute_trailing_stop)로 "
         "계산합니다. '추적 전'은 최고가 기록이 아직 없다는 뜻입니다(매수 직후·재시작 직후).[/dim]")
+    config.console.print(
+        "[dim]※ 손절선=수량가중 평균 손절률 기준 청산가(TS 무장 시 그 선). 여유=현재가 대비 거리. "
+        "오픈리스크=그 선까지 내려갈 때의 잠재손실(히트 캡이 세는 값).[/dim]")
 
 
 def _adjust_seed(deposit=True):
@@ -388,8 +508,8 @@ def _show_equity_curve():
         utils.pause()
         return
     peak = curve[0]["total"]
-    # 보유 종목 수는 체결 원장을 되감아 얻는다. 매매가 없던 날은 직전 값을 잇는다.
-    held_map = paper_broker.holdings_count_by_date()
+    # 보유 수·실현손익·매매는 체결 원장을 되감아 얻는다. 매매가 없던 날은 보유만 직전 값을 잇는다.
+    ledger = paper_broker.daily_ledger()
     slots = getattr(config, 'SYSTEM_MAX_HOLDINGS', 4)
     cur_seed = paper_broker.get_seed()
     seed_approx = any(e.get("seed") is None for e in curve[-40:])
@@ -397,8 +517,10 @@ def _show_equity_curve():
     t = Table(title="\n일별 가상 자산 추이", box=box.HORIZONTALS, header_style="dim", border_style="dim")
     # '변동'은 전일이 아니라 **직전 스냅샷** 대비다 — 이 표는 트레이딩 루프가 돈 날만 있어
     #  주말·미실행일이 통째로 빠진다(예: 금 → 월). '전일대비'로 적으면 거짓말이 된다.
-    for col in ("일자", "현금", "주식평가", "총자산", "변동", "누적", "주식비중", "보유", "고점대비"):
-        t.add_column(col, justify="left" if col == "일자" else "right")
+    for col in ("일자", "현금", "주식평가", "총자산", "변동", "누적", "주식비중", "보유",
+                "고점대비", "실현손익", "매매"):
+        t.add_column(col, justify="left" if col in ("일자", "매매") else "right",
+                     no_wrap=(col == "매매"))
     rows = curve[-40:]
     prev_total, held = None, 0
     for e in rows:
@@ -418,20 +540,72 @@ def _show_equity_curve():
 
         # 주식비중 = 노출. 슬롯이 다 차도 사이징 층(기초비중 × 변동성 배수)이 상한을 정한다.
         expo = (e["stock_value"] / e["total"] * 100) if e["total"] else 0.0
-        held = held_map.get(e["date"], held)
+        day = ledger.get(e["date"]) or {}
+        held = day.get("holdings", held)
+
+        # [왜 실현손익을 나누어 적는가] '변동'만으로는 그날 무슨 일이 있었는지 알 수 없다.
+        #  실측 2026-08-26: 변동 -0.62%였지만 실현손익이 -102,356원이었다 — 즉 보유분 평가는
+        #  오히려 +40,220 올랐고, 자산이 준 것은 손절이 확정됐기 때문이다. 추세추종에서
+        #  '손절 규칙이 정상 작동한 날'과 '시장이 나빴던 날'은 완전히 다른 사건인데,
+        #  이 열이 없으면 둘이 구분되지 않는다. (평가분 = 변동 − 실현손익)
+        rp = day.get("realized") or 0.0
+        rp_txt = f"[{'red' if rp > 0 else 'blue'}]{rp:+,.0f}[/]" if rp else "[dim]-[/dim]"
+        # 종목명까지 적으면 표가 2-1 기준 폭(135)을 넘는다. 건수만 남긴다 —
+        #  "그날 매매가 있었나"는 여기서, "무엇을 샀나"는 5-4 체결 내역에서 본다.
+        evs = day.get("events") or []
+        nb = sum(1 for x in evs if x.startswith("+"))
+        ns = len(evs) - nb
+        ev = " ".join(t for t in (f"매수{nb}" if nb else "", f"매도{ns}" if ns else "") if t) or "-"
 
         t.add_row(e["date"], f"{e['cash']:,.0f}", f"{e['stock_value']:,.0f}",
                   f"{e['total']:,.0f}", chg_txt, cum_txt,
-                  f"{expo:.0f}%", f"{held}/{slots}", f"[{c}]{dd:.2f}%[/]")
+                  f"{expo:.0f}%", f"{held}/{slots}", f"[{c}]{dd:.2f}%[/]",
+                  rp_txt, f"[dim]{ev}[/dim]")
         prev_total = e["total"]
         # 5행마다 구분선 — 다른 목록 표(종목 표·테마 표)와 같은 규칙. 마지막 행 뒤에는
         #  넣지 않는다(표 하단 테두리와 겹쳐 두 줄로 보인다).
         if t.row_count % 5 == 0 and t.row_count < len(rows):
             t.add_section()
     config.console.print(t)
+
+    # ── 요약 — 표를 위아래로 훑지 않아도 기간 전체의 모양이 잡히게 한다. 열을 늘리지 않고
+    #    밀도를 올리는 자리라, 표에 넣기 애매한 '기간 집계'는 전부 여기로 모은다.
+    totals = [e["total"] for e in curve]
+    p, mdd, under = totals[0], 0.0, 0
+    for v in totals:
+        p = max(p, v)
+        d = (v - p) / p * 100 if p else 0.0
+        mdd = min(mdd, d)
+        under += (d < 0)
+    expos = [(e["stock_value"] / e["total"] * 100) for e in curve if e["total"]]
+    realized = sum((v.get("realized") or 0.0) for v in ledger.values())
+    first_seed = next((e["seed"] for e in curve if e.get("seed")), cur_seed)
+    cum_all = (totals[-1] - cur_seed) / cur_seed * 100 if cur_seed else 0.0
+    # 노출 상한은 사이징 구조가 정한다 — 기초비중 × 변동성 배수 하한 × 슬롯 수.
+    #  슬롯이 다 차도 이 위로는 못 간다. '왜 현금이 노는가'의 답이 이 한 줄에 있다.
+    expo_cap = (config.resolve_invest_ratio()
+                * getattr(config, 'VOLATILITY_SCALING_MIN', 0.4) * slots * 100)
+
+    cc = "red" if cum_all > 0 else "blue" if cum_all < 0 else "white"
+    config.console.print(
+        f"\n[bold]기간 요약[/bold] [dim]{curve[0]['date']} ~ {curve[-1]['date']} "
+        f"({len(curve)}일) · 시드 {cur_seed:,.0f}원"
+        + (f" (시작 {first_seed:,.0f}원)" if first_seed != cur_seed else "") + "[/dim]")
+    config.console.print(
+        f"  누적 [{cc}]{cum_all:+.2f}%[/] · MDD [blue]{mdd:.2f}%[/] · "
+        f"고점 아래 {under}/{len(totals)}일")
+    if expos:
+        config.console.print(
+            f"  노출 평균 {sum(expos) / len(expos):.0f}% · 최대 {max(expos):.0f}% "
+            f"[dim](사이징 구조 상한 {expo_cap:.0f}%)[/dim]")
+    config.console.print(
+        f"  실현손익 누적 [{'red' if realized > 0 else 'blue' if realized else 'white'}]"
+        f"{realized:+,.0f}원[/] · 평가분 {totals[-1] - cur_seed - realized:+,.0f}원")
+
     config.console.print(
         "[dim]※ 변동=직전 스냅샷 대비(휴장·미실행일은 행이 없어 하루가 아닐 수 있음) · "
-        "누적=시드 대비 · 주식비중=총자산 중 주식 평가액(노출) · 고점대비=자산 고점 대비 하락률[/dim]")
+        "누적=시드 대비 · 주식비중=총자산 중 주식 평가액(노출) · 고점대비=자산 고점 대비 하락률 · "
+        "평가분 = 변동 − 실현손익[/dim]")
     if seed_approx:
         # 옛 행에는 그 시점 시드가 없다. 입출금이 있었다면 누적 열이 그만큼 틀어진다 —
         #  분모를 숨기지 않고 밝힌다(모르는 것을 아는 척하지 않는다).

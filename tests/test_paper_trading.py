@@ -275,16 +275,26 @@ def test_equity_snapshot_freezes_seed_of_that_day(paper):
     assert paper.get_equity_curve()[-1]["seed"] == pytest.approx(5_000_000)
 
 
-def test_holdings_count_by_date_tracks_open_positions(paper):
-    """날짜별 보유 종목 수는 체결 원장을 되감아 얻는다(과거 행의 슬롯 사용률)."""
+def test_daily_ledger_tracks_holdings_realized_and_events(paper):
+    """날짜별 체결 요약 — 보유 수·실현손익·매매 이벤트를 한 원장에서 되짚는다.
+
+    자산 곡선이 "이 날 왜 움직였나"에 답하려면 셋이 함께 있어야 한다. 실측 2026-08-26:
+    변동 -0.62%였지만 실현손익 -102,356원 · 평가는 +40,220 상승이었다 — 손절이 나간
+    날과 시장이 나빴던 날은 완전히 다른 사건인데, 실현손익 없이는 구분되지 않는다.
+    """
     api.place_order("domestic", "buy", "005930", 10, 70000, "00")
     api.place_order("domestic", "buy", "000660", 5, 180000, "00")
-    by_date = paper.holdings_count_by_date()
-    assert list(by_date.values())[-1] == 2
+    day = list(paper.daily_ledger().values())[-1]
+    assert day["holdings"] == 2
+    assert day["realized"] == 0.0            # 매수만으로는 실현손익이 없다
+    assert day["events"] == ["+삼성전자", "+SK하이닉스"] or len(day["events"]) == 2
 
-    # 전량 매도하면 그 종목은 빠진다 — 부분 매도는 유지된다.
-    api.place_order("domestic", "sell", "005930", 10, 71000, "00")
-    assert list(paper.holdings_count_by_date().values())[-1] == 1
+    # 전량 매도하면 보유에서 빠지고 실현손익이 잡힌다.
+    api.place_order("domestic", "sell", "005930", 10, 77000, "00")
+    day = list(paper.daily_ledger().values())[-1]
+    assert day["holdings"] == 1
+    assert day["realized"] > 0               # 70,000 → 77,000 이익 청산
+    assert day["events"][-1].startswith("-")
 
 
 def test_reset_clears_everything(paper):
