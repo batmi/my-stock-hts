@@ -2111,7 +2111,9 @@ class RiskManager:
           ② **USE_BREAK_EVEN_STOP이 켜져 있고** 최고가 기준 max_profit이 BEP 발동선
              (ATR 손절 시 손절폭과 동일) 이상이면 본전(매수가)으로 상향.
              꺼져 있으면 상향하지 않는다 — 없는 손절선을 가정하면 리스크를 과소 계상한다.
-          ③ max_profit이 트레일링 발동선 이상이면 최고가×(1-콜백%)으로 상향.
+          ③ max_profit이 트레일링 발동선 이상이면 최고가×(1-실효콜백%)으로 상향.
+             실효콜백은 청산 로직과 같은 effective_callback(하한, ATR×배수)을 쓴다 —
+             고정 하한만 쓰면 실제보다 높은 손절선을 가정해 리스크가 과소 계상된다.
         손절선이 현재가 위(이미 이익 잠김)면 해당 포지션 리스크는 0으로 본다.
         """
         total_risk = 0.0
@@ -2125,6 +2127,8 @@ class RiskManager:
         bep_rate_cfg = sell_cfg.get("BREAK_EVEN_PROFIT_RATE", 5.0)
         ts_act = sell_cfg.get("TRAILING_STOP_ACTIVATION_RATE", 10.0)
         ts_cb = sell_cfg.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
+        ts_atr_mult = sell_cfg.get("TRAILING_ATR_MULTIPLIER", 3.5)
+        atr_mult = sell_cfg.get("ATR_STOP_MULTIPLIER", 2.0) or 2.0
 
         for h in holdings:
             try:
@@ -2187,14 +2191,40 @@ class RiskManager:
                     #  ATR/매수가 = |sl_rate| / ATR_STOP_MULTIPLIER 로 역산할 수 있다.
                     #  하한(콜백)만으로 근사하면 실제보다 훨씬 일찍 무장한 것으로 보여
                     #  손절선을 과대 상향 → 오픈 리스크를 과소평가한다(반대 방향 위험).
+                    #  [ATR 역산] sl_rate가 매수 시점 ATR 손절률이므로 ATR = |sl_rate|×매수가/배수.
+                    #   발동선과 콜백이 **같은 재료**를 써야 실제 청산선과 어긋나지 않는다.
+                    #   (MAX_ATR_STOP_LOSS_RATE 캡에 걸린 종목은 역산값이 실제 ATR보다 작아
+                    #    콜백을 조금 좁게 잡는다 — 남은 과소 계상은 이 캡 폭 안쪽이다.)
+                    est_atr = (abs(sl_rate) / 100.0 * buy_price / atr_mult) if use_atr_stop else 0.0
                     act = ts_act
                     if str(sell_cfg.get("TS_ACTIVATION_MODE", "fixed")).lower() == "breakeven":
-                        atr_mult = sell_cfg.get("ATR_STOP_MULTIPLIER", 2.0) or 2.0
-                        est_atr = abs(sl_rate) / 100.0 * buy_price / atr_mult if use_atr_stop else 0
                         act = breakeven_activation_rate(est_atr, buy_price, ts_cb,
                                                         use_atr=bool(use_atr_stop))
                     if act > 0 and ts_cb > 0 and max_profit >= act:
-                        stop_price = max(stop_price, highest * (1 - ts_cb / 100.0))
+                        # [SSOT] 콜백은 청산 로직(compute_trailing_stop)과 같은 식을 쓴다.
+                        #  종전에는 고정 하한(TRAILING_STOP_CALLBACK_RATE, 5%)만 썼다. 실제
+                        #  주청산선은 샹들리에 max(하한, ATR×TRAILING_ATR_MULTIPLIER)이고
+                        #  max이므로 **항상 하한 이상**이다 — 즉 고정값은 실제보다 높은
+                        #  손절선을 가정해 오픈 리스크를 과소 계상했다. 독스트링이 표방하는
+                        #  '보수적(과대평가)' 방향의 정반대이고, 2026-08-19에 고친 BEP 결함과
+                        #  같은 계열이다. [실측 2026-08-29 · 한국콜마 10주] 무장 시 고정 5%는
+                        #  리스크 78,950원을 내지만 실제 콜백 19.2%(ATR 8,890×3.5/고점)에서는
+                        #  309,150원 — 3.9배 과소였다.
+                        #
+                        #  [감사 2026-08-29 · tools/audit_heat_formula.py · 44종목 10년]
+                        #   TS 무장일 12,100일에서 '가정 청산선 − 실제 청산선'(현재가 대비)
+                        #   중앙 +6.88%p → +3.20%p, 과소 계상 비율 98.1% → 90.9%.
+                        #   히트 중앙 3.31% → 4.81%(실제 7.01%), 캡 10% 초과일 1.1% → 3.7%
+                        #   (실제 26.7%). 세 구간 전부 같은 방향이다.
+                        #   ※ 잔차의 원인은 여기서 못 없앤다 — 실매매엔 그 시점 ATR 시계열이
+                        #     없어 매수 시점 손절률로 역산하는데, 추세가 길어질수록 실제 ATR이
+                        #     커져 실제 콜백이 더 넓어진다. 닫으려면 보유 종목의 현재 ATR을
+                        #     이 함수에 넘겨야 한다(호출부가 같은 주기에 이미 차트를 읽는다).
+                        cb = ts_cb
+                        if use_atr_stop and est_atr > 0 and highest > 0:
+                            cb = effective_callback(ts_cb, est_atr * ts_atr_mult / highest * 100.0,
+                                                    max_profit)
+                        stop_price = max(stop_price, highest * (1 - cb / 100.0))
 
                 total_risk += qty * max(0.0, cur - stop_price)
             except Exception as e:

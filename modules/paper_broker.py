@@ -432,7 +432,9 @@ def adjust_seed(amount):
         _set_state('seed', new_seed)
         logger.info(f"[PAPER] 가상 {'입금' if amount >= 0 else '출금'} {abs(amount):,}원 "
                     f"(시드 {new_seed:,.0f} / 현금 {cash+amount:,.0f})")
-        return True, f"{'입금' if amount >= 0 else '출금'} {abs(amount):,}원 반영 완료"
+    # 락 밖에서 — 기준선 보정은 DB·JSON·트레이더 메모리를 함께 만진다.
+    _shift_daily_baseline(amount)
+    return True, f"{'입금' if amount >= 0 else '출금'} {abs(amount):,}원 반영 완료"
 
 
 def _account_key():
@@ -487,6 +489,67 @@ def _clear_daily_baseline():
             inst._hwm_cache_date = None
     except Exception as e:
         logger.warning(f"[PAPER] 트레이더 기준선 초기화 실패(무시): {e}")
+
+
+def _shift_daily_baseline(amount):
+    """입출금액만큼 '오늘 시작 자산' 기준선과 일일 자산 이력을 평행이동한다.
+
+    [왜 초기화가 아니라 이동인가] adjust_seed 는 reset 과 달리 포지션·체결 이력을 남긴다.
+    기준선만 지우면 드로다운 기준(HWM)이 통째로 사라져 리스크 한도가 조용히 열리고,
+    그대로 두면 반대 방향의 사고가 난다 — 입금으로 부푼 자산이 고점으로 박혀 그 돈을
+    빼고 나면 **매매와 무관한 가짜 드로다운**이 룩백 기간(DD_LOOKBACK_DAYS, 기본 90일)
+    내내 남는다. 자산곡선을 현재 자본 기준으로 옮기면 곡선의 모양이 보존되고, 반대
+    방향 입출금이 오면 그대로 되돌아온다.
+
+    [실측 2026-08-23] 가상계좌에 1,000만원이 들어왔다 나간 흔적 한 줄(20,028,670원)이
+    남아 드로다운 49.5% → 리스크 스케일 x0.8 → 히트 캡 10%가 8%로 묶였다. 여기에
+    휩소율 x0.85 가 겹쳐 실효 캡이 6.8%가 되면서, 실제 오픈 리스크 6.85%가 캡을 넘어
+    신규 매수·피라미딩이 통째로 막혔다.
+
+    세 곳을 함께 옮긴다 — 하나라도 빠지면 서로 다른 기준을 보게 된다.
+      ① daily_asset_history (드로다운 HWM)
+      ② daily_asset_state.json 의 오늘 기준선 (일일 손실 한도의 분모)
+      ③ 실행 중인 트레이더의 메모리 기준선·HWM 캐시 (재기동 없이 반영)
+    """
+    if not amount:
+        return
+    key = _account_key()
+
+    try:
+        moved = _db().shift_daily_assets(key, amount)
+        if moved:
+            logger.info(f"[PAPER] 일일 자산 이력 {moved}행 {amount:+,}원 보정: {key}")
+    except Exception as e:
+        logger.warning(f"[PAPER] 일일 자산 이력 보정 실패(무시): {e}")
+
+    try:
+        from core import jsonio
+        from modules.auto_trade.common import DAILY_STATE_FILE
+        data = jsonio.load_json(DAILY_STATE_FILE, default={}) or {}
+        accounts = data.get("accounts") or {}
+        if accounts.get(key):
+            accounts[key] = max(0, accounts[key] + amount)
+            data["accounts"] = accounts
+            jsonio.save_json(DAILY_STATE_FILE, data)
+            logger.info(f"[PAPER] 일일 시작 자산 기준선 보정: {key} → {accounts[key]:,}원")
+    except Exception as e:
+        logger.warning(f"[PAPER] 일일 자산 기준선 보정 실패(무시): {e}")
+
+    # 실행 중인 트레이더의 메모리 기준선도 함께 옮긴다.
+    #  0(미설정)은 건드리지 않는다 — 다음 측정 때 새 자산으로 잡히는 것이 맞다.
+    try:
+        import modules.auto_trade as _at
+        inst = getattr(_at.AutoTrader, "_instance", None)
+        if inst is not None:
+            if getattr(inst, 'initial_asset', 0) > 0:
+                inst.initial_asset = max(0, inst.initial_asset + amount)
+            if getattr(inst, 'baseline_principal', 0) > 0:
+                inst.baseline_principal = max(0, inst.baseline_principal + amount)
+            # HWM 캐시는 하루 1회만 갱신되므로 여기서 옮기지 않으면 오늘 하루 옛 값이 산다.
+            if getattr(inst, '_hwm_cache', 0.0):
+                inst._hwm_cache = max(0.0, inst._hwm_cache + amount)
+    except Exception as e:
+        logger.warning(f"[PAPER] 트레이더 기준선 보정 실패(무시): {e}")
 
 
 # 실계좌 DB와 **이름·스키마가 같은** 공용 테이블. 페이퍼 DB 파일에서만 지운다.

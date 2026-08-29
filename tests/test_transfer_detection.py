@@ -63,11 +63,14 @@ def _cycle(trader, cash, holdings, realized=0):
     with patch('modules.auto_trade.account.get_asset_status_data', return_value=asset), \
          patch('modules.auto_trade.db_manager.db.get_trades', return_value=trades), \
          patch('modules.auto_trade.db_manager.db.save_daily_asset'), \
+         patch('modules.auto_trade.db_manager.db.shift_daily_assets') as shift, \
          patch('modules.auto_trade.save_daily_initial_asset'), \
          patch('modules.auto_trade.load_daily_initial_asset', return_value=0), \
          patch('modules.auto_trade.api.send_telegram_message') as tg, \
          patch.object(trader, '_refine_trade_records', side_effect=lambda x: x):
         trader._monitor_account_status(holdings, summary, deposit)
+    # 기준선 이동은 DB를 만지므로 반드시 막는다(막지 않으면 테스트가 실계좌 이력을 옮긴다).
+    tg.shift_daily_assets = shift
     return tg
 
 
@@ -143,6 +146,26 @@ def test_withdrawal_is_detected(trader):
         tg = _transfer_alerts(_cycle(trader, 1_000_000, _holdings()))
     assert tg, "출금이 감지되지 않았다 — 기준이 높은 채로 남아 방어 모드가 늦어진다"
     assert trader.initial_asset == before - 500_000
+
+
+def test_confirmed_transfer_shifts_asset_history(trader):
+    """확정된 입출금은 **과거 자산 스냅샷까지** 같은 금액만큼 옮긴다.
+
+    [왜] daily_asset_history 는 드로다운 기반 리스크 스케일링의 HWM 분모다. 오늘 행만
+     고치면 표 안에 입출금 전후의 자본이 섞인다.
+       · 입금: 과거 고점이 낮게 남아 드로다운을 **과소**평가 → 한도가 조용히 열린다.
+       · 출금: 과거 고점이 높게 남아 **가짜 드로다운**이 룩백(DD_LOOKBACK_DAYS) 내내 산다.
+     후자가 2026-08-23 가상계좌에서 실제로 일어났다 — 1,000만원이 들어왔다 나간 흔적
+     한 줄이 드로다운 49.5%를 만들어 히트 캡을 10%에서 8%로 석 달간 묶었다.
+    """
+    _cycle(trader, 1_000_000, _holdings())
+    for _ in range(3):
+        tg = _cycle(trader, 1_500_000, _holdings())
+
+    assert _transfer_alerts(tg), "이 표본은 입금이 확정된 상태여야 한다"
+    calls = [c.args for c in tg.shift_daily_assets.call_args_list]
+    assert calls, "확정 입금인데 과거 자산 스냅샷이 이동하지 않았다"
+    assert calls[-1][1] == 500_000, f"이동액이 입금액과 다르다: {calls[-1]}"
 
 
 def test_transient_blip_does_not_confirm(trader):

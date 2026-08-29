@@ -1523,6 +1523,36 @@ class DBManager:
                 except Exception:
                     break
 
+    def shift_daily_assets(self, account, amount):
+        """계좌의 일일 자산 스냅샷 전체를 amount만큼 평행이동한다. (외부 입출금 보정)
+
+        [왜 필요한가] 이 표는 드로다운 기반 리스크 스케일링의 HWM 분모다. 입금으로
+        자산이 뛴 날이 고점으로 박히면, 그 돈을 다시 빼도 고점은 남아 **매매와 무관한
+        가짜 드로다운**이 룩백 기간(DD_LOOKBACK_DAYS) 내내 리스크 한도를 축소한다.
+        실측 2026-08-23: 가상계좌에 1,000만원이 들어왔다 나간 흔적 한 줄(20,028,670원)이
+        드로다운을 49.5%로 만들어 히트 캡을 10% → 8%로 묶었다.
+
+        [왜 삭제가 아니라 이동인가] 지우면 드로다운 기준 자체가 사라져 한도가 조용히
+        열린다(데이터가 없을수록 열리는 구조). 과거 곡선을 현재 자본 기준으로 옮기면
+        곡선의 '모양'이 보존되고, 반대 방향 입출금이 오면 그대로 되돌아온다.
+
+        반환: 이동한 행 수 (실패 시 0)
+        """
+        if not amount:
+            return 0
+        with self.lock:
+            try:
+                conn = self._get_conn()
+                cursor = conn.cursor()
+                # 자산이 음수가 되는 이동은 기록을 망가뜨린다 — 0에서 끊는다.
+                cursor.execute("UPDATE daily_asset_history SET asset = MAX(0, asset + ?) "
+                               "WHERE account = ?", (amount, account))
+                conn.commit()
+                return cursor.rowcount or 0
+            except Exception as e:
+                logger.warning(f"[DB] 일일 자산 스냅샷 이동 실패: {e}")
+                return 0
+
     def get_daily_asset(self, start_date, account):
         """특정 날짜 이후의 가장 오래된 자산 스냅샷 조회 (기초 자산용)"""
         try:

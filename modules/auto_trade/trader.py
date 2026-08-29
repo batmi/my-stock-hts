@@ -4110,7 +4110,18 @@ class AutoTrader:
                                         save_daily_initial_asset(account_key, self.initial_asset)
                                         try:
                                             today_str = datetime.now().strftime("%Y-%m-%d")
+                                            # [기준선 이동] 과거 스냅샷도 함께 옮긴다. 오늘 행만 고치면
+                                            #  daily_asset_history 안에 입출금 전후 자본이 섞여, 드로다운
+                                            #  HWM이 엉뚱한 기준을 본다. 입금이면 과거 고점이 낮게 남아
+                                            #  드로다운을 **과소**평가하고(한도가 조용히 열린다), 출금이면
+                                            #  높게 남아 가짜 드로다운이 룩백(DD_LOOKBACK_DAYS) 내내 산다
+                                            #  — 후자가 2026-08-23 가상계좌에서 실제로 일어난 사고다.
+                                            #  save 보다 먼저 옮겨야 오늘 행이 두 번 더해지지 않는다.
+                                            db_manager.db.shift_daily_assets(account_key, int(transfer_amt))
                                             db_manager.db.save_daily_asset(today_str, account_key, self.initial_asset)
+                                            # 0은 '오늘 아직 안 잼'이라 옮기면 안 된다(없는 고점이 생긴다).
+                                            if getattr(self, '_hwm_cache', 0.0) > 0:
+                                                self._hwm_cache = max(0.0, self._hwm_cache + int(transfer_amt))
                                         except Exception: pass
 
                                         api.send_telegram_message(f"💰 [예수금 {action_str} 자동 감지]\n백그라운드 감시 결과, 계좌에 약 {abs(int(transfer_amt)):,}원의 {action_str}이 발생한 것을 확인했습니다.\n\n안전한 수익률 계산을 위해 시스템 기준 자산을 {self.initial_asset:,}원으로 스스로 자동 동기화했습니다.")

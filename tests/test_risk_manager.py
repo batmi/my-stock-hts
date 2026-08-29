@@ -1,6 +1,7 @@
 import pytest
 import math
 from modules.auto_trade import RiskManager
+from modules.auto_trade import engine
 from unittest.mock import patch
 import config
 
@@ -329,6 +330,7 @@ def test_portfolio_heat_ts_uplift(monkeypatch):
     """트레일링이 무장했으면 손절선이 고점 기준으로 올라가 오픈 리스크가 줄어든다.
 
     TS는 BEP 토글과 무관하다 — 주청산 경로라 항상 살아 있다.
+    다만 상향폭은 **실효 콜백**(샹들리에)이 정한다 — 아래 SSOT 테스트 참조.
     """
     trader = MockHeatTrader()
     rm = RiskManager(trader)
@@ -336,14 +338,58 @@ def test_portfolio_heat_ts_uplift(monkeypatch):
     monkeypatch.setitem(config.SELL_STRATEGY, 'USE_BREAK_EVEN_STOP', False)
     monkeypatch.setitem(config.SELL_STRATEGY, 'TRAILING_STOP_ACTIVATION_RATE', 10.0)
     monkeypatch.setitem(config.SELL_STRATEGY, 'TRAILING_STOP_CALLBACK_RATE', 5.0)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'ATR_STOP_MULTIPLIER', 2.0)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'TRAILING_ATR_MULTIPLIER', 3.5)
 
-    # TS: 최고가 +20% ≥ 발동 10% → 손절선 = 12000×(1-5%)=11400
+    # 역산 ATR = 5%×10000/2 = 250 → 실효 콜백 = max(5%, 250×3.5/12000) = 7.29%
+    #  → 손절선 = 12000×(1-7.29%) = 11125 → 리스크 = 10주 × 375원
     trader.trailing_stop_cache['000002'] = 12000.0
     heat2 = rm.compute_portfolio_heat(
         [_holding('000002', 10, 10000, 11500)],
         {'000002': [{'qty': 10, 'stop_loss_rate': -5.0}]},
     )
-    assert heat2 == pytest.approx(10 * 100)
+    assert heat2 == pytest.approx(10 * 375)
+    # 무장 전(손절선 9500)보다는 작다 — 상향 자체는 여전히 일어난다.
+    assert heat2 < 10 * (11500 - 9500)
+
+
+def test_portfolio_heat_ts_callback_matches_exit_logic(monkeypatch):
+    """[SSOT] 히트가 가정하는 TS 청산선 = 청산 로직(compute_trailing_stop)의 청산선.
+
+    [왜 걸어 두는가] 2026-08-29까지 이 함수는 콜백으로 고정 하한
+     (TRAILING_STOP_CALLBACK_RATE, 5%)만 썼다. 실제 주청산선은 샹들리에
+     max(하한, ATR×TRAILING_ATR_MULTIPLIER)이고 max이므로 **항상 하한 이상**이다
+     — 즉 실제보다 높은 손절선을 가정해 오픈 리스크를 과소 계상했다. 히트 캡은
+     리스크 스케일링의 실효 방어 경로라(config SYSTEM_MAX_PORTFOLIO_RISK 주석)
+     과소 계상은 방어를 그만큼 무르게 만든다.
+     ATR 하나로 두 경로를 같은 자리에 세워, 한쪽만 바뀌면 실패하게 한다.
+    """
+    trader = MockHeatTrader()
+    rm = RiskManager(trader)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'USE_ATR_STOP', True)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'USE_BREAK_EVEN_STOP', False)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'TRAILING_STOP_CALLBACK_RATE', 5.0)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'ATR_STOP_MULTIPLIER', 2.0)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'TRAILING_ATR_MULTIPLIER', 3.5)
+
+    buy, high, cur, qty = 10000.0, 14000.0, 13000.0, 10
+    atr = 600.0                       # 손절률 -12% = ATR 600 × 배수 2 / 매수가
+    sl_rate = -(atr * 2 / buy) * 100
+
+    trader.trailing_stop_cache['000004'] = high
+    heat = rm.compute_portfolio_heat(
+        [_holding('000004', qty, buy, cur)],
+        {'000004': [{'qty': qty, 'stop_loss_rate': sl_rate}]},
+    )
+
+    info = engine.compute_trailing_stop(highest_price=high, buy_price=buy,
+                                        current_price=cur, ind={'atr': atr})
+    assert info['armed'], "이 표본은 TS가 무장한 상태여야 한다"
+    assert heat == pytest.approx(qty * (cur - info['stop_price']))
+
+    # 고정 콜백(옛 산식)이었다면 리스크를 이만큼 작게 봤을 것이다 — 회귀 시 여기서 갈린다.
+    old_style = qty * (cur - high * (1 - 5.0 / 100.0))
+    assert heat > old_style
 
 
 def test_portfolio_heat_locked_position_zero_risk(monkeypatch):
@@ -368,11 +414,11 @@ def test_portfolio_risk_budget_left(monkeypatch):
     trader = MockHeatTrader(10_000_000)
     rm = RiskManager(trader)
 
-    monkeypatch.setattr(config, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0, raising=False)
+    monkeypatch.setattr(config.settings, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0, raising=False)
     trader.portfolio_heat_amt = 400_000
     assert rm.portfolio_risk_budget_left() == pytest.approx(600_000)
 
-    monkeypatch.setattr(config, 'SYSTEM_MAX_PORTFOLIO_RISK', 0.0, raising=False)
+    monkeypatch.setattr(config.settings, 'SYSTEM_MAX_PORTFOLIO_RISK', 0.0, raising=False)
     assert rm.portfolio_risk_budget_left() is None
 
 
@@ -380,7 +426,7 @@ def test_portfolio_risk_budget_uses_current_asset(monkeypatch):
     """[히트 캡 기준자산] 현재 평가자산이 있으면 그 값을 기준으로 예산 산출 (보수적)"""
     trader = MockHeatTrader(10_000_000)
     rm = RiskManager(trader)
-    monkeypatch.setattr(config, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0, raising=False)
+    monkeypatch.setattr(config.settings, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0, raising=False)
 
     # 장중 손실로 현재자산이 800만원으로 감소 → 예산도 함께 축소
     trader.current_total_asset = 8_000_000
@@ -392,7 +438,7 @@ def test_portfolio_risk_budget_scaled_by_risk_scale(monkeypatch):
     """[리스크 스케일링] risk_scale(<1)이 히트 캡 예산을 배수만큼 축소"""
     trader = MockHeatTrader(10_000_000)
     rm = RiskManager(trader)
-    monkeypatch.setattr(config, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0, raising=False)
+    monkeypatch.setattr(config.settings, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0, raising=False)
     trader.portfolio_heat_amt = 0
     trader.risk_scale = 0.5  # 약세/드로다운 축소
 

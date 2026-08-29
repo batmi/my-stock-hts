@@ -231,6 +231,34 @@ def test_withdraw_limited_by_cash(paper):
     assert paper.get_seed() == 4_000_000
 
 
+def test_deposit_shifts_drawdown_baseline(paper):
+    """입출금은 일일 자산 이력을 함께 평행이동한다 — 가짜 드로다운을 남기지 않는다.
+
+    [사고 2026-08-23] adjust_seed 가 현금·시드만 옮기고 기준선을 두던 시절, 가상계좌에
+     1,000만원이 들어왔다 나간 흔적 한 줄(20,028,670원)이 daily_asset_history 에 남았다.
+     이 값이 HWM 으로 잡혀 드로다운 49.5% → 리스크 스케일 x0.8 → 히트 캡 10%가 8%로
+     묶였고, 휩소율 x0.85 가 겹친 실효 캡 6.8%를 실제 오픈 리스크 6.85%가 넘겨 신규
+     매수·피라미딩이 통째로 막혔다. 룩백이 90일이라 한 줄이 석 달을 간다.
+
+    [왜 삭제가 아니라 이동인가] 지우면 드로다운 기준 자체가 사라져 한도가 조용히 열린다.
+     이동은 곡선의 모양을 보존하고, 반대 방향 입출금에 그대로 되돌아온다(아래에서 확인).
+    """
+    key = paper._account_key()
+    db = db_manager.db
+    db.save_daily_asset("2026-08-21", key, 5_000_000)
+    db.save_daily_asset("2026-08-22", key, 5_100_000)
+
+    ok, _ = paper.adjust_seed(2_000_000)
+    assert ok
+    # 과거 고점이 '입금 후 자본' 기준으로 올라온다 → 현재 700만원 대비 드로다운 없음
+    assert db.get_max_daily_asset("2026-08-01", key) == pytest.approx(7_100_000)
+
+    # 같은 돈을 도로 빼면 원래 곡선으로 돌아온다 — 가짜 고점이 남지 않는 것이 요점이다.
+    ok, _ = paper.adjust_seed(-2_000_000)
+    assert ok
+    assert db.get_max_daily_asset("2026-08-01", key) == pytest.approx(5_100_000)
+
+
 def test_reset_clears_everything(paper):
     """초기화하면 포지션·체결·자산곡선이 지워지고 시드가 복원된다."""
     api.place_order("domestic", "buy", "005930", 10, 70000, "00")
