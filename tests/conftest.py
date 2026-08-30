@@ -444,8 +444,15 @@ def reset_all_singletons():
     analysis.reset_tvdatafeed_circuit()
     _atr_engine.set_vol_regime_ratio(1.0)
 
-def create_mock_df(trend='up', periods=100, start_price=10000):
-    """가상의 주가 데이터프레임 생성 헬퍼 함수"""
+def create_mock_df(trend='up', periods=100, start_price=10000, seed=20260830):
+    """가상의 주가 데이터프레임 생성 헬퍼 함수.
+
+    [결정성] 노이즈에 고정 씨드를 쓴다. 전역 np.random 을 그대로 쓰던 시절에는 실행마다
+    다른 봉이 나와, 노이즈에 민감한 판정(PSAR 추세 위치 등)이 이따금 실패했다
+    (실측 2026-08-30 전체 실행: test_psar_calculation 이 한 번 실패하고 재실행하면 통과).
+    실패가 무작위면 '진짜 회귀'와 구분할 수 없으므로 데이터를 못 박는다.
+    """
+    rng = np.random.default_rng(seed)
     dates = pd.date_range(start="2023-01-01", periods=periods)
     
     if trend == 'up':
@@ -459,7 +466,7 @@ def create_mock_df(trend='up', periods=100, start_price=10000):
         close = np.linspace(start_price, start_price, periods)
 
     # 노이즈 추가
-    noise = np.random.normal(0, start_price * 0.005, periods)
+    noise = rng.normal(0, start_price * 0.005, periods)
     close = close + noise
     
     df = pd.DataFrame({
@@ -468,7 +475,7 @@ def create_mock_df(trend='up', periods=100, start_price=10000):
         'open': close * 0.99,
         'high': close * 1.02,
         'low': close * 0.98,
-        'volume': np.random.randint(1000, 10000, periods)
+        'volume': rng.integers(1000, 10000, periods)
     })
     return df
 

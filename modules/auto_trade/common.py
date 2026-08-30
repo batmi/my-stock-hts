@@ -400,31 +400,44 @@ def remove_restricted_stock(code, cano=None, acnt=None):
 
         _pkg().save_restricted_stocks(data)
 
-# [추가] 수동 매수 '발주 시점' 제한 등록의 사후 정리.
-#  발주 즉시 제한에 넣어 타이밍 윈도우를 막되, 그 매수가 끝내 체결되지
-#  못한 경우(취소/거부/미체결)에는 제한을 자동 해제하여 잔여물을 남기지 않는다.
-def schedule_buy_restriction_cleanup(code, cano, acnt, is_overseas=False):
-    """비동기로 체결 여부를 추적하여 미체결 매수의 제한을 정리한다.
-    - 잔고가 잡히면(체결) 제한을 유지하고 종료.
-    - 진행 중 주문이 남아 있으면(지정가 대기 등) 계속 대기.
-    - 잔고 0 + 진행 중 주문 없음 → 취소/거부로 보고 제한 해제.
-    - 늦게 체결되는 주문은 체결 시점 등록 로직이 다시 제한을 넣으므로 안전."""
-    def _get_qty():
-        if is_overseas:
-            bal = api.get_overseas_balance(cano, acnt)
-            if bal is None:
-                return None
-            for item in bal:
-                if item.get('ovrs_pdno') == code:
-                    return int(float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0)))
-            return 0
-        bal, _ = api.get_domestic_balance(cano, acnt)
+def current_holding_qty(code, cano, acnt, is_overseas=False):
+    """계좌의 해당 종목 보유수량. **조회 실패는 None('모름')** — 0(없음)과 구분한다."""
+    if is_overseas:
+        bal = api.get_overseas_balance(cano, acnt)
         if bal is None:
             return None
         for item in bal:
-            if item.get('pdno') == code:
-                return int(item.get('hldg_qty', 0))
+            if item.get('ovrs_pdno') == code:
+                return int(float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0)))
         return 0
+    bal, _ = api.get_domestic_balance(cano, acnt)
+    if bal is None:
+        return None
+    for item in bal:
+        if item.get('pdno') == code:
+            return int(item.get('hldg_qty', 0))
+    return 0
+
+
+# [추가] 수동 매수 '발주 시점' 제한 등록의 사후 정리.
+#  발주 즉시 제한에 넣어 타이밍 윈도우를 막되, 그 매수가 끝내 체결되지
+#  못한 경우(취소/거부/미체결)에는 제한을 자동 해제하여 잔여물을 남기지 않는다.
+def schedule_buy_restriction_cleanup(code, cano, acnt, is_overseas=False,
+                                     pre_qty=None, odno=None):
+    """비동기로 체결 여부를 추적하여 미체결 매수의 제한을 정리한다.
+    - 체결이 확인되면 제한을 유지하고 종료.
+    - 진행 중 주문이 남아 있으면(지정가 대기 등) 계속 대기.
+    - 체결 흔적 없음 + 진행 중 주문 없음 → 취소/거부로 보고 제한 해제.
+    - 늦게 체결되는 주문은 체결 시점 등록 로직이 다시 제한을 넣으므로 안전.
+
+    [왜 pre_qty·odno 가 필요한가] 종전 판정은 '잔고 > 0 = 체결'이었다. **이미 들고 있던
+     종목**을 수동으로 추가 매수하면 그 주문이 취소돼도 기존 보유분 때문에 잔고가 0이
+     아니라, 제한이 영원히 남는다 = 시스템이 자기 포지션의 손절·트레일링을 멈춘다.
+     그래서 ① 그 주문번호의 체결 기록 ② 발주 전 대비 **늘어난** 잔고, 두 가지로 판정한다.
+     pre_qty 를 넘기지 않으면 종전과 같이 '잔고 > 0'으로 동작한다(하위 호환).
+     pre_qty=None(조회 실패)도 같은 자리로 떨어진다 — 모르면 보수적으로 유지한다.
+    """
+    base_qty = int(pre_qty) if isinstance(pre_qty, int) and pre_qty > 0 else 0
 
     def _worker():
         try:
@@ -435,15 +448,22 @@ def schedule_buy_restriction_cleanup(code, cano, acnt, is_overseas=False):
         for _ in range(40):  # 최대 약 10분 추적 (15초 * 40)
             time.sleep(15)
             try:
-                qty = _get_qty()
+                # 체결 기록이 있으면 확정이다(잔고 조회보다 정확하고 싸다).
+                if odno:
+                    try:
+                        if db_manager.db.check_trade_exists(odno, "체결"):
+                            return
+                    except Exception:
+                        pass
+                qty = _pkg().current_holding_qty(code, cano, acnt, is_overseas)
                 if qty is None:
                     continue  # 조회 실패 → 재시도
-                if qty > 0:
-                    return  # 체결 확인 → 제한 유지
-                # 잔고 0: 아직 진행 중인 주문이 있으면 계속 대기
+                if qty > base_qty:
+                    return  # 잔고가 늘었다 = 체결 → 제한 유지
+                # 늘지 않았다: 아직 진행 중인 주문이 있으면 계속 대기
                 if om is not None and om.is_pending(code):
                     continue
-                # 잔고 0 + 진행 중 주문 없음 → 미체결(취소/거부)로 판단 → 해제
+                # 체결 흔적 없음 + 진행 중 주문 없음 → 미체결(취소/거부)로 판단 → 해제
                 remove_restricted_stock(code, cano=cano, acnt=acnt)
                 logger.info(f"[Restriction] {code} 수동 매수 미체결(취소/거부) 확인 → 계좌({cano}-{acnt}) 제한 해제")
                 return

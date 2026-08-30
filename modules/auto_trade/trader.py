@@ -4639,10 +4639,14 @@ class AutoTrader:
         # [최적화] 종목별 개별 DB 조회(최근 매수/보유분 매수 내역)를 주기 시작 시 배치 쿼리로 일괄 로드
         #  (기존: 보유 종목 × 최대 5쿼리 → 배치 3쿼리, 저사양 SD카드 SQLite I/O 절감)
         _all_hold_codes = [h['pdno'] for h in holdings]
-        latest_buy_map = db_manager.db.get_latest_buy_trades(_all_hold_codes)
-        buy_trades_map = db_manager.db.get_buy_trades_for_current_holdings(_all_hold_codes)
+        # [계좌 귀속] trades 는 모든 모드·계좌가 한 파일을 공유한다(토스·한투가 같은
+        #  테이블에 쌓인다). 계좌로 거르지 않으면 같은 종목을 두 계좌에서 들고 있을 때
+        #  **남의 계좌 매수 기록**으로 손절선(수량가중평균)·오픈 리스크·진입일이 계산된다.
+        _acct = self._trade_account_key()
+        latest_buy_map = db_manager.db.get_latest_buy_trades(_all_hold_codes, account=_acct)
+        buy_trades_map = db_manager.db.get_buy_trades_for_current_holdings(_all_hold_codes, account=_acct)
         # 진입일(보유수량이 0 → 1 이상이 된 시점) — 시간청산 기준
-        entry_date_map = db_manager.db.get_position_entry_dates(_all_hold_codes)
+        entry_date_map = db_manager.db.get_position_entry_dates(_all_hold_codes, account=_acct)
 
         # [추가] 포트폴리오 히트(총 오픈 리스크) 스냅샷 갱신 — 같은 주기의 피라미딩/신규 매수 캡 판정에 사용
         # [알려진 한계] 기준은 **잔고**다. 직전 주기에 낸 매수·증액 주문이 아직 체결되지
@@ -5326,7 +5330,7 @@ class AutoTrader:
         
         reentry_hurdles = {}
         # [최적화] 당일 매도 종목의 최근 매수 내역을 배치 쿼리로 일괄 조회
-        _sold_latest_buys = db_manager.db.get_latest_buy_trades(sold_today)
+        _sold_latest_buys = db_manager.db.get_latest_buy_trades(sold_today, account=target_account)
         for scode in sold_today:
             last_buy = _sold_latest_buys.get(scode)
             if last_buy:

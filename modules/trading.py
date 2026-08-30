@@ -897,6 +897,18 @@ def send_order(order_type):
         logger.info(f"운영자 실행: {' - '.join(context.USER_ACTION_BREADCRUMB)}")
 
         try:
+            # [제한 정리 기준] 매수는 **발주 전 보유수량**을 먼저 잡아 둔다. 수동 매수를
+            #  발주 즉시 제한 종목에 넣고 미체결이면 자동 해제하는데, 그 판정이 '잔고 > 0'
+            #  이면 **이미 들고 있던 종목**을 추가 매수했다가 취소한 경우 기존 보유분 때문에
+            #  제한이 영원히 남는다 = 시스템이 자기 포지션의 손절을 멈춘다.
+            pre_hold_qty = None
+            if order_type == 'buy':
+                try:
+                    pre_hold_qty = auto_trade.current_holding_qty(
+                        stock_code, target_cano, target_acnt, is_overseas)
+                except Exception as e:
+                    logger.debug(f"[수동주문] 발주 전 보유수량 조회 실패({stock_code}): {e}")
+
             result = None
             # [수정] 단일 API 호출이므로 status 사용
             with Progress(
@@ -974,7 +986,9 @@ def send_order(order_type):
                     try:
                         auto_trade.add_restricted_stock(stock_code, stock_name, "수동매매", is_overseas=is_overseas, cano=target_cano, acnt=target_acnt, account_type=auto_trade._current_account_type())
                         # [추가] 미체결(취소/거부) 시 제한을 자동 정리하는 사후 추적 시작
-                        auto_trade.schedule_buy_restriction_cleanup(stock_code, target_cano, target_acnt, is_overseas=is_overseas)
+                        auto_trade.schedule_buy_restriction_cleanup(
+                            stock_code, target_cano, target_acnt, is_overseas=is_overseas,
+                            pre_qty=pre_hold_qty, odno=odno)
                     except Exception as e:
                         logger.error(f"수동 매수 제한 종목 등록 오류(발주): {e}")
 

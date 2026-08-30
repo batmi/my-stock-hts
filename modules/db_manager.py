@@ -838,11 +838,27 @@ class DBManager:
         except Exception:
             return []
 
-    def get_buy_trades_for_current_holdings(self, codes):
+    @staticmethod
+    def _account_clause(account):
+        """계좌 필터 SQL 조각과 인자. account 가 없으면 무동작(전체 조회).
+
+        [왜 필요한가] trades 는 모든 모드·계좌가 한 파일을 공유한다(토스·한투 실전이
+        같은 테이블에 쌓인다). 계좌로 거르지 않으면 같은 종목을 두 계좌에서 들고 있을 때
+        **남의 계좌 매수 기록**으로 손절선(수량가중평균)·오픈 리스크·진입일이 계산된다.
+        """
+        if not account:
+            return "", []
+        return " AND (account = ? OR account IS NULL OR account = '')", [account]
+
+    def get_buy_trades_for_current_holdings(self, codes, account=None):
         """[배치] 여러 종목의 현재 보유분 매수 내역을 일괄 조회합니다. {code: [trades]}
 
         get_buy_trades_for_current_holding과 동일한 결과를 종목 수와 무관하게
         쿼리 2회로 반환한다 (자동매매 매도 분석 주기의 DB I/O 절감).
+
+        account: 지정하면 그 계좌의 기록만 본다(계좌를 섞으면 손절선·진입일이 남의
+                 포지션 기록으로 계산된다). 계좌가 비어 있는 옛 행은 함께 포함한다 —
+                 이 컬럼이 생기기 전 기록을 잃지 않기 위해서다. None이면 전체(종전 동작).
         """
         codes = [c for c in dict.fromkeys(codes or []) if c]
         result = {c: [] for c in codes}
@@ -851,19 +867,20 @@ class DBManager:
             conn = self._get_conn()
             cursor = conn.cursor()
             ph = ",".join("?" * len(codes))
+            acc_sql, acc_args = self._account_clause(account)
 
             # 1. 종목별 마지막 매도 시각 일괄 조회
             cursor.execute(f"""
                 SELECT code, time FROM trades
                 WHERE id IN (
                     SELECT MAX(id) FROM trades
-                    WHERE code IN ({ph}) AND (type LIKE '%sell%' OR type LIKE '%매도%')
+                    WHERE code IN ({ph}) AND (type LIKE '%sell%' OR type LIKE '%매도%'){acc_sql}
                     GROUP BY code
-                )""", codes)
+                )""", codes + acc_args)
             last_sell = {row['code']: row['time'] for row in cursor.fetchall()}
 
             # 2. 매수 내역 일괄 조회 후 종목별 '마지막 매도 이후' 필터링
-            cursor.execute(f"SELECT * FROM trades WHERE code IN ({ph}) AND (type LIKE '%buy%' OR type LIKE '%매수%')", codes)
+            cursor.execute(f"SELECT * FROM trades WHERE code IN ({ph}) AND (type LIKE '%buy%' OR type LIKE '%매수%'){acc_sql}", codes + acc_args)
             for row in cursor.fetchall():
                 t = dict(row)
                 ls = last_sell.get(t['code'])
@@ -874,14 +891,14 @@ class DBManager:
         except Exception:
             return result
 
-    def get_position_entry_dates(self, codes):
+    def get_position_entry_dates(self, codes, account=None):
         """[배치] 현재 보유 포지션의 진입일을 일괄 조회합니다. {code: 'YYYY-MM-DD'}
 
         get_position_entry_info의 진입일만 추린 편의 함수.
         """
-        return {c: v['date'] for c, v in self.get_position_entry_info(codes).items() if v.get('date')}
+        return {c: v['date'] for c, v in self.get_position_entry_info(codes, account).items() if v.get('date')}
 
-    def get_position_entry_info(self, codes):
+    def get_position_entry_info(self, codes, account=None):
         """[배치] 진입일과 재생 결과 수량을 함께 돌려줍니다.
         {code: {'date': 'YYYY-MM-DD'|None, 'qty': int}}
 
@@ -906,10 +923,11 @@ class DBManager:
             conn = self._get_conn()
             cursor = conn.cursor()
             ph = ",".join("?" * len(codes))
+            acc_sql, acc_args = self._account_clause(account)
             cursor.execute(f"""
                 SELECT code, time, type, qty FROM trades
-                WHERE code IN ({ph}) AND order_status = '체결'
-                ORDER BY code, time ASC""", codes)
+                WHERE code IN ({ph}) AND order_status = '체결'{acc_sql}
+                ORDER BY code, time ASC""", codes + acc_args)
 
             running = {}
             for row in cursor.fetchall():
@@ -952,11 +970,15 @@ class DBManager:
             logger.debug(f"진입일 조회 실패: {e}")
             return {}
 
-    def get_latest_buy_trades(self, codes):
+    def get_latest_buy_trades(self, codes, account=None):
         """[배치] 여러 종목의 최근 매수 내역을 일괄 조회합니다. {code: trade|None 미포함}
 
         get_latest_buy_trade의 3단계 우선순위(ATR 손절률 보존 원본 → 접수 원본 → 체결확인 더미)를
         동일하게 적용하되 쿼리 1회로 처리한다.
+
+        account: 지정하면 그 계좌의 기록만 본다(계좌를 섞으면 손절선·진입일이 남의
+                 포지션 기록으로 계산된다). 계좌가 비어 있는 옛 행은 함께 포함한다 —
+                 이 컬럼이 생기기 전 기록을 잃지 않기 위해서다. None이면 전체(종전 동작).
         """
         codes = [c for c in dict.fromkeys(codes or []) if c]
         result = {}
@@ -965,7 +987,8 @@ class DBManager:
             conn = self._get_conn()
             cursor = conn.cursor()
             ph = ",".join("?" * len(codes))
-            cursor.execute(f"SELECT * FROM trades WHERE code IN ({ph}) AND (type LIKE '%buy%' OR type LIKE '%매수%') ORDER BY id DESC", codes)
+            acc_sql, acc_args = self._account_clause(account)
+            cursor.execute(f"SELECT * FROM trades WHERE code IN ({ph}) AND (type LIKE '%buy%' OR type LIKE '%매수%'){acc_sql} ORDER BY id DESC", codes + acc_args)
 
             tiers = {}  # code -> [원본(ATR), 원본, 아무거나] 각 티어별 최신(id 최대) 1건
             for row in cursor.fetchall():

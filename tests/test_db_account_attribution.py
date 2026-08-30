@@ -120,3 +120,77 @@ def test_execute_custom_also_carries_the_context(proxied_db):
     context.trade_context.use_auto_account = True
     proxy.execute_custom(probe)
     assert seen == [True], "execute_custom이 계좌 컨텍스트를 잃었다"
+
+
+# ==========================================================
+# 조회도 계좌로 갈라야 한다 — 기록만 갈라 두면 절반만 맞는다
+#
+# [왜] trades 는 모든 모드·계좌가 **한 파일**을 공유한다(실측: 토스 '189-01-501685-'
+# 와 한투 '68029263-01' 의 기록이 같은 테이블에 있다). 자동매매의 매도 판정은 이
+# 테이블에서 매수 기록을 배치로 긁어 ① 손절선(수량가중평균) ② 오픈 리스크 ③ 진입일
+# (시간청산 기준)을 만든다. 계좌로 거르지 않으면 같은 종목을 두 계좌에서 들고 있을 때
+# 남의 계좌 매수가 섞여 **다른 포지션의 기록으로 내 손절선이 정해진다**.
+# ==========================================================
+
+def _seed_two_accounts(proxy):
+    """같은 종목을 두 계좌에서 산 상태를 만든다. (자동 -9%, 수동 -3%)"""
+    context.trade_context.use_auto_account = True
+    proxy.insert_trade("매수", "005930", "삼성전자", 10, "70000", "AUTO-1",
+                       order_status="체결", stop_loss_rate=-9.0)
+    context.trade_context.use_auto_account = False
+    proxy.insert_trade("매수", "005930", "삼성전자", 5, "71000", "MAIN-1",
+                       order_status="체결", stop_loss_rate=-3.0)
+    proxy.flush() if hasattr(proxy, 'flush') else time.sleep(0.3)
+
+
+def test_buy_trades_are_scoped_to_the_account(proxied_db):
+    """[핵심] 보유분 매수 기록은 그 계좌 것만 — 손절선·오픈 리스크의 입력이다."""
+    proxy, _ = proxied_db
+    _seed_two_accounts(proxy)
+    auto_key = f"{AUTO[0]}-{AUTO[1]}"
+
+    scoped = proxy.get_buy_trades_for_current_holdings(["005930"], account=auto_key)["005930"]
+    assert [t['odno'] for t in scoped] == ["AUTO-1"], "다른 계좌의 매수가 섞였다"
+
+    everything = proxy.get_buy_trades_for_current_holdings(["005930"])["005930"]
+    assert len(everything) == 2, "계좌를 안 주면 종전대로 전체를 본다(하위 호환)"
+
+
+def test_latest_buy_is_scoped_to_the_account(proxied_db):
+    """최근 매수는 재진입 허들·피라미딩 차수·진입일 복원의 근거다."""
+    proxy, _ = proxied_db
+    _seed_two_accounts(proxy)
+
+    got = proxy.get_latest_buy_trades(["005930"], account=f"{AUTO[0]}-{AUTO[1]}")
+    assert got["005930"]['odno'] == "AUTO-1"
+    assert got["005930"]['stop_loss_rate'] == -9.0, "남의 계좌 손절률을 물려받았다"
+
+
+def test_entry_dates_are_scoped_to_the_account(proxied_db):
+    """진입일은 시간청산의 기준 — 남의 계좌 체결이 섞이면 보유일수가 틀어진다."""
+    proxy, _ = proxied_db
+    context.trade_context.use_auto_account = False
+    proxy.insert_trade("매수", "005930", "삼성전자", 5, "71000", "MAIN-OLD",
+                       order_status="체결", custom_time="2026-01-02 09:00:00")
+    context.trade_context.use_auto_account = True
+    proxy.insert_trade("매수", "005930", "삼성전자", 10, "70000", "AUTO-NEW",
+                       order_status="체결", custom_time="2026-08-20 09:00:00")
+    time.sleep(0.3)
+
+    auto = proxy.get_position_entry_dates(["005930"], account=f"{AUTO[0]}-{AUTO[1]}")
+    assert auto.get("005930") == "2026-08-20", f"진입일이 남의 계좌 체결로 잡혔다: {auto}"
+
+
+def test_legacy_rows_without_an_account_are_kept(proxied_db):
+    """계좌 컬럼이 생기기 전 기록을 잃으면 그 포지션의 손절 기준이 사라진다."""
+    proxy, path = proxied_db
+    context.trade_context.use_auto_account = True
+    proxy.insert_trade("매수", "000660", "SK하이닉스", 3, "180000", "OLD-1",
+                       order_status="체결", stop_loss_rate=-8.0)
+    time.sleep(0.3)
+    c = sqlite3.connect(path)
+    c.execute("UPDATE trades SET account = NULL WHERE odno = 'OLD-1'")
+    c.commit(); c.close()
+
+    got = proxy.get_buy_trades_for_current_holdings(["000660"], account=f"{AUTO[0]}-{AUTO[1]}")
+    assert [t['odno'] for t in got["000660"]] == ["OLD-1"], "옛 기록(계좌 없음)이 버려졌다"
