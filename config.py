@@ -121,6 +121,10 @@ class GlobalSettings(BaseModel):
     MARKET_HALT_VI_MAX_CODES: int = 40      # VI 점검 종목 수 상한 (라즈베리파이 부하 방어)
     TELEGRAM_INSTANCE_NAME: str = "HTS"
     TELEGRAM_POLLING_TIMEOUT: int = Field(default=10, gt=0)
+    #  [명령 신선도] 텔레그램은 봇이 죽어 있는 동안 온 메시지를 최대 24시간 큐에 쌓아
+    #  두었다가 재기동 첫 폴링에서 한꺼번에 내려준다. 이 값보다 오래된 명령은 실행하지
+    #  않고 버린다 — 어제 보낸 /stop 이 오늘 아침 기동과 함께 되살아나면 안 된다.
+    TELEGRAM_COMMAND_MAX_AGE_SEC: int = Field(default=180, gt=0)
 
     # ==========================================================
     # [설정] 시스템 트레이딩 (System Trading)
@@ -4057,6 +4061,7 @@ CONFIG_DESCRIPTIONS = {
     "MARKET_HALT_VI_MAX_CODES": "VI 점검 종목 수 상한",
     "TELEGRAM_INSTANCE_NAME": "알림 메시지 머리말 (인스턴스 식별)",
     "TELEGRAM_POLLING_TIMEOUT": "봇 명령어 수신 대기 시간",
+    "TELEGRAM_COMMAND_MAX_AGE_SEC": "이보다 오래된 봇 명령은 실행하지 않음(재기동 시 재실행 방지)",
     "SYSTEM_TRADING_INTERVAL": "자동매매 루프 실행 간격 (초)",
     "SYSTEM_INVEST_PER_STOCK": "전체 자산 대비 한 종목 투자 비율",
     "SYSTEM_MAX_HOLDINGS": "포트폴리오에 담을 수 있는 최대 종목 수",

@@ -145,9 +145,16 @@ class TelegramCommander:
                 if response.status_code == 200:
                     data = response.json()
                     if data.get('ok'):
+                        stale = 0
                         for result in data.get('result', []):
                             self.last_update_id = result['update_id']
-                            self._handle_message(result.get('message', {}))
+                            if self._handle_message(result.get('message', {})) == 'stale':
+                                stale += 1
+                        if stale:
+                            # 한 번만 알린다 — 24시간 치 백로그면 답장이 도배된다.
+                            self._send_reply(
+                                f"⏳ 기동 전에 도착한 오래된 명령 {stale}건을 실행하지 않고 버렸습니다.\n"
+                                f"필요하면 다시 보내주세요.")
                 elif response.status_code == 409:
                     # Conflict: 다른 인스턴스가 이미 폴링 중임
                     # [수정] 자정 로그 로테이션이나 네트워크 재접속 시 일시적으로 발생할 수 있으므로 즉시 종료하지 않고 대기
@@ -175,6 +182,25 @@ class TelegramCommander:
         #  fail-closed 로 뒤집는다 — 수신자를 모르면 아무 명령도 받지 않는다.
         if not config.TELEGRAM_CHAT_ID or chat_id != str(config.TELEGRAM_CHAT_ID):
             return
+
+        # [명령 신선도] 텔레그램은 봇이 내려가 있는 동안의 메시지를 최대 24시간 큐에 쌓아
+        #  두었다가 재기동 첫 폴링에서 한꺼번에 내려준다. 종전에는 그것을 전부 지금 온
+        #  명령처럼 실행했다 — 어젯밤 보낸 /stop 이 오늘 아침 기동과 동시에 자동매매를
+        #  다시 끄고, 장 마감 후 무시된 /start 가 다음 날 개장 전에 되살아난다. 긴 네트워크
+        #  단절 뒤 재연결에서도 같은 일이 생긴다(폴링 루프가 예외를 삼키고 되돌아온다).
+        #  원격 제어 명령은 '보낸 그 시점'의 의도이므로, 늦게 도착한 것은 실행하지 않는다.
+        #  (버린 사실은 호출부가 모아서 1회 통지한다 — 조용히 버리면 '봇이 죽었다'로 읽힌다)
+        sent_at = message.get('date')
+        if sent_at:
+            try:
+                age = time.time() - float(sent_at)
+            except (TypeError, ValueError):
+                age = 0
+            max_age = getattr(config, 'TELEGRAM_COMMAND_MAX_AGE_SEC', 180)
+            if age > max_age:
+                logger.warning(f"[Telegram] 만료된 명령 무시({int(age)}초 지남): "
+                               f"{str(message.get('text', ''))[:40]}")
+                return 'stale'
 
         # [추가] 하단 고정 메뉴 버튼 텍스트 매핑
         #  '상태 요약' 버튼의 이모지는 KOSPI 국면에 따라 바뀌므로, 나올 수 있는 값을
@@ -1406,81 +1432,13 @@ class TelegramCommander:
     def _cmd_log(self, args):
         return self.trader.get_recent_logs()
 
-    def _cmd_preset(self, args):
-        if not args:
-            return self._get_preset_status()
-
-        target = args[0].lower()
-        preset_type = None
-        if target in ['bull', 'b']:
-            preset_type = 'bull'
-        elif target in ['bear', 'r']:
-            preset_type = 'bear'
-        elif target in ['sideways', 's']:
-            preset_type = 'sideways'
-        elif target in ['default', 'd', 'reset']:
-            preset_type = 'default'
-            
-        if not preset_type:
-            return "⚠️ 알 수 없는 프리셋입니다. (b:강세, r:약세, s:횡보, d:초기화 중 선택)"
-            
-        from modules import settings
-        msg = settings.apply_strategy_preset(preset_type, interactive=False)
-        return msg
-
-    def _get_preset_status(self):
-        """현재 적용 중인 전략 프리셋 및 기본 설정과의 차이 조회 (/preset 무옵션)"""
-        from modules import settings
-        try:
-            preset = settings.check_and_update_active_preset()
-        except Exception:
-            preset = getattr(config.settings, 'ACTIVE_PRESET', 'default')
-
-        preset_display_map = {
-            "default": ("🟢", "기본 (Default)"),
-            "bull": ("🔴", "강세장 (Bull)"),
-            "bear": ("🔵", "약세장 (Bear)"),
-            "sideways": ("🟡", "횡보장 (Sideways)"),
-            "custom": ("⚪", "커스텀 (Custom)"),
-        }
-        p_emoji, p_name = preset_display_map.get(preset, ("⚪", preset))
-        msg = f"[전략 프리셋: {p_emoji} {p_name}]\n"
-
-        lines = []
-        try:
-            if preset == "custom":
-                # 커스텀: 현재 설정 전체를 기본값과 비교
-                changed_items = config.get_custom_settings()
-                for key, info in changed_items.items():
-                    dict_key = info.get("key", key)
-                    desc = getattr(config, 'CONFIG_DESCRIPTIONS', {}).get(dict_key, dict_key)
-                    lines.append(f"• {desc}: {info['default']} ➔ {info['current']}")
-            elif preset != "default":
-                # 강세/약세/횡보: 프리셋 정의값을 기본 프리셋과 비교
-                default_vals = settings.get_preset_values("default")
-                preset_vals = settings.get_preset_values(preset)
-                for k, v in preset_vals.items():
-                    default_v = default_vals.get(k)
-                    if v != default_v:
-                        desc = getattr(config, 'CONFIG_DESCRIPTIONS', {}).get(k, k)
-                        lines.append(f"• {desc}: {default_v} ➔ {v}")
-        except Exception as e:
-            logger.debug(f"Preset diff error: {e}")
-
-        if preset == "default":
-            msg += "\n기본 설정 그대로 운용 중입니다."
-        elif lines:
-            max_items = 30
-            if len(lines) > max_items:
-                rest = len(lines) - max_items
-                lines = lines[:max_items] + [f"• ... 외 {rest}건 (설정 메뉴에서 확인)"]
-            msg += "\n기본 설정과 다른 항목 (기본값 ➔ 현재값)\n"
-            msg += "\n".join(lines)
-        else:
-            msg += "\n기본 설정과 다른 항목이 없습니다."
-
-        msg += "\n\n프리셋 변경: /preset b(강세) · r(약세) · s(횡보) · d(초기화)"
-        return msg
+    # [PRESET_RETIRED] _cmd_preset / _get_preset_status 제거 (2026-08-30).
+    #  전략 프리셋은 2026-07-20 폐지됐고 command_handlers 에서 /preset 을 뺐는데,
+    #  두 메서드는 남아 아무도 부르지 않은 채 settings.apply_strategy_preset 을
+    #  가리키고 있었다(전체 스위트 실행률 3~6%). 폐지된 레버가 핸들러 한 줄 등록만으로
+    #  되살아나는 상태였다 — 그 프리셋은 진입 임계값·손절·TS 폭·스코어 가중치를 통째로
+    #  덮어쓴다(설정 메뉴에서 봉인한 키들이다). 폐지 근거는 settings.py PRESET_RETIRED 주석.
+    #  현재 설정과 기본값의 차이는 /config 가 보여준다.
 
     def _cmd_balance(self, args):
         self._send_reply("⏳ [계좌 잔고 조회] 자산 및 잔고 정보를 수집 중입니다. 잠시만 기다려주세요...")
