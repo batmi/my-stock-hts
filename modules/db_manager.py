@@ -1636,16 +1636,68 @@ class DBManager:
         except Exception:
             return None
 
+    #  [고립 고점] 이 배수를 넘고 **혼자만** 높은 행은 기록 오류로 보고 고점에서 뺀다.
+    #   진짜 성장이면 그 수준의 행이 여러 날 남는다(아래 주석 참조).
+    #   실사고의 오염 행은 중앙값의 1.997배였다 — 2.0으로 두면 그 사고를 못 잡는다.
+    #   안전은 배수가 아니라 '고립' 조건이 맡는다(여럿이면 절대 빼지 않는다).
+    HWM_OUTLIER_RATIO = 1.5
+    #  고점 후보와 '같은 수준'으로 볼 하한 비율. 이 위에 자기 자신뿐이면 고립이다.
+    HWM_PEER_RATIO = 0.8
+
     def get_max_daily_asset(self, start_date, account):
-        """특정 날짜 이후의 자산 고점(HWM) 조회 (드로다운 기반 리스크 스케일링용)"""
+        """특정 날짜 이후의 자산 고점(HWM) 조회 (드로다운 기반 리스크 스케일링용)
+
+        [고립 고점 방어] 종전에는 단순 MAX였다. 자산 스냅샷 한 행이 잘못 박히면 그 값이
+         룩백(DD_LOOKBACK_DAYS, 기본 90일) 내내 고점 행세를 하고, 가짜 드로다운이 리스크
+         한도를 석 달간 묶는다.
+         [실사고 2026-08-23·가상투자] 일요일에 20,028,670원(직전 10,028,670 + 정확히
+          1,000만) 한 행이 박혔다. 그 뒤 08-27·28 내내 드로다운이 50.0~50.3%로 계산돼
+          (자산은 1,000만원 그대로였다) DD_SCALE_2 x0.8이 상시 걸렸고, 히트 캡이
+          8.5% → 6.8%로 조여져 한국콜마 증액이 206주기 연속 차단됐다
+          (필요 89,000원 > 남은 예산 35,000원). 로그의 세 드로다운 값이 이 한 행으로
+          소수점까지 재현된다.
+
+        [판정] '중앙값의 HWM_OUTLIER_RATIO 배를 넘으면서, 그 수준(HWM_PEER_RATIO 이상)의
+         행이 자기 자신뿐인' 값만 뺀다. 진짜로 자산이 늘었다면 그 수준의 행이 여러 날
+         남으므로 걸리지 않고, 정당한 입금은 shift_daily_assets가 과거 행을 함께 올려
+         중앙값도 같이 오르므로 역시 걸리지 않는다.
+         [방향] 고점을 깎는 것은 드로다운을 **과소**평가(한도가 열리는) 방향이라 위험하다.
+          그래서 배수를 넉넉히 두고 '고립'까지 요구한다 — 애매하면 빼지 않는다.
+        """
         try:
             conn = self._get_conn()
             cursor = conn.cursor()
-            cursor.execute("SELECT MAX(asset) FROM daily_asset_history WHERE account = ? AND date >= ?", (account, start_date))
-            row = cursor.fetchone()
-            return row[0] if row and row[0] else None
+            cursor.execute("SELECT date, asset FROM daily_asset_history "
+                           "WHERE account = ? AND date >= ? AND asset > 0 ORDER BY date",
+                           (account, start_date))
+            rows = cursor.fetchall()
         except Exception:
             return None
+        vals = [float(r[1]) for r in rows]
+        if not vals:
+            return None
+
+        ordered = sorted(vals)
+        mid = len(ordered) // 2
+        median = ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2.0
+        if median <= 0:
+            return max(vals)
+
+        kept, dropped = list(vals), []
+        while kept:
+            peak = max(kept)
+            if peak <= median * self.HWM_OUTLIER_RATIO:
+                break
+            if sum(1 for v in kept if v >= peak * self.HWM_PEER_RATIO) > 1:
+                break                      # 그 수준이 여럿이다 = 실제 자산 수준
+            kept.remove(peak)
+            dropped.append(peak)
+
+        if dropped:
+            bad = ", ".join(f"{d:,.0f}원" for d in dropped)
+            logger.warning(f"[DB] 자산 고점에서 고립 이상치 제외(account={account}): {bad} "
+                           f"(중앙값 {median:,.0f}원). daily_asset_history 를 확인하십시오.")
+        return max(kept) if kept else median
             
     def insert_reserved_order(self, cano, acnt, market, order_type, code, name, qty, order_price, condition_type, target_price, target_time, expire_dt=None, composite_json=None):
         with self.lock:

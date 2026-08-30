@@ -6423,6 +6423,28 @@ class AutoTrader:
                 if dd_scale is not None:
                     scale *= dd_scale
                     reasons.append(dd_reason)
+                    # [경보] 깊은 드로다운은 그 자체로 알려야 할 사건이다 — 진짜라면 재앙이고,
+                    #  가짜라면(자산 스냅샷 오류) 룩백 내내 조용히 리스크 한도를 묶는다.
+                    #  2026-08-23 가상투자에서 유령 고점 한 행이 드로다운을 50%로 만들어
+                    #  히트 캡을 8.5%→6.8%로 조였고, 증액이 206주기 차단되는 동안 이 사실은
+                    #  리스크 스케일링 로그 한 줄에만 묻혀 있었다. 하루 1회만 알린다.
+                    if dd >= lv2:
+                        today_key = datetime.now().strftime("%Y-%m-%d")
+                        if getattr(self, '_dd_alert_date', None) != today_key:
+                            self._dd_alert_date = today_key
+                            equity = getattr(self, 'current_total_asset', 0) or self.initial_asset
+                            msg = (f"⚠️ [계좌 드로다운 {dd:.1f}%]\n"
+                                   f"자산 고점 대비 {dd:.1f}% 하락으로 판정해 신규 진입·증액 "
+                                   f"리스크 한도를 x{dd_scale:g}로 줄였습니다.\n"
+                                   f"(현재 평가자산 {equity:,.0f}원)\n\n"
+                                   f"손실이 실제와 다르면 자산 스냅샷(daily_asset_history)에 "
+                                   f"잘못된 고점이 남아 있을 수 있습니다 — 그대로 두면 "
+                                   f"{int(params.get('DD_LOOKBACK_DAYS', 90))}일간 한도가 묶입니다.")
+                            self.log(f"[리스크 스케일링] 계좌 드로다운 {dd:.1f}% — 한도 x{dd_scale:g} 축소")
+                            try:
+                                api.send_telegram_message(msg)
+                            except Exception:
+                                pass
                     for m_type in market_scales:
                         market_scales[m_type] *= dd_scale
                         market_reasons[m_type] = " ".join(
