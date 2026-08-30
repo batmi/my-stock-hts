@@ -162,21 +162,7 @@ def test_reserved_order_trailing_sell(mock_session_open, mock_get_price, mock_db
             monitor._check_orders()
             mock_exec.assert_called_once()
 
-@patch('modules.auto_trade.api.get_domestic_balance')
-@patch('modules.auto_trade.db_manager.db')
-def test_simulation_conclusions_by_balance(mock_db, mock_dom_bal):
-    """ConclusionMonitor: 모의투자 잔고 기반 API 체결 누락 보정 테스트"""
-    trader = AutoTrader()
-    trader.order_manager.pending_orders = {'005930': {'ODNO123': 'ORDER_SENT'}}
-    
-    monitor = ConclusionMonitor()
-    
-    # 잔고에 수량이 10주 입고된 것으로 모킹
-    mock_dom_bal.return_value = ([{'pdno': '005930', 'hldg_qty': '10'}], None)
-    mock_db.get_trade_by_odno.return_value = {'type': 'buy', 'qty': '10', 'price': '70000', 'code': '005930', 'name': '삼성전자'}
-    
-    with patch.object(monitor, '_handle_simulation_fill') as mock_handle_fill:
-        monitor._check_simulation_conclusions_by_balance('12345678', '01')
-        
-        # 잔고 수량(10주)이 주문 수량(10주) 이상이므로 체결로 간주하고 핸들러가 호출되어야 함
-        mock_handle_fill.assert_called_once()
+# [제거 2026-08-30] test_simulation_conclusions_by_balance
+#  잔고 기반 체결 추론(_check_simulation_conclusions_by_balance)은 KIS 모의투자 모드
+#  폐지로 호출부가 사라진 죽은 코드였고, 이 테스트만 그것을 살아 있는 경로처럼 보이게
+#  하고 있었다. 함수와 함께 제거한다(가상투자 체결은 원장 대사 경로가 담당한다).

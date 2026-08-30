@@ -4196,24 +4196,29 @@ class AutoTrader:
             except Exception: pass
         return None
 
-    def _effective_stop_loss_rate(self, buy_trades=None):
-        """포지션의 실효 손절률(%) — 매수 기록의 수량가중평균, 없으면 전역값. 미사용이면 None."""
-        tq, ws = 0, 0.0
-        for t in (buy_trades or []):
-            q = api.safe_int(t.get('qty', 0))
-            try:
-                s = float(t.get('stop_loss_rate') or 0.0)
-            except (TypeError, ValueError):
-                s = 0.0
-            if q > 0 and s != 0.0:
-                tq += q
-                ws += q * s
-        sl_rate = (ws / tq) if tq > 0 else None
-        if sl_rate is None or sl_rate >= 0:
-            sl_rate = config.SELL_STRATEGY.get("STOP_LOSS_RATE", -7.0)
+    def _effective_stop_loss_rate(self, buy_trades=None, rule=None, fallback_atr_rate=None):
+        """포지션의 실효 손절률(%) — 매도 판정이 실제로 쓰는 그 값. 미사용(0)이면 None.
+
+        [SSOT] 산식은 build_sell_thresholds가 단독 보유한다. 종전에는 이 자리와
+         _alert_unmanaged_stop이 '수량가중평균'을 각자 복제해 **세 벌**이 돌았고, 세 벌이
+         서로 달랐다 — 복제본은 ATR 손절 사용 여부도, 개별 룰의 손절 조이기도, 매수 기록이
+         없는 포지션의 ATR 복원(fallback)도 보지 않는다. 그래서 '손절 보호'(미체결 매수
+         취소)와 '미관리 포지션 이탈 경보'가 정작 매도 엔진과 다른 선을 보고 판단했다.
+         경보·취소는 손절이 안 도는 포지션의 마지막 안전망이라, 그 선이 실제 판정과
+         어긋나면 조용히 늦거나 조용히 빨라진다.
+
+        fallback_atr_rate: 매수 기록이 없을 때 쓸 복원값(일봉이 있는 호출부만 넘긴다).
+        """
+        thresholds = _pkg().build_sell_thresholds(
+            rule=rule, buy_trades=buy_trades, fallback_atr_rate=fallback_atr_rate)
+        try:
+            sl_rate = float(thresholds.get("STOP_LOSS_RATE",
+                                           config.SELL_STRATEGY.get("STOP_LOSS_RATE", -7.0)))
+        except (TypeError, ValueError):
+            return None
         return sl_rate if sl_rate < 0 else None
 
-    def _cancel_pending_buy_on_stop_loss(self, code, name, item, buy_trades=None):
+    def _cancel_pending_buy_on_stop_loss(self, code, name, item, buy_trades=None, rule=None):
         """미체결 '매수'가 걸린 채 체결분이 손절선을 이탈하면 그 매수를 즉시 취소한다.
 
         [왜 취소가 먼저인가] 매수 주문을 열어 둔 채 같은 종목을 팔면 서로 싸운다 —
@@ -4227,7 +4232,7 @@ class AutoTrader:
         """
         try:
             profit_rate = float(item.get('evlu_pfls_rt') or 0.0)
-            sl_rate = self._effective_stop_loss_rate(buy_trades)
+            sl_rate = self._effective_stop_loss_rate(buy_trades, rule=rule)
             if sl_rate is None or profit_rate > sl_rate:
                 return
 
@@ -4420,7 +4425,7 @@ class AutoTrader:
                  f"(진입일 {entry_date} 이후 봉 고가)")
         return derived_high
 
-    def _alert_unmanaged_stop(self, code, name, item, kind, buy_trades=None):
+    def _alert_unmanaged_stop(self, code, name, item, kind, buy_trades=None, rule=None):
         """[안전장치] 자동 매도 대상에서 제외된 보유 포지션의 손절선 이탈 경보
 
         [추세추종 원칙] "탈출 전략이 없다면 포지션을 잡지 마라."
@@ -4445,22 +4450,11 @@ class AutoTrader:
                                f"— 스로틀은 건드리지 않는다")
                 return
 
-            sl_rate = None
-            tq, ws = 0, 0.0
-            for t in (buy_trades or []):
-                q = api.safe_int(t.get('qty', 0))
-                try:
-                    s = float(t.get('stop_loss_rate') or 0.0)
-                except (TypeError, ValueError):
-                    s = 0.0
-                if q > 0 and s != 0.0:
-                    tq += q
-                    ws += q * s
-            if tq > 0:
-                sl_rate = ws / tq
-            if sl_rate is None or sl_rate >= 0:
-                sl_rate = config.SELL_STRATEGY.get("STOP_LOSS_RATE", -7.0)
-            if sl_rate >= 0:
+            # [SSOT] 손절선은 매도 엔진이 쓰는 그 값이어야 한다(_effective_stop_loss_rate).
+            #  종전에는 여기에 수량가중평균을 한 벌 더 복제해 두어, ATR 손절 OFF·개별 룰
+            #  조이기 같은 조건에서 실제 판정과 다른 선을 보고 경보했다.
+            sl_rate = self._effective_stop_loss_rate(buy_trades, rule=rule)
+            if sl_rate is None:
                 return  # 손절 기준 자체가 없으면(0=미사용) 경보할 기준도 없다
 
             if profit_rate > sl_rate:
@@ -4698,8 +4692,8 @@ class AutoTrader:
             if code in restricted_stocks:
                 self.set_stock_state(code, None)
                 self.log(f"[분석스킵] {name}: {UNMANAGED_RESTRICTED}")
-                self._alert_unmanaged_stop(code, name, item, UNMANAGED_RESTRICTED,
-                                           buy_trades_map.get(code))
+                self._alert_unmanaged_stop(code, name, item, UNMANAGED_RESTRICTED, rule=rules_map.get(code),
+                                           buy_trades=buy_trades_map.get(code))
                 return
             
             if self.order_manager.is_pending(code):
@@ -4708,7 +4702,8 @@ class AutoTrader:
                 #  부분체결로 이미 확보된 물량이 손절선을 이탈해도 주문이 종결될 때까지
                 #  청산되지 않는다("탈출 전략이 없다면 포지션을 잡지 마라"와 충돌).
                 #  손절 상황이면 미체결 '매수'를 즉시 취소해, 다음 주기에 정상 청산되게 한다.
-                self._cancel_pending_buy_on_stop_loss(code, name, item, buy_trades_map.get(code))
+                self._cancel_pending_buy_on_stop_loss(code, name, item, buy_trades_map.get(code),
+                                                     rule=rules_map.get(code))
                 # [관측성] 종전에는 DEBUG 로그라 화면·파일 어디에도 남지 않았다. 이 스킵은
                 #  손절·트레일링을 통째로 끄는 경로이므로 **항상** 남긴다 — 매도가 안 나가는데
                 #  이유를 알 수 없던 원인이 이것이었다(2026-08-05).
@@ -4719,8 +4714,8 @@ class AutoTrader:
                          f"({', '.join(str(o) for o in odnos) or '?'} · {streak}회 연속) "
                          f"— 이 동안 손절·트레일링 판정이 건너뛰어집니다")
                 if streak >= STUCK_PENDING_ALERT_CYCLES:
-                    self._alert_unmanaged_stop(code, name, item, UNMANAGED_STUCK_PENDING,
-                                               buy_trades_map.get(code))
+                    self._alert_unmanaged_stop(code, name, item, UNMANAGED_STUCK_PENDING, rule=rules_map.get(code),
+                                               buy_trades=buy_trades_map.get(code))
                 return
             self.stuck_pending_streak.pop(code, None)
 
@@ -4752,8 +4747,8 @@ class AutoTrader:
                 self.set_stock_state(code, None)
                 self.log(f"[매도스킵] {name}({code}): {UNMANAGED_ETF}")
                 # [Fix] 시스템이 손절하지 않는 포지션이므로 손절선 이탈 시 경보는 발송한다.
-                self._alert_unmanaged_stop(code, name, item, UNMANAGED_ETF,
-                                           buy_trades_map.get(code))
+                self._alert_unmanaged_stop(code, name, item, UNMANAGED_ETF, rule=rules_map.get(code),
+                                           buy_trades=buy_trades_map.get(code))
                 # [앵커 복원] 매도 판정에서 빠져도 앵커는 남겨 둔다. 여기서 돌아서면 이 종목의
                 #  trailing_stops 는 영영 갱신되지 않아, 마지막 매수의 체결가가 앵커로 굳는다
                 #  (102780: 4월 진입·실제 고가 36,360인데 8월 1주 추가 매수로 25,500이 기록).
@@ -4792,8 +4787,8 @@ class AutoTrader:
             if current_price <= 0:
                 self.set_stock_state(code, None)
                 self.log(f"[분석스킵] {name}({code}): 현재가 이상({current_price}) — {UNMANAGED_BAD_PRICE}")
-                self._alert_unmanaged_stop(code, name, item, UNMANAGED_BAD_PRICE,
-                                           buy_trades_map.get(code))
+                self._alert_unmanaged_stop(code, name, item, UNMANAGED_BAD_PRICE, rule=rules_map.get(code),
+                                           buy_trades=buy_trades_map.get(code))
                 return
 
             # [안전장치] 시세 조회에 실패해 폴백한 값(_price_stale)은 판정 근거가 될 수 없다.
@@ -4804,8 +4799,8 @@ class AutoTrader:
             if item.get('_price_stale'):
                 self.set_stock_state(code, None)
                 self.log(f"[분석스킵] {name}({code}): {UNMANAGED_STALE_PRICE}")
-                self._alert_unmanaged_stop(code, name, item, UNMANAGED_STALE_PRICE,
-                                           buy_trades_map.get(code))
+                self._alert_unmanaged_stop(code, name, item, UNMANAGED_STALE_PRICE, rule=rules_map.get(code),
+                                           buy_trades=buy_trades_map.get(code))
                 return
 
             rule = rules_map.get(code)
@@ -4933,8 +4928,8 @@ class AutoTrader:
                         self.log(f"매도 중단: {name} 주문 가능 수량 부족 "
                                  f"(미체결 존재 가능성 · {streak}회 연속)")
                         if streak >= NO_SELLABLE_ALERT_CYCLES:
-                            self._alert_unmanaged_stop(code, name, item, UNMANAGED_NO_SELLABLE,
-                                                       buy_trades_map.get(code))
+                            self._alert_unmanaged_stop(code, name, item, UNMANAGED_NO_SELLABLE, rule=rules_map.get(code),
+                                                       buy_trades=buy_trades_map.get(code))
                         return
                 else:
                     self.no_sellable_streak.pop(code, None)
@@ -5017,8 +5012,8 @@ class AutoTrader:
                     self.log(f"[분석실패] {name}({code}): 매도 판정 중 오류 — "
                              f"{type(e).__name__}: {e} — 이번 주기에 손절·트레일링 판정을 받지 못했습니다")
                     logger.exception(f"[매도분석] {code} 판정 실패")
-                    self._alert_unmanaged_stop(code, name, item, UNMANAGED_ANALYSIS_ERROR,
-                                               buy_trades_map.get(code))
+                    self._alert_unmanaged_stop(code, name, item, UNMANAGED_ANALYSIS_ERROR, rule=rules_map.get(code),
+                                               buy_trades=buy_trades_map.get(code))
                 except Exception:
                     logger.exception(f"[매도분석] {code} 실패 처리 중 2차 오류")
 
@@ -5692,6 +5687,15 @@ class AutoTrader:
                     vol_strength_val = result.get('vol_strength')
                     if config.session.is_toss:
                         # [추가] 토스: 체결강도 미제공 → 매도잔량비(ask_bid_ratio)로 당일 재진입 판단
+                        # [알려진 비대칭 — 무동작에 가깝다] 여기 쓰는 min_abr은 analyze_buy가
+                        #  일반 매수 게이트에서 이미 적용한 값과 같다. 즉 이 자리에 온 후보는
+                        #  그 검사를 통과한 뒤라, 실제로 걸리는 경우는 '호가를 못 구했다(None)'
+                        #  하나뿐이다. KIS의 '직전 진입 체결강도를 경신해야 한다'는 자기 갱신
+                        #  허들에 해당하는 장치가 토스에는 없고, 당일 재진입 방어는 위의
+                        #  손절가 게이트만 남는다.
+                        #  고치려면 새 진입 필터를 넣는 일이 되므로 같은 차단율 무작위 대조가
+                        #  먼저다(config ANALYSIS_THRESHOLDS 주석의 진입 필터 채택 규칙).
+                        #  현재 동작은 tests/test_reentry_hurdle.py 가 못 박고 있다.
                         abr = result.get('ask_bid_ratio')
                         min_abr = result.get('min_ask_bid_ratio', 0) or 0
                         if abr is None or (min_abr > 0 and abr < min_abr):

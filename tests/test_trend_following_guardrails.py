@@ -203,11 +203,16 @@ def test_unmanaged_stop_alert_rearms_after_recovery(trader):
 
 
 def test_unmanaged_stop_uses_recorded_stop_loss_rate(trader):
-    """매수 기록의 실제 손절률(ATR 손절)이 있으면 그것을 기준으로 판정한다."""
-    config.SELL_STRATEGY["STOP_LOSS_RATE"] = -7.0
+    """매수 기록의 실제 손절률(ATR 손절)이 있으면 그것을 기준으로 판정한다.
+
+    [전제 고정] 기록된 ATR 손절률은 USE_ATR_STOP이 켜져 있을 때만 판정선이 된다
+    (매도 엔진과 같은 규약). 다른 테스트가 이 값을 전역으로 꺼 놓고 복구하지 않으면
+    여기서 -7%로 판정돼 실패하므로, 이 파일이 의존하는 설정을 명시적으로 못 박는다.
+    """
     trades = [{'qty': 10, 'stop_loss_rate': -12.0}]  # ATR 손절 -12%
 
-    with patch('modules.auto_trade.api.send_telegram_message') as mock_tg:
+    with patch.dict(config.SELL_STRATEGY, {"STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True}), \
+         patch('modules.auto_trade.api.send_telegram_message') as mock_tg:
         # -10%는 전역 기준(-7%)은 넘었지만 실제 손절선(-12%)은 아직 이탈 전 → 경보 없음
         trader._alert_unmanaged_stop('069500', 'KODEX 200', _holding(-10.0), 'ETF', trades)
         mock_tg.assert_not_called()
@@ -217,9 +222,12 @@ def test_unmanaged_stop_uses_recorded_stop_loss_rate(trader):
 
 
 def test_unmanaged_stop_silent_when_stop_disabled(trader):
-    """손절 기준 자체가 없으면(0=미사용) 경보 기준도 없다."""
-    config.SELL_STRATEGY["STOP_LOSS_RATE"] = 0.0
-    with patch('modules.auto_trade.api.send_telegram_message') as mock_tg:
+    """손절 기준 자체가 없으면(0=미사용) 경보 기준도 없다.
+
+    (종전에는 전역 설정을 직접 바꾸고 마지막 줄에서 되돌렸다 — 단언이 깨지면 복구가
+     실행되지 않아 뒤따르는 테스트들이 손절 0인 세상에서 돌았다.)
+    """
+    with patch.dict(config.SELL_STRATEGY, {"STOP_LOSS_RATE": 0.0, "USE_ATR_STOP": False}), \
+         patch('modules.auto_trade.api.send_telegram_message') as mock_tg:
         trader._alert_unmanaged_stop('069500', 'KODEX 200', _holding(-50.0), 'ETF')
         mock_tg.assert_not_called()
-    config.SELL_STRATEGY["STOP_LOSS_RATE"] = -7.0

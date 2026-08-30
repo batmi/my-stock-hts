@@ -10,47 +10,33 @@ def cleanup_db_connection():
     yield
     db_manager.db.close_connection()
 
-@patch('modules.auto_trade.api.get_domestic_balance')
-@patch('modules.auto_trade.db_manager.db.get_trade_by_odno')
 @patch('modules.auto_trade.api.send_telegram_message')
 @patch('modules.auto_trade.db_manager.db.insert_trade')
-def test_simulation_fill_buy(mock_insert, mock_tg, mock_get_trade, mock_balance):
-    """모의투자 잔고 기반 매수 체결 확인 테스트"""
-    # 1. Setup
+def test_simulation_fill_buy(mock_insert, mock_tg):
+    """체결 확정 통보가 없는 체결 처리는 '(추정)' 라벨로 원장·알림에 남는다.
+
+    [이력] 종전에는 잔고 기반 추론(_check_simulation_conclusions_by_balance)을 통해
+    이 경로에 들어왔다. 그 함수는 KIS 모의투자 모드가 폐지되며 호출부가 사라져
+    죽은 코드였고(2026-08-30 제거), 테스트만 살아 있어 '검증된 체결 경로'처럼 보였다.
+    라벨링 자체는 살아 있는 로직이므로 핸들러를 직접 태워 그대로 고정한다.
+    """
     trader = auto_trade.AutoTrader()
-    trader.order_manager.pending_orders = {
-        '005930': {'12345': auto_trade.OrderStatus.ORDER_SENT}
-    }
-    
-    # Mock Balance: 삼성전자 10주 보유 (체결됨을 의미)
-    # Holdings list, Summary list
-    mock_balance.return_value = ([
-        {'pdno': '005930', 'hldg_qty': '10', 'prdt_name': 'Samsung'}
-    ], [])
-    
-    # Mock Trade Info from DB
-    mock_get_trade.return_value = {
+    trade = {
         'type': 'buy', 'code': '005930', 'name': 'Samsung', 'qty': 10, 'price': 50000,
         'snapshot': '{"indicators": {"rsi": 50}}', 'strategy_score': 8.0,
         'profit_amt': 0, 'profit_rate': 0.0
     }
-    
-    # 2. Run
+
     monitor = auto_trade.ConclusionMonitor()
-    # Mock DB update to avoid actual DB call
-    with patch('modules.auto_trade.db_manager.db.update_trade'):
-        with patch('modules.auto_trade.db_manager.db.check_trade_exists', return_value=False):
-            monitor._check_simulation_conclusions_by_balance("12345678", "01")
-    
-    # 3. Verify
-    # insert_trade called with "체결(추정)"
+    monitor.processed_sim_fills.discard('12345')
+    with patch('modules.auto_trade.db_manager.db.update_trade'), \
+         patch('modules.auto_trade.db_manager.db.check_trade_exists', return_value=False):
+        monitor._handle_simulation_fill(trader, trade, '12345', '005930', 10, "잔고 증가 확인")
+
     mock_insert.assert_called()
-    
-    # Check if order_status is correct (args or kwargs)
     _, kwargs = mock_insert.call_args
     assert kwargs.get('order_status') == "체결(추정)"
-    
-    # Telegram alert sent
+
     mock_tg.assert_called()
     assert "[매수 체결(추정)]" in mock_tg.call_args[0][0]
 

@@ -349,8 +349,6 @@ class ConclusionMonitor:
                     if data.get('rt_cd') != '0' and ovrs_data.get('rt_cd') != '0':
                         has_error = True
                     
-                    # [추가] 모의투자 전용: API 체결내역 누락 대비 잔고 기반 체결 확인
-
                     trades = []
                     if data.get('rt_cd') == '0':
                         trades.extend(data.get('output1', []))
@@ -839,76 +837,6 @@ class ConclusionMonitor:
         self._handle_simulation_fill(
             trader, trade, odno, code, int(fill['qty']), "가상 체결 원장 확인",
             confirmed_fill={'price': fill['price'], 'qty': fill['qty']})
-
-    def _check_simulation_conclusions_by_balance(self, cano, acnt):
-        """모의투자: 잔고 변동을 확인하여 체결 처리 (API 누락 대응)"""
-        trader = _pkg().AutoTrader()
-        # 대기 중인 주문이 없으면 스킵
-        if not trader.order_manager.pending_orders:
-            return
-
-        try:
-            # 현재 잔고 조회 (API 호출)
-            holdings, _ = api.get_domestic_balance(cano, acnt)
-            holdings_map = {h['pdno']: int(h['hldg_qty']) for h in holdings} if holdings else {}
-            
-            # 해외 잔고 조회
-            ovrs_holdings = api.get_overseas_balance(cano, acnt)
-            if ovrs_holdings:
-                for h in ovrs_holdings:
-                    holdings_map[h['ovrs_pdno']] = int(float(h.get('ovrs_cblc_qty', 0) or h.get('ord_psbl_qty', 0)))
-
-            if config.FILE_DEBUG_LEVEL == "DEBUG":
-                logger.debug(f"[Monitor] 모의투자 잔고 기반 체결 확인 중... (보유종목: {len(holdings_map)}개)")
-            
-            # 대기 중인 주문 확인
-            with trader.order_manager._lock:
-                pending_codes = list(trader.order_manager.pending_orders.keys())
-                
-                for code in pending_codes:
-                    orders = trader.order_manager.pending_orders.get(code, {})
-                    odnos = list(orders.keys())
-                    
-                    for odno in odnos:
-                        status = orders[odno]
-                        # '주문 전송' 상태인 주문만 대상
-                        if status != OrderStatus.ORDER_SENT: continue
-                        
-                        # DB에서 주문 정보 조회
-                        trade = db_manager.db.get_trade_by_odno(odno)
-                        if not trade: continue
-                        
-                        type_str = trade.get('type', '')
-                        qty = int(trade.get('qty', 0))
-                        
-                        is_filled = False
-                        reason = ""
-                        
-                        # 매수 주문: 잔고 수량이 주문 수량 이상이면 체결로 간주
-                        if "buy" in type_str.lower() or "매수" in type_str:
-                            current_qty = holdings_map.get(code, 0)
-                            if current_qty >= qty:
-                                is_filled = True
-                                reason = "잔고 입고 확인"
-                        
-                        # 매도 주문: 발주 직전 보유수량 대비 감소분이 주문수량 이상이면 체결로 간주
-                        #  (부분매도 대응. pre_qty 미보유 시 전량매도 가정으로 폴백)
-                        elif "sell" in type_str.lower() or "매도" in type_str:
-                            current_qty = holdings_map.get(code, 0)
-                            pre_qty = trader.order_manager.sell_pre_qty.get(str(odno))
-                            if pre_qty is not None and (pre_qty - current_qty) >= qty:
-                                is_filled = True
-                                reason = "잔고 감소 확인"
-                            elif current_qty == 0:
-                                is_filled = True
-                                reason = "잔고 0 확인"
-                        
-                        if is_filled:
-                            logger.debug(f"[ORDER_DEBUG] 모의투자 잔고 기반 체결 감지: {code} (No.{odno})")
-                            self._handle_simulation_fill(trader, trade, odno, code, qty, reason)
-                            
-        except Exception as e:
-            logger.error(f"[Monitor] 모의투자 잔고 기반 체결 확인 중 오류: {e}")
 
     def _handle_simulation_fill(self, trader, trade, odno, code, qty, reason, confirmed_fill=None):
         """모의투자·가상투자 체결 처리 핸들러.
