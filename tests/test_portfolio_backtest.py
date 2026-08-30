@@ -700,3 +700,44 @@ def test_halted_day_does_not_close_the_position(universe):
     r = pbt.run_portfolio(holed, pbt.precompute_status(holed, _thresholds()), dates, slots=2)
     assert not [t for t in r["trades"] if t["reason"] == "데이터종료"], \
         "중간 공백을 데이터 종료로 오인해 청산했다"
+
+
+# ==========================================================
+# 선견(lookahead) — 미래를 모르는 상태에서도 같은 판정을 하는가
+#
+# [왜] 백테스트의 가장 값비싼 결함은 '미래를 조금 아는 것'이다. 결과는 그럴듯하게
+# 좋아지고, 그 숫자로 정한 다이얼이 실매매에서만 무너진다. 지표를 전 구간에 한 번에
+# 계산하는 구조(compute_price_indicators)라 한 곳만 전방을 보면 조용히 새어 든다.
+#
+# 검사법: 뒤를 잘라낸 세계와 전체 세계를 나란히 돌려 **겹치는 구간의 거래가 완전히
+# 같은지** 본다. 어느 판정이든 미래 봉을 참조하면 여기서 갈라진다.
+# ==========================================================
+
+def _lookahead_pair(dfs, cut, **kw):
+    trunc = {c: df.iloc[:cut].copy() for c, df in dfs.items()}
+    def _run(d):
+        st = pbt.precompute_status(d, _thresholds())
+        ds = sorted({str(x) for df in d.values() for x in df["date"]})
+        return pbt.run_portfolio(d, st, ds, **kw), ds
+    full_res, _ = _run(dfs)
+    tr_res, tr_dates = _run(trunc)
+    last = tr_dates[-1]
+    key = lambda t: (t["code"], t["date"], t["reason"], round(t.get("fill", 0), 2))
+    return ([key(t) for t in full_res["trades"] if t["date"] <= last],
+            [key(t) for t in tr_res["trades"] if t["date"] <= last])
+
+
+def test_truncating_the_future_does_not_change_past_trades(universe):
+    """[핵심] 뒷부분을 잘라내도 앞 구간의 매매가 한 건도 달라지지 않아야 한다."""
+    dfs, _status, _dates = universe
+    seen, truncated = _lookahead_pair(dfs, cut=180)
+    assert seen, "대조 조건이 깨졌다 — 잘린 구간에 거래가 없다"
+    assert seen == truncated, "미래 봉을 잘랐더니 과거 매매가 달라졌다(선견 의심)"
+
+
+def test_the_intraday_path_is_free_of_lookahead_too(universe):
+    """장중 청산 모사도 같다 — 결론 대부분이 이 경로에서 나온다."""
+    dfs, _status, _dates = universe
+    seen, truncated = _lookahead_pair(dfs, cut=180, exit_intraday=True)
+    assert seen, "대조 조건이 깨졌다 — 잘린 구간에 거래가 없다"
+    assert seen == truncated

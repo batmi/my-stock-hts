@@ -661,6 +661,11 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             #  mfe = 보유 중 최대 평가수익률, armed = TS 무장 경험, bep = 청산 시
             #  손절선이 본전선까지 올라와 있었는가.
             "mfe": max_profit, "armed": bool(pos.get("ts_armed_ever")), "bep": bool(is_bep),
+            # [감사 가능성] 청산 체결가. 종전에는 매수·증액에만 fill 이 있어, **청산가가
+            #  그날 봉 안의 실현 가능한 가격인지 사후에 검증할 수 없었다**(장중 모드는
+            #  체결가 규약이 경로마다 다르다: 선·시가·봉 종가·익일 시가).
+            #  tests/test_intraday_replay.py 가 이 값으로 불변식을 건다.
+            "fill": sell_price, "qty": pos["qty"],
         })
         del positions[code]
 
@@ -793,6 +798,39 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             return None
         return max(cands, key=lambda x: x[0])
 
+    def _price_exit_confirmed(pos, price, hwm, atr_val, row, state, state_reason,
+                              raw_score, sell_check, holding_days, day, ts_act_eff):
+        """그 가격이면 decide_sell 도 **가격성 사유로** 판다고 답하는가.
+
+        [왜 있나] _intraday_stop_level 은 청산선을 직접 계산한다(decide_sell 은 선을
+        돌려주지 않으므로). 두 산식이 갈라지면 장중 모드의 청산가가 조용히 틀어지는데,
+        수익률은 그럴듯하게 나오므로 아무도 모른다. 그래서 집행할 때마다 같은 상황을
+        decide_sell 에 되물어 어긋난 횟수를 센다(결과의 intraday_mismatch, 0이어야 정상).
+
+        시간청산은 종가 판정이라 여기서는 끈다 — 켜면 우선순위가 가려 거짓 불일치가 난다.
+        cfg 는 config 가 아니라 **이 실행의 파라미터**로 짠다(감사 도구가 다이얼을 쓸어
+        바꾸므로 build_sell_cfg 를 쓰면 스윕 값이 아니라 config 값으로 대조하게 된다).
+        """
+        _sl, _applied, _bep = _effective_sl(pos, hwm=hwm)
+        chk, chk_reason = decide_sell(
+            price=price, high=hwm, avg=pos["avg"],
+            sl_rate=_sl, atr_applied=_applied, is_bep=_bep,
+            holding_days=holding_days, state=state, state_reason=state_reason,
+            raw_score=raw_score, sell_check=sell_check, ema60=row.get(sell_ma_col),
+            atr=atr_val, roll_high_5=row.get("roll_high_5", 0),
+            roll_high_10=row.get("roll_high_10", 0),
+            cfg={"use_atr": use_atr, "use_time_stop": False,
+                 "time_stop_days": time_stop_days, "ts_act": ts_act_eff,
+                 "time_stop_min": time_stop_min,
+                 "ts_callback": ts_callback, "ts_atr_mult": ts_atr_mult,
+                 "ts_breakeven": ts_breakeven,
+                 "sell_score_limit": sell_score_limit,
+                 "profit_lock_use": (day in profit_lock_dates
+                                     if profit_lock_dates is not None else lock_use),
+                 "profit_lock_min_mfe": lock_min_mfe,
+                 "profit_lock_giveback": lock_giveback})
+        return bool(chk and chk_reason in PRICE_EXIT_REASONS)
+
     prev_equity = None      # 방어 모드 판정용 전일 자산
     for day in dates:
         stop_px_today.clear()   # 게이트는 '당일'만 — 실매매도 today_trades로 하루치만 본다
@@ -872,6 +910,14 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                     ref = ({"ATR": st_now[7]} if st_now else prev_row)
                     hit = _intraday_stop_level(pos, ref, hwm, day, ts_act_eff, only)
                     if hit and bc <= hit[0]:
+                        # [자기검증] 분봉 경로에는 종전에 대조가 없었다 — 장중 결론
+                        #  대부분이 이 경로에서 나오는데 정작 산식이 갈라져도 아무 신호가
+                        #  없었다. 두 다리를 다 켠 실행에서만 전수 대조가 성립한다.
+                        if only is None and not _price_exit_confirmed(
+                                pos, bc, hwm, (ref.get("ATR", 0) or 0), row, state,
+                                state_reason, raw_score, sell_check, holding_days,
+                                day, ts_act_eff):
+                            intraday_mismatch += 1
                         mfe = (hwm - pos["avg"]) / pos["avg"] * 100
                         if mfe >= ts_act_eff:
                             pos["ts_armed_ever"] = True
@@ -906,31 +952,13 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 if hit and low <= hit[0]:
                     level, hit_reason, hit_bep = hit
                     # [자기검증] 같은 상황을 decide_sell 에 저가로 물어봐도 가격성 사유로
-                    #  팔아야 한다. 시간청산은 종가 판정이므로 꺼서 우선순위 가림을 막는다.
-                    _sl, _applied, _bep = _effective_sl(pos, hwm=hwm)
-                    chk, chk_reason = decide_sell(
-                        price=low, high=hwm, avg=pos["avg"],
-                        sl_rate=_sl, atr_applied=_applied,
-                        is_bep=_bep, holding_days=holding_days,
-                        state=state, state_reason=state_reason, raw_score=raw_score,
-                        sell_check=sell_check, ema60=row.get(sell_ma_col), atr=row.get("ATR", 0),
-                        roll_high_5=row.get("roll_high_5", 0),
-                        roll_high_10=row.get("roll_high_10", 0),
-                        cfg={"use_atr": use_atr, "use_time_stop": False,
-                             "time_stop_days": time_stop_days, "ts_act": ts_act_eff,
-                             "time_stop_min": time_stop_min,
-                             "ts_callback": ts_callback, "ts_atr_mult": ts_atr_mult,
-                             "ts_breakeven": ts_breakeven,
-                             "sell_score_limit": sell_score_limit,
-                             "profit_lock_use": (day in profit_lock_dates
-                                                 if profit_lock_dates is not None else lock_use),
-                             "profit_lock_min_mfe": lock_min_mfe,
-                             "profit_lock_giveback": lock_giveback})
-                    if not (chk and chk_reason in PRICE_EXIT_REASONS):
+                    #  팔아야 한다(_price_exit_confirmed).
+                    if exit_intraday_only is None and not _price_exit_confirmed(
+                            pos, low, hwm, row.get("ATR", 0), row, state, state_reason,
+                            raw_score, sell_check, holding_days, day, ts_act_eff):
                         # 한쪽 다리만 장중으로 옮긴 경우 decide_sell 은 다른 다리를 답할 수
                         #  있으므로, 전수 대조는 두 다리를 다 켠 실행에서만 의미가 있다.
-                        if exit_intraday_only is None:
-                            intraday_mismatch += 1
+                        intraday_mismatch += 1
                     # 갭하락으로 시가가 이미 선 아래면 그 시가가 체결가다.
                     raw = min(level, row["open"]) if (row.get("open") or 0) > 0 else level
                     exec_price = utils.adjust_to_tick(raw * (1 - slippage), False) or raw
