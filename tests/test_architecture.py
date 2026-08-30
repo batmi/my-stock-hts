@@ -26,15 +26,31 @@ def test_global_settings_pydantic_validation():
         config.GlobalSettings(SYSTEM_INVEST_PER_STOCK=1.5) # le=1.0 제약 위반
 
 def test_load_dynamic_config_thread_safety():
-    """동적 설정 로드 시 RLock을 통해 Thread-safe하게 동작하는지 검증"""
-    with patch('config._settings_lock') as mock_lock:
-        # 빈 JSON 데이터로 강제 업데이트 시도
-        with patch('builtins.open'), patch('json.load', return_value={"SYSTEM_MAX_HOLDINGS": 20}), patch('os.path.exists', return_value=True):
-            config.load_dynamic_config()
-            
-        # 락(RLock)을 획득하고 해제했는지 확인
-        mock_lock.__enter__.assert_called()
-        mock_lock.__exit__.assert_called()
+    """동적 설정 로드 시 RLock을 통해 Thread-safe하게 동작하는지 검증
+
+    [주의] 이 테스트는 진짜로 load_dynamic_config()를 돌린다 — 주입한 값이 settings와
+     config 모듈 속성 양쪽에 그대로 남는다. 되돌리지 않으면 뒤 테스트가 상한 20을 본다:
+     실제로 test_audit_trade_mechanics 의 슬롯 상한 검증이 조용히 무력화됐다(6 > 4 를
+     잡아야 하는데 6 < 20 이라 통과). 점검 도구 테스트의 실패 형태가 '항상 통과'라
+     증상이 보이지도 않는다. 그래서 여기서 되돌린다.
+    """
+    saved = config.settings.SYSTEM_MAX_HOLDINGS
+    had_attr = 'SYSTEM_MAX_HOLDINGS' in config.__dict__
+    try:
+        with patch('config._settings_lock') as mock_lock:
+            # 빈 JSON 데이터로 강제 업데이트 시도
+            with patch('builtins.open'), patch('json.load', return_value={"SYSTEM_MAX_HOLDINGS": 20}), patch('os.path.exists', return_value=True):
+                config.load_dynamic_config()
+
+            # 락(RLock)을 획득하고 해제했는지 확인
+            mock_lock.__enter__.assert_called()
+            mock_lock.__exit__.assert_called()
+    finally:
+        config.settings.SYSTEM_MAX_HOLDINGS = saved
+        if had_attr:
+            config.__dict__['SYSTEM_MAX_HOLDINGS'] = saved
+        else:
+            config.__dict__.pop('SYSTEM_MAX_HOLDINGS', None)
 
 # ==========================================================
 # 3. AI 프롬프트 관리의 외부화 (Prompts Separation)

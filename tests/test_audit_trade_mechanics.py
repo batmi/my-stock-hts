@@ -166,14 +166,27 @@ def test_zero_highest_price_is_flagged(db, capsys):
     assert "최고가가 0" in capsys.readouterr().out
 
 
+def _fix_slot_cap(monkeypatch, n):
+    """슬롯 상한을 이 테스트 안에서 못박는다.
+
+    도구는 config 모듈 속성(config.SYSTEM_MAX_HOLDINGS)을 읽는다. 그 이름이 모듈
+    __dict__ 에 있으면 PEP 562 __getattr__ 가 불리지 않아 settings 만 고쳐서는 소용이
+    없다 — load_dynamic_config() 를 돌린 다른 테스트가 모듈 속성을 심어 두면 여기 검사가
+    조용히 무력화된다(실제로 상한 20 이 남아 6종목 위반을 놓쳤다). 양쪽 다 고정한다.
+    """
+    import config
+    monkeypatch.setattr(config.settings, "SYSTEM_MAX_HOLDINGS", n, raising=False)
+    if "SYSTEM_MAX_HOLDINGS" in config.__dict__:
+        monkeypatch.setitem(config.__dict__, "SYSTEM_MAX_HOLDINGS", n)
+
+
 def test_slot_cap_breach_is_caught(db, capsys, monkeypatch):
     """슬롯 상한을 넘으면 리스크 한도 산정 전제가 깨진다.
 
     [주의] 상한은 config 전역이라 다른 테스트가 바꿔 놓으면 이 검사가 조용히 무력화된다
     (xdist 병렬에서 실제로 겪었다). 주변 상태에 기대지 않도록 여기서 고정한다.
     """
-    import config
-    monkeypatch.setattr(config.settings, "SYSTEM_MAX_HOLDINGS", 4, raising=False)
+    _fix_slot_cap(monkeypatch, 4)
     conn, path = db()
     for i in range(6):
         _buy(conn, code=f"00593{i}", name=f"종목{i}", when=f"2026-08-10 10:0{i}:00")
@@ -183,8 +196,7 @@ def test_slot_cap_breach_is_caught(db, capsys, monkeypatch):
 
 def test_slot_cap_counts_sells_back(db, capsys, monkeypatch):
     """팔면 슬롯이 비어야 한다 — 매도를 안 세면 멀쩡한 운용도 위반으로 잡힌다."""
-    import config
-    monkeypatch.setattr(config.settings, "SYSTEM_MAX_HOLDINGS", 4, raising=False)
+    _fix_slot_cap(monkeypatch, 4)
     conn, path = db()
     for i in range(6):
         _buy(conn, code=f"00593{i}", name=f"종목{i}", when=f"2026-08-10 10:0{i}:00")

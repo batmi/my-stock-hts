@@ -109,10 +109,17 @@ def _print_status():
     # [기준 명시] 총자산은 '지금' 재평가한 값이다. 장 밖에서는 그 '지금'이 무엇인지
     #  (KRX 종가인지 NXT 최종가인지) 밝히지 않으면 자산 곡선의 마지막 행과 왜 다른지
     #  알 수 없다 — 곡선은 그날의 확정 스냅샷이고 이 값은 조회 시점 평가다.
+    #  세션 이름(market_session_label)은 **표시 시세**의 기준이라 여기 쓰면 안 된다 —
+    #  실제로 '휴장 · NXT 최종가'라고 적어 놓고 총자산은 KRX 확정 종가로 계산하고 있었다.
+    #  평가가 실제로 무엇을 보는지(정규장=실시간 / 그 밖=확정 종가)를 그대로 적는다.
     try:
         import api
-        _sess, _style = api.market_session_label(False)
-        _basis = f" · 평가 기준: {_sess}"
+        if api.chart_overlay_enabled(False):
+            _basis = " · 평가 기준: 정규장 실시간가"
+        else:
+            _d = api.krx_last_settled_day()
+            _d = f"{_d[4:6]}-{_d[6:8]}" if _d and len(_d) == 8 else _d
+            _basis = f" · 평가 기준: KRX 확정 종가({_d})"
     except Exception:      # noqa: BLE001 - 부가 표기는 실패해도 화면을 막지 않는다
         _basis = ""
     config.console.print(f"[dim]개설 {perf['started_at']} · 시세 소스: 한국투자증권(실전) · "
@@ -258,7 +265,7 @@ def _position_open_risk(positions):
         risks = {}
         for p in positions:
             code, qty = p["code"], p["qty"]
-            cur = paper_broker._current_price(code, p["avg_price"])
+            cur = paper_broker.valuation_price(code, p["avg_price"])
             probe = max(cur, float(highs.get(code) or 0.0)) * 10.0
             one = [{'pdno': code, 'hldg_qty': str(qty),
                     'pchs_avg_pric': f"{p['avg_price']:.4f}", 'prpr': str(int(probe))}]
@@ -342,7 +349,9 @@ def _print_verification_detail(perf):
     heat_cap_amt = (perf["total"] * heat_cap / 100.0) if heat_cap else 0.0
 
     for p in positions:
-        cur = paper_broker._current_price(p["code"], p["avg_price"])
+        # 총자산과 같은 규칙으로 평가한다(장 종료 후 = KRX 확정 종가). 종전에는
+        #  _current_price 라 표만 NXT 최종가였고, 총자산과 합계가 어긋났다.
+        cur = paper_broker.valuation_price(p["code"], p["avg_price"])
         profit = (cur - p["avg_price"]) / p["avg_price"] * 100 if p["avg_price"] else 0.0
         held = _holding_days(p.get("first_buy_at"))
         try:

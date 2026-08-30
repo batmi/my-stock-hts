@@ -262,3 +262,38 @@ def test_closing_snapshot_retries_until_it_is_close_based(trader):
     assert _closing(trader, ok=False).called          # 찍긴 찍는다(덮어쓰기)
     assert _closing(trader, ok=True).called, "재시도가 막혔다 — 그날은 영영 장중가로 남는다"
     assert not _closing(trader).called                # 성공 후에는 하루 1회
+
+
+# ---------------------------------------------------------------------------
+# ④ 표시 경로 — 화면의 포지션 표가 총자산과 같은 값을 본다
+# ---------------------------------------------------------------------------
+def test_display_price_follows_the_valuation_rule(paper):
+    """표시용 평가가도 총자산과 같은 규칙을 탄다.
+
+    실제로 어긋났다: 성과 화면의 포지션 표가 _current_price 를 직접 불러 NXT 최종가를
+    썼고, 같은 화면의 총자산(확정 종가)과 40,400원 차이가 났다(2026-08-30 실측).
+    표의 수익률·손절 여유·오픈 리스크만 다른 기준이 되면 화면을 대조에 쓸 수 없다.
+    """
+    with patch('api.chart_overlay_enabled', return_value=False), \
+         patch('api.krx_last_settled_day', return_value=TODAY), \
+         patch('api.get_chart_data', return_value=_bars()), \
+         patch('api.get_current_price', return_value=NXT_LAST):
+        assert paper_broker.valuation_price(CODE, 1.0) == KRX_CLOSE
+
+    with patch('api.chart_overlay_enabled', return_value=True), \
+         patch('api.get_current_price', return_value=NXT_LAST):
+        assert paper_broker.valuation_price(CODE, 1.0) == NXT_LAST
+
+
+def test_report_does_not_reach_past_the_valuation_rule():
+    """화면 코드가 _current_price 를 직접 부르면 기준이 다시 갈라진다.
+
+    함수 하나로 막을 수 있는 종류의 회귀라 소스에서 고정한다 — 표시 경로는
+    valuation_price 만 쓴다.
+    """
+    import inspect
+
+    from modules import paper_report
+    src = inspect.getsource(paper_report)
+    assert "_current_price(" not in src, \
+        "paper_report 가 평가 규칙을 우회했다 — valuation_price 를 쓸 것"
