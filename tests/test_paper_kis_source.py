@@ -1,6 +1,6 @@
-"""가상투자(mode 4)가 KIS 시세를 쓰되 실계좌를 건드리지 않는가.
+"""가상투자(mode 1)가 KIS 시세를 쓰되 실계좌를 건드리지 않는가.
 
-[배경] mode 4는 토스 시세를 쓰다가 KIS 실전 시세로 바뀌었다. 토스를 쓸 때는 계좌성
+[배경] mode 1는 토스 시세를 쓰다가 KIS 실전 시세로 바뀌었다. 토스를 쓸 때는 계좌성
 API가 `if config.session.is_toss:` 분기에서 먼저 막혔는데, is_toss가 False가 되면서
 그 방어가 통째로 사라졌다. 즉 **가로채기를 빠져나간 계좌성 호출은 이제 실제 KIS로
 나간다**. VIRT 앱키에도 실제 계좌가 매여 있으므로, 계좌번호만 맞으면 '가상투자'인데
@@ -42,15 +42,15 @@ def paper_session(monkeypatch, tmp_path):
 
 # ───────────────── 세션 구성 ─────────────────
 
-def test_mode4_uses_kis_not_toss(paper_session):
-    """[핵심] mode 4는 더 이상 토스가 아니다 — mode 2와 같은 데이터 경로여야 한다."""
+def test_mode1_uses_kis_not_toss(paper_session):
+    """[핵심] mode 1는 더 이상 토스가 아니다 — mode 2와 같은 데이터 경로여야 한다."""
     assert paper_session.is_toss is False, "토스 경로면 체결강도·지수·일봉이 mode 2와 달라진다"
     assert paper_session.is_paper is True
     assert paper_session.url_base == config.REAL_URL, "가상투자는 KIS 실전 서버 시세를 쓴다"
     assert paper_session.url_base == config.REAL_URL
 
 
-def test_mode4_uses_the_virt_app_key(paper_session):
+def test_mode1_uses_the_virt_app_key(paper_session):
     """[핵심] 실전 앱키를 쓰면 TPS·웹소켓·토큰을 실전 인스턴스와 공유해 양쪽이 깨진다."""
     assert paper_session.app_key == "VIRTKEY123"
     assert paper_session.app_secret == "VIRTSECRET123"
@@ -60,7 +60,7 @@ def test_mode4_uses_the_virt_app_key(paper_session):
     assert paper_session.auto_app_key == "VIRTKEY123"
 
 
-def test_mode4_never_carries_a_real_account_number(paper_session):
+def test_mode1_never_carries_a_real_account_number(paper_session):
     """[핵심 fail-safe] 계좌번호가 실계좌면 가로채기를 놓친 호출이 실 잔고를 읽는다."""
     assert paper_session.cano == "PAPER"
     assert paper_session.auto_cano == "PAPER"

@@ -129,11 +129,71 @@ def _current_price(code, fallback=0.0):
 # 하락분이 장부에서 사라져 자산곡선·MDD가 실제보다 좋아 보이므로, 직전 정상가를 쓴다.
 _last_prices = {}
 
+# KRX 확정 종가 {code: (확정일 YYYYMMDD, 종가)}. 확정된 봉은 불변이라 하루 한 번만 구하면 된다.
+_krx_closes = {}
+
 
 def reset_price_cache():
     """테스트·계좌 전환용 — 마지막 정상가 캐시를 비운다."""
     with _lock:
         _last_prices.clear()
+        _krx_closes.clear()
+
+
+def _krx_settled_close(code):
+    """평가에 쓸 KRX 확정 종가. KRX 정규장 중이거나 못 구하면 0.0(호출부가 실시간가로 폴백).
+
+    [규칙] 자산 평가는 **정규장 중에는 현재가, 장 종료 후에는 KRX 확정 종가**다.
+     정규장 밖의 실시간가는 NXT(대체거래소) 체결가인데, NXT 거래량은 정규장의 수백분의
+     1이라 소수 체결이 계좌 전체의 평가액을 정한다. 그 값이 자산곡선·MDD·수익률에
+     그대로 들어가면 '오늘 얼마를 벌었나'가 몇 건의 장외 체결로 흔들린다.
+     (2026-08-30 20:00 실측: 페이퍼 주식평가 3,703,700 = NXT 최종가 / KRX 종가 3,744,000)
+
+    [왜 여기서 거르나] api.get_current_price 는 ats_prpr(NXT)이 있으면 무조건 그것을
+     돌려준다 — 주문가·손절 트리거는 언제나 실시간가여야 하므로 그 함수는 그대로가 맞다.
+     걸러야 할 것은 **평가액**뿐이다.
+
+    [게이트] chart_overlay_enabled(False) == KRX 정규장(09:00~15:30). 그 밖은 전부 확정
+     종가를 쓴다 — NXT 프리(08:00~09:00)·애프터(15:30~20:00)도 포함하며,
+     USE_KRX_CLOSE_AFTER_HOURS(표시 설정)와 무관하다. 평가 기준은 선택지가 아니다.
+
+    [방어] 마지막 봉이 '확정된 세션'보다 오래됐으면(당일 봉 미수신) 쓰지 않는다.
+     그대로 쓰면 지난 거래일 종가가 오늘 평가액이 된다(analysis 의 표시 경로와 같은 방어).
+     15:30~15:40(종가 확정 여유) 사이가 이 구간이라, 그때는 종전대로 실시간가로 평가한다.
+    """
+    try:
+        import api
+        if api.chart_overlay_enabled(False):
+            return 0.0          # KRX 정규장 — 현재가로 평가한다
+        settled = api.krx_last_settled_day()
+    except Exception as e:      # noqa: BLE001 - 판정 실패는 '고정하지 않음'(실시간가 유지)
+        logger.debug(f"[PAPER] KRX 확정일 판정 실패({code}): {e}")
+        return 0.0
+
+    with _lock:
+        hit = _krx_closes.get(code)
+    if hit and hit[0] == settled:
+        return hit[1]
+
+    try:
+        import api
+        # realtime=False: 캐시 적중 시 현재가 오버레이를 생략한다(확정 종가를 덮지 않게).
+        df = api.get_chart_data(code, False, 'daily', realtime=False)
+        if df is None or df.empty:
+            return 0.0
+        last = df.iloc[-1]
+        if str(last['date']).replace('-', '')[:8] < settled:
+            return 0.0
+        close = float(last['close'])
+    except Exception as e:      # noqa: BLE001
+        logger.debug(f"[PAPER] KRX 확정 종가 조회 실패({code}): {e}")
+        return 0.0
+
+    if close <= 0:
+        return 0.0
+    with _lock:
+        _krx_closes[code] = (settled, close)
+    return close
 
 
 def _price_with_status(code, cost=0.0):
@@ -147,7 +207,17 @@ def _price_with_status(code, cost=0.0):
 
     폴백 순서: 직전 정상가 → 평단(직전 정상가가 없을 때만). 어느 쪽이든 stale로 표시해
     판정에서 배제하되, 평가금이 0으로 무너지지는 않게 한다(자산 스냅샷 보존).
+
+    [평가 기준] 정규장 밖에서는 KRX 확정 종가로 평가한다(_krx_settled_close).
+     확정된 종가는 '판정 불가'가 아니므로 stale 이 아니다 — 마감 후 청산 신호 스캔은
+     오히려 이 값으로 판정해야 종가와 어긋나지 않는다.
     """
+    krx = _krx_settled_close(code)
+    if krx > 0:
+        with _lock:
+            _last_prices[code] = krx
+        return krx, False
+
     price = _current_price(code)
     if price > 0:
         with _lock:
@@ -222,7 +292,7 @@ def fill_price(price, action, market=False):
      여기서 한 번 더 얹으면 편도 0.4%가 되어 백테스트(편도 0.2%)의 두 배를 문다.
      실측(2026-08-20): 현재가 1,188,000 → 주문 1,190,000 → 가상체결 1,192,380(+0.37%),
      백테스트 모델은 1,190,000(+0.17%). 왕복 0.4%p 초과 부담이라 관찰모드가 전략이
-     아니라 비용 모델 때문에 뒤처진다 — mode 4의 존재 이유를 깨뜨린다.
+     아니라 비용 모델 때문에 뒤처진다 — mode 1의 존재 이유를 깨뜨린다.
     [2026-08-10 도입 당시의 오판] '지정가 그대로 체결이면 백테스트보다 유리하다'고 봤으나
      그 지정가가 이미 현재가×(1±0.002)라 백테스트 체결가와 같은 자리다.
     [호가 정렬] 시장가 체결가는 호가 단위에 맞춘다. 종전에는 맞추지 않아 101,796·
@@ -335,7 +405,12 @@ def _record_fill(time_str, type_str, code, name, qty, price, amount, fee, profit
 # 스냅샷 / 리포트용 집계
 # ==========================================================
 def snapshot_equity():
-    """일별 자산 스냅샷 기록(자산곡선·MDD 산출용). 같은 날 재호출 시 덮어쓴다."""
+    """일별 자산 스냅샷 기록(자산곡선·MDD 산출용). 같은 날 재호출 시 덮어쓴다.
+
+    반환: 이 스냅샷이 **KRX 확정 종가로만** 평가됐는가. 마감 스냅샷을 찍는 쪽이 이 값을
+     보고 재시도를 정한다 — 한 종목이라도 일봉을 못 받아 실시간가로 폴백했다면 그날 행은
+     아직 종가 기준이 아니다(다음 주기에 덮으면 된다).
+    """
     try:
         _, output2 = get_domestic_balance()
         s = output2[0]
@@ -346,8 +421,11 @@ def snapshot_equity():
             "INSERT OR REPLACE INTO paper_equity (date, cash, stock_value, total, seed) "
             "VALUES (?,?,?,?,?)",
             (datetime.now().strftime('%Y-%m-%d'), cash, stock, cash + stock, get_seed()))
+        # 값 조회는 확정일 단위로 캐시돼 있어 추가 조회가 아니다.
+        return all(_krx_settled_close(p['code']) > 0 for p in get_positions())
     except Exception as e:
         logger.debug(f"[PAPER] 자산 스냅샷 실패: {e}")
+        return False
 
 
 _FILL_COLS = ("time, type, code, name, qty, price, amount, fee, profit_amt, profit_rate, odno")
@@ -435,7 +513,10 @@ def get_performance():
     gross_profit = sum(f['profit_amt'] for f in wins)
     gross_loss = abs(sum(f['profit_amt'] for f in losses))
 
-    curve = [e['total'] for e in get_equity_curve()] or [seed, total]
+    # [기준] 곡선(일별 스냅샷) **뒤에 현재값을 붙여** 낙폭을 잰다. 스냅샷만 쓰면 오늘의
+    #  하락은 다음 스냅샷이 찍히기 전까지 MDD에 절대 들어가지 않아, 같은 화면의 총자산은
+    #  실시간인데 MDD만 어제 기준인 상태가 된다(2026-08-30 실측).
+    curve = ([e['total'] for e in get_equity_curve()] or [seed]) + [total]
     peak, mdd = curve[0], 0.0
     for v in curve:
         peak = max(peak, v)

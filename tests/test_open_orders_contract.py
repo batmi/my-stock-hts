@@ -1,6 +1,6 @@
 """미체결 조회의 반환 계약 — 모든 모드에서 '주문 dict의 리스트'여야 한다.
 
-관찰 모드(mode 4)가 응답 봉투 dict({"rt_cd":..., "output": []})를 돌려주는 바람에
+관찰 모드(mode 1)가 응답 봉투 dict({"rt_cd":..., "output": []})를 돌려주는 바람에
 호출부가 그대로 순회하다가 키 문자열을 원소로 받아 터졌다.
 
   [2026-08-04] 미체결 관리 중 오류: 'str' object has no attribute 'get'
@@ -9,7 +9,7 @@
 str이 나온다. 증상이 두 곳에서 났다.
   · engine.manage_unfilled_orders — 매 주기 로그 에러 (사용자 관측)
   · trader._get_toss_open_buy_reserved — 예외로 입금 자동 감지가 조용히 스킵됨
-    (mode 4는 is_toss·is_paper가 동시에 True라 토스 전용 경로도 함께 탄다)
+    (mode 1는 is_toss·is_paper가 동시에 True라 토스 전용 경로도 함께 탄다)
 
 계약을 테스트로 고정해 어떤 모드가 추가돼도 형태가 갈라지지 않게 한다.
 """
@@ -58,7 +58,7 @@ def test_toss_mode_returns_list(monkeypatch):
 def test_reserved_cash_calculation_survives_paper_mode(paper_session):
     """trader._get_toss_open_buy_reserved가 예외 없이 0을 돌려줘야 한다.
 
-    mode 4는 is_toss도 True라 이 토스 전용 보정 경로를 함께 탄다. 예외가 나면
+    mode 1는 is_toss도 True라 이 토스 전용 보정 경로를 함께 탄다. 예외가 나면
     toss_cash_reliable=False가 되어 입금 자동 감지가 매 주기 조용히 건너뛰어진다.
     """
     from modules.auto_trade import AutoTrader

@@ -73,7 +73,7 @@ def test_limit_fill_matches_backtest_execution_price(paper):
     [배경] 주문가는 호출부가 adjust_to_tick(현재가 × (1 ± SLIPPAGE_RATE))로 만든다
      — '체결 확률 확보'용 버퍼이지 비용 모델이 아니다. 2026-08-10~08-20 사이의
      가상 브로커는 그 위에 슬리피지를 한 번 더 얹어 편도 0.4%를 물렸고, 백테스트는
-     편도 0.2%였다. 관찰모드가 전략이 아니라 비용 모델 때문에 뒤처지면 mode 4로
+     편도 0.2%였다. 관찰모드가 전략이 아니라 비용 모델 때문에 뒤처지면 mode 1로
      실매매와 백테스트를 견주는 일 자체가 불가능해진다.
     """
     from core import utils
@@ -181,7 +181,7 @@ def test_unfilled_always_empty(paper):
 
     [2026-08-04] 이 테스트는 원래 응답 봉투 dict({'rt_cd','output'})를 단언해,
     '주문 dict의 리스트'라는 실제 계약과 어긋난 형태를 고정하고 있었다. 그 탓에
-    mode 4에서 호출부가 봉투를 순회하며 키 문자열을 원소로 받아 매 주기 터졌다
+    mode 1에서 호출부가 봉투를 순회하며 키 문자열을 원소로 받아 매 주기 터졌다
     ("미체결 관리 중 오류: 'str' object has no attribute 'get'").
     계약대로 리스트를 단언한다. 상세는 tests/test_open_orders_contract.py 참조.
     """

@@ -3316,7 +3316,7 @@ DB_FILE_PATH = os.path.join(DB_DIR, "trade_history.db")
 # [관찰 모드] 페이퍼 트레이딩 전용 DB. 실계좌 DB와 **파일을 분리**한다 —
 #  trailing_stops·half_tp_status가 code를 PK로 쓰기 때문에 파일을 공유하면
 #  실계좌 포지션의 트레일링 최고가가 가상 포지션에 오염된다.
-#  초기화도 이 파일 하나만 지우면 끝난다. (세션 mode 4 진입 시 db.switch_path로 전환)
+#  초기화도 이 파일 하나만 지우면 끝난다. (세션 mode 1 진입 시 db.switch_path로 전환)
 PAPER_DB_FILE_PATH = os.path.join(DB_DIR, "paper_trading.db")
 
 # ==========================================================

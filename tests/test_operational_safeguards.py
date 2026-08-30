@@ -311,7 +311,7 @@ def test_appkey_lock_file_does_not_leak_the_key(tmp_path):
 
 
 def test_different_appkeys_do_not_block_each_other(tmp_path):
-    """앱키가 다르면 막지 않는다 — mode 4(VIRT_APP_KEY) 동시 운용이 정상 흐름이다."""
+    """앱키가 다르면 막지 않는다 — mode 1(VIRT_APP_KEY) 동시 운용이 정상 흐름이다."""
     with patch.object(config, 'DB_FILE_PATH', str(tmp_path / "t.db")):
         a = instance_lock.AppKeyLock("REAL_KEY")
         b = instance_lock.AppKeyLock("VIRT_KEY")

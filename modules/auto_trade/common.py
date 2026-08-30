@@ -662,7 +662,7 @@ class OrderStatus:
 def _active_db_path():
     """지금 열려 있는 DB 파일 경로.
 
-    [중요] config.DB_FILE_PATH를 직접 쓰면 안 된다. 가상투자(mode 4)는
+    [중요] config.DB_FILE_PATH를 직접 쓰면 안 된다. 가상투자(mode 1)는
     db_manager.db.switch_path(config.PAPER_DB_FILE_PATH)로 **파일만** 갈아끼우고
     config.DB_FILE_PATH는 실계좌 경로 그대로다. 그래서 아래 함수들이 실계좌 DB를 열어
       · 조회: 가상투자 룰의 가중치를 찾지 못해 JSON 문자열이 dict로 바뀌지 않은 채

@@ -202,6 +202,8 @@ class AutoTrader:
             cls._instance.after_hours_sell_notified = {}
             # 마감 후 청산 신호 스캔을 수행한 날짜(YYYYMMDD). 거래일당 1회로 묶는다.
             cls._instance.after_hours_scan_date = None
+            # [관찰 모드] 마감 스냅샷을 찍은 날짜(YYYYMMDD). 거래일당 1회.
+            cls._instance.paper_closing_snapshot_date = None
             # [안전장치] 거래소 미체결 현황을 파악했는가. initialize()의 재기동 복구가
             #  성공하면 True. False인 동안은 신규 매수를 보류한다(중복 주문 방지).
             cls._instance.pending_restore_ok = True
@@ -3457,7 +3459,7 @@ class AutoTrader:
                     if target_cano and is_log_needed:
                         # [수정] 토스/모의는 단일계좌라 시스템 트레이딩 계좌 = 기본 계좌.
                         #        모드 플래그를 보지 않으면 토스가 '한투증권(자동)'으로 오표시되므로 is_toss도 분기.
-                        # [Fix] 가상투자(mode 4)도 자기 분기가 없어 '한투증권(자동)'으로 떨어졌다.
+                        # [Fix] 가상투자(mode 1)도 자기 분기가 없어 '한투증권(자동)'으로 떨어졌다.
                         #  실전 시세를 쓸 뿐 계좌는 가상이므로 실전 자동매매 계좌로 읽히면 위험하다.
                         #  라벨은 trading.py의 표기와 같은 '가상투자'로 맞춘다.
                         display_cano = target_cano
@@ -3575,6 +3577,10 @@ class AutoTrader:
                             else:
                                 self.log("시스템 상태: WAITING (장 마감 - 분석 중지)")
                         self.was_market_open = current_market_status
+                        # [관찰 모드] 종가 확정 후 마감 스냅샷 1회. 주기 스냅샷은 RUNNING
+                        #  분기에만 있어 15:20 단일가 휴게부터는 찍히지 않는다.
+                        if getattr(config.session, 'is_paper', False):
+                            self._snapshot_paper_closing_equity()
                         # [관측성] 마감 후 청산 신호 1회 스캔. 분석을 통째로 멈추면 트래픽은
                         #  아끼지만, 종가가 확정된 뒤 손절·트레일링선을 이탈한 사실을 아무도
                         #  모르는 채로 다음 개장까지 간다 — 갭이 그대로 손실이 되는 구간이다.
@@ -4556,6 +4562,40 @@ class AutoTrader:
         except Exception as e:
             logger.debug(f"[손절선 이탈 경보] {code} 처리 실패: {e}")
 
+    def _snapshot_paper_closing_equity(self):
+        """[관찰 모드] 종가가 확정된 뒤 그날 자산 스냅샷을 한 번 더 찍는다(종가로 덮음).
+
+        [왜] 주기 스냅샷은 RUNNING 분기에서만 돈다. 15:20 단일가 휴게부터 상태가
+         WAITING이라 그날 마지막 스냅샷은 15:19 장중가로 굳고, 종가 단일가(15:20~15:30)
+         에서 확정된 종가는 자산곡선에 영원히 들어가지 못한다. 곡선이 유일한 소스인
+         MDD·누적수익률·고점대비가 전부 종가 기준이 아니게 된다.
+         (2026-08-28 실측: 곡선 3,743,000 = 15:19:40 값 / 확정 종가 3,744,000)
+
+        [시각] 시계가 아니라 확정 여부를 본다 — api.krx_last_settled_day()가 오늘을
+         가리켜야(마감 + 확정 여유) 그날 봉을 종가로 인정한다. 그 전에 찍으면 직전
+         거래일 종가를 오늘 값으로 굳힌다.
+        [빈도] 거래일당 1회. 휴장일에는 찍지 않는다 — 새 봉이 없는데 행을 만들면
+         주말·공휴일이 '변동 없는 거래일'로 곡선에 남아 일수·고점 아래 일수가 부푼다.
+         일봉을 못 받아 실시간가로 폴백한 종목이 하나라도 있으면 '찍었다'로 세지 않고
+         다음 주기에 다시 덮는다(같은 날 재호출은 덮어쓰기다).
+        """
+        try:
+            if api.is_holiday_today():
+                return
+            today = datetime.now().strftime("%Y%m%d")
+            if self.paper_closing_snapshot_date == today:
+                return
+            if api.krx_last_settled_day() != today:
+                return      # 아직 종가가 확정되지 않았다 — 다음 주기에 다시 본다
+            from modules import paper_broker
+            if not paper_broker.snapshot_equity():
+                return
+            self.paper_closing_snapshot_date = today
+            self.log("[관찰 모드] 마감 자산 스냅샷 기록 (KRX 확정 종가 기준)")
+        except Exception as e:
+            # 기록 전용 경로다. 실패해도 매매 루프를 흔들면 안 된다.
+            logger.debug(f"[관찰 모드 마감 스냅샷] 실패: {e}")
+
     def _scan_after_hours_sell_signals(self, target_cano):
         """[관측성] 장 마감 후 청산 신호를 하루 한 번 스캔해 알린다. (주문 없음)
 
@@ -4580,6 +4620,11 @@ class AutoTrader:
             if now.strftime("%H%M") < after:
                 return
             today = now.strftime("%Y%m%d")
+            # [기준] 일봉이 확정된 뒤에만 판정한다. 설정 시각(기본 15:35)이 확정 여유
+            #  (15:40)보다 이르면 잔고의 현재가가 아직 NXT 체결가라 종가와 어긋난다 —
+            #  '종가가 확정된 뒤에 돈다'는 이 함수의 전제를 시계가 아니라 확정 여부로 센다.
+            if api.krx_last_settled_day() != today:
+                return
             if self.after_hours_scan_date == today:
                 return
             self.after_hours_scan_date = today

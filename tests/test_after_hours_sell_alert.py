@@ -149,8 +149,13 @@ def _scan(trader, hhmm="1600", holiday=False, holdings=_DEFAULT, enabled=True):
         def now(cls, tz=None):
             return _dt(2026, 8, 10, int(hhmm[:2]), int(hhmm[2:]))
 
+    # 일봉 확정일 — 실제 판정과 같은 규칙(마감 + 확정 여유 15:40 이후에야 '오늘').
+    #  스캔은 시계가 아니라 이 값으로 '종가가 나왔는가'를 센다.
+    settled = "20260810" if hhmm >= "1540" else "20260807"
+
     holdings = _holding() if holdings is _DEFAULT else holdings
     with patch.object(at_pkg.trader, 'datetime', _Now), \
+         patch('modules.auto_trade.api.krx_last_settled_day', return_value=settled), \
          patch('modules.auto_trade.api.is_holiday_today', return_value=holiday), \
          patch('modules.auto_trade.api.get_domestic_balance', return_value=(holdings, {})), \
          patch.object(at_pkg.config, 'AFTER_HOURS_SELL_ALERT', enabled), \

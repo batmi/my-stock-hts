@@ -60,7 +60,7 @@ def test_missing_auto_appkey_shares_one_bucket(sess, separated, monkeypatch):
 
 
 def test_paper_mode_never_splits(sess, separated, monkeypatch):
-    """관찰모드(mode 4)는 앱키가 VIRT 하나뿐이다 — 나누면 한 키에 40 TPS를 쏜다.
+    """관찰모드(mode 1)는 앱키가 VIRT 하나뿐이다 — 나누면 한 키에 40 TPS를 쏜다.
 
     가상투자(mode 1)는 KIS 실전 시세를 쓴다. 즉 별도 분기로
     걸러지지 않고, 오직 'real_app_key == auto_app_key'라는 사실에 기대어 한 버킷으로

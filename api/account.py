@@ -130,7 +130,7 @@ def get_today_history(cano=None, acnt_prdt_cd=None, retries=None, target_date=No
     """금일 체결 내역 조회"""
     # [관찰 모드] 실계좌 체결 내역을 조회하지 않는다. 가상 주문은 즉시 체결되어
     #  대사(reconcile)할 미체결이 없고, 체결 기록은 paper DB가 갖고 있다.
-    #  (mode 4가 KIS 시세를 쓰게 되면서 is_toss 분기가 더 이상 막아주지 않는다)
+    #  (mode 1가 KIS 시세를 쓰게 되면서 is_toss 분기가 더 이상 막아주지 않는다)
     if _paper_active():
         return {'rt_cd': '0', 'output1': [], 'output2': {}}
     # [추가] 토스: CLOSED 주문 이력에서 당일 국내 체결을 KIS 형태로 변환

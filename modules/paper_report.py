@@ -106,8 +106,17 @@ def show_paper_menu():
 def _print_status():
     perf = paper_broker.get_performance()
     config.console.print("[bold cyan]성과 현황 (Paper Trading)[/bold cyan]")
+    # [기준 명시] 총자산은 '지금' 재평가한 값이다. 장 밖에서는 그 '지금'이 무엇인지
+    #  (KRX 종가인지 NXT 최종가인지) 밝히지 않으면 자산 곡선의 마지막 행과 왜 다른지
+    #  알 수 없다 — 곡선은 그날의 확정 스냅샷이고 이 값은 조회 시점 평가다.
+    try:
+        import api
+        _sess, _style = api.market_session_label(False)
+        _basis = f" · 평가 기준: {_sess}"
+    except Exception:      # noqa: BLE001 - 부가 표기는 실패해도 화면을 막지 않는다
+        _basis = ""
     config.console.print(f"[dim]개설 {perf['started_at']} · 시세 소스: 한국투자증권(실전) · "
-                         f"실주문 차단[/dim]\n")
+                         f"실주문 차단{_basis}[/dim]\n")
 
     ret_color = "red" if perf["total_return"] > 0 else ("blue" if perf["total_return"] < 0 else "white")
     t = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim", show_header=False)
@@ -117,7 +126,7 @@ def _print_status():
               f"현금 {perf['cash']:,.0f}원 + 주식 {perf['total']-perf['cash']:,.0f}원")
     t.add_row("누적 수익률", f"[{ret_color}]{perf['total_return']:+.2f}%[/]",
               f"{perf['total']-perf['seed']:+,.0f}원")
-    t.add_row("최대 낙폭(MDD)", f"[blue]{perf['mdd']:.2f}%[/]", "일별 스냅샷 기준")
+    t.add_row("최대 낙폭(MDD)", f"[blue]{perf['mdd']:.2f}%[/]", "일별 스냅샷 + 현재값")
     t.add_row("Profit Factor", f"{perf['pf']:.2f}" if perf["pf"] != float("inf") else "∞",
               f"{perf['win']}승 {perf['loss']}패 · 승률 {perf['win_rate']:.1f}%")
     t.add_row("최장 연속 손절", f"{perf['max_loss_streak']}건",
@@ -416,6 +425,9 @@ def _print_verification_detail(perf):
     elif risk_by_code:
         config.console.print(
             f"  [bold]리스크 예산[/bold] 오픈 리스크 {total_risk:,.0f}원 [dim](캡 미사용)[/dim]")
+    if risk_by_code:
+        # 표 밖으로 나온 요약 줄과 아래 범례(※)를 붙여 두면 한 덩어리로 읽힌다. 한 줄 띄운다.
+        config.console.print()
 
     config.console.print(
         "[dim]※ TS 청산선은 실제 청산 판정과 같은 함수(engine.compute_trailing_stop)로 "
@@ -603,7 +615,10 @@ def _show_equity_curve():
         f"{realized:+,.0f}원[/] · 평가분 {totals[-1] - cur_seed - realized:+,.0f}원")
 
     config.console.print(
-        "[dim]※ 변동=직전 스냅샷 대비(휴장·미실행일은 행이 없어 하루가 아닐 수 있음) · "
+        # 행의 평가 기준을 밝힌다 — 마감 스냅샷이 찍히려면 그 시각에 자동매매가 돌고
+        #  있어야 한다. 15:20 전에 세우면 그날 행은 장중가로 남는다(숨기지 않는다).
+        "[dim]※ 각 행은 그날 KRX 확정 종가 기준(마감 시각에 자동매매가 돌고 있었을 때) · "
+        "변동=직전 스냅샷 대비(휴장·미실행일은 행이 없어 하루가 아닐 수 있음) · "
         "누적=시드 대비 · 주식비중=총자산 중 주식 평가액(노출) · 고점대비=자산 고점 대비 하락률 · "
         "평가분 = 변동 − 실현손익[/dim]")
     if seed_approx:

@@ -1,8 +1,8 @@
 """토큰 캐시가 '발급한 앱키'까지 확인하는가.
 
 json/token_cache.json 은 파일 하나이고 슬롯 이름이 REAL/AUTO/SIMULATION/TOSS 뿐이다.
-그런데 관찰모드(mode 4)는 real_app_key·auto_app_key 를 VIRT_APP_KEY 로 덮어쓴다
-(session.load_config). 즉 mode 4 가 VIRT 키로 받은 토큰이 'REAL' 슬롯에 남는다.
+그런데 관찰모드(mode 1)는 real_app_key·auto_app_key 를 VIRT_APP_KEY 로 덮어쓴다
+(session.load_config). 즉 mode 1 가 VIRT 키로 받은 토큰이 'REAL' 슬롯에 남는다.
 
 만료 시각만 검사하면 그 토큰이 최대 24시간 동안 '유효함'으로 통과한다. 같은 기계에서
 mode 2 로 바꾸는 순간 남의 앱키 토큰을 그대로 집어 KIS 인증이 실패하고, 재발급은
@@ -61,7 +61,7 @@ def test_recently_issued_still_detected_for_same_key(store):
 # ─────────────────────────────────────────────
 
 def test_paper_token_is_not_reused_by_real_mode(store):
-    """mode 4 가 'REAL' 슬롯에 남긴 VIRT 키 토큰을 mode 2 가 재사용하면 안 된다."""
+    """mode 1 가 'REAL' 슬롯에 남긴 VIRT 키 토큰을 mode 2 가 재사용하면 안 된다."""
     store.real_app_key = "VIRT-KEY"                     # 관찰모드: real_app_key ← virt_app_key
     store.set_token("REAL", "tok-from-paper", _expiry())
 

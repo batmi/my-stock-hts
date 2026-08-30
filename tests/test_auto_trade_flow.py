@@ -1,8 +1,30 @@
+import copy
+
 import pytest
 from unittest.mock import patch, MagicMock
 from modules.auto_trade import AutoTrader
 import config
 import pandas as pd
+
+
+@pytest.fixture(autouse=True)
+def _restore_config_dicts():
+    """이 파일은 config 전역 dict 를 **제자리에서** 고친다(임계값 고정). 되돌리지 않으면
+    같은 워커의 뒤 테스트가 오염된 값을 본다.
+
+    실제로 test_exit_parity 가 이것 때문에 깨졌다: BUY_RSI_MAX 70→65 가 남으면
+    module 스코프로 미리 계산해 둔 상태(precompute_status)와 그 뒤 실매매 경로가 서로
+    다른 임계값을 보게 되어, 경계에 있던 판정 2건이 '보유' ↔ '점수하락'으로 뒤집힌다.
+    xdist 분배에 따라 앞뒤 순서가 바뀌므로 증상이 파일 하나 추가만으로 나타났다 사라진다.
+    """
+    saved_thresholds = copy.deepcopy(config.ANALYSIS_THRESHOLDS)
+    saved_sell = copy.deepcopy(config.SELL_STRATEGY)
+    yield
+    config.ANALYSIS_THRESHOLDS.clear()
+    config.ANALYSIS_THRESHOLDS.update(saved_thresholds)
+    config.SELL_STRATEGY.clear()
+    config.SELL_STRATEGY.update(saved_sell)
+
 
 @pytest.fixture
 def trader():
