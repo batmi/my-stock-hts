@@ -117,26 +117,93 @@ def test_recovers_on_next_cycle(rm):
     assert r.portfolio_risk_budget_left() == pytest.approx(1_000_000)
 
 
-def test_buy_path_reserves_before_sending_not_after():
-    """예산 선점이 주문 **전**에 끝나야 한다(회귀 방지).
+# ---------------------------------------------------------------------------
+# 신규 매수 경로의 예산 선점 — 동작으로 잰다
+#
+# [왜] 종전에는 주문 성공 뒤에 히트를 더했다. 그 사이(네트워크 왕복)에 매도 워커의
+# 피라미딩이 아직 반영되지 않은 예산을 보고 자기 몫을 잡을 수 있어, 두 경로의 합계가
+# 포트폴리오 히트 캡을 넘었다. 피라미딩은 확인·선점을 락으로 원자화하고 실패 시
+# 반납한다 — 신규 매수도 같은 규약이어야 한다.
+#
+# [이 테스트를 다시 쓴 이유] 종전 판정은 inspect.getsource 로 소스 문자열의 등장 순서를
+# 비교했다. 변수명만 바꿔도 깨지고, 반대로 의미가 바뀌어도 통과할 수 있다 — 지키려던
+# 성질(주문이 나가는 순간 예산이 이미 잡혀 있는가)을 실제로는 재지 않았다.
+# ---------------------------------------------------------------------------
+from unittest.mock import patch
 
-    [왜] 종전에는 주문 성공 뒤에 히트를 더했다. 그 사이(네트워크 왕복)에 매도 워커의
-    피라미딩이 아직 반영되지 않은 예산을 보고 자기 몫을 잡을 수 있어, 두 경로의 합계가
-    포트폴리오 히트 캡을 넘었다. 피라미딩은 이미 확인·선점을 락으로 원자화하고 실패 시
-    반납한다 — 신규 매수도 같은 규약이어야 한다.
+_CAND = [{'code': '005930', 'name': '삼성전자', 'price': 70_000, 'score': 9.0,
+          'rsi': 50, 'adx': 30, 'cci': 100, 'is_custom_rule': False, 'atr': 1_000}]
+
+
+@pytest.fixture
+def buyer(monkeypatch):
+    """신규 매수 1회를 태울 수 있는 트레이더."""
+    AutoTrader._instance = None
+    t = AutoTrader()
+    t.is_running = True
+    t.buy_halted = False
+    t.pending_restore_ok = True
+    t.initial_asset = 10_000_000
+    t.current_total_asset = 10_000_000
+    t.portfolio_heat_amt = 0.0
+    t.portfolio_heat_unknown = False
+    monkeypatch.setattr(config.settings, "SYSTEM_MAX_PORTFOLIO_RISK", 10.0, raising=False)
+    monkeypatch.setattr(t.risk_manager, "current_risk_scale", lambda market_type=None: 1.0)
+    return t
+
+
+def _run_buy(trader, odno="ODNO1", on_send=None):
+    def _send(*a, **kw):
+        if on_send:
+            on_send()
+        return odno
+    with patch.dict(config.SELL_STRATEGY,
+                    {"USE_ATR_STOP": True, "STOP_LOSS_RATE": -7.0, "ATR_STOP_MULTIPLIER": 2.0}), \
+         patch.object(trader, '_clamp_order_price', side_effect=lambda c, p: p), \
+         patch('modules.auto_trade.api.fetch_buyable_quantity', return_value=1000), \
+         patch('modules.auto_trade.db_manager.db.delete_trailing_stop'), \
+         patch('modules.auto_trade.db_manager.db.delete_half_tp'), \
+         patch('modules.auto_trade.db_manager.db.cancel_reserved_buy_orders', return_value=0), \
+         patch.object(trader.order_manager, 'send_order', side_effect=_send) as order:
+        trader._execute_buy_orders(list(_CAND), 10_000_000, 0.25, 0, 4)
+    return order
+
+
+def test_budget_is_reserved_before_the_order_leaves(buyer):
+    """[핵심] 주문이 나가는 그 순간에 이미 예산이 잡혀 있어야 한다."""
+    seen = []
+    order = _run_buy(buyer, on_send=lambda: seen.append(buyer.portfolio_heat_amt))
+    assert order.called, "대조 조건이 깨졌다 — 주문 자체가 안 나갔다"
+    assert seen and seen[0] > 0, "주문이 나가는 시점에 예산이 아직 안 잡혀 있었다"
+
+
+def test_reservation_is_returned_when_the_order_fails(buyer):
+    """주문이 실패하면 선점분은 반납된다 — 안 그러면 예산이 영구히 잠긴다."""
+    order = _run_buy(buyer, odno=None)
+    assert order.called
+    assert buyer.portfolio_heat_amt == 0.0, "주문 실패인데 선점분이 남았다"
+
+
+def test_budget_taken_between_check_and_send_blocks_the_buy(buyer):
+    """[핵심] 확인과 선점 사이에 다른 경로가 예산을 가져가면 사지 않는다.
+
+    배분액 기준의 첫 확인은 락 밖이다. 그 뒤 매도 워커의 피라미딩이 같은 예산을 잡으면
+    합계가 캡을 넘으므로, 확정 수량으로 **다시 확인하고 같은 락 안에서 선점**해야 한다.
+    (첫 호출은 넉넉한 예산, 두 번째 호출은 소진 — 경합을 그대로 흉내 낸다)
     """
-    import inspect
-    from modules.auto_trade import AutoTrader
-    src = inspect.getsource(AutoTrader._execute_buy_orders)
+    budgets = iter([10_000_000, 0.0])
+    with patch.object(buyer.risk_manager, 'portfolio_risk_budget_left',
+                      side_effect=lambda *a, **kw: next(budgets, 0.0)):
+        order = _run_buy(buyer)
+    assert not order.called, "주문 직전에 예산이 소진됐는데 그대로 발주했다"
+    assert buyer.portfolio_heat_amt == 0.0, "보류인데 예산이 선점된 채 남았다"
 
-    reserve = src.index("self.portfolio_heat_amt += new_risk_amt")
-    send = src.index("send_order(cand['code']")
-    release = src.index("self.portfolio_heat_amt -= new_risk_amt")
 
-    assert reserve < send, "주문보다 늦게 선점하면 그 사이 예산이 이중 사용된다"
-    assert send < release, "반납은 주문 실패를 확인한 뒤여야 한다"
-    assert "with self._lock" in src[reserve - 60:reserve], "선점이 락 밖이다"
-    assert "with self._lock" in src[release - 60:release], "반납이 락 밖이다"
+def test_no_contention_means_the_recheck_is_a_no_op(buyer):
+    """[대조군] 경합이 없으면 재확인은 무동작이어야 한다 — 상시 보류면 기능이 죽는다."""
+    order = _run_buy(buyer)
+    assert order.called, "경합이 없는데 재확인이 매수를 막았다"
+    assert buyer.portfolio_heat_amt > 0, "체결 대기분의 리스크가 예산에 안 잡혔다"
 
 
 # ---------------------------------------------------------------------------

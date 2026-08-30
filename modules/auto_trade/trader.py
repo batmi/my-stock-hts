@@ -4651,6 +4651,11 @@ class AutoTrader:
         entry_date_map = db_manager.db.get_position_entry_dates(_all_hold_codes)
 
         # [추가] 포트폴리오 히트(총 오픈 리스크) 스냅샷 갱신 — 같은 주기의 피라미딩/신규 매수 캡 판정에 사용
+        # [알려진 한계] 기준은 **잔고**다. 직전 주기에 낸 매수·증액 주문이 아직 체결되지
+        #  않았으면 그 오픈 리스크는 여기 안 잡혀, 체결될 때까지 히트가 과소평가된다
+        #  (주기 안에서의 이중 사용은 매수/증액 경로의 '주문 전 선점'이 막지만, 그 선점분은
+        #  다음 주기의 이 재계산으로 리셋된다). 미체결은 보통 한 주기 안에 체결·취소로
+        #  정리되고, 과소평가 폭은 그 한 주문분이라 캡을 실질적으로 무너뜨리지 않는다.
         try:
             self.portfolio_heat_amt = self.risk_manager.compute_portfolio_heat(holdings, buy_trades_map)
             self.portfolio_heat_unknown = False
@@ -5042,6 +5047,16 @@ class AutoTrader:
             if getattr(self, 'buy_halted', False):
                 return
 
+            # [안전장치] 미체결 주문 현황을 모르면 증액도 보류한다 — 신규 매수와 같은 이유다
+            #  (_check_buy_conditions의 pending_restore_ok 게이트). 재기동 직후 복구 조회가
+            #  실패하면 is_pending 맵이 비어 있어 '미체결 없음'과 '모름'이 구분되지 않는다.
+            #  그 상태로 증액하면 거래소에 이미 걸린 주문을 못 본 채 두 번째를 낸다
+            #  (주문 유실은 재전송하지 않는다는 규약과 같은 자리). manage_unfilled_orders가
+            #  성공하면 자동 해제된다.
+            if not getattr(self, 'pending_restore_ok', True):
+                self.log(f"피라미딩 보류: {name} - 미체결 주문 현황 미확인 (중복 주문 방지)")
+                return
+
             # [증액 횟수] 권위 소스는 trailing_stops.pyramid_count 다(재시작에도 유지되고,
             #  신규 진입 시 delete_trailing_stop 으로 함께 지워져 자동으로 0이 된다).
             #
@@ -5123,9 +5138,28 @@ class AutoTrader:
                 # [SSOT] 신규 매수와 같은 함수를 쓴다 (engine.atr_stop_rate).
                 sl_rate = _pkg().atr_stop_rate(atr_val, current_price, atr_mult=atr_mult) or sl_rate
 
+            # [추세추종 안전장치] "탈출 전략이 없다면 포지션을 잡지 마라" — 신규 매수
+            #  (_execute_buy_orders)와 같은 게이트다. 종전에는 증액 경로에만 이 검사가 없어,
+            #  ATR 손절 OFF + 고정 손절 0(둘 다 사용자 설정으로 가능)이면 청산 기준 없는
+            #  포지션을 더 키웠다. 게다가 아래 히트 캡은 sl_rate<0 일 때만 도는 구조라
+            #  리스크 회계에서도 통째로 빠졌다(add_risk=0 → 예산 확인 자체를 건너뜀).
+            #  개별 룰의 stop_loss가 NULL이면 값이 None으로 들어오는 것도 여기서 걸린다
+            #  (종전에는 아래 비교에서 TypeError가 나 '피라미딩 오류'로만 남았다).
+            try:
+                sl_rate = float(sl_rate)
+            except (TypeError, ValueError):
+                sl_rate = 0.0
+            if sl_rate >= 0:
+                self.log(f"피라미딩 보류: {name} - 손절 기준 없음 "
+                         f"(ATR 손절 {'ON(ATR 미확보)' if use_atr_stop else 'OFF'} + 고정 손절 0). "
+                         f"청산 기준과 손실액 상한이 모두 없는 증액은 하지 않습니다.")
+                return
+
             # [추가] 포트폴리오 히트 캡: 증액분 리스크가 남은 예산을 넘으면 피라미딩 보류.
             #  (_sell_worker 스레드 동시 실행 대비, 예산 확인과 선점을 락으로 원자화)
-            add_risk = (add_qty * order_price) * (abs(sl_rate) / 100.0) if sl_rate < 0 else 0.0
+            #  (sl_rate < 0 은 위 게이트가 보장한다 — 조건부로 두면 '손절 없음'이 다시
+            #   히트 캡 우회 경로가 된다)
+            add_risk = (add_qty * order_price) * (abs(sl_rate) / 100.0)
             reserved_heat = False
             if add_risk > 0:
                 with self._lock:
@@ -6109,21 +6143,31 @@ class AutoTrader:
             #  DB 기록이 남는데(최고가 UPSERT는 단조 증가), 재시작 후 재매수 시 잔존 최고가로
             #  max_profit이 과대 계산되어 매수 직후 BEP/TS가 오발동(신규 포지션 즉시 청산)하는
             #  것을 방지한다. (후보군은 보유 종목을 제외하므로 이 시점은 항상 신규 포지션)
+            # [히트 캡 선점] 주문을 내기 **전에** 예산을 잡는다. 종전에는 주문 성공 뒤에
+            #  더했는데, 그 사이(네트워크 왕복)에 매도 워커의 피라미딩이 같은 예산을 보고
+            #  자기 몫을 잡을 수 있어 합계가 캡을 넘었다. 피라미딩 경로는 이미 확인과
+            #  선점을 락으로 원자화하고 실패 시 반납한다 — 같은 규약으로 맞춘다.
+            #  [원자성] 위쪽 예산 확인은 배분액 기준이고 락 밖이다. 확인과 선점 사이에
+            #   다른 경로(피라미딩)가 예산을 잡으면 합계가 캡을 넘으므로, **확정 수량으로
+            #   다시 확인하고 같은 락 안에서 선점**한다. 경합이 없으면 이 재확인은 무동작이다
+            #   (여기 도달한 시점의 qty×주문가는 위에서 통과한 배분액 이하다).
+            new_risk_amt = (qty * order_price) * (abs(sl_rate) / 100.0) if (sl_rate and sl_rate < 0) else 0.0
+            if new_risk_amt > 0:
+                with self._lock:
+                    budget_now = self.risk_manager.portfolio_risk_budget_left(avail_cash=avail_cash)
+                    if budget_now is not None and new_risk_amt > budget_now:
+                        self.log(f"매수 보류: {cand['name']} - 포트폴리오 총 리스크 예산이 "
+                                 f"주문 직전에 소진됨 (필요 {new_risk_amt:,.0f}원 > 남은 "
+                                 f"{max(budget_now, 0):,.0f}원)")
+                        continue
+                    self.portfolio_heat_amt += new_risk_amt
+
             db_manager.db.delete_trailing_stop(cand['code'])
             db_manager.db.delete_half_tp(cand['code'])
             with self._lock:
                 self.trailing_stop_cache.pop(cand['code'], None)
 
             self.log(f"매수 실행: {cand['name']} - {reason}")
-
-            # [히트 캡 선점] 주문을 내기 **전에** 예산을 잡는다. 종전에는 주문 성공 뒤에
-            #  더했는데, 그 사이(네트워크 왕복)에 매도 워커의 피라미딩이 같은 예산을 보고
-            #  자기 몫을 잡을 수 있어 합계가 캡을 넘었다. 피라미딩 경로는 이미 확인과
-            #  선점을 락으로 원자화하고 실패 시 반납한다 — 같은 규약으로 맞춘다.
-            new_risk_amt = (qty * order_price) * (abs(sl_rate) / 100.0) if (sl_rate and sl_rate < 0) else 0.0
-            if new_risk_amt > 0:
-                with self._lock:
-                    self.portfolio_heat_amt += new_risk_amt
 
             # [수정] 매수 시 사유와 점수, 그리고 지정가 가격을 DB 저장을 위해 전달
             odno = self.order_manager.send_order(cand['code'], qty, "buy", name=cand['name'], reason=reason, score=cand['score'], price=order_price, rule=cand.get('rule'), stop_loss_rate=sl_rate)

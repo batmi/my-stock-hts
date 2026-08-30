@@ -129,3 +129,51 @@ def test_execute_order_success(mock_tg, mock_update, mock_place, monitor):
     mock_place.assert_called_once_with('domestic', 'buy', '005930', 10, '80000', '00')
     mock_update.assert_any_call(5, 'TRIGGERED', '123456')
     mock_tg.assert_called_once()
+
+# ---------------------------------------------------------------------------
+# 원장에 적히는 것이 '실제로 발주한 것'인가
+#
+# [왜] 예약 매도는 발주 직전에 매도가능수량과 대사해 수량을 줄인다(_reconcile_sell_qty).
+# 그런데 거래내역(trades)에는 등록 시점의 order['qty']와 order_price(시장가면 0)를
+# 적고 있었다 — 텔레그램 알림은 대사된 수량을 쓰므로 원장과 알림이 서로 달랐다.
+# 원장은 사후에 손익·체결을 대조하는 유일한 근거라 '주문한 적 없는 수량'이 남으면 안 된다.
+# ---------------------------------------------------------------------------
+
+def _execute(monitor, order, sellable=None, price=0.0):
+    """_execute_order 를 한 번 태우고 (insert_trade Mock, place_order Mock)을 돌려준다."""
+    with patch('modules.reserved_order_monitor.db_manager.db.update_reserved_order_status'), \
+         patch('modules.reserved_order_monitor.db_manager.db.cancel_other_reserved_orders',
+               return_value=[]), \
+         patch('modules.reserved_order_monitor.db_manager.db.insert_trade') as insert, \
+         patch('modules.reserved_order_monitor.analysis.get_snapshot', return_value=None), \
+         patch('modules.reserved_order_monitor.api.send_telegram_message'), \
+         patch('modules.reserved_order_monitor.api.fetch_sellable_quantity',
+               return_value=sellable), \
+         patch('modules.reserved_order_monitor.api.get_current_price', return_value=price), \
+         patch('modules.auto_trade.AutoTrader'), \
+         patch('modules.auto_trade.ConclusionMonitor'), \
+         patch('modules.reserved_order_monitor.api.place_order',
+               return_value={'rt_cd': '0', 'output': {'ODNO': '123456'}}) as place:
+        monitor._execute_order(order, "테스트 사유")
+    return insert, place
+
+
+def test_ledger_records_the_reconciled_sell_quantity(monitor):
+    """외부 매매로 보유가 줄면 원장도 줄어든 수량을 적어야 한다."""
+    order = {'id': 7, 'cano': '12345678', 'acnt': '01', 'code': '005930', 'market': 'KR',
+             'order_type': 'sell', 'name': '삼성전자', 'qty': 10, 'order_price': 80000,
+             'condition_type': 'PRICE_BELOW'}
+    insert, place = _execute(monitor, order, sellable=4)
+    assert place.call_args[0][3] == 4, "대조 조건이 깨졌다 — 발주 수량이 축소되지 않았다"
+    assert insert.call_args[0][3] == 4, "원장에 주문한 적 없는 수량(등록 수량)이 남았다"
+
+
+def test_ledger_records_the_price_actually_ordered_for_a_market_order(monitor):
+    """시장가(등록가 0)로 현재가를 계산해 발주했으면 그 단가가 원장에 남아야 한다."""
+    order = {'id': 8, 'cano': '12345678', 'acnt': '01', 'code': 'AAPL', 'market': 'US',
+             'order_type': 'buy', 'name': 'AAPL', 'qty': 3, 'order_price': 0,
+             'condition_type': 'PRICE_ABOVE'}
+    insert, place = _execute(monitor, order, price=200.0)
+    sent = float(place.call_args[0][4])
+    assert sent > 0, "대조 조건이 깨졌다 — 시장가 단가가 계산되지 않았다"
+    assert float(insert.call_args[0][4]) == pytest.approx(sent), "원장 단가가 0으로 남았다"

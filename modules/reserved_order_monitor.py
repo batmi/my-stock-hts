@@ -693,9 +693,19 @@ class ReservedOrderMonitor:
             # [추가] 예약 발동 내역을 거래 내역(trades)에 기록 (접수 상태)
             t_type = f"{'매수' if order['order_type'] == 'buy' else '매도'}(예약)"
             snapshot = analysis.get_snapshot(order['code'], is_overseas=(order['market'] == 'US'))
+            # [원장 정합] 실제로 발주한 수량·단가를 적는다. 종전에는 등록 시점의
+            #  order['qty']와 order_price(시장가면 0)를 적어, 매도 수량 대사(_reconcile_sell_qty)로
+            #  줄어든 주문이 원장에는 옛 수량으로 남고 텔레그램 알림과도 갈렸다.
+            #  시장가로 산출한 지정가(price_str)가 있으면 그것이 실제 주문 단가다.
+            try:
+                rec_price = float(price_str)
+            except (TypeError, ValueError):
+                rec_price = 0.0
+            if rec_price <= 0:
+                rec_price = order_price
             db_manager.db.insert_trade(
-                t_type, order['code'], order['name'], order['qty'], 
-                order_price, odno, snapshot=snapshot, reason=f"예약발동: {reason}"
+                t_type, order['code'], order['name'], order_qty,
+                rec_price, odno, snapshot=snapshot, reason=f"예약발동: {reason}"
             )
             
             # [추가] 미체결 추적 및 모의투자 체결 보정을 위해 OrderManager에 등록
