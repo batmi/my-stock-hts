@@ -94,8 +94,6 @@ class ConclusionMonitor:
             cls._instance.cancel_status = {} # [추가] 주문별 취소 수량 추적 {계좌-주문번호: qty}
             cls._instance.processed_sim_fills = set() # [추가] 모의투자 중복 알림 방지 캐시
             cls._instance.paper_backfill_done = False # [추가] 가상투자 당일 원장 1회 복구 여부
-            cls._instance.ws_confirmed_fills = {}     # [추가] WS 체결통보로 '실제 체결'이 확인된 주문 {odno: {price,qty,ts}}
-                                                       #  → 체결 알림에서 '(추정)' 문구 제거 및 실제 체결가 사용에 이용
             
             # [수정] 적응형 폴링 설정 로드
             cls._instance.active_interval = getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5)
@@ -141,25 +139,15 @@ class ConclusionMonitor:
 
         notice의 체결 데이터를 직접 신뢰해 DB에 쓰지 않고(필드 검증 리스크 회피),
         검증된 REST 경로(_check_conclusions)를 즉시 1회 수행하도록 깨우기만 한다.
+        WS는 **지연을 줄일 뿐**이며, 통보가 오지 않아도 주기 폴링이 같은 체결을 잡는다.
+
+        [주의] 구독 키는 HTS ID라 같은 ID의 **다른 계좌** 주문도 여기로 들어온다. 지금은
+          '깨우기'만 하므로 무해하지만(폴링이 우리 계좌만 본다), 통보 내용을 쓰기 시작하면
+          notice['acnt'] 로 계좌를 갈라야 한다.
         """
         try:
             if notice.get('rejected'):
                 return  # 거부 통보는 폴링이 처리(미체결 정리 경로)
-            # [추가] WS로 '실제 체결(is_fill=2)'을 확인한 주문은 주문번호+체결정보를 기록한다.
-            #  이후 체결 알림 생성 시 이 기록이 있으면 '(추정)' 문구를 빼고 실제 체결가를 사용한다.
-            #  (WS 미수신이면 기록이 없어 기존처럼 잔고 기반 추정 라벨을 유지)
-            if notice.get('is_fill') and notice.get('odno'):
-                with self._lock:
-                    # 메모리 상한(라즈베리파이): 오래된 항목 정리
-                    if len(self.ws_confirmed_fills) > 200:
-                        cutoff = time.time() - 600
-                        for k in [k for k, v in self.ws_confirmed_fills.items() if v.get('ts', 0) < cutoff]:
-                            self.ws_confirmed_fills.pop(k, None)
-                    self.ws_confirmed_fills[_norm_odno(notice['odno'])] = {
-                        'price': notice.get('price') or 0.0,
-                        'qty': notice.get('qty') or 0.0,
-                        'ts': time.time(),
-                    }
             self.check_now()  # 집중 감시 모드 진입 + 즉시 폴링 1회
         except Exception as e:
             logger.debug(f"[Monitor] 체결통보 처리 오류: {e}")
@@ -874,12 +862,9 @@ class ConclusionMonitor:
                                 price = float(cp_data['output'].get('stck_prpr', 0))
                 except Exception: pass
 
-            # [추가] WS 체결통보로 '실제 체결'이 확인된 주문인지 판정.
-            #  확인되면 (추정)이 아닌 확정 체결로 라벨링하고, 실시간 체결가(있으면)를 사용한다.
+            # 체결이 확정적으로 확인된 경우(가상투자 원장 대사)에는 '(추정)' 라벨을 떼고
+            # 원장의 실제 체결가를 쓴다.
             ws_fill = confirmed_fill
-            if ws_fill is None:
-                with self._lock:
-                    ws_fill = self.ws_confirmed_fills.get(_norm_odno(odno))
             ws_confirmed = bool(ws_fill)
             if ws_fill and float(ws_fill.get('price') or 0) > 0:
                 price = float(ws_fill['price'])  # 추정가 → 실시간 체결통보의 실제 체결가로 대체

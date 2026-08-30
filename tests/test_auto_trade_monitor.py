@@ -84,16 +84,26 @@ def test_norm_odno_strips_zero_padding():
     assert _norm_odno("CANCEL_99") == "CANCEL_99"  # 비숫자는 원문 유지
 
 
-def test_ws_exec_notice_records_fill_and_ignores_rejected(monitor):
-    with patch.object(monitor, 'check_now'):
-        # 실제 체결(is_fill) → 기록
+def test_ws_exec_notice_wakes_the_poller_but_ignores_rejections(monitor):
+    """WS는 **지연만 줄인다** — 통보 내용을 믿고 DB에 쓰지 않고 검증된 REST 확인을 깨운다.
+
+    거부 통보까지 깨우면 체결이 없는데도 집중 감시로 들어가 TPS만 태운다(미체결 정리
+    경로가 따로 처리한다).
+    """
+    with patch.object(monitor, 'check_now') as woke:
         monitor._on_ws_exec_notice({'is_fill': True, 'rejected': False,
                                     'odno': '0000013727', 'price': 28200.0, 'qty': 33})
-        assert _norm_odno('0000013727') in monitor.ws_confirmed_fills
-        # 거부 통보 → 무시
+        assert woke.call_count == 1
         monitor._on_ws_exec_notice({'is_fill': False, 'rejected': True,
                                     'odno': '0000099999', 'price': 0, 'qty': 0})
-        assert _norm_odno('0000099999') not in monitor.ws_confirmed_fills
+        assert woke.call_count == 1, "거부 통보가 집중 감시를 깨웠다"
+
+
+def test_a_malformed_ws_notice_does_not_escape_to_the_feed_thread(monitor):
+    """콜백은 피드 스레드에서 불린다 — 여기서 예외가 새면 WS 수신 루프가 죽는다."""
+    with patch.object(monitor, 'check_now'):
+        monitor._on_ws_exec_notice({})       # 필드 없음
+        monitor._on_ws_exec_notice(None)     # notice 자체가 None
 
 
 @patch('modules.auto_trade.api.get_current_price_data', return_value={'rt_cd': '1'})
@@ -101,16 +111,20 @@ def test_ws_exec_notice_records_fill_and_ignores_rejected(monitor):
 @patch('modules.auto_trade.db_manager.db')
 @patch('modules.auto_trade.api.send_telegram_message')
 def test_handle_simulation_fill_ws_confirmed_drops_estimate(mock_tg, mock_db, mock_cp, mock_cpd, monitor):
+    """체결 원장으로 확인된 체결은 '(추정)'을 떼고 원장의 실제 체결가를 쓴다.
+
+    [이력] 종전에는 이 확정 정보가 WS 체결통보 기록(ws_confirmed_fills)에서도 왔다.
+    KIS 모의(mode 1) 폐지 뒤 그 경로에는 산 호출자가 없어졌고(유일한 호출자인
+    _apply_paper_fill 은 항상 confirmed_fill 을 넘긴다), 기록만 쌓이고 아무도 읽지
+    않는 상태였다. 지금 남은 확정 경로는 원장 대사 하나다.
+    """
     mock_db.check_trade_exists.return_value = False
     mock_db.get_all_stock_strategies.return_value = []
     odno = '0000013727'
-    # WS 체결통보 수신(실제 체결가 28,200)
-    with patch.object(monitor, 'check_now'):
-        monitor._on_ws_exec_notice({'is_fill': True, 'rejected': False,
-                                    'odno': odno, 'price': 28200.0, 'qty': 33})
     trade = {'type': 'sell', 'name': '대한항공', 'price': 0, 'reason': '사용자 수동 주문',
              'profit_amt': -34650, 'profit_rate': -3.58}
-    monitor._handle_simulation_fill(MagicMock(), trade, odno, '003490', 33, '잔고 감소 확인')
+    monitor._handle_simulation_fill(MagicMock(), trade, odno, '003490', 33, '잔고 감소 확인',
+                                    confirmed_fill={'price': 28200.0, 'qty': 33})
 
     # DB: '체결(추정)'이 아닌 '체결'로 저장
     assert mock_db.insert_trade.call_args.kwargs.get('order_status') == '체결'

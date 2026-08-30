@@ -74,7 +74,9 @@ def parse_h0stcnt0(body, count="1"):
         if len(rec) <= _P_VOL_STRENGTH:
             continue
         out.append({
-            'code': rec[_P_CODE],
+            #  [캐시 키] 읽기 경로는 6자리 단축코드로 조회한다. 전문에 공백이 섞이면
+            #  캐시 키가 어긋나 WS가 영원히 안 맞고, 조용히 REST로만 돌아간다(무증상 성능 저하).
+            'code': rec[_P_CODE].strip(),
             'price': _to_float(rec[_P_PRICE]),
             'change_rate': _to_float(rec[_P_CHG_RATE]),
             'volume': _to_float(rec[_P_VOLUME]),
@@ -90,7 +92,7 @@ def parse_h0stasp0(body, count="1"):
         if len(rec) <= _A_TOTAL_BID:
             continue
         out.append({
-            'code': rec[_A_CODE],
+            'code': rec[_A_CODE].strip(),      # 위와 같은 이유(캐시 키 일치)
             'total_ask': _to_float(rec[_A_TOTAL_ASK]),
             'total_bid': _to_float(rec[_A_TOTAL_BID]),
         })
