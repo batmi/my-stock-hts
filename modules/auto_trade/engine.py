@@ -2310,6 +2310,27 @@ class RiskManager:
         heat = getattr(self.trader, 'portfolio_heat_amt', 0.0)
         return equity * (cap * self.current_risk_scale() / 100.0) - heat
 
+    def _equity_baseline(self):
+        """[SSOT] 리스크 판정의 자본 기준선 = 당일 시작 자산 + 오늘 누적 순입출금.
+
+        일일 손실 차단기와 사이징이 **같은 자본**을 봐야 한다 — 서로 다른 기준을 보면
+        종목당 한도는 걸리는데 합산 한도는 안 걸리는 식으로 어긋난다.
+
+        [왜 속성에서 직접 재는가] 백테스트와 테스트는 얇은 트레이더 대역으로 이 클래스를
+        그대로 쓴다(사이징 산식을 두 벌로 만들지 않기 위해서다 — test_sizing_parity 가 그
+        동일성을 고정한다). 그래서 메서드 존재를 요구하지 않고 속성만 읽되, **숫자인지
+        확인한다**: 목 객체는 float()에 1.0을 돌려주므로 그대로 믿으면 기준 자본이 1원이
+        되어 배분액이 0이 된다(실제로 이 함수의 첫 구현이 그랬다).
+        net_transfer_today 가 없거나 숫자가 아니면 보정하지 않는다 — 모르면 안 건드린다.
+        """
+        base = getattr(self.trader, 'initial_asset', 0)
+        base = float(base) if isinstance(base, (int, float)) and not isinstance(base, bool) else 0.0
+        if base <= 0:
+            return 0.0
+        net = getattr(self.trader, 'net_transfer_today', 0)
+        net = float(net) if isinstance(net, (int, float)) and not isinstance(net, bool) else 0.0
+        return max(0.0, base + net)
+
     def allocate_budget(self, avail_cash, invest_ratio, stop_loss_rate=None, atr=None,
                         current_price=None, market_type=None):
         """자산 배분 계산
@@ -2356,15 +2377,18 @@ class RiskManager:
         #    PF도 낮아(2.83→2.20) 국면 판단이 실제로 기여함을 확인했다(셔플 대조군도 동일).
         scaled_ratio = invest_ratio * risk_scale
 
-        if self.trader.initial_asset > 0:
-            target_invest_amt = int(self.trader.initial_asset * scaled_ratio)
+        # [입출금 보정] 차단기와 같은 기준선을 쓴다. 두 장치가 서로 다른 자본을 보면
+        #  종목당 한도는 걸리는데 합산 한도는 안 걸리는 식으로 어긋난다.
+        equity_base = self._equity_baseline()
+        if equity_base > 0:
+            target_invest_amt = int(equity_base * scaled_ratio)
         else:
             target_invest_amt = int(avail_cash * scaled_ratio)
 
         base_amt = target_invest_amt
 
         if risk_per_trade > 0 and stop_loss_rate and abs(stop_loss_rate) > 0:
-            total_equity = self.trader.initial_asset if self.trader.initial_asset > 0 else avail_cash
+            total_equity = equity_base if equity_base > 0 else avail_cash
             max_loss_amt = total_equity * (risk_per_trade * risk_scale / 100.0)
             try:
                 gap_buffer = max(1.0, float(risk_params.get("GAP_RISK_BUFFER", 1.2)))
@@ -2419,17 +2443,31 @@ class RiskManager:
         if loss_limit_pct <= 0 or self.trader.initial_asset <= 0: return
         if current_total <= 0: return
 
+        # [입출금 보정] 기준선은 '시작 자산 + 오늘 순입출금'이다. 출금은 손실이 아니므로
+        #  분모에서 함께 빼야 한다 — 안 빼면 정상적인 출금 한 번에 방어 모드가 걸린다
+        #  (1,000만 계좌에서 300만 출금 = -30%로 읽힌다). 이 값은 저장된 상태가 아니라
+        #  매 주기 다시 재는 파생값이라, 기준 자산을 옮기지 않아도 즉시 반영된다.
+        baseline = self._equity_baseline()
+        if baseline <= 0: return
+
         # [Fix] 비정상적인 데이터(갑작스런 반토막 이상 하락 등 API 데이터 누락 의심) 필터링
         # (주로 증권사 API 통신 오류로 인해 주식 평가액이 0으로 수신되어 예수금만 계산될 때 발생합니다.)
-        if current_total < self.trader.initial_asset * 0.5:
+        if current_total < baseline * 0.5:
             self.trader.log(f"⚠️ 비정상적인 자산 급감 감지(API 오류 의심). 손실 한도 체크를 스킵합니다. (현재자산: {current_total:,}원)")
             return
 
-        loss_rate = (current_total - self.trader.initial_asset) / self.trader.initial_asset * 100
-        
+        loss_rate = (current_total - baseline) / baseline * 100
+
         if config.FILE_DEBUG_LEVEL == "DEBUG":
-            logger.debug(f"[LossCheck] 시작자산:{self.trader.initial_asset:,} -> 현재자산:{current_total:,} | 변동률:{loss_rate:+.2f}% (한도:-{loss_limit_pct}%)")
-        
+            logger.debug(f"[LossCheck] 기준선:{baseline:,.0f}(시작 {self.trader.initial_asset:,} + 순입출금 {getattr(self.trader, 'net_transfer_today', 0):+,}) -> 현재자산:{current_total:,} | 변동률:{loss_rate:+.2f}% (한도:-{loss_limit_pct}%)")
+
+        # [자가 복구] 출금이 확인되기 전 한 주기 동안은 손실로 보여 방어 모드가 걸릴 수 있다.
+        #  다음 주기에 순입출금이 잡히면 기준선이 맞춰지므로, 그때 스스로 푼다.
+        #  사람이 메뉴를 열 필요가 없다 — 일일 손실로 걸린 것만, 한도 안일 때만 푼다.
+        if (loss_rate > -loss_limit_pct
+                and getattr(self.trader, 'buy_halt_kind', None) == 'daily_loss'):
+            self.trader._reevaluate_buy_halt_after_transfer(current_total, "입출금")
+
         if loss_rate <= -loss_limit_pct:
             # [Fix] 기존에는 여기서 trader.stop()으로 시스템을 통째로 정지했다. 그러나 정지는
             #  포지션을 청산하지 않고 매도 감시 루프까지 함께 끄기 때문에, 일일 손실 한도에
@@ -2453,8 +2491,8 @@ class RiskManager:
                 self.trader.last_emergency_alert_time = now
 
             # 이미 같은 날 발동 중이면 halt_buys가 False를 돌려주어 알림·로그가 반복되지 않는다.
-            if self.trader.halt_buys(reason, notify_msg=msg):
-                self.trader.log(f"시작 자산: {self.trader.initial_asset:,}원 -> 현재 자산: {current_total:,}원")
+            if self.trader.halt_buys(reason, notify_msg=msg, kind='daily_loss'):
+                self.trader.log(f"기준선: {baseline:,.0f}원 -> 현재 자산: {current_total:,}원")
                 console.print(
                     f"\n[bold red]🛑 [방어 모드] 일일 손실 한도 초과 (수익률: {loss_rate:.2f}% / 제한: -{loss_limit_pct}%)[/bold red]\n"
                     f"[dim]신규 매수를 중단했습니다. 손절·트레일링 스탑 감시는 계속됩니다.[/dim]\n")

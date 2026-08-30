@@ -62,7 +62,7 @@ def _cycle(trader, cash, holdings, realized=0):
 
     with patch('modules.auto_trade.account.get_asset_status_data', return_value=asset), \
          patch('modules.auto_trade.db_manager.db.get_trades', return_value=trades), \
-         patch('modules.auto_trade.db_manager.db.save_daily_asset'), \
+         patch('modules.auto_trade.db_manager.db.save_daily_asset') as save_asset, \
          patch('modules.auto_trade.db_manager.db.shift_daily_assets') as shift, \
          patch('modules.auto_trade.save_daily_initial_asset'), \
          patch('modules.auto_trade.load_daily_initial_asset', return_value=0), \
@@ -71,11 +71,25 @@ def _cycle(trader, cash, holdings, realized=0):
         trader._monitor_account_status(holdings, summary, deposit)
     # 기준선 이동은 DB를 만지므로 반드시 막는다(막지 않으면 테스트가 실계좌 이력을 옮긴다).
     tg.shift_daily_assets = shift
+    tg.save_daily_asset = save_asset
     return tg
 
 
 def _transfer_alerts(tg):
     return [c for c in tg.call_args_list if "자동 감지" in str(c)]
+
+
+def _net_transfer_writes(*mocks):
+    """여러 주기에 걸쳐 기록된 '그날 순입출금' 쓰기를 모은다.
+
+    기록은 값이 **바뀐 주기에만** 일어난다(매 주기 쓰면 파이3에 부담이고 의미도 없다).
+    그래서 마지막 주기의 mock만 보면 아무것도 없다.
+    """
+    out = []
+    for m in mocks:
+        out += [c for c in m.save_daily_asset.call_args_list
+                if c.kwargs.get('net_transfer') is not None]
+    return out
 
 
 # ─────────────────────────── 오탐 방지 (가장 중요) ───────────────────────────
@@ -124,7 +138,13 @@ def test_small_change_is_ignored(trader):
 # ─────────────────────────── 실제 입출금은 잡는가 ───────────────────────────
 
 def test_real_deposit_is_detected_after_three_cycles(trader):
-    """5만원 이상 원금 증가가 3주기 연속 유지되면 입금으로 확정한다."""
+    """5만원 이상 원금 증가가 3주기 연속 유지되면 입금으로 확정해 **알린다**.
+
+    [설계] 확정돼도 기준 자산(initial_asset)은 옮기지 않는다. 일일 손실 한도와 사이징은
+    net_transfer_today 를 빼고 계산하고(effective_baseline), 드로다운은 그날 행의
+    net_transfer 로 환산하므로(get_max_daily_asset) 옮길 상태가 없다.
+    옮기는 쪽은 되돌릴 수 없고, 추정이 틀리면 잘못된 기준이 그대로 굳는다.
+    """
     _cycle(trader, 1_000_000, _holdings())
     before = trader.initial_asset
 
@@ -134,38 +154,76 @@ def test_real_deposit_is_detected_after_three_cycles(trader):
 
     assert not alerts[0] and not alerts[1], "1~2회 만에 확정하면 API 지연에 오탐한다"
     assert alerts[2], "3회 연속 동일 변동인데 입금이 확정되지 않았다"
-    assert trader.initial_asset == before + 500_000, "기준 자산이 입금액만큼 이동하지 않았다"
+    assert trader.initial_asset == before, "기준 자산을 옮겼다 — 파생 보정이면 옮길 필요가 없다"
+    assert trader.net_transfer_today == 500_000
+    assert trader.effective_baseline() == before + 500_000, "유효 기준선이 입금을 반영하지 않았다"
 
 
 def test_withdrawal_is_detected(trader):
-    """출금(원금 감소)도 같은 규칙으로 잡아 기준 자산을 낮춘다."""
+    """출금도 같은 규칙으로 잡아 유효 기준선을 낮춘다."""
     _cycle(trader, 1_500_000, _holdings())
     before = trader.initial_asset
 
     for _ in range(3):
         tg = _transfer_alerts(_cycle(trader, 1_000_000, _holdings()))
-    assert tg, "출금이 감지되지 않았다 — 기준이 높은 채로 남아 방어 모드가 늦어진다"
-    assert trader.initial_asset == before - 500_000
+    assert tg, "출금이 감지되지 않았다"
+    assert trader.net_transfer_today == -500_000
+    assert trader.effective_baseline() == before - 500_000
 
 
-def test_confirmed_transfer_shifts_asset_history(trader):
-    """확정된 입출금은 **과거 자산 스냅샷까지** 같은 금액만큼 옮긴다.
+def test_the_transfer_is_recorded_on_todays_asset_row(trader):
+    """[핵심] 그날 순입출금을 자산 이력에 남긴다 — 내일부터의 드로다운 기준이 여기서 나온다.
 
-    [왜] daily_asset_history 는 드로다운 기반 리스크 스케일링의 HWM 분모다. 오늘 행만
-     고치면 표 안에 입출금 전후의 자본이 섞인다.
-       · 입금: 과거 고점이 낮게 남아 드로다운을 **과소**평가 → 한도가 조용히 열린다.
-       · 출금: 과거 고점이 높게 남아 **가짜 드로다운**이 룩백(DD_LOOKBACK_DAYS) 내내 산다.
-     후자가 2026-08-23 가상계좌에서 실제로 일어났다 — 1,000만원이 들어왔다 나간 흔적
-     한 줄이 드로다운 49.5%를 만들어 히트 캡을 10%에서 8%로 석 달간 묶었다.
+    [왜 이력을 옮기지 않는가] 종전에는 daily_asset_history 를 통째로 평행이동했다. 그 방식은
+     되돌릴 수 없고, 추정이 틀리면 고점이 낮아져 드로다운을 **과소**평가한다 = 리스크 한도가
+     조용히 열린다. 원본을 두고 환산만 하면 잘못된 값이 굳지 않고, 그날 항목만 다시 쓰면
+     저절로 복구된다.
+     (2026-08-23 가상계좌: 자산 이력 한 줄이 드로다운 50%를 만들어 히트 캡을 석 달간 묶었다.)
     """
+    _cycle(trader, 1_000_000, _holdings())
+    mocks = [_cycle(trader, 1_500_000, _holdings()) for _ in range(3)]
+
+    assert _transfer_alerts(mocks[-1]), "이 표본은 입금이 확정된 상태여야 한다"
+    calls = _net_transfer_writes(*mocks)
+    assert calls, "그날 순입출금이 자산 이력에 기록되지 않았다"
+    assert calls[-1].kwargs['net_transfer'] == 500_000
+    for m in mocks:
+        m.shift_daily_assets.assert_not_called()   # 이력을 옮기면 되돌릴 수 없다
+
+
+def test_the_alert_says_no_action_is_needed(trader):
+    """운용자가 할 일이 없다는 것을 알려야 한다 — 모르면 멀쩡한 시스템을 세운다."""
     _cycle(trader, 1_000_000, _holdings())
     for _ in range(3):
         tg = _cycle(trader, 1_500_000, _holdings())
+    body = str(_transfer_alerts(tg)[0])
+    assert "자동" in body and "조치할 것은 없" in body
 
-    assert _transfer_alerts(tg), "이 표본은 입금이 확정된 상태여야 한다"
-    calls = [c.args for c in tg.shift_daily_assets.call_args_list]
-    assert calls, "확정 입금인데 과거 자산 스냅샷이 이동하지 않았다"
-    assert calls[-1][1] == 500_000, f"이동액이 입금액과 다르다: {calls[-1]}"
+
+def test_the_detection_alert_does_not_repeat_all_day(trader):
+    """같은 입출금으로 알림이 되풀이되면 진짜 경보가 묻힌다."""
+    _cycle(trader, 1_000_000, _holdings())
+    total = 0
+    for _ in range(12):
+        total += len(_transfer_alerts(_cycle(trader, 1_500_000, _holdings())))
+    assert total == 1, f"감지 알림이 {total}번 나갔다(도배)"
+
+
+def test_a_large_transfer_is_handled_like_any_other(trader):
+    """[상한 폐지] 큰 입출금도 사람 손을 기다리지 않는다.
+
+    종전에는 기준자산의 30%를 넘으면 반영하지 않고 사람에게 넘겼다 — 기준선을 **옮기는**
+    방식이라 오탐 한 번이 차단기와 사이징을 동시에 틀어 놓았기 때문이다. 그 미반영분이
+    90일짜리 가짜 드로다운으로 남는 것이 실제 문제였다. 이제 옮기지 않으므로 상한이 없다.
+    """
+    _cycle(trader, 4_000_000, _holdings())
+    before = trader.initial_asset
+    mocks = [_cycle(trader, 100_000, _holdings()) for _ in range(3)]  # 390만 출금(기준의 78%)
+    assert _transfer_alerts(mocks[-1]), "큰 출금이 감지되지 않았다"
+    assert trader.net_transfer_today == -3_900_000
+    assert trader.effective_baseline() == before - 3_900_000
+    calls = _net_transfer_writes(*mocks)
+    assert calls and calls[-1].kwargs['net_transfer'] == -3_900_000
 
 
 def test_transient_blip_does_not_confirm(trader):
@@ -179,3 +237,5 @@ def test_transient_blip_does_not_confirm(trader):
 
     assert not _transfer_alerts(tg)
     assert trader.initial_asset == before
+
+

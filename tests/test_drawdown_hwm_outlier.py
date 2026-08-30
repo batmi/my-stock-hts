@@ -197,3 +197,87 @@ def test_a_shallow_drawdown_does_not_alert():
          patch('modules.auto_trade.api.send_telegram_message') as tg:
         t._update_risk_scale()
     tg.assert_not_called()
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 입출금 보정 — 이력을 옮기지 않고 환산한다
+#
+# 출금하면 그 전날들의 자산은 '더 이상 내 것이 아닌 돈'을 포함한다. 그대로 두면 그 값이
+# 고점이 되어 가짜 드로다운이 룩백 내내 리스크 한도를 묶는다(2026-08-23 실사고).
+#
+# [왜 옮기지 않는가] 종전에는 daily_asset_history 를 통째로 평행이동했다. 되돌릴 수 없고,
+# 입출금 추정이 틀리면 고점이 낮아져 드로다운을 **과소**평가한다 = 한도가 조용히 열린다.
+# 그래서 30% 상한을 두고 초과분은 사람에게 넘겼는데, 그 미반영분이 다시 90일짜리 가짜
+# 드로다운이 됐다. 원본을 두고 환산만 하면 상한도 사람도 필요 없다.
+# ──────────────────────────────────────────────────────────────────────────
+
+def test_a_withdrawal_no_longer_leaves_a_phantom_peak(db):
+    """[핵심] 300만원 출금 뒤 700만원 계좌의 드로다운은 30%가 아니라 0%다."""
+    for d in range(1, 6):
+        db.save_daily_asset(f"2026-08-{d:02d}", ACC, 10_000_000.0)
+    db.save_daily_asset("2026-08-05", ACC, 10_000_000.0, net_transfer=-3_000_000)
+    db.save_daily_asset("2026-08-06", ACC, 7_000_000.0, net_transfer=0)
+
+    hwm = db.get_max_daily_asset("2026-05-30", ACC)
+    assert hwm == 7_000_000.0, f"출금 전 자산이 고점으로 남았다: {hwm:,.0f}"
+    assert (hwm - 7_000_000) / hwm * 100 == 0.0
+
+
+def test_a_deposit_raises_the_old_peaks_to_be_comparable(db):
+    """입금은 반대 방향 — 옛 자산을 올려야 오늘과 비교된다(안 올리면 드로다운 과소평가)."""
+    for d in range(1, 5):
+        db.save_daily_asset(f"2026-08-{d:02d}", ACC, 10_000_000.0)
+    db.save_daily_asset("2026-08-05", ACC, 10_000_000.0, net_transfer=+5_000_000)
+    db.save_daily_asset("2026-08-06", ACC, 15_000_000.0, net_transfer=0)
+
+    assert db.get_max_daily_asset("2026-05-30", ACC) == 15_000_000.0
+
+
+def test_the_transfer_day_counts_its_own_transfer(db):
+    """자산 행은 그날 '시작' 스냅샷이고 입출금은 장중에 난다 — 자기 날 것도 빼야 한다."""
+    db.save_daily_asset("2026-08-05", ACC, 10_000_000.0, net_transfer=-3_000_000)
+    assert db.get_max_daily_asset("2026-05-30", ACC) == 7_000_000.0
+
+
+def test_a_real_loss_after_a_withdrawal_is_still_a_drawdown(db):
+    """[대조군] 출금을 뺀 뒤에도 진짜로 줄었으면 드로다운이다 — 보정이 손실을 가리면 안 된다."""
+    for d in range(1, 6):
+        db.save_daily_asset(f"2026-08-{d:02d}", ACC, 10_000_000.0)
+    db.save_daily_asset("2026-08-05", ACC, 10_000_000.0, net_transfer=-3_000_000)
+    db.save_daily_asset("2026-08-06", ACC, 6_000_000.0, net_transfer=0)   # 100만 실손실
+
+    hwm = db.get_max_daily_asset("2026-05-30", ACC)
+    assert hwm == 7_000_000.0
+    assert round((hwm - 6_000_000) / hwm * 100, 1) == 14.3
+
+
+def test_the_raw_history_is_left_intact(db):
+    """[되돌릴 수 있음] 환산은 읽을 때만 한다 — 원본이 남아야 잘못된 값이 굳지 않는다."""
+    db.save_daily_asset("2026-08-05", ACC, 10_000_000.0, net_transfer=-3_000_000)
+    row = db.execute_query("SELECT asset, net_transfer FROM daily_asset_history "
+                           "WHERE date='2026-08-05'", fetch='one')
+    assert row['asset'] == 10_000_000.0, "원본 자산이 덮어써졌다"
+    assert row['net_transfer'] == -3_000_000
+
+
+def test_updating_the_asset_alone_keeps_the_transfer(db):
+    """자산만 갱신하는 호출이 입출금 기록을 지우면 드로다운 기준이 다시 어긋난다."""
+    db.save_daily_asset("2026-08-05", ACC, 10_000_000.0, net_transfer=-3_000_000)
+    db.save_daily_asset("2026-08-05", ACC, 10_050_000.0)          # net_transfer 미지정
+    row = db.execute_query("SELECT asset, net_transfer FROM daily_asset_history "
+                           "WHERE date='2026-08-05'", fetch='one')
+    assert (row['asset'], row['net_transfer']) == (10_050_000.0, -3_000_000)
+
+
+def test_rows_without_a_transfer_column_still_work(db):
+    """[하위 호환] 옛 행(net_transfer 없음)은 0으로 읽어 종전과 같은 결과를 낸다."""
+    for d in range(1, 6):
+        db.save_daily_asset(f"2026-08-{d:02d}", ACC, 10_000_000.0)
+    db.execute_query("UPDATE daily_asset_history SET net_transfer = NULL")
+    assert db.get_max_daily_asset("2026-05-30", ACC) == 10_000_000.0
+
+
+def test_the_outlier_guard_still_applies_after_adjustment(db):
+    """환산 뒤에도 고립 이상치 방어가 살아 있어야 한다(두 방어가 서로를 무력화하면 안 된다)."""
+    _fill(db, REAL_INCIDENT)
+    assert db.get_max_daily_asset("2026-05-30", ACC) == 10_084_924.0

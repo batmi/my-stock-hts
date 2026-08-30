@@ -763,6 +763,7 @@ def manage_restricted_stocks_menu():
     elif choice == "3": 
         if _remove_restricted_stock() is False: return False
 
+
 def system_trading_menu():
     """시스템 트레이딩 메뉴"""
 

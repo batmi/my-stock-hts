@@ -42,7 +42,7 @@ from modules.auto_trade.engine import (ANCHOR_RESTORE_INTERVAL_SEC, DefaultStrat
                                        UNMANAGED_BAD_PRICE, UNMANAGED_ETF,
                                        UNMANAGED_NO_SELLABLE, UNMANAGED_RESTRICTED,
                                        UNMANAGED_STALE_PRICE, UNMANAGED_STUCK_PENDING)
-from modules.auto_trade.common import (_enrich_rules_with_weights, _get_trade_account, entry_open_delay_remaining, get_mystock_log_tail, get_restricted_stocks, is_plausible_baseline, is_single_price_break, is_system_market_open, load_daily_initial_asset, save_daily_initial_asset)
+from modules.auto_trade.common import (_enrich_rules_with_weights, _get_trade_account, entry_open_delay_remaining, get_mystock_log_tail, get_restricted_stocks, is_plausible_baseline, is_single_price_break, is_system_market_open, load_daily_initial_asset, load_daily_principal, save_daily_initial_asset)
 
 console = config.console
 
@@ -58,8 +58,6 @@ DB_WRITE_FAIL_ALERT_COOLDOWN = 1800.0
 #  두 장치를 동시에 틀어 놓는다. 추정 금액이 기준 자산의 이 비율(또는 아래 절대 하한)을 넘으면
 #  자동 반영하지 않고 사람에게 넘긴다 — 반영하지 않으면 기준이 옛 값(더 작은 쪽)으로 남아
 #  차단기가 더 일찍 걸리므로, '안 고치는 쪽'이 안전한 방향이다.
-AUTO_TRANSFER_MAX_RATIO = 0.30
-AUTO_TRANSFER_MIN_LIMIT = 1_000_000   # 소액 계좌에서 상한이 지나치게 좁아지지 않도록
 
 #  계좌 차단기(일일 손실 한도) 점검이 이만큼 연속 실패하면 알린다. 한 번은 일시적
 #  데이터 결손일 수 있지만, 연속 실패는 '차단기가 꺼져 있다'는 뜻이다.
@@ -188,6 +186,8 @@ class AutoTrader:
             cls._instance.buy_halted = False          # 방어 모드 활성 여부
             cls._instance.buy_halt_reason = ""        # 방어 모드 사유 (상태 표시용)
             cls._instance.buy_halt_date = None        # 방어 모드 발동 일자 (날짜 변경 시 자동 해제)
+            cls._instance.buy_halt_kind = None        # 발동 원인 종류('daily_loss' 등) — 정정 시 재평가용
+            cls._instance.net_transfer_today = 0      # 오늘 누적 순입출금(파생값) — effective_baseline 보정용
             cls._instance.unmanaged_stop_notified = {} # [안전장치] 자동매도 제외 포지션의 손절선 이탈 경보 스로틀 {code: ts}
             # [안전장치] '매도 결정했는데 매도가능수량 0'이 연속 몇 주기 관측됐는가 {code: 횟수}.
             #  미체결 취소 직후의 일시적 0과, 거래정지처럼 지속되는 상태를 구분하기 위한 값이다.
@@ -411,6 +411,12 @@ class AutoTrader:
                     saved_initial = load_daily_initial_asset(account_key)
                     if saved_initial > 0:
                         self.initial_asset = saved_initial
+                        # [오프라인 입출금] 기준 원금도 함께 복원한다. 복원하지 않으면 아래
+                        #  감시 루프가 기준 원금을 **입출금 이후 상태로** 새로 잡아 차이가
+                        #  0이 되고, 프로그램이 꺼진 사이의 입출금이 영영 감지되지 않는다.
+                        #  그러면 시작 자산만 옛 값으로 남아(출금이면 높게) 차단기가 헛발동하고
+                        #  사이징 기준도 부푼 채로 하루가 간다.
+                        self.baseline_principal = load_daily_principal(account_key)
                     elif is_plausible_baseline(account_key, tot_asset):
                         self.initial_asset = tot_asset
                         save_daily_initial_asset(account_key, self.initial_asset)
@@ -997,7 +1003,7 @@ class AutoTrader:
         # [추가] 로거 연결 해제 (메시지 전송 후 해제)
         context.SYSTEM_LOGGER = None
 
-    def halt_buys(self, reason, notify_msg=None):
+    def halt_buys(self, reason, notify_msg=None, kind=None):
         """[안전장치] 방어 모드 진입 — 신규 매수·피라미딩만 중단하고 청산 감시는 유지한다.
 
         [추세추종 원칙] "어떤 전략을 쓰든 손절을 하지 않으면 언젠가는 계좌가 심각한 타격을 입는다."
@@ -1015,6 +1021,9 @@ class AutoTrader:
             self.buy_halted = True
             self.buy_halt_reason = reason
             self.buy_halt_date = today
+            #  발동 원인의 종류. 사유 문자열을 되읽지 않고 이 값으로 판단한다 —
+            #  문구가 바뀌면 조용히 어긋나는 종류의 결합을 만들지 않는다.
+            self.buy_halt_kind = kind
 
         self.log(f"[방어 모드] 신규 매수 중단: {reason} (매도·손절 감시는 계속됩니다)")
         if notify_msg:
@@ -1029,8 +1038,63 @@ class AutoTrader:
             self.buy_halted = False
             self.buy_halt_reason = ""
             self.buy_halt_date = None
+            self.buy_halt_kind = None
         self.log(f"[방어 모드 해제] 신규 매수를 재개합니다. ({reason})")
         return True
+
+    def effective_baseline(self):
+        """리스크 판정에 쓸 **오늘의 자본 기준선** = 시작 자산 + 오늘 누적 순입출금.
+
+        [왜 파생값인가] 종전에는 입출금이 감지되면 initial_asset 자체를 옮겼다. 그러려면
+        3주기 확인·자동 조정 상한·파일 저장이 필요했고, 상한을 넘으면 사람이 손대기 전까지
+        **기준이 틀린 채로 하루가 갔다**(출금이면 일일 손실 한도가 종일 헛발동한다).
+
+        순입출금은 원금 불변량(현금+매입원가-실현손익)의 변화라 매 주기 정확히 다시 잴 수
+        있다. 저장하지 않고 판정할 때마다 재면 상한도 대기도 필요 없고, 스냅샷이 한 번
+        튀어도 다음 주기에 저절로 낫는다 — 잘못된 값이 굳지 않는다.
+
+        [옮기지 않는다] 입출금이 감지돼도 initial_asset·baseline_principal 은 그대로 둔다.
+        옮기면 이 파생값이 0이 되어 같은 결과가 나오지만, 옮기는 쪽은 되돌릴 수 없고
+        추정이 틀리면 잘못된 기준이 그대로 굳는다. 여러 날에 걸친 드로다운 기준도 이력을
+        고치지 않고 daily_asset_history.net_transfer 로 환산한다(get_max_daily_asset).
+        """
+        # 산식은 RiskManager._equity_baseline 이 단독 보유한다 — 차단기·사이징과
+        #  갈라지면 세 장치가 서로 다른 자본을 보게 된다.
+        return self.risk_manager._equity_baseline()
+
+    def _reevaluate_buy_halt_after_transfer(self, current_total, action_str="입출금"):
+        """입출금으로 기준 자산을 옮긴 뒤, 방어 모드를 새 기준으로 다시 잰다.
+
+        [왜] 출금은 기준 자산이 정정되기 **전** 3주기 동안 그대로 '손실'로 보인다. 그 사이
+        일일 손실 한도가 걸리면 방어 모드가 켜지는데, 기준을 고쳐도 그것은 날짜가 바뀔
+        때까지 풀리지 않았다(halt_buys는 당일 재발동만 막는다). 즉 **정상적인 출금 한 번이
+        그날 신규 진입을 통째로 멈췄다.** 계좌 잔고가 수시로 변하는 실계좌에서는 흔한 일이다.
+
+        일일 손실로 걸린 방어 모드만 다시 잰다 — 다른 사유(수동·장애)까지 풀면 안 된다.
+        새 기준으로도 한도를 넘으면 그대로 둔다. 풀었는데 다음 주기에 진짜로 넘으면
+        차단기가 다시 건다(같은 날 재발동은 halt_buys가 허용한다 — 해제로 날짜가 지워진다).
+        """
+        if getattr(self, 'buy_halt_kind', None) != 'daily_loss':
+            return False
+        try:
+            limit_pct = getattr(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0)
+            # 차단기와 **같은 기준선**을 써야 한다. initial_asset을 직접 보면, 기준을 옮기지
+            #  않고 순입출금으로만 보정되는 경로(대부분의 경우)에서 영영 풀리지 않는다.
+            baseline = self.effective_baseline()
+            if baseline <= 0 or current_total <= 0:
+                return False
+            new_rate = (current_total - baseline) / baseline * 100.0
+            if new_rate <= -limit_pct:
+                return False        # 새 기준으로도 한도 초과 — 그대로 둔다
+            self.resume_buys(f"{action_str} 반영으로 기준 자산 정정 "
+                             f"(손익률 {new_rate:+.2f}% / 한도 -{limit_pct}%)")
+            api.send_telegram_message(
+                f"✅ [방어 모드 해제] {action_str}을 기준 자산에 반영했습니다.\n"
+                f"다시 잰 손익률 {new_rate:+.2f}% (한도 -{limit_pct}%) — 신규 매수를 재개합니다.")
+            return True
+        except Exception as e:
+            logger.debug(f"[입출금] 방어 모드 재평가 실패: {e}")
+            return False
 
     def log_current_holdings(self):
         """현재 보유 종목 현황을 조회하여 로그에 출력합니다 (체결 후 호출용)"""
@@ -4058,6 +4122,35 @@ class AutoTrader:
                         # → 보유 종목 하락만으로 '가짜 입금'이 잡혀 기준자산이 부풀고 비상정지가 오작동했다.
                         if is_first_init or self.baseline_principal <= 0:
                             self.baseline_principal = current_principal
+                            # 재기동이 같은 날 다시 일어나도 이 기준으로 대조할 수 있게 남긴다.
+                            try:
+                                save_daily_initial_asset(f"{target_cano}-{acnt_cd}",
+                                                         self.initial_asset,
+                                                         principal=int(current_principal))
+                            except Exception:
+                                pass
+
+                        # [파생값] 오늘 누적 순입출금. 저장하지 않고 매 주기 다시 잰다.
+                        #  기준 자산을 **옮기지 않아도** 차단기·사이징이 이 값으로 즉시 보정된다
+                        #  (effective_baseline 참조). 옮기면 initial_asset과 baseline_principal이
+                        #  같은 폭으로 움직여 이 값이 0이 되므로, 반영 전후의 유효 기준은 동일하다.
+                        if toss_cash_reliable and realized_ok:
+                            _net = int(current_principal - self.baseline_principal)
+                            if _net != getattr(self, 'net_transfer_today', 0):
+                                self.net_transfer_today = _net
+                                # [여러 날 보정] 오늘 행에 남겨야 내일부터의 드로다운 기준이 맞는다.
+                                #  이력을 옮기지 않고 이 값으로 환산한다(get_max_daily_asset).
+                                #  값이 바뀔 때만 쓴다 — 매 주기 쓰면 파이3에 부담이고 의미도 없다.
+                                try:
+                                    db_manager.db.save_daily_asset(
+                                        datetime.now().strftime("%Y-%m-%d"),
+                                        f"{target_cano}-{acnt_cd}", self.initial_asset,
+                                        net_transfer=_net)
+                                    self._hwm_cache_date = None   # 환산이 바뀌었으니 다시 잰다
+                                except Exception as _e:
+                                    logger.debug(f"[입출금] 일자별 순입출금 기록 실패: {_e}")
+                        else:
+                            self.net_transfer_today = 0   # 못 쟀으면 보정하지 않는다(옛 동작 유지)
 
                         if not is_first_init and toss_cash_reliable and realized_ok:
                             transfer_amt = current_principal - self.baseline_principal
@@ -4078,57 +4171,27 @@ class AutoTrader:
                                     
                                 if self._pending_transfer_count >= 3:
                                     action_str = "입금" if transfer_amt > 0 else "출금"
-
-                                    # [안전장치] 자동 조정에 상한을 둔다. 이 값은 계좌 차단기의
-                                    #  분모이자 사이징의 기준 자산이라, 오탐 한 번이 두 장치를
-                                    #  동시에 틀어 놓는다. 반영하지 않으면 기준이 옛 값(=더 작은
-                                    #  쪽)으로 남아 차단기가 더 일찍 걸리므로 보수적이다 —
-                                    #  즉 '안 고치는 쪽'이 안전한 방향이다. 큰 변동은 사람이 본다.
-                                    limit = max(int(self.initial_asset * AUTO_TRANSFER_MAX_RATIO),
-                                                AUTO_TRANSFER_MIN_LIMIT)
-                                    if abs(transfer_amt) > limit:
-                                        self.log(f"⚠️ 외부 {action_str} 추정 {transfer_amt:+,}원이 자동 조정 "
-                                                 f"상한({limit:,}원)을 넘어 반영하지 않습니다.")
+                                    # [알림 전용] 감지된 입출금은 **기준선을 옮기지 않는다.**
+                                    #  일일 손실 한도·사이징은 net_transfer_today 로, 드로다운은
+                                    #  daily_asset_history.net_transfer 로 각각 파생 보정되므로
+                                    #  옮길 상태가 없다. 여기서는 운용자에게 알리기만 한다.
+                                    #  (종전에는 initial_asset 을 옮기고 자산 이력을 평행이동했다.
+                                    #   되돌릴 수 없고, 추정이 틀리면 고점이 낮아져 드로다운을
+                                    #   과소평가 = 리스크 한도가 조용히 열리는 방향이었다.
+                                    #   그래서 30% 상한을 두고 초과분은 사람에게 넘겼는데,
+                                    #   그 미반영분이 90일짜리 가짜 드로다운으로 남았다.)
+                                    _sig = (datetime.now().strftime("%Y-%m-%d"),
+                                            int(round(transfer_amt / 10000.0)))
+                                    if getattr(self, '_transfer_alert_sig', None) != _sig:
+                                        self._transfer_alert_sig = _sig
+                                        self.log(f"💰 외부 예수금 {action_str} 자동 감지: {transfer_amt:+,}원 "
+                                                 f"(리스크 기준은 자동 보정됩니다)")
                                         api.send_telegram_message(
-                                            f"⚠️ [{action_str} 자동 조정 보류]\n"
-                                            f"추정 금액 {transfer_amt:+,}원이 자동 조정 상한 {limit:,}원을 넘습니다.\n"
-                                            f"실제 {action_str}이면 기준 자산을 직접 맞춰 주시고, 아니면 "
-                                            f"잔고 조회 이상을 확인해 주세요.\n"
-                                            f"(현재 기준 자산 {self.initial_asset:,}원 — 변경하지 않았습니다)")
-                                        self._pending_transfer_count = 0
-                                        self._pending_transfer_amt = 0
-                                        transfer_amt = 0     # 반영하지 않는다
-
-                                    if transfer_amt:
-                                        self.log(f"💰 외부 예수금 {action_str} 자동 감지: {transfer_amt:+,}원")
-                                        self.log(f"-> 시스템 오작동 방지를 위해 기준 자산을 동기화합니다. ({self.initial_asset:,} -> {self.initial_asset + int(transfer_amt):,})")
-
-                                        self.initial_asset += int(transfer_amt)
-                                        self.baseline_principal += int(transfer_amt)  # [추가] 입금 감지 기준 원금도 함께 이동
-
-                                        account_key = f"{target_cano}-{acnt_cd}"
-                                        save_daily_initial_asset(account_key, self.initial_asset)
-                                        try:
-                                            today_str = datetime.now().strftime("%Y-%m-%d")
-                                            # [기준선 이동] 과거 스냅샷도 함께 옮긴다. 오늘 행만 고치면
-                                            #  daily_asset_history 안에 입출금 전후 자본이 섞여, 드로다운
-                                            #  HWM이 엉뚱한 기준을 본다. 입금이면 과거 고점이 낮게 남아
-                                            #  드로다운을 **과소**평가하고(한도가 조용히 열린다), 출금이면
-                                            #  높게 남아 가짜 드로다운이 룩백(DD_LOOKBACK_DAYS) 내내 산다
-                                            #  — 후자가 2026-08-23 가상계좌에서 실제로 일어난 사고다.
-                                            #  save 보다 먼저 옮겨야 오늘 행이 두 번 더해지지 않는다.
-                                            db_manager.db.shift_daily_assets(account_key, int(transfer_amt))
-                                            db_manager.db.save_daily_asset(today_str, account_key, self.initial_asset)
-                                            # 0은 '오늘 아직 안 잼'이라 옮기면 안 된다(없는 고점이 생긴다).
-                                            if getattr(self, '_hwm_cache', 0.0) > 0:
-                                                self._hwm_cache = max(0.0, self._hwm_cache + int(transfer_amt))
-                                        except Exception: pass
-
-                                        api.send_telegram_message(f"💰 [예수금 {action_str} 자동 감지]\n백그라운드 감시 결과, 계좌에 약 {abs(int(transfer_amt)):,}원의 {action_str}이 발생한 것을 확인했습니다.\n\n안전한 수익률 계산을 위해 시스템 기준 자산을 {self.initial_asset:,}원으로 스스로 자동 동기화했습니다.")
-
-                                        # 처리 후 초기화
-                                        self._pending_transfer_count = 0
-                                        self._pending_transfer_amt = 0
+                                            f"💰 [예수금 {action_str} 자동 감지]\n"
+                                            f"약 {abs(int(transfer_amt)):,}원의 {action_str}을 확인했습니다.\n\n"
+                                            f"✅ 일일 손실 한도·포지션 사이징·드로다운 기준은 이 금액을 "
+                                            f"빼고 계산하므로 자동으로 맞춰집니다. 조치할 것은 없습니다.\n"
+                                            f"(실제 {action_str}이 아니라면 잔고 조회 이상을 확인해 주세요)")
                             else:
                                 if hasattr(self, '_pending_transfer_count'):
                                     self._pending_transfer_count = 0

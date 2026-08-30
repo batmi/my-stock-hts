@@ -476,15 +476,42 @@ def schedule_buy_restriction_cleanup(code, cano, acnt, is_overseas=False,
 # [추가] 일일 자산 상태 파일 경로 및 관리 함수 (재시작 시 손실 제한 기준 유지용)
 DAILY_STATE_FILE = os.path.join(config.JSON_DIR, "daily_asset_state.json")
 
-def load_daily_initial_asset(account_key):
-    """계좌별 일일 시작 자산을 로드합니다."""
+def _daily_state_entry(account_key):
+    """오늘 자의 계좌 항목을 dict로 정규화해 돌려준다(없으면 빈 dict).
+
+    옛 형식은 값이 숫자 하나(시작 자산)였다. 형식을 바꾸면서 옛 파일을 그대로 읽어야
+    한다 — 기동 중 형식이 바뀌었다고 그날 기준선을 잃으면 차단기가 통째로 꺼진다.
+    """
     today_str = datetime.now().strftime("%Y-%m-%d")
     data = jsonio.load_json(DAILY_STATE_FILE, default={}) or {}
-    if data.get("date") == today_str:
-        accounts = data.get("accounts", {})
-        if account_key in accounts and accounts[account_key] > 0:
-            return accounts[account_key]
-    return 0
+    if data.get("date") != today_str:
+        return {}
+    entry = (data.get("accounts") or {}).get(account_key)
+    if isinstance(entry, dict):
+        return entry
+    if isinstance(entry, (int, float)):
+        return {"asset": entry}
+    return {}
+
+
+def load_daily_initial_asset(account_key):
+    """계좌별 일일 시작 자산을 로드합니다."""
+    asset = _daily_state_entry(account_key).get("asset") or 0
+    return asset if asset > 0 else 0
+
+
+def load_daily_principal(account_key):
+    """계좌별 기준 원금(현금+매입원가-실현손익)을 로드합니다. 없으면 0.
+
+    [왜 저장하는가] 이 값은 가격 변동·매매와 무관하게 **입출금이 없으면 불변**이라
+    외부 입출금을 가려내는 유일한 불변량이다. 종전에는 메모리에만 있어서, 프로그램이
+    꺼진 사이에 입출금이 있고 같은 날 다시 켜면 기준 원금이 **입출금 이후 상태로**
+    새로 잡혔다 — 그러면 차이가 0이라 그 입출금은 영영 감지되지 않는다.
+    반면 시작 자산(initial_asset)은 파일에서 옛 값 그대로 복원되므로, 출금이면 분모가
+    높게 남아 차단기가 헛발동하고 사이징 기준도 부푼 채로 하루를 보낸다.
+    """
+    principal = _daily_state_entry(account_key).get("principal") or 0
+    return principal if principal > 0 else 0
 
 # 직전 영업일 대비 이 비율 아래면 '시세 결손으로 예수금만 잡힌 응답'을 의심한다.
 #  engine.check_loss_limit 이 current_total 에 이미 쓰고 있는 것과 같은 기준(0.5)이다.
@@ -520,15 +547,24 @@ def is_plausible_baseline(account_key, tot_asset, last_known=None):
     return tot_asset >= last_known * BASELINE_SANITY_RATIO
 
 
-def save_daily_initial_asset(account_key, asset_value):
-    """계좌별 일일 시작 자산을 저장합니다."""
+def save_daily_initial_asset(account_key, asset_value, principal=None):
+    """계좌별 일일 시작 자산(과 기준 원금)을 저장합니다.
+
+    principal 을 주지 않으면 이미 저장된 값을 그대로 둔다 — 시작 자산만 고치는 호출이
+    기준 원금을 지워 버리면, 재기동 때 오프라인 입출금 감지가 다시 꺼진다.
+    """
     today_str = datetime.now().strftime("%Y-%m-%d")
     data = {"date": today_str, "accounts": {}}
     old_data = jsonio.load_json(DAILY_STATE_FILE, default={}) or {}
     if old_data.get("date") == today_str:
         data["accounts"] = old_data.get("accounts", {})
 
-    data["accounts"][account_key] = asset_value
+    prev = data["accounts"].get(account_key)
+    entry = dict(prev) if isinstance(prev, dict) else {}
+    entry["asset"] = asset_value
+    if principal is not None:
+        entry["principal"] = principal
+    data["accounts"][account_key] = entry
     jsonio.save_json(DAILY_STATE_FILE, data)
 
 # [리팩토링] 시스템 트레이딩 운영 시간 판단 (단일 진입점)

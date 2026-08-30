@@ -452,6 +452,15 @@ class DBManager:
                     cursor.execute("DROP TABLE signal_ledger_old")
                     print("[DB] 신호 원장에 계좌 구분(is_sim) 추가됨")
 
+                # [마이그레이션 2026-08-30] 일자별 순입출금. 자산 이력을 **옮기지 않고**
+                #  드로다운 기준을 맞추기 위한 값이다(get_max_daily_asset 주석 참조).
+                cursor.execute("PRAGMA table_info(daily_asset_history)")
+                _dah_cols = [c[1] for c in cursor.fetchall()]
+                if _dah_cols and "net_transfer" not in _dah_cols:
+                    cursor.execute("ALTER TABLE daily_asset_history "
+                                   "ADD COLUMN net_transfer REAL DEFAULT 0")
+                    print("[DB] 자산 이력 컬럼 추가됨: net_transfer")
+
                 # [마이그레이션 2026-08-30] 계좌 상태 차단 컬럼 추가. PK가 그대로라 ADD로 족하다.
                 cursor.execute("PRAGMA table_info(signal_ledger)")
                 _led_cols = [c[1] for c in cursor.fetchall()]
@@ -1559,17 +1568,27 @@ class DBManager:
             logger.error(f"[DB] 백업 실패: {e}")
             return None
 
-    def save_daily_asset(self, date_str, account, asset_value):
-        """일일 총 자산 스냅샷 저장"""
+    def save_daily_asset(self, date_str, account, asset_value, net_transfer=None):
+        """일일 총 자산 스냅샷 저장.
+
+        net_transfer: 그날의 누적 순입출금(입금 +, 출금 −). None이면 기존 값을 보존한다 —
+          자산만 갱신하는 호출이 입출금 기록을 지우면 드로다운 기준이 다시 어긋난다.
+        """
         with self.lock:
             for attempt in range(5):
                 try:
                     conn = self._get_conn()
                     cursor = conn.cursor()
+                    if net_transfer is None:
+                        cursor.execute(
+                            "SELECT net_transfer FROM daily_asset_history "
+                            "WHERE date = ? AND account = ?", (date_str, account))
+                        _row = cursor.fetchone()
+                        net_transfer = (_row[0] if _row and _row[0] is not None else 0)
                     cursor.execute('''
-                        INSERT OR REPLACE INTO daily_asset_history (date, account, asset)
-                        VALUES (?, ?, ?)
-                    ''', (date_str, account, asset_value))
+                        INSERT OR REPLACE INTO daily_asset_history (date, account, asset, net_transfer)
+                        VALUES (?, ?, ?, ?)
+                    ''', (date_str, account, asset_value, float(net_transfer or 0)))
                     conn.commit()
                     break
                 except sqlite3.OperationalError as e:
@@ -1667,13 +1686,33 @@ class DBManager:
         try:
             conn = self._get_conn()
             cursor = conn.cursor()
-            cursor.execute("SELECT date, asset FROM daily_asset_history "
+            cursor.execute("SELECT date, asset, COALESCE(net_transfer, 0) "
+                           "FROM daily_asset_history "
                            "WHERE account = ? AND date >= ? AND asset > 0 ORDER BY date",
                            (account, start_date))
             rows = cursor.fetchall()
         except Exception:
             return None
-        vals = [float(r[1]) for r in rows]
+        if not rows:
+            return None
+
+        # [입출금 보정] 옛 자산을 오늘의 자본으로 환산한다.
+        #   환산자산(d) = 자산(d) + (d일 **이후에 일어난 모든 순입출금**, 그날 것 포함)
+        #  자산 행은 그날 '시작' 스냅샷이고 입출금은 그날 장중에 나므로 자기 날 것도 더한다.
+        #  예) 5일차 시작 1,000만 → 그날 300만 출금 → 오늘 700만.
+        #      환산하지 않으면 1,000만이 고점으로 남아 30% 가짜 드로다운이 된다.
+        #      환산하면 1,000만 + (-300만) = 700만 → 드로다운 0.
+        #
+        #  [왜 이력을 고치지 않는가] 종전에는 daily_asset_history 를 통째로 평행이동했다.
+        #   그 방식은 되돌릴 수 없고, 입출금 추정이 틀리면 고점이 낮아져 드로다운을 **과소**
+        #   평가한다 = 리스크 한도가 조용히 열린다. 원본을 두고 환산만 하면 잘못된 값이
+        #   굳지 않고, 그날 항목만 다시 쓰면 저절로 복구된다.
+        suffix = 0.0
+        adjusted = []
+        for _d, asset, net in reversed(rows):          # 최근 → 과거
+            suffix += float(net or 0)
+            adjusted.append(float(asset) + suffix)
+        vals = adjusted
         if not vals:
             return None
 
