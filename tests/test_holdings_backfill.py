@@ -308,3 +308,83 @@ def test_trade_history_screen_skips_the_offer_in_paper_mode(monkeypatch):
     monkeypatch.setattr(account, 'fetch_domestic_balance',
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("잔고를 조회했다")))
     account.offer_holdings_backfill()      # 예외 없이 조용히 반환해야 한다
+
+
+# ─────────────────────────────────────────────
+# 5. '외부 매수' 판정 — 자기 주문을 남으로 몰지 않는가
+#
+# [왜 위험한가] 외부로 판정되면 그 종목이 제한 종목(수동매매)으로 올라가 시스템 매도
+# 대상에서 빠진다 = 손절·트레일링이 멈춘다. 판정 근거가 '체결 기록이 없다'였는데,
+# 체결 기록은 체결 통보를 받은 뒤 따로 INSERT 된다 — 주문을 내고 체결 전에 프로세스가
+# 죽으면(라즈베리파이 OOM·재기동) 접수 기록만 남아 **자기 주문이 외부로 판정**됐다.
+# ─────────────────────────────────────────────
+
+def _own_accept_row(stop_loss_rate=-9.5, type_str="매수"):
+    return {'type': type_str, 'stop_loss_rate': stop_loss_rate, 'strategy_score': 8.0}
+
+
+def test_an_order_we_placed_is_not_external_even_without_a_fill_record(monkeypatch):
+    """[핵심] 접수 기록만 남은 자기 주문 — 제한을 걸면 그 포지션의 손절이 멈춘다."""
+    monkeypatch.setattr(hb, '_exists', lambda odno: False)
+    monkeypatch.setattr(hb.db_manager.db, 'get_trade_by_odno',
+                        lambda odno: _own_accept_row())
+    calls = _stub_sync(monkeypatch, _plan_with_buy())
+
+    res = hb.sync_account(holdings=[_holding()], register_restrictions=True)
+    assert res['restricted'] == [] and calls == [], \
+        "시스템이 낸 주문을 외부 매수로 보고 자기 포지션을 제한 종목으로 올렸다"
+
+
+def test_an_external_app_order_is_still_external(monkeypatch):
+    """[대조군] 외부 앱(MTS/HTS) 주문도 접수 기록이 생긴다 — 그건 우리 주문이 아니다."""
+    monkeypatch.setattr(hb, '_exists', lambda odno: False)
+    monkeypatch.setattr(hb.db_manager.db, 'get_trade_by_odno',
+                        lambda odno: _own_accept_row(type_str="매수(외부)"))
+    calls = _stub_sync(monkeypatch, _plan_with_buy())
+
+    res = hb.sync_account(holdings=[_holding()], register_restrictions=True)
+    assert res['restricted'] == ["005930"], "외부 매수 방어가 풀렸다"
+
+
+def test_an_unknown_order_is_external(monkeypatch):
+    """[대조군] 주문 기록이 아예 없으면 외부다(종전 판정과 같다)."""
+    monkeypatch.setattr(hb, '_exists', lambda odno: False)
+    monkeypatch.setattr(hb.db_manager.db, 'get_trade_by_odno', lambda odno: None)
+    calls = _stub_sync(monkeypatch, _plan_with_buy())
+
+    assert hb.sync_account(holdings=[_holding()], register_restrictions=True)['restricted'] == ["005930"]
+
+
+def test_recovered_own_fill_keeps_its_stop_loss_rate(monkeypatch):
+    """복원 기록이 '(외부)'로 남으면 진입 시 손절률이 사라져 청산 기준이 폴백으로 내려간다."""
+    written = []
+    monkeypatch.setattr(hb, '_exists', lambda odno: False)
+    monkeypatch.setattr(hb.db_manager.db, 'get_trade_by_odno',
+                        lambda odno: _own_accept_row(stop_loss_rate=-9.5))
+    monkeypatch.setattr(hb.db_manager.db, 'insert_trade',
+                        lambda *a, **k: written.append((a, k)) or True)
+
+    hb.apply([{'code': '005930', 'name': '삼성전자', 'qty': 10, 'missing': 0, 'already': 0,
+               'records': hb.build_records([_tx("20260728", True, 10, odno="MINE")])}])
+
+    args, kwargs = written[0]
+    assert "(외부)" not in args[0], f"자기 체결을 외부로 기록했다: {args[0]}"
+    assert kwargs['stop_loss_rate'] == -9.5, "진입 시 손절률이 복원되지 않았다"
+    assert kwargs['reason'] == hb.OWN_FILL_REASON
+
+
+def test_recovered_external_fill_stays_labelled_external(monkeypatch):
+    """[대조군] 진짜 외부 체결은 '(외부)' 딱지와 복원 사유를 그대로 유지한다."""
+    written = []
+    monkeypatch.setattr(hb, '_exists', lambda odno: False)
+    monkeypatch.setattr(hb.db_manager.db, 'get_trade_by_odno', lambda odno: None)
+    monkeypatch.setattr(hb.db_manager.db, 'insert_trade',
+                        lambda *a, **k: written.append((a, k)) or True)
+
+    hb.apply([{'code': '005930', 'name': '삼성전자', 'qty': 10, 'missing': 0, 'already': 0,
+               'records': hb.build_records([_tx("20260728", True, 10, odno="THEIRS")])}])
+
+    args, kwargs = written[0]
+    assert "(외부)" in args[0]
+    assert kwargs['reason'] == hb.BACKFILL_REASON
+    assert kwargs['stop_loss_rate'] == 0.0

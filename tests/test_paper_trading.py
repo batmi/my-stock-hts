@@ -259,6 +259,67 @@ def test_deposit_shifts_drawdown_baseline(paper):
     assert db.get_max_daily_asset("2026-08-01", key) == pytest.approx(5_100_000)
 
 
+def test_deposit_shifts_the_daily_loss_baseline(paper, tmp_path, monkeypatch):
+    """입출금은 **일일 손실 한도의 분모**(오늘 시작 자산)도 함께 옮긴다.
+
+    이걸 빼면 500만으로 시작한 날 200만을 넣는 순간 자산이 +40%로 읽혀 한도가 헐거워지고,
+    반대로 출금하면 매매와 무관하게 방어 모드가 걸린다. 종전에는 자산 이력(HWM) 이동만
+    테스트가 있었고, 세 기준선 중 나머지 둘은 검증되지 않았다(2026-08-30 커버리지 실측).
+    """
+    from core import jsonio
+    from modules.auto_trade import common as at_common
+
+    state = tmp_path / "daily_asset_state.json"
+    key = paper._account_key()
+    jsonio.save_json(str(state), {"accounts": {key: 5_000_000}})
+    monkeypatch.setattr(at_common, 'DAILY_STATE_FILE', str(state), raising=False)
+
+    assert paper.adjust_seed(2_000_000)[0]
+    assert jsonio.load_json(str(state))["accounts"][key] == 7_000_000
+
+    assert paper.adjust_seed(-2_000_000)[0]
+    assert jsonio.load_json(str(state))["accounts"][key] == 5_000_000, \
+        "반대 방향 입출금에 기준선이 되돌아오지 않았다"
+
+
+def test_deposit_shifts_the_running_traders_baseline(paper, tmp_path, monkeypatch):
+    """실행 중인 트레이더의 메모리 기준선·HWM 캐시도 재기동 없이 따라와야 한다.
+
+    HWM 캐시는 하루 1회만 갱신되므로, 여기서 옮기지 않으면 입출금한 그날 하루는
+    옛 고점으로 드로다운이 계산된다 — 사고 2026-08-23과 같은 계열의 오차다.
+    """
+    from modules.auto_trade import AutoTrader
+    from modules.auto_trade import common as at_common
+    monkeypatch.setattr(at_common, 'DAILY_STATE_FILE', str(tmp_path / "s.json"), raising=False)
+
+    AutoTrader._instance = None
+    t = AutoTrader()
+    t.initial_asset = 5_000_000
+    t.baseline_principal = 5_000_000
+    t._hwm_cache = 5_100_000
+
+    assert paper.adjust_seed(1_000_000)[0]
+    assert t.initial_asset == 6_000_000
+    assert t.baseline_principal == 6_000_000
+    assert t._hwm_cache == pytest.approx(6_100_000)
+
+
+def test_an_unmeasured_baseline_is_left_alone(paper, tmp_path, monkeypatch):
+    """0(미설정)은 건드리지 않는다 — 다음 측정 때 새 자산으로 잡히는 것이 맞다."""
+    from modules.auto_trade import AutoTrader
+    from modules.auto_trade import common as at_common
+    monkeypatch.setattr(at_common, 'DAILY_STATE_FILE', str(tmp_path / "s.json"), raising=False)
+
+    AutoTrader._instance = None
+    t = AutoTrader()
+    t.initial_asset = 0
+    t.baseline_principal = 0
+    t._hwm_cache = 0.0
+
+    assert paper.adjust_seed(1_000_000)[0]
+    assert (t.initial_asset, t.baseline_principal, t._hwm_cache) == (0, 0, 0.0)
+
+
 def test_equity_snapshot_freezes_seed_of_that_day(paper):
     """스냅샷은 **그 시점 시드**를 함께 굳힌다 — 누적 수익률의 분모가 흔들리면 안 된다.
 

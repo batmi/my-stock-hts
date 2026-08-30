@@ -247,44 +247,30 @@ class ReservedOrderMonitor:
                 if curr_price <= 0: continue
                 
                 if condition_type in ['SCORE_UP', 'SCORE_DOWN', 'RSI_UP', 'RSI_DOWN', 'EMA_UP', 'EMA_DOWN']:
-                    cached = self.chart_cache.get(code)
-                    if cached:
-                        # [핵심] 원본 캐시를 복사 후 마지막 행(오늘)의 종가만 현재가로 교체하여 지표 계산
-                        df = cached['df'].copy()
-                        df.iloc[-1, df.columns.get_loc('close')] = curr_price
-                        ind = indicators.calculate_indicators(df)
-                        
+                    # [SSOT] 판정은 _eval_atomic 이 단독 보유한다. 종전에는 이 자리에 점수·RSI·
+                    #  EMA 비교가 한 벌 더 있어, 같은 조건이 단일 예약과 복합(COMPOSITE) 서브조건
+                    #  에서 각각 다른 코드로 평가됐다. 지금은 같지만 갈라져도 아무도 모른다 —
+                    #  발동은 실주문이라 조용한 불일치가 곧 오발주다.
+                    #  문구(발동 사유)만 여기서 만든다.
+                    df, ind = self._get_indicators_for(code, curr_price)
+                    ctx = {'curr_price': curr_price, 'df': df, 'ind': ind, 'code': code,
+                           'is_overseas': is_overseas, 'now_hhmm': now_time_str_short,
+                           'order_type': order_type}
+                    if self._eval_atomic(condition_type, target_price, ctx):
+                        trigger = True
                         if 'SCORE' in condition_type:
-                            custom_rule = db_manager.db.get_stock_strategy(code)
-                            weights = config.SCORING_WEIGHTS
-                            if custom_rule and custom_rule.get('weights'):
-                                try:
-                                    w_data = custom_rule['weights']
-                                    if isinstance(w_data, str): weights = json.loads(w_data)
-                                    elif isinstance(w_data, dict): weights = w_data
-                                except Exception: pass
-                            sm_flag, _ = analysis.check_smart_money_turnaround(code, is_overseas=is_overseas)
-                            score, _ = analysis.calculate_score(df=df, ind=ind, weights=weights, smart_money=sm_flag)
-                            
-                            if condition_type == 'SCORE_UP' and score >= target_price:
-                                trigger, reason = True, f"목표 점수 도달 ({score}점 >= {target_price}점)"
-                            elif condition_type == 'SCORE_DOWN' and score <= target_price:
-                                trigger, reason = True, f"목표 점수 하락 ({score}점 <= {target_price}점)"
+                            sc = ctx.get('_score')
+                            op = ">=" if condition_type == 'SCORE_UP' else "<="
+                            word = "도달" if condition_type == 'SCORE_UP' else "하락"
+                            reason = f"목표 점수 {word} ({sc}점 {op} {target_price}점)"
                         elif 'RSI' in condition_type:
-                            rsi_val = ind.get('rsi')
-                            if rsi_val is not None:
-                                if condition_type == 'RSI_UP' and rsi_val >= target_price:
-                                    trigger, reason = True, f"RSI 도달 ({rsi_val:.1f} >= {target_price})"
-                                elif condition_type == 'RSI_DOWN' and rsi_val <= target_price:
-                                    trigger, reason = True, f"RSI 하락 ({rsi_val:.1f} <= {target_price})"
-                        elif 'EMA' in condition_type:
-                            ema_key = f"ema_{int(target_price)}"
-                            ema_val = ind.get(ema_key)
-                            if ema_val is not None:
-                                if condition_type == 'EMA_UP' and curr_price >= ema_val:
-                                    trigger, reason = True, f"EMA {int(target_price)}선 상향돌파 (현재가: {curr_price:,.2f})"
-                                elif condition_type == 'EMA_DOWN' and curr_price <= ema_val:
-                                    trigger, reason = True, f"EMA {int(target_price)}선 하향이탈 (현재가: {curr_price:,.2f})"
+                            rv = (ind or {}).get('rsi')
+                            op = ">=" if condition_type == 'RSI_UP' else "<="
+                            word = "도달" if condition_type == 'RSI_UP' else "하락"
+                            reason = f"RSI {word} ({rv:.1f} {op} {target_price})"
+                        else:
+                            word = "상향돌파" if condition_type == 'EMA_UP' else "하향이탈"
+                            reason = f"EMA {int(target_price)}선 {word} (현재가: {curr_price:,.2f})"
 
                 elif condition_type == 'HOLDING_EXIT':
                     # [보유분석 청산] 자동매매가 실제 청산에 쓰는 판정(analyze_sell)을 그대로 쓴다.

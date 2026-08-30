@@ -30,6 +30,9 @@ from core import trading_cost
 logger = logging.getLogger(__name__)
 
 BACKFILL_REASON = "보유분 복원(증권사 체결내역)"
+#  '우리가 낸 주문인데 체결 기록만 없는' 경우의 복원. 외부 매수와 구분해야 한다 —
+#  외부로 잘못 판정하면 그 포지션이 제한 종목으로 올라가 손절·트레일링이 통째로 멈춘다.
+OWN_FILL_REASON = "체결 기록 복원(시스템 주문)"
 
 
 def supports_broker_history():
@@ -152,6 +155,29 @@ def _exists(odno):
         return False
 
 
+def our_order_row(odno):
+    """이 주문번호를 **시스템이 낸 적이 있는가** — 있으면 그 접수 기록을 돌려준다.
+
+    [왜 '체결 기록 없음'으로 판정하면 안 되나] 체결 기록(order_status='체결')은 체결
+    통보를 받은 뒤에 따로 INSERT 된다. 주문을 내고 체결 전에 프로세스가 죽으면(라즈베리
+    파이 OOM·재기동) 접수 기록만 남는데, 그것만 보고 '외부 매수'로 판정하면 시스템이
+    **자기 포지션을 제한 종목으로 올려** 손절·트레일링에서 제외한다. 경보는 나가지만
+    청산은 사람이 손대기 전까지 멈춘다.
+
+    외부 앱(MTS/HTS) 주문도 접수 기록이 생기지만 type 에 '(외부)'가 붙는다 — 그것은
+    우리 주문이 아니다.
+    """
+    if not odno:
+        return None
+    try:
+        row = db_manager.db.get_trade_by_odno(odno)
+    except Exception:
+        return None
+    if not row:
+        return None
+    return None if "(외부)" in str(row.get('type') or '') else row
+
+
 def apply(plans, cano=None, acnt_prdt_cd=None):
     """계획을 DB에 기록한다. (기록 건수, 건너뛴 건수) 반환.
 
@@ -167,11 +193,22 @@ def apply(plans, cano=None, acnt_prdt_cd=None):
                 if _exists(r['odno']):
                     skipped += 1
                     continue
+                # 우리가 낸 주문인데 체결 기록만 빠진 경우 — '(외부)'로 적으면 통계도
+                #  틀리고, 무엇보다 진입 시 손절률이 사라져 청산 기준이 폴백으로 내려간다.
+                own = our_order_row(r['odno'])
+                rec_type = r['type'].replace("(외부)", "") if own else r['type']
+                try:
+                    own_sl = float((own or {}).get('stop_loss_rate') or 0.0)
+                except (TypeError, ValueError):
+                    own_sl = 0.0
                 ok = db_manager.db.insert_trade(
-                    r['type'], r['code'], r['name'], r['qty'], str(int(r['price'])), r['odno'],
-                    order_status="체결", reason=BACKFILL_REASON, custom_time=r['time'],
+                    rec_type, r['code'], r['name'], r['qty'], str(int(r['price'])), r['odno'],
+                    order_status="체결",
+                    reason=OWN_FILL_REASON if own else BACKFILL_REASON,
+                    custom_time=r['time'],
                     profit_amt=r['profit_amt'], profit_rate=r['profit_rate'],
-                    buy_price=r['buy_price'])
+                    buy_price=r['buy_price'], stop_loss_rate=own_sl,
+                    score=(own or {}).get('strategy_score') or 0)
                 if ok:
                     written += 1
                 else:
@@ -209,8 +246,13 @@ def sync_account(cano=None, acnt_prdt_cd=None, months=12, register_restrictions=
 
         summary['partial'] = [(p['code'], p['name'], p['missing']) for p in plans if p['missing'] > 0]
 
+        # [외부 판정] '체결 기록이 없다'가 아니라 '우리가 낸 주문이 아니다'가 기준이다.
+        #  our_order_row 주석 참조 — 접수 기록만 남은 자기 주문을 외부로 몰면 그 포지션의
+        #  손절이 멈춘다(제한 종목 등록).
         new_buy_codes = {(p['code'], p['name']) for p in plans
-                         for r in p['records'] if '매수' in r['type'] and not _exists(r['odno'])}
+                         for r in p['records']
+                         if '매수' in r['type'] and not _exists(r['odno'])
+                         and our_order_row(r['odno']) is None}
 
         summary['written'], summary['skipped'] = apply(plans, cano=cano, acnt_prdt_cd=acnt_prdt_cd)
 
