@@ -38,9 +38,13 @@ def db(tmp_path):
     config.DB_FILE_PATH = original
 
 
-def _row(code="005930", name="삼성전자", outcome="passed", score=7.5, vol=120.0, abr=2.0):
-    return {"code": code, "name": name, "outcome": outcome,
-            "score": score, "state": "매수", "vol": vol, "abr": abr}
+def _row(code="005930", name="삼성전자", outcome="passed", score=7.5, vol=120.0, abr=2.0,
+         blocked_by=None):
+    row = {"code": code, "name": name, "outcome": outcome,
+           "score": score, "state": "매수", "vol": vol, "abr": abr}
+    if blocked_by:
+        row["blocked_by"] = blocked_by
+    return row
 
 
 def test_같은_날_같은_종목은_한_행에_주기가_쌓인다(db):
@@ -308,4 +312,92 @@ def test_옛_원장은_실전으로_옮겨진다(tmp_path, monkeypatch):
     finally:
         if getattr(getattr(manager, "local", None), "conn", None):
             manager.local.conn.close()
+        config.DB_FILE_PATH = original
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 계좌 상태 차단 (blocked_slot / blocked_cash)
+#
+# [왜 생겼는가] 2026-08-29까지의 가상투자 기록이 이 공백을 그대로 보여줬다.
+#  08-27·28 대한항공은 285~287주기 내내 `passed` 인데 매수는 0건이다 — 슬롯이 4/4로
+#  꽉 차 있었기 때문인데, 원장에는 그 사실이 어디에도 없다. 사유는 로그에만 남았고,
+#  로그 파싱은 이 원장을 만든 이유 자체라 되돌아갈 수 없다.
+#  그 상태로 원장을 읽으면 "신호가 287번 섰다"만 보여, 슬롯·시드를 늘리면 그만큼
+#  더 샀을 것처럼 읽힌다.
+# ──────────────────────────────────────────────────────────────────────────
+
+def test_슬롯_만석은_신호와_함께_기록된다(db):
+    """[핵심] '신호는 섰고 막은 것은 계좌다'가 한 행에서 같이 읽혀야 한다."""
+    db.record_signal_ledger("20260827", [_row(outcome="passed", blocked_by="slot")])
+    r = db.execute_query("SELECT passed, blocked_slot, blocked_cash, cycles "
+                         "FROM signal_ledger WHERE date='20260827'", fetch='one')
+    assert (r['passed'], r['blocked_slot'], r['blocked_cash'], r['cycles']) == (1, 1, 0, 1)
+
+
+def test_예수금_부족도_같은_방식으로_기록된다(db):
+    db.record_signal_ledger("20260827", [_row(outcome="passed", blocked_by="cash")])
+    r = db.execute_query("SELECT passed, blocked_slot, blocked_cash "
+                         "FROM signal_ledger WHERE date='20260827'", fetch='one')
+    assert (r['passed'], r['blocked_slot'], r['blocked_cash']) == (1, 0, 1)
+
+
+def test_계좌_상태는_게이트_판정을_덮지_않는다(db):
+    """둘은 직교한다 — 게이트 결과를 계좌 사유로 갈아치우면 차단율이 통째로 틀어진다."""
+    db.record_signal_ledger("20260827", [_row(outcome="gate_vol", blocked_by="slot")])
+    r = db.execute_query("SELECT passed, blocked_vol, blocked_slot "
+                         "FROM signal_ledger WHERE date='20260827'", fetch='one')
+    assert r['blocked_vol'] == 1
+    assert r['passed'] == 0
+    assert r['blocked_slot'] == 0, "게이트가 이미 막은 신호를 슬롯 탓으로 셌다(기회비용 과대평가)"
+
+
+def test_계좌_상태도_주기마다_누적된다(db):
+    for _ in range(3):
+        db.record_signal_ledger("20260827", [_row(outcome="passed", blocked_by="slot")])
+    db.record_signal_ledger("20260827", [_row(outcome="passed")])   # 슬롯이 비었다
+    r = db.execute_query("SELECT cycles, passed, blocked_slot "
+                         "FROM signal_ledger WHERE date='20260827'", fetch='one')
+    assert (r['cycles'], r['passed'], r['blocked_slot']) == (4, 4, 3)
+
+
+def test_모르는_계좌_사유는_아무것도_세지_않는다(db):
+    """새 사유가 생겨도 엉뚱한 칸이 오르지 않는다(blocked_other로 새지도 않는다)."""
+    db.record_signal_ledger("20260827", [_row(outcome="passed", blocked_by="새사유")])
+    r = db.execute_query("SELECT passed, blocked_slot, blocked_cash, blocked_other "
+                         "FROM signal_ledger WHERE date='20260827'", fetch='one')
+    assert (r['passed'], r['blocked_slot'], r['blocked_cash'], r['blocked_other']) == (1, 0, 0, 0)
+
+
+def test_옛_원장_파일에도_컬럼이_생긴다(db, tmp_path):
+    """[마이그레이션] 이미 돌고 있는 계좌의 원장이 기동에서 깨지면 안 된다."""
+    import sqlite3
+    path = str(tmp_path / "old.sqlite")
+    con = sqlite3.connect(path)
+    con.execute("""CREATE TABLE signal_ledger (
+        date TEXT, code TEXT, is_sim INTEGER DEFAULT 0, name TEXT,
+        cycles INTEGER DEFAULT 0, passed INTEGER DEFAULT 0,
+        blocked_vol INTEGER DEFAULT 0, blocked_abr INTEGER DEFAULT 0,
+        blocked_hold INTEGER DEFAULT 0, blocked_corr INTEGER DEFAULT 0,
+        blocked_rs INTEGER DEFAULT 0, blocked_tq INTEGER DEFAULT 0,
+        blocked_reentry INTEGER DEFAULT 0, blocked_other INTEGER DEFAULT 0,
+        max_score REAL DEFAULT 0.0, max_vol REAL, min_abr REAL, last_state TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (date, code, is_sim))""")
+    con.execute("INSERT INTO signal_ledger (date, code, name, cycles, passed) "
+                "VALUES ('20260826','003490','대한항공', 30, 30)")
+    con.commit(); con.close()
+
+    original = config.DB_FILE_PATH
+    config.DB_FILE_PATH = path
+    try:
+        old = DBManager()
+        old.record_signal_ledger("20260827", [_row(code="003490", name="대한항공",
+                                                   outcome="passed", blocked_by="slot")])
+        rows = old.execute_query("SELECT date, passed, blocked_slot FROM signal_ledger "
+                                 "ORDER BY date", fetch='all')
+        assert [r['passed'] for r in rows] == [30, 1], "기존 행이 소실됐다"
+        assert rows[1]['blocked_slot'] == 1
+        if getattr(getattr(old, "local", None), "conn", None):
+            old.local.conn.close()
+    finally:
         config.DB_FILE_PATH = original

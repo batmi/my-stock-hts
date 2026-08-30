@@ -400,6 +400,14 @@ class DBManager:
                         blocked_tq INTEGER DEFAULT 0,
                         blocked_reentry INTEGER DEFAULT 0,
                         blocked_other INTEGER DEFAULT 0,
+                        -- [계좌 상태] 게이트는 통과했는데 계좌가 못 사게 한 주기.
+                        --  passed 와 함께 오른다(신호는 섰고, 막은 것은 계좌다).
+                        --  이 둘이 없던 동안 원장은 '왜 안 샀나'를 답하지 못했다 — 실제로
+                        --  2026-08-27~28 가상투자에서 대한항공이 287주기 내내 passed 인데
+                        --  매수는 0건이었고(슬롯 4/4 만석), 그 사유는 로그에만 있었다.
+                        --  로그 파싱은 원장을 만든 이유 자체이므로 되돌아갈 수 없다.
+                        blocked_slot INTEGER DEFAULT 0,
+                        blocked_cash INTEGER DEFAULT 0,
                         max_score REAL DEFAULT 0.0,
                         max_vol REAL,
                         min_abr REAL,
@@ -443,6 +451,14 @@ class DBManager:
                     ''')
                     cursor.execute("DROP TABLE signal_ledger_old")
                     print("[DB] 신호 원장에 계좌 구분(is_sim) 추가됨")
+
+                # [마이그레이션 2026-08-30] 계좌 상태 차단 컬럼 추가. PK가 그대로라 ADD로 족하다.
+                cursor.execute("PRAGMA table_info(signal_ledger)")
+                _led_cols = [c[1] for c in cursor.fetchall()]
+                for _c in ("blocked_slot", "blocked_cash"):
+                    if _led_cols and _c not in _led_cols:
+                        cursor.execute(f"ALTER TABLE signal_ledger ADD COLUMN {_c} INTEGER DEFAULT 0")
+                        print(f"[DB] 신호 원장 컬럼 추가됨: {_c}")
 
                 # 컬럼 확장 (마이그레이션)
                 cursor.execute("PRAGMA table_info(trades)")
@@ -1329,6 +1345,12 @@ class DBManager:
         "reentry": "blocked_reentry",       # 당일 재진입 차단
         "other": "blocked_other",
     }
+    #  [계좌 상태] 게이트 판정과 **직교**한다 — 신호는 섰는데 계좌가 못 사게 한 경우다.
+    #   passed 와 동시에 오른다(둘의 합이 주기 수가 되지 않는다는 뜻).
+    _LEDGER_ACCOUNT_COLS = {
+        "slot": "blocked_slot",             # 보유 슬롯 만석
+        "cash": "blocked_cash",             # 예수금 부족
+    }
 
     def record_signal_ledger(self, date_str, rows):
         """한 주기의 매수 신호 판정을 (일자, 종목) 단위로 누적한다.
@@ -1345,20 +1367,30 @@ class DBManager:
         for r in rows:
             col = self._LEDGER_COLS.get(r.get("outcome"), "blocked_other")
             counts = {c: 0 for c in self._LEDGER_COLS.values()}
+            counts.update({c: 0 for c in self._LEDGER_ACCOUNT_COLS.values()})
             counts[col] = 1
+            # 계좌 상태는 게이트 결과를 덮지 않고 따로 센다 — '신호는 섰는데 계좌가 막았다'가
+            # 한 행에서 같이 읽혀야 기회비용을 제대로 잰다.
+            #  게이트가 이미 막은 신호는 계좌 탓이 아니다 — 둘 다 세면 '슬롯만 늘리면
+            #  이만큼 더 샀을 것'이라는 틀린 기회비용이 나온다. 통과한 신호에만 붙인다.
+            acc_col = self._LEDGER_ACCOUNT_COLS.get(r.get("blocked_by")) if col == "passed" else None
+            if acc_col:
+                counts[acc_col] = 1
             payload.append((
                 date_str, r.get("code"), is_sim, r.get("name"),
                 counts["passed"], counts["blocked_vol"], counts["blocked_abr"],
                 counts["blocked_hold"], counts["blocked_corr"], counts["blocked_rs"],
                 counts["blocked_tq"], counts["blocked_reentry"], counts["blocked_other"],
+                counts["blocked_slot"], counts["blocked_cash"],
                 float(r.get("score") or 0.0), r.get("vol"), r.get("abr"), r.get("state"),
             ))
         sql = '''
             INSERT INTO signal_ledger
                 (date, code, is_sim, name, cycles, passed, blocked_vol, blocked_abr, blocked_hold,
                  blocked_corr, blocked_rs, blocked_tq, blocked_reentry, blocked_other,
+                 blocked_slot, blocked_cash,
                  max_score, max_vol, min_abr, last_state, updated_at)
-            VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(date, code, is_sim) DO UPDATE SET
                 cycles          = cycles + 1,
                 passed          = passed + excluded.passed,
@@ -1370,6 +1402,8 @@ class DBManager:
                 blocked_tq      = blocked_tq + excluded.blocked_tq,
                 blocked_reentry = blocked_reentry + excluded.blocked_reentry,
                 blocked_other   = blocked_other + excluded.blocked_other,
+                blocked_slot    = blocked_slot + excluded.blocked_slot,
+                blocked_cash    = blocked_cash + excluded.blocked_cash,
                 max_score       = MAX(max_score, excluded.max_score),
                 -- NULL은 '못 쟀다'이지 0이 아니다. 한쪽만 값이 있으면 그 값을 남긴다.
                 max_vol = CASE WHEN excluded.max_vol IS NULL THEN max_vol

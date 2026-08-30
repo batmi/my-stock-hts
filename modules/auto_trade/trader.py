@@ -5281,6 +5281,9 @@ class AutoTrader:
         #  뒤에서 후보를 못 산 이유가 '조건 미달'이라는 뭉뚱그린 문구로만 남았다.
         #  두 로그는 시각이 벌어져(분석 한 바퀴) 붙여 읽기도 어렵다.
         buy_skip_reason = ""
+        # [신호 원장] 계좌 상태로 막힌 사실을 원장까지 들고 간다. 종전에는 로그로만 남아,
+        #  원장을 읽는 감사가 '게이트를 통과했는데 왜 안 샀나'에 답할 수 없었다.
+        buy_block = None
 
         if len(holding_codes) >= max_holdings:
             buy_skip_reason = (f"보유 슬롯 가득 참 — {len(holding_codes)}/{max_holdings}종목 "
@@ -5288,6 +5291,7 @@ class AutoTrader:
             if self.consecutive_errors == 0: # 로그 도배 방지
                 self.log(f"매수 스킵: 최대 보유 종목 수({max_holdings}개) 도달 (투자비중 {config.format_invest_ratio()} 기준) - 종목분석은 계속 진행합니다.")
             can_buy = False
+            buy_block = 'slot'
 
         # 예수금 확인 (API 직접 호출)
         avail_cash = 0
@@ -5306,6 +5310,7 @@ class AutoTrader:
             if self.consecutive_errors == 0: # 로그 도배 방지
                  self.log(f"매수 스킵: 예수금 부족 ({avail_cash:,}원 < {min_cash:,}원) - 종목분석은 계속 진행합니다.")
             can_buy = False
+            buy_block = 'cash'
             
         # [추가] 개별 룰 로드 ([최적화] 루프에서 주기당 1회 로드해 전달받으면 재조회 생략)
         if rules_map is None:
@@ -5351,7 +5356,7 @@ class AutoTrader:
         stop_exit_prices = self._collect_stop_exit_prices(today_trades)
 
         # 1. 후보 분석
-        candidates = self._analyze_candidates(targets, holding_codes, rules_map, reentry_hurdles, holding_names_map, holding_groups_map, restricted_stocks=restricted_stocks, stop_exit_prices=stop_exit_prices)
+        candidates = self._analyze_candidates(targets, holding_codes, rules_map, reentry_hurdles, holding_names_map, holding_groups_map, restricted_stocks=restricted_stocks, stop_exit_prices=stop_exit_prices, buy_block=buy_block)
         
         # 2. 매수 집행
         if candidates:
@@ -5401,7 +5406,7 @@ class AutoTrader:
                 out[t['code']] = price   # 시간순이므로 마지막 것이 남는다
         return out
 
-    def _analyze_candidate_worker(self, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles, holdings_dfs, holding_groups_map, io_pool=None, stop_exit_prices=None):
+    def _analyze_candidate_worker(self, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles, holdings_dfs, holding_groups_map, io_pool=None, stop_exit_prices=None, buy_block=None):
         """(내부함수) 매수 후보 분석용 단일 워커
 
         io_pool: 차트/체결강도/호가 동시 조회용 공유 스레드풀 (None이면 자체 생성 — 하위 호환)
@@ -5655,10 +5660,16 @@ class AutoTrader:
             def _ledger(outcome):
                 if not is_buy_state:
                     return None
-                return {'code': code, 'name': name, 'outcome': outcome,
-                        'score': result.get('score'), 'state': result['state'],
-                        'vol': result.get('vol_strength'),
-                        'abr': result.get('ask_bid_ratio')}
+                row = {'code': code, 'name': name, 'outcome': outcome,
+                       'score': result.get('score'), 'state': result['state'],
+                       'vol': result.get('vol_strength'),
+                       'abr': result.get('ask_bid_ratio')}
+                # 계좌 상태(슬롯 만석·예수금 부족)는 게이트를 통과한 신호에만 의미가 있다.
+                #  게이트가 이미 막은 종목까지 슬롯 탓으로 세면 기회비용이 부풀어,
+                #  '슬롯을 늘리면 이만큼 더 샀을 것'이라는 틀린 결론을 부른다.
+                if outcome == 'passed' and buy_block:
+                    row['blocked_by'] = buy_block
+                return row
 
             # [추가] 가짜 체결강도로 걸러진 경우 사유 표시 (매수 시그널일 때만)
             vol_reject_msg = ""
@@ -5776,7 +5787,7 @@ class AutoTrader:
                 return {'type': 'log_only', 'log': log_msg, 'ledger': _ledger(_out)}
         except Exception: return None
 
-    def _analyze_candidates(self, targets, holding_codes, rules_map, reentry_hurdles, holding_names_map, holding_groups_map, restricted_stocks=None, stop_exit_prices=None):
+    def _analyze_candidates(self, targets, holding_codes, rules_map, reentry_hurdles, holding_names_map, holding_groups_map, restricted_stocks=None, stop_exit_prices=None, buy_block=None):
         candidates = []
         skipped_stocks = []
         ledger_rows = []               # [신호 원장] 이 주기의 매수 신호 판정 (주기 끝에 1회 기록)
@@ -5851,7 +5862,7 @@ class AutoTrader:
         io_pool = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers * 3, thread_name_prefix="cand_io")
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="at_cand") as executor:
-                futures = [executor.submit(self._analyze_candidate_worker, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles, holdings_dfs, holding_groups_map, io_pool=io_pool, stop_exit_prices=stop_exit_prices) for item in targets]
+                futures = [executor.submit(self._analyze_candidate_worker, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles, holdings_dfs, holding_groups_map, io_pool=io_pool, stop_exit_prices=stop_exit_prices, buy_block=buy_block) for item in targets]
 
                 for future in concurrent.futures.as_completed(futures):
                     if not self.is_running: break
