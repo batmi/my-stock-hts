@@ -66,6 +66,17 @@ CIRCUIT_BREAKER_ALERT_FAILS = 3
 #  숨겨지지 않고 매 주기 반복되므로, 억제하지 않으면 알림이 도배된다.
 CODE_ERROR_ALERT_COOLDOWN = 1800.0
 
+#  [오프라인 입출금 확정 문턱] 원금 대조에는 잔돈이 남는다 — 매수 수수료는 실현손익에
+#   들어가지 않고, 세금·배당도 원 단위로 어긋난다. 그 잡음을 입출금으로 확정하면
+#   (출금 방향일 때) 자산 고점이 낮아져 리스크 한도가 조용히 열린다.
+#   그래서 절대 하한(장중 감지와 같은 5만원)과 계좌 규모 대비 비율 중 **작은 쪽**을 쓴다.
+#   비율을 함께 두는 이유: 잡음은 계좌 규모에 비례하는데 5만원 고정이면 소액 계좌에서
+#   전 재산이 빠져나가도(실제 사례: 10,027원 계좌의 1만원 출금 → 가짜 드로다운 99.7%)
+#   문턱을 못 넘는다.
+OFFLINE_TRANSFER_ABS_MIN = 50_000.0
+OFFLINE_TRANSFER_RATIO = 0.005
+OFFLINE_TRANSFER_FLOOR = 100.0
+
 
 def _pkg():
     """패키지(modules.auto_trade) 네임스페이스 접근자.
@@ -1063,6 +1074,98 @@ class AutoTrader:
         # 산식은 RiskManager._equity_baseline 이 단독 보유한다 — 차단기·사이징과
         #  갈라지면 세 장치가 서로 다른 자본을 보게 된다.
         return self.risk_manager._equity_baseline()
+
+    @staticmethod
+    def _offline_transfer_threshold(baseline_principal):
+        """오프라인 입출금으로 확정할 최소 금액. (상수 주석 참조)"""
+        base = abs(float(baseline_principal or 0))
+        return max(OFFLINE_TRANSFER_FLOOR,
+                   min(OFFLINE_TRANSFER_ABS_MIN, base * OFFLINE_TRANSFER_RATIO))
+
+    def _reconcile_offline_transfer(self, account_key, current_principal, realized_ok):
+        """프로그램이 꺼져 있던 사이의 입출금을 스스로 되찾아 자산 이력에 적는다.
+
+        [왜 필요한가] 장중 감지(_monitor_account_status)는 **그날 기준 원금이 잡힌 뒤**의
+         변화만 본다. 프로그램이 꺼진 사이의 입출금은 잴 주체가 없어 영영 기록되지 않고,
+         출금이면 옛 자산이 그대로 고점으로 남아 룩백(DD_LOOKBACK_DAYS, 90일) 내내
+         가짜 드로다운이 리스크 한도를 묶는다.
+         [실사고 2026-08-31] 계좌 44048158-01에서 프로그램이 꺼져 있던 7/28~8/4 사이에
+          약 1만원이 빠졌다. 07-27의 10,027원이 고점으로 남아 드로다운이 99.7%로
+          계산됐고(현재 27원), 운용자가 DB를 직접 고치기 전에는 풀리지 않았다.
+
+        [식] 원금(현금+매입원가-실현손익)은 입출금이 없으면 그 사이의 실현손익만큼만
+         움직인다. 따라서
+             순입출금 = (오늘 원금) - (마지막으로 남긴 원금) - (그 사이의 실현손익)
+         오늘의 실현손익은 양변에서 상쇄되므로 합산 구간은 [그날, 어제]다.
+
+        [어느 행에 적는가] 마지막 스냅샷을 남긴 그날의 행이다. 자산 행은 그날 '시작'
+         스냅샷이고 환산식은 'd일 이후에 일어난 입출금'을 d의 자산에 더하므로
+         (get_max_daily_asset), 그 이후에 일어난 이 입출금은 그 행에 실려야 한다.
+         오늘 행에 적으면 이미 반영된 오늘 자산에 한 번 더 더해져 이중 계산이 된다.
+
+        [모르면 안 건드린다] 실현손익을 못 쟀거나(realized_ok=False), 대조점이 거래
+         보존 기간 밖이면(그 사이 매도 기록이 지워져 실현손익 합이 잘린다) 아무것도
+         하지 않는다. 잘린 실현손익은 그대로 가짜 '출금'이 되고, 출금 방향의 오탐은
+         고점을 낮춰 **한도를 여는** 위험한 방향이다.
+
+        반환: 기록한 금액(입금 +, 출금 −). 아무것도 안 했으면 0.
+        """
+        if not realized_ok or not current_principal or current_principal <= 0:
+            return 0
+        try:
+            today = datetime.now().strftime("%Y-%m-%d")
+            snap = db_manager.db.get_last_principal_snapshot(account_key, today)
+            if not snap:
+                return 0                       # 대조점 없음 = 이 계좌의 첫 운용
+            last_date, last_principal = snap
+            if last_principal <= 0:
+                return 0
+            if last_date >= today:
+                return 0                       # 오늘 이미 대조를 끝냈다(같은 날 재기동).
+                                               #  오늘 이후의 변화는 장중 감지가 맡는다 —
+                                               #  여기서 또 재면 같은 입출금을 두 번 적는다.
+
+            retention = int(getattr(config, 'DB_DATA_RETENTION_DAYS', 365) or 365)
+            gap_days = (datetime.now() - datetime.strptime(last_date, "%Y-%m-%d")).days
+            if retention > 0 and gap_days > retention - 7:
+                self.log(f"[오프라인 입출금] 마지막 대조점({last_date})이 거래 보존 기간 밖이라 "
+                         f"보정을 건너뜁니다 — 실현손익 합을 신뢰할 수 없습니다.")
+                return 0
+
+            yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+            realized, ok = db_manager.db.get_realized_profit_between(
+                last_date, yesterday, account_key)
+            if not ok:
+                self.log("[오프라인 입출금] 구간 실현손익 조회 실패 — 보정하지 않습니다.")
+                return 0
+
+            residual = float(current_principal) - float(last_principal) - float(realized)
+            if abs(residual) < self._offline_transfer_threshold(last_principal):
+                return 0
+
+            amount = int(round(residual))
+            if not db_manager.db.add_net_transfer(last_date, account_key, amount):
+                return 0                       # 그날 행이 없다 = 적을 자리가 없다
+
+            self._hwm_cache_date = None        # 환산이 바뀌었으니 드로다운을 다시 잰다
+            action_str = "입금" if amount > 0 else "출금"
+            self.log(f"💰 정지 중 발생한 예수금 {action_str} 자동 반영: {amount:+,}원 "
+                     f"(대조점 {last_date}, 구간 실현손익 {int(realized):+,}원)")
+            try:
+                api.send_telegram_message(
+                    f"💰 [정지 중 {action_str} 자동 반영]\n"
+                    f"프로그램이 꺼져 있던 사이({last_date} 이후)의 {action_str} "
+                    f"약 {abs(amount):,}원을 확인해 자산 이력에 반영했습니다.\n\n"
+                    f"✅ 드로다운 기준(자산 고점)이 이 금액을 빼고 계산되므로 "
+                    f"조치할 것은 없습니다.\n"
+                    f"(대조: {last_date} 원금 {int(last_principal):,}원 → 현재 "
+                    f"{int(current_principal):,}원, 그 사이 실현손익 {int(realized):+,}원)")
+            except Exception:
+                pass
+            return amount
+        except Exception as e:
+            logger.warning(f"[오프라인 입출금] 보정 실패 — 그대로 둡니다: {e}")
+            return 0
 
     def _reevaluate_buy_halt_after_transfer(self, current_total, action_str="입출금"):
         """입출금으로 기준 자산을 옮긴 뒤, 방어 모드를 새 기준으로 다시 잰다.
@@ -4127,6 +4230,10 @@ class AutoTrader:
                         # 있으면 매입원가≠평가금이라 그 차이(=시작 시점 평가손익)가 가짜 입출금으로 오인되었다.
                         # → 보유 종목 하락만으로 '가짜 입금'이 잡혀 기준자산이 부풀고 비상정지가 오작동했다.
                         if is_first_init or self.baseline_principal <= 0:
+                            # [오프라인 입출금] 기준을 새로 잡기 **전에** 꺼져 있던 사이의
+                            #  입출금부터 되찾는다. 새로 잡고 나면 대조할 것이 없어진다.
+                            self._reconcile_offline_transfer(
+                                f"{target_cano}-{acnt_cd}", current_principal, realized_ok)
                             self.baseline_principal = current_principal
                             # 재기동이 같은 날 다시 일어나도 이 기준으로 대조할 수 있게 남긴다.
                             try:
@@ -4135,6 +4242,19 @@ class AutoTrader:
                                                          principal=int(current_principal))
                             except Exception:
                                 pass
+                            # [날짜를 넘는 대조점] 파일(daily_state)은 날짜가 바뀌면 비워지므로
+                            #  오프라인 입출금을 되찾을 수 없다. 자산 이력 행에 함께 남긴다.
+                            #  자산이 0(시세 결손 의심)인 날은 남기지 않는다 — 그런 행은
+                            #  get_max_daily_asset의 환산에서 빠져 보정이 사라진다. 그날을
+                            #  건너뛰어도 다음 대조는 그 이전 스냅샷과 이뤄져 식은 그대로 성립한다.
+                            if realized_ok and self.initial_asset > 0:
+                                try:
+                                    db_manager.db.save_daily_asset(
+                                        datetime.now().strftime("%Y-%m-%d"),
+                                        f"{target_cano}-{acnt_cd}", self.initial_asset,
+                                        principal=int(current_principal))
+                                except Exception as _e:
+                                    logger.debug(f"[입출금] 기준 원금 스냅샷 저장 실패: {_e}")
 
                         # [파생값] 오늘 누적 순입출금. 저장하지 않고 매 주기 다시 잰다.
                         #  기준 자산을 **옮기지 않아도** 차단기·사이징이 이 값으로 즉시 보정된다
@@ -6545,8 +6665,10 @@ class AutoTrader:
                                    f"자산 고점 대비 {dd:.1f}% 하락으로 판정해 신규 진입·증액 "
                                    f"리스크 한도를 x{dd_scale:g}로 줄였습니다.\n"
                                    f"(현재 평가자산 {equity:,.0f}원)\n\n"
-                                   f"손실이 실제와 다르면 자산 스냅샷(daily_asset_history)에 "
-                                   f"잘못된 고점이 남아 있을 수 있습니다 — 그대로 두면 "
+                                   f"입출금은 정지 중에 있었던 것까지 자동 반영되므로 "
+                                   f"조치할 것은 없습니다. 다만 손실이 실제와 다르다면 "
+                                   f"자산 스냅샷(daily_asset_history)에 잘못된 고점이 남아 "
+                                   f"있을 수 있습니다 — 그대로 두면 "
                                    f"{int(params.get('DD_LOOKBACK_DAYS', 90))}일간 한도가 묶입니다.")
                             self.log(f"[리스크 스케일링] 계좌 드로다운 {dd:.1f}% — 한도 x{dd_scale:g} 축소")
                             try:

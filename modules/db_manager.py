@@ -461,6 +461,14 @@ class DBManager:
                                    "ADD COLUMN net_transfer REAL DEFAULT 0")
                     print("[DB] 자산 이력 컬럼 추가됨: net_transfer")
 
+                # [마이그레이션 2026-09-01] 그날의 기준 원금(현금+매입원가-실현손익).
+                #  프로그램이 꺼져 있던 사이의 입출금을 되찾는 유일한 대조점이다
+                #  (trader._reconcile_offline_transfer 주석 참조).
+                if _dah_cols and "principal" not in _dah_cols:
+                    cursor.execute("ALTER TABLE daily_asset_history "
+                                   "ADD COLUMN principal REAL")
+                    print("[DB] 자산 이력 컬럼 추가됨: principal")
+
                 # [마이그레이션 2026-08-30] 계좌 상태 차단 컬럼 추가. PK가 그대로라 ADD로 족하다.
                 cursor.execute("PRAGMA table_info(signal_ledger)")
                 _led_cols = [c[1] for c in cursor.fetchall()]
@@ -1568,27 +1576,34 @@ class DBManager:
             logger.error(f"[DB] 백업 실패: {e}")
             return None
 
-    def save_daily_asset(self, date_str, account, asset_value, net_transfer=None):
+    def save_daily_asset(self, date_str, account, asset_value, net_transfer=None, principal=None):
         """일일 총 자산 스냅샷 저장.
 
         net_transfer: 그날의 누적 순입출금(입금 +, 출금 −). None이면 기존 값을 보존한다 —
           자산만 갱신하는 호출이 입출금 기록을 지우면 드로다운 기준이 다시 어긋난다.
+        principal: 그날의 기준 원금(현금+매입원가-실현손익). None이면 기존 값을 보존한다 —
+          같은 이유다. 이 값이 지워지면 재기동 때 오프라인 입출금을 되찾을 대조점이 사라진다.
         """
         with self.lock:
             for attempt in range(5):
                 try:
                     conn = self._get_conn()
                     cursor = conn.cursor()
-                    if net_transfer is None:
+                    if net_transfer is None or principal is None:
                         cursor.execute(
-                            "SELECT net_transfer FROM daily_asset_history "
+                            "SELECT net_transfer, principal FROM daily_asset_history "
                             "WHERE date = ? AND account = ?", (date_str, account))
                         _row = cursor.fetchone()
-                        net_transfer = (_row[0] if _row and _row[0] is not None else 0)
+                        if net_transfer is None:
+                            net_transfer = (_row[0] if _row and _row[0] is not None else 0)
+                        if principal is None:
+                            principal = (_row[1] if _row else None)
                     cursor.execute('''
-                        INSERT OR REPLACE INTO daily_asset_history (date, account, asset, net_transfer)
-                        VALUES (?, ?, ?, ?)
-                    ''', (date_str, account, asset_value, float(net_transfer or 0)))
+                        INSERT OR REPLACE INTO daily_asset_history
+                            (date, account, asset, net_transfer, principal)
+                        VALUES (?, ?, ?, ?, ?)
+                    ''', (date_str, account, asset_value, float(net_transfer or 0),
+                          None if principal is None else float(principal)))
                     conn.commit()
                     break
                 except sqlite3.OperationalError as e:
@@ -1654,6 +1669,95 @@ class DBManager:
             return row[0] if row else None
         except Exception:
             return None
+
+    def get_last_principal_snapshot(self, account, on_or_before):
+        """on_or_before 까지(포함) 마지막으로 남긴 (일자, 기준 원금). 없으면 None.
+
+        오늘 것도 돌려준다 — 호출부가 '오늘 이미 대조를 끝냈다'를 알아야 같은 입출금을
+        두 번 세지 않는다(같은 날 재기동).
+
+        [무엇에 쓰는가] 프로그램이 꺼져 있던 사이의 입출금을 되찾는 대조점이다.
+         원금(현금+매입원가-실현손익)은 입출금이 없으면 **매매·시세와 무관하게**
+         그 사이의 실현손익만큼만 움직인다. 그래서
+             (오늘 원금) - (그날 원금) - (그 사이 실현손익) = 그 사이의 순입출금
+         이 성립한다(trader._reconcile_offline_transfer).
+         asset > 0 인 행만 본다 — 자산이 0인 행에 순입출금을 적으면 get_max_daily_asset의
+         환산에서 통째로 빠져(WHERE asset > 0) 보정이 사라진다.
+        """
+        try:
+            cursor = self._get_conn().cursor()
+            cursor.execute("SELECT date, principal FROM daily_asset_history "
+                           "WHERE account = ? AND date <= ? AND asset > 0 "
+                           "AND principal IS NOT NULL ORDER BY date DESC LIMIT 1",
+                           (account, on_or_before))
+            row = cursor.fetchone()
+            if not row or row[1] is None:
+                return None
+            return row[0], float(row[1])
+        except Exception:
+            return None
+
+    def add_net_transfer(self, date_str, account, amount):
+        """이미 있는 자산 이력 행의 순입출금에 amount를 **더한다**(덮어쓰지 않는다).
+
+        그날 장중에 감지된 입출금이 이미 적혀 있을 수 있고, 그 위에 오프라인 보정을
+        덮어쓰면 먼저 잰 값이 사라진다. 행이 없으면 아무것도 하지 않는다 — 없는 날을
+        새로 만들면 자산이 없는 행이 생겨 이력이 더 나빠진다.
+
+        반환: 기록했으면 True.
+        """
+        if not amount:
+            return False
+        with self.lock:
+            try:
+                conn = self._get_conn()
+                cursor = conn.cursor()
+                cursor.execute("UPDATE daily_asset_history "
+                               "SET net_transfer = COALESCE(net_transfer, 0) + ? "
+                               "WHERE date = ? AND account = ?",
+                               (float(amount), date_str, account))
+                conn.commit()
+                return bool(cursor.rowcount)
+            except Exception as e:
+                logger.warning(f"[DB] 순입출금 가산 실패({account} {date_str}): {e}")
+                return False
+
+    def get_realized_profit_between(self, start_date, end_date, account, is_sim=False):
+        """[start_date, end_date] 구간의 실현손익 합계와 신뢰 여부를 (합계, ok)로 돌려준다.
+
+        조회가 실패하면 (0, False)다 — 0과 '못 쟀다'를 가르지 않으면 그 금액이 그대로
+        가짜 입출금으로 둔갑한다(이 파일이 아니라 호출부의 실패 모드다. trader의
+        '실현손익을 못 구했는데 0으로 두면' 주석과 같은 이유).
+
+        [중복 제거] 한 주문(odno)은 접수·체결로 여러 행이 남고 그중 여럿이 손익을 들고
+         있을 수 있다. trader._refine_trade_records 와 같은 규칙으로 (일자, odno)당
+         **가장 나중 행의 0 아닌 손익** 하나만 센다. odno가 없으면 행마다 센다.
+        """
+        try:
+            cursor = self._get_conn().cursor()
+            cursor.execute(
+                "SELECT id, substr(time, 1, 10), odno, type, profit_amt FROM trades "
+                "WHERE account = ? AND is_sim = ? AND time >= ? AND time <= ? "
+                "ORDER BY id ASC",
+                (account, 1 if is_sim else 0, f"{start_date} 00:00:00", f"{end_date} 23:59:59"))
+            rows = cursor.fetchall()
+        except Exception as e:
+            logger.warning(f"[DB] 구간 실현손익 조회 실패({account} {start_date}~{end_date}): {e}")
+            return 0, False
+
+        picked = {}
+        loose = 0
+        for _id, day, odno, type_str, profit in rows:
+            if "매도" not in str(type_str or "") and "sell" not in str(type_str or "").lower():
+                continue
+            profit = int(profit or 0)
+            if not profit:
+                continue
+            if odno:
+                picked[(day, odno)] = profit      # 나중 행이 앞 행을 덮는다(id 오름차순)
+            else:
+                loose += profit
+        return sum(picked.values()) + loose, True
 
     #  [고립 고점] 이 배수를 넘고 **혼자만** 높은 행은 기록 오류로 보고 고점에서 뺀다.
     #   진짜 성장이면 그 수준의 행이 여러 날 남는다(아래 주석 참조).
