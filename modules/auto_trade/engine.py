@@ -944,7 +944,7 @@ def resolve_holding_context(last_buy, fallback_buy_date=None, entry_date=None):
     return holding_days, is_mr_holding
 
 
-def analyze_holdings(entries, max_workers=None, restricted_codes=None):
+def analyze_holdings(entries, max_workers=None, restricted_codes=None, account=None):
     """보유 종목에 시스템 매도 판단(analyze_sell)을 그대로 적용한다. (읽기 전용)
 
     시스템 트레이딩 루프와 달리 DB 최고가 갱신·주문·상태 캐시 변경 등 부수효과가 전혀 없어
@@ -952,6 +952,12 @@ def analyze_holdings(entries, max_workers=None, restricted_codes=None):
 
     restricted_codes를 넘기면 각 결과에 'unmanaged'(자동 매도 제외 사유)를 채운다.
     청산 신호가 떠도 시스템이 팔지 않는 포지션을 화면에서 구분하기 위한 정보다.
+
+    account: 'cano-acnt'. trades 는 모든 모드·계좌가 한 파일을 공유하므로, 넘기지 않으면
+     같은 종목을 두 계좌에서 들고 있을 때 **남의 계좌 매수 기록**으로 손절선·진입일이
+     계산된다. 매매 루프(trader)는 이미 계좌로 가르고 있어서, 여기를 비워두면 화면이
+     보여주는 손절선과 시스템이 실제로 쓰는 손절선이 갈린다. None이면 전체(종전 동작) —
+     수동 입력 포지션처럼 계좌에 귀속되지 않는 호출부가 쓴다.
 
     entries: [{'code', 'name', 'buy_price', 'current_price', 'profit_rate', 'is_overseas'}]
     반환: {code: analyze_sell 결과 + holding_days/highest_price/has_rule/unmanaged}
@@ -971,8 +977,8 @@ def analyze_holdings(entries, max_workers=None, restricted_codes=None):
 
     rules_list = _safe(lambda: _pkg()._enrich_rules_with_weights(db_manager.db.get_all_stock_strategies()), [])
     rules_map = {r['code']: r for r in rules_list}
-    latest_buy_map = _safe(lambda: db_manager.db.get_latest_buy_trades(codes), {})
-    buy_trades_map = _safe(lambda: db_manager.db.get_buy_trades_for_current_holdings(codes), {})
+    latest_buy_map = _safe(lambda: db_manager.db.get_latest_buy_trades(codes, account=account), {})
+    buy_trades_map = _safe(lambda: db_manager.db.get_buy_trades_for_current_holdings(codes, account=account), {})
     highest_map = _safe(lambda: db_manager.db.get_all_trailing_stops(), {})
     half_tp_set = _safe(lambda: db_manager.db.get_all_half_tp(), set())
     # ------------------------------------------------------------------ 진입일
@@ -986,7 +992,7 @@ def analyze_holdings(entries, max_workers=None, restricted_codes=None):
     #  [왜 더 이른 쪽인가] 두 소스 모두 수량 흐름으로 판정하므로 서로 어긋나면 이력이 더
     #   많은 쪽이 이긴다. 보유일수는 '자본이 얼마나 오래 묶였나'이므로 과소평가(시간청산
     #   지연·TS 앵커 오차)가 과대평가보다 위험하다.
-    entry_info_map = _safe(lambda: db_manager.db.get_position_entry_info(codes), {})
+    entry_info_map = _safe(lambda: db_manager.db.get_position_entry_info(codes, account=account), {})
 
     # 진입이 조회 구간보다 과거인지 판별하려면 현재 보유수량이 필요하다.
     qty_map = {e['code']: e['qty'] for e in entries if e.get('qty') is not None}

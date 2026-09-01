@@ -42,7 +42,8 @@ from modules.auto_trade.engine import (ANCHOR_RESTORE_INTERVAL_SEC, DefaultStrat
                                        UNMANAGED_BAD_PRICE, UNMANAGED_ETF,
                                        UNMANAGED_NO_SELLABLE, UNMANAGED_RESTRICTED,
                                        UNMANAGED_STALE_PRICE, UNMANAGED_STUCK_PENDING)
-from modules.auto_trade.common import (_enrich_rules_with_weights, _get_trade_account, entry_open_delay_remaining, get_mystock_log_tail, get_restricted_stocks, is_plausible_baseline, is_single_price_break, is_system_market_open, load_daily_initial_asset, load_daily_principal, save_daily_initial_asset)
+from modules.auto_trade.common import (_enrich_rules_with_weights, _get_trade_account, entry_open_delay_remaining,
+    trade_account_key, get_mystock_log_tail, get_restricted_stocks, is_plausible_baseline, is_single_price_break, is_system_market_open, load_daily_initial_asset, load_daily_principal, save_daily_initial_asset)
 
 console = config.console
 
@@ -461,9 +462,7 @@ class AutoTrader:
         return False
 
     def _trade_account_key(self):
-        cano = config.session.auto_cano
-        acnt = config.session.auto_acnt_prdt_cd
-        return f"{cano}-{acnt}"
+        return trade_account_key()
 
     def _acquire_instance_lock(self):
         """이 계좌의 자동매매 배타 잠금을 잡는다. 실패하면 시작하지 않는다.
@@ -771,7 +770,8 @@ class AutoTrader:
 
             if valid_holdings:
                 from modules import account
-                analysis_results = account.run_holding_analysis(valid_holdings, [], _pkg().get_restricted_stocks(*_get_trade_account()))
+                analysis_results = account.run_holding_analysis(valid_holdings, [], _pkg().get_restricted_stocks(*_get_trade_account()),
+                                                           account=trade_account_key())
                 msg += "\n\n" + _pkg().format_holdings_block(valid_holdings, analysis_results=analysis_results)
             else:
                 msg += "\n\n📋 [보유 종목] 없음"
@@ -978,7 +978,8 @@ class AutoTrader:
 
                     if valid_holdings:
                         from modules import account
-                        analysis_results = account.run_holding_analysis(valid_holdings, [], _pkg().get_restricted_stocks(*_get_trade_account()))
+                        analysis_results = account.run_holding_analysis(valid_holdings, [], _pkg().get_restricted_stocks(*_get_trade_account()),
+                                                           account=trade_account_key())
                         msg += "\n\n" + _pkg().format_holdings_block(valid_holdings, title="최종 보유 종목 현황", analysis_results=analysis_results)
                     else:
                         msg += "\n\n📋 [최종 보유 종목] 없음"
@@ -1579,7 +1580,8 @@ class AutoTrader:
 
         if valid_holdings:
             from modules import account
-            analysis_results = account.run_holding_analysis(valid_holdings, [], _pkg().get_restricted_stocks(*_get_trade_account()))
+            analysis_results = account.run_holding_analysis(valid_holdings, [], _pkg().get_restricted_stocks(*_get_trade_account()),
+                                                           account=trade_account_key())
             msg += "\n" + _pkg().format_holdings_block(valid_holdings, analysis_results=analysis_results)
         else:
             msg += "\n📋 [보유 종목] 없음"
@@ -3593,7 +3595,8 @@ class AutoTrader:
 
             if valid_holdings:
                 from modules import account
-                analysis_results = account.run_holding_analysis(valid_holdings, [], _pkg().get_restricted_stocks(*_get_trade_account()))
+                analysis_results = account.run_holding_analysis(valid_holdings, [], _pkg().get_restricted_stocks(*_get_trade_account()),
+                                                           account=trade_account_key())
                 msg += "\n\n" + _pkg().format_holdings_block(valid_holdings, analysis_results=analysis_results)
             else:
                 msg += "\n\n📋 [보유 종목] 없음"

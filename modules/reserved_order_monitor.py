@@ -432,7 +432,7 @@ class ReservedOrderMonitor:
                     dom = [i for i in (raw_dom or []) if api.safe_int(i.get('hldg_qty', 0)) > 0]
                     ovs = [i for i in (raw_ovs or [])
                            if float(i.get('ovrs_cblc_qty', 0) or i.get('ord_psbl_qty', 0) or 0) > 0]
-                    res = account_mod.run_holding_analysis(dom, ovs)
+                    res = account_mod.run_holding_analysis(dom, ovs, account=f"{cano}-{acnt}")
             except Exception as e:
                 logger.warning(f"[Reserve] 보유분석 실패({cano}): {e}")
                 return None

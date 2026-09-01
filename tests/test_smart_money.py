@@ -210,3 +210,103 @@ def test_kis_fallback_warns_when_coverage_is_partial(capsys):
 
     printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list if c.args)
     assert "KRX_ID" in printed and "수급 데이터가 최근 구간" in printed
+
+
+# ==========================================================
+# 4. 선견(lookahead) — D일 판정이 D일의 확정 수급을 쓴다 (2026-09-01)
+# ==========================================================
+# 백테스트는 D일 행의 smart_money 를 D일 하루치 순매수 **최종값**으로 만든다. 실매매가
+# 그 시점에 보는 것은 '천천히 갱신되는 잠정치'라(api/quotes/price.py 주석) 그날 순매수가
+# 얼마로 끝날지 모른다. 장중 스캔 모드는 더 노골적이다 — intraday_bars 가 09:30 봉부터
+# 그날 확정 수급을 단다(비가격 컬럼 재사용).
+#
+# 기존 선견 회귀(tests/test_portfolio_backtest.py)는 미래 **날짜**를 잘라 비교하므로
+# 같은 날 안에서 새는 이것을 구조적으로 못 잡는다. 그래서 별도로 못을 박는다.
+#
+# SMART_MONEY_LAG 는 그 크기를 재기 위한 손잡이다(tools/audit_smart_money_lag.py).
+# 기본값 0 = 종전 동작 — 이전 감사 수치와의 연속성을 위해 바꾸지 않는다.
+
+@pytest.fixture(autouse=True)
+def _reset_lag():
+    backtest.SMART_MONEY_LAG = 0
+    yield
+    backtest.SMART_MONEY_LAG = 0
+
+
+def _sm(dates, f, o, **kw):
+    krx = pd.DataFrame({"date": list(dates), "f_net": list(f), "o_net": list(o)})
+    with patch('modules.krx_daily.get_investor_netbuy', return_value=krx), \
+         patch('api.get_investor_trend', return_value=[]):
+        return backtest._append_smart_money_signal(_bars(dates), "005930",
+                                                   is_overseas=False, **kw)
+
+
+def test_the_default_still_reads_the_same_days_netbuy():
+    """[현행 고정] lag=0 이면 D일 쌍끌이가 **그날** 켜진다 — 이것이 선견의 형태다."""
+    dates = ["20240102", "20240103", "20240104"]
+    out = _sm(dates, [-1, -1, 900], [-1, -1, 900])
+    assert bool(out.loc[out["date"] == "20240104", "smart_money"].iloc[0]) is True
+
+
+def test_lag_one_only_uses_what_live_already_knows():
+    """lag=1 이면 그 쌍끌이는 **다음 날**에야 보인다 (전일까지 확정된 수급만)."""
+    dates = ["20240102", "20240103", "20240104", "20240105"]
+    out = _sm(dates, [-1, -1, 900, -1], [-1, -1, 900, -1], lag=1)
+    got = {d: bool(v) for d, v in zip(out["date"], out["smart_money"])}
+    assert got["20240104"] is False, "하루 앞을 보고 있다"
+    assert got["20240105"] is True, "전일 확정 수급이 반영되지 않았다"
+
+
+def test_the_module_default_drives_the_lag_too():
+    """감사 도구는 인자가 아니라 모듈 기본값으로 팔을 가른다 — 그 통로를 고정한다."""
+    dates = ["20240102", "20240103", "20240104"]
+    backtest.SMART_MONEY_LAG = 1
+    out = _sm(dates, [-1, -1, 900], [-1, -1, 900])
+    assert bool(out.loc[out["date"] == "20240104", "smart_money"].iloc[0]) is False
+
+
+# ==========================================================
+# 5. 감사 재현성 — 이 축은 환경변수 유무로 켜지고 꺼진다 (2026-09-01)
+# ==========================================================
+# KRX_ID/KRX_PW 가 있으면 전 구간(KRX), 없으면 최근 30거래일만(KIS), 다 실패하면 전 구간
+# False. 자격증명이 다른 두 기계의 감사는 서로 다른 전략을 잰 것인데, 결과 어디에도 그
+# 상태가 남지 않았다. prepare_universe 가 한 줄로 알린다(warn_if_unmodeled 와 같은 문).
+
+def test_the_source_of_every_stock_is_recorded():
+    backtest.reset_smart_money_source()
+    krx = pd.DataFrame({"date": ["20240102"], "f_net": [1], "o_net": [1]})
+    with patch('modules.krx_daily.get_investor_netbuy', return_value=krx), \
+         patch('api.get_investor_trend', return_value=[]):
+        backtest._append_smart_money_signal(_bars(["20240102"]), "005930", is_overseas=False)
+    with patch('modules.krx_daily.get_investor_netbuy', return_value=None), \
+         patch('api.get_investor_trend', return_value=[]), \
+         patch.object(config.console, "print"):
+        backtest._append_smart_money_signal(_bars(["20240102"]), "000660", is_overseas=False)
+
+    assert backtest.smart_money_source_summary() == {"KRX": 1, "없음": 1}
+
+
+def test_a_run_without_krx_says_so_loudly():
+    """KRX 가 한 종목도 없으면 = 축이 사실상 빠진 채로 도는 중이다. 눈에 띄어야 한다."""
+    from modules import portfolio_backtest as pb
+
+    backtest.reset_smart_money_source()
+    backtest._SMART_MONEY_SOURCE.update({"005930": "KIS", "000660": None})
+    with patch.object(config.console, "print") as mock_print:
+        dist = pb.announce_smart_money_source()
+
+    assert dist == {"KIS": 1, "없음": 1}
+    printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list if c.args)
+    assert "KRX_ID" in printed
+
+
+def test_a_run_with_krx_does_not_nag():
+    from modules import portfolio_backtest as pb
+
+    backtest.reset_smart_money_source()
+    backtest._SMART_MONEY_SOURCE.update({"005930": "KRX"})
+    with patch.object(config.console, "print") as mock_print:
+        dist = pb.announce_smart_money_source()
+
+    assert dist == {"KRX": 1}
+    assert not mock_print.called, "정상 상태에서 콘솔을 어지럽히지 않는다"

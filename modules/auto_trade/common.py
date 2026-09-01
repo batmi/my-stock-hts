@@ -246,6 +246,17 @@ def _get_trade_account():
     acnt = getattr(config.session, 'auto_acnt_prdt_cd', None) or config.session.acnt_prdt_cd
     return cano, acnt
 
+
+def trade_account_key():
+    """매매 계좌를 DB `trades.account` 와 같은 'cano-acnt' 문자열로 만든다.
+
+    [왜 함수인가] 이 문자열은 매수 기록을 계좌로 가르는 필터 키다(db_manager._account_clause).
+     호출부마다 f-string을 짜면 한쪽만 다른 규칙을 쓰게 되고, 그러면 **남의 계좌 매수 기록**
+     으로 손절선·진입일이 계산된다 — 화면과 실제 판정이 조용히 갈리는 자리다.
+    """
+    cano, acnt = _get_trade_account()
+    return f"{cano or ''}-{acnt or ''}"
+
 _MARKET_TYPE_CACHE = {}
 
 def resolve_market_type(code, cache=None):

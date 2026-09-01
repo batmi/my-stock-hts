@@ -254,13 +254,17 @@ def sync_today_trades():
     logger.debug(f"[HISTORY_DEBUG] sync_today_trades() 종료. 처리 건수: {total_count}")
     return total_count
 
-def run_holding_analysis(domestic_items, overseas_items, restricted_codes=None):
+def run_holding_analysis(domestic_items, overseas_items, restricted_codes=None, account=None):
     """국내/해외 보유 종목에 시스템 매도 판단을 적용한다. (읽기 전용 · 부수효과 없음)
 
     메뉴 2의 종목 분석은 차트만 보고 '지금 새로 살 만한가'를 판정하지만, 보유 분석은
     매입단가·수익률·최고가(트레일링)·보유일수·반익절 이력·매수 시점 ATR 손절률·개별 룰까지
     반영한다. 같은 종목이라도 두 결과가 갈릴 수 있으며, 여기서 쓰는 판정 로직은 자동매매가
     실제로 청산에 쓰는 analyze_sell과 동일하다.
+
+    account: 'cano-acnt'. 매수 기록을 그 계좌로 거른다 — 같은 종목을 두 계좌에서 들고
+     있으면 남의 매수로 손절선·진입일이 계산되기 때문이다. 자동매매 루프는 이미 계좌로
+     가르고 있으므로, 여기를 비워두면 화면과 실제 판정이 갈린다.
 
     반환: {code: analyze_sell 결과} — 실패한 종목은 키가 없다.
     """
@@ -304,7 +308,8 @@ def run_holding_analysis(domestic_items, overseas_items, restricted_codes=None):
 
     try:
         from modules import auto_trade
-        return auto_trade.analyze_holdings(entries, restricted_codes=restricted_codes)
+        return auto_trade.analyze_holdings(entries, restricted_codes=restricted_codes,
+                                           account=account)
     except Exception as e:
         logger.warning(f"보유 분석 실패: {e}")
         return {}
@@ -1144,7 +1149,8 @@ def _display_balance_details(cano, acnt_prdt_cd):
 
         # [추가] 보유 분석 — 자동매매가 실제로 쓰는 매도 판단(analyze_sell)을 그대로 적용
         progress.update(task, description="[cyan]보유 종목 분석 중 (시스템 매도 기준)...[/cyan]")
-        holding_analysis = run_holding_analysis(output1, ovrs_output, restricted_codes=restricted_stocks)
+        holding_analysis = run_holding_analysis(output1, ovrs_output, restricted_codes=restricted_stocks,
+                                                account=f"{cano}-{acnt_prdt_cd}")
 
     # ---------------------------
     # [국내 주식 잔고]

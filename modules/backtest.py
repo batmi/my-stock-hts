@@ -258,14 +258,48 @@ def _investor_netbuy_frame(df, code):
     return inv_df, 'KIS'
 
 
-def _append_smart_money_signal(df, code, is_overseas):
+# [감사 재현성] 이 축은 **환경변수 유무로 켜지고 꺼진다** — KRX_ID/KRX_PW 가 있으면 전 구간
+#  (KRX), 없으면 최근 30거래일만(KIS), 조회가 다 실패하면 전 구간 False 다. 즉 자격증명이
+#  다른 두 기계에서 돌린 감사는 **서로 다른 전략을 잰 것**이다. 그런데 결과 어디에도 그
+#  상태가 남지 않아 비교할 때 확인할 방법이 없었다. 종목별 출처를 여기 쌓고
+#  portfolio_backtest.prepare_universe 가 한 줄로 알린다(같은 문에서 부르는
+#  warn_if_unmodeled 와 같은 취지 — '조용히 갈라지는 자리'를 소리 나게 한다).
+_SMART_MONEY_SOURCE = {}          # {code: 'KRX' | 'KIS' | None(못 구함)}
+
+# [선견] 수급을 며칠 늦춰 볼 것인가(거래일). 0 = 종전 동작 = D일 판정에 **D일 확정 수급**을
+#  쓴다. 그런데 실매매가 D일 장중에 보는 값은 '천천히 갱신되는 **잠정치**'이고
+#  (api.quotes.price.get_investor_trend 주석), 그날 순매수가 얼마로 끝날지는 모른다.
+#  장중 스캔 모드는 더 노골적이다 — intraday_bars 가 09:30 봉부터 그날 확정 수급을 단다
+#  (비가격 컬럼 재사용). 즉 백테스트만 하루 앞을 본다.
+#  lag=1 은 '전일까지 확정된 수급만'이라는, 실매매가 확실히 아는 것만 쓰는 팔이다.
+#  기본값을 0으로 두는 이유는 이전 감사 수치와의 연속성 때문이다 — 크기는
+#  tools/audit_smart_money_lag.py 가 잰다.
+SMART_MONEY_LAG = 0
+
+
+def reset_smart_money_source():
+    _SMART_MONEY_SOURCE.clear()
+
+
+def smart_money_source_summary():
+    """{'KRX': n, 'KIS': n, '없음': n} — 준비된 종목의 수급 출처 분포."""
+    out = {}
+    for src in _SMART_MONEY_SOURCE.values():
+        key = src or "없음"
+        out[key] = out.get(key, 0) + 1
+    return out
+
+
+def _append_smart_money_signal(df, code, is_overseas, lag=None):
     """과거 수급 데이터를 조회해 DataFrame에 병합하고 스마트머니 시그널을 사전 계산 (Vectorized)"""
     df['smart_money'] = False
     if is_overseas:
+        _SMART_MONEY_SOURCE[str(code)] = None
         return df
 
     try:
         inv_df, source = _investor_netbuy_frame(df, code)
+        _SMART_MONEY_SOURCE[str(code)] = source
         if inv_df is None:
             config.console.print("[dim yellow]※ 안내: 과거 수급 데이터를 불러올 수 없어 '스마트머니' 시그널이 시뮬레이션에 반영되지 않습니다.[/dim yellow]")
             return df
@@ -287,6 +321,13 @@ def _append_smart_money_signal(df, code, is_overseas):
         
         f_net = merged['f_net']
         o_net = merged['o_net']
+
+        # [선견 차단] lag 거래일만큼 늦춰 본다. lag=1이면 D일 판정이 D-1까지의 확정
+        #  수급만 쓴다 — 실매매가 그 시점에 확실히 아는 것과 같아진다.
+        _lag = SMART_MONEY_LAG if lag is None else int(lag)
+        if _lag > 0:
+            f_net = f_net.shift(_lag).fillna(0)
+            o_net = o_net.shift(_lag).fillna(0)
         
         # 벡터화 연산 (df는 과거->최신 순서이므로 shift(1)은 전일 데이터)
         c1_today = (f_net > 0) & (o_net > 0)
@@ -303,6 +344,7 @@ def _append_smart_money_signal(df, code, is_overseas):
         
         return merged
     except Exception as e:
+        _SMART_MONEY_SOURCE[str(code)] = None
         logger.error(f"스마트머니 데이터 병합 오류: {e}")
         config.console.print("[dim yellow]※ 안내: 수급 데이터 병합 중 오류가 발생하여 '스마트머니' 시그널이 시뮬레이션에 반영되지 않습니다.[/dim yellow]")
         df['smart_money'] = False

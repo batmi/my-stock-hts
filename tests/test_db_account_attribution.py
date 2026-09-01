@@ -194,3 +194,63 @@ def test_legacy_rows_without_an_account_are_kept(proxied_db):
 
     got = proxy.get_buy_trades_for_current_holdings(["000660"], account=f"{AUTO[0]}-{AUTO[1]}")
     assert [t['odno'] for t in got["000660"]] == ["OLD-1"], "옛 기록(계좌 없음)이 버려졌다"
+
+
+# ==========================================================
+# 화면 경로도 같은 계좌를 봐야 한다 (2026-09-01)
+#
+# 위 필터를 매매 루프(trader)에는 걸었는데, 읽기 전용 분석 경로
+# (engine.analyze_holdings ← account.run_holding_analysis)만 계좌 없이 남아 있었다.
+# 주문을 내지 않으니 매매는 안 틀리지만, **화면이 보여주는 손절선과 시스템이 실제로
+# 쓰는 손절선이 갈린다** — 운용자가 그 화면을 보고 판단하는 자리다.
+# ==========================================================
+
+def test_the_read_only_analysis_path_passes_the_account_down():
+    """[핵심] analyze_holdings 가 세 배치 조회 전부에 계좌를 넘긴다."""
+    from unittest.mock import patch
+    from modules.auto_trade import engine
+
+    seen = {}
+
+    def _rec(name):
+        def _f(codes, account=None):
+            seen[name] = account
+            return {}
+        return _f
+
+    entries = [{'code': '005930', 'name': '삼성전자', 'buy_price': 70000,
+                'current_price': 70000, 'profit_rate': 0.0, 'is_overseas': False}]
+    with patch.object(engine.db_manager.db, 'get_latest_buy_trades', _rec('latest')), \
+         patch.object(engine.db_manager.db, 'get_buy_trades_for_current_holdings', _rec('buys')), \
+         patch.object(engine.db_manager.db, 'get_position_entry_info', _rec('entry')), \
+         patch.object(engine.db_manager.db, 'get_all_stock_strategies', lambda: []), \
+         patch.object(engine.db_manager.db, 'get_all_trailing_stops', lambda: {}), \
+         patch.object(engine.db_manager.db, 'get_all_half_tp', lambda: set()), \
+         patch.object(engine.api, 'get_period_entry_dates', lambda *a, **k: {}), \
+         patch.object(engine.DefaultStrategy, 'analyze_sell', lambda *a, **k: {}):
+        engine.analyze_holdings(entries, account="AUTO9999-01")
+
+    assert seen == {'latest': "AUTO9999-01", 'buys': "AUTO9999-01",
+                    'entry': "AUTO9999-01"}, seen
+
+
+def test_the_account_survives_the_account_module_wrapper():
+    """account.run_holding_analysis 가 통로다 — 여기서 끊기면 위 수정이 무의미하다."""
+    from unittest.mock import patch
+    from modules import account as account_mod
+
+    got = {}
+    items = [{'pdno': '005930', 'prdt_name': '삼성전자', 'hldg_qty': '10',
+              'pchs_avg_pric': '70000', 'prpr': '70000', 'evlu_pfls_rt': '0.0'}]
+    with patch('modules.auto_trade.analyze_holdings',
+               side_effect=lambda *a, **k: got.update(k) or {}):
+        account_mod.run_holding_analysis(items, [], account="AUTO9999-01")
+
+    assert got.get('account') == "AUTO9999-01"
+
+
+def test_the_trading_loop_and_the_screen_build_the_same_key():
+    """두 경로가 다른 규칙으로 키를 만들면 조용히 갈라진다 — 한 함수로 모았다."""
+    from modules.auto_trade import common
+
+    assert common.trade_account_key() == "-".join(common._get_trade_account())

@@ -311,6 +311,33 @@ def warn_if_unmodeled(where="백테스트"):
     return on
 
 
+def announce_smart_money_source(where="백테스트"):
+    """수급(스마트머니) 축을 **어느 소스로** 굴렸는지 알린다.
+
+    [왜] 이 축은 KRX_ID/KRX_PW 유무로 켜지고 꺼진다 — 있으면 전 구간(KRX), 없으면 최근
+     30거래일만(KIS), 다 실패하면 전 구간 False. 자격증명이 다른 두 기계의 감사는 서로
+     다른 전략을 잰 것인데, 결과에 그 상태가 남지 않아 비교할 때 확인할 방법이 없었다.
+     실측 크기는 작지만(축 on/off = 수익 67.51%→67.86%) '몰라서 못 맞추는 것'과
+     '알고 감안하는 것'은 다르다.
+    """
+    dist = backtest.smart_money_source_summary()
+    if not dist:
+        return dist
+    parts = " · ".join(f"{k} {v}종목" for k, v in sorted(dist.items()))
+    msg = f"[{where}] 수급(스마트머니) 출처: {parts}"
+    if dist.get("KRX"):
+        logger.info(msg)
+    else:
+        # KRX가 하나도 없다 = 이 축이 사실상 빠진 채로 도는 중이다. 눈에 띄어야 한다.
+        msg += " — KRX_ID/KRX_PW 가 없으면 이 축은 최근 구간 밖에서 꺼진 것으로 계산된다."
+        logger.warning(msg)
+        try:
+            config.console.print(f"[dim yellow]※ {msg}[/dim yellow]")
+        except Exception:
+            print(msg)
+    return dist
+
+
 # 실매매에는 늘 켜져 있는데 run_portfolio 는 **인자를 줘야만** 켜지는 게이트들.
 #  주지 않으면 조용히 꺼진 채로 도는데, 감사 도구 대부분이 주지 않는다(실측: daily_loss_limit
 #  1개 / reentry_block 1개 / oversize_limit 1개 뿐). 각각 따로 측정돼 '무해'로 판정됐지만
@@ -1554,6 +1581,7 @@ def prepare_universe(targets, days, progress_cb=None, is_overseas=False):
     # 이 함수는 메뉴 백테스트와 감사 도구 전부가 지나는 문이다 — 재현 못 하는 청산이
     #  켜져 있으면 여기서 한 번 알린다(run_portfolio 안에서 부르면 주기마다 쏟아진다).
     warn_if_unmodeled()
+    backtest.reset_smart_money_source()
 
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
     dfs, mf_dates, failed = {}, {}, []
@@ -1584,6 +1612,9 @@ def prepare_universe(targets, days, progress_cb=None, is_overseas=False):
 
     # [동적 손절 캡] 날짜별 지수 변동성 배율. 실패하면 빈 dict → 배율 1.0(고정 캡).
     backtest.prepare_vol_regime(days, is_overseas)
+
+    # 수급 축을 어느 소스로 굴렸는지 남긴다 — 감사끼리 비교할 때 이 줄이 전제다.
+    announce_smart_money_source()
 
     dates = sorted({str(d) for df in dfs.values() for d in df["date"]})
     return dfs, mf_dates, dates, failed
