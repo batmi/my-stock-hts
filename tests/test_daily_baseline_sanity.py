@@ -60,3 +60,32 @@ def test_small_but_consistent_account_passes():
     """
     assert is_plausible_baseline(KEY, 27, last_known=27)
     assert not is_plausible_baseline(KEY, 27, last_known=10_027)
+
+
+# ==========================================================
+# 위쪽 이상치 — 거부하지 않고 보이게만 한다 (2026-09-01)
+#
+# [실측] 가상투자 자산 이력 2026-08-23 행이 10,028,670 → 20,028,670 이었다. 차이가 정확히
+# 시드(1,000만)라 자산에 시드가 한 번 더 더해진 것이다. 그 행 하나로 자산 고점이 두 배가
+# 되고 드로다운이 -49.98% 로 계산된다(실데이터 재현). get_max_daily_asset 의 고립 이상치
+# 제거가 잡아 -1.05% 로 끝났다.
+#
+# 그래도 **거부하지는 않는다.** 거부하면 정당한 입금 다음 날 기준선이 옛 값으로 굳어
+# 차단기가 종일 안 터진다 — 이 함수가 막으려던 바로 그 실패 모드다. 드문 중복 계상을
+# 막자고 입금일마다 보호 장치를 끄는 것은 남는 장사가 아니다.
+# ==========================================================
+
+def test_a_doubling_still_passes_but_is_logged(caplog):
+    """[핵심] 실측 그대로의 값 — 통과시키되 로그에는 남는다."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="modules.auto_trade.common"):
+        assert is_plausible_baseline(KEY, 20_028_670, last_known=10_028_670)
+    assert any("daily_asset_history" in r.message for r in caplog.records), \
+        "중복 계상 의심이 조용히 지나갔다"
+
+
+def test_a_normal_day_logs_nothing(caplog):
+    import logging
+    with caplog.at_level(logging.WARNING, logger="modules.auto_trade.common"):
+        assert is_plausible_baseline(KEY, 10_100_000, last_known=10_000_000)
+    assert not caplog.records, "정상 운용 중에 경고를 쏟으면 아무도 안 읽는다"

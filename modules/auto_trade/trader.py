@@ -4379,6 +4379,17 @@ class AutoTrader:
                         #  같은 폭으로 움직여 이 값이 0이 되므로, 반영 전후의 유효 기준은 동일하다.
                         if toss_cash_reliable and realized_ok:
                             _net = int(current_principal - self.baseline_principal)
+                            # [잡음 바닥] 원금 대조에는 잔돈이 남는다 — 매수 수수료는 현금만
+                            #  깎고 매입원가에는 안 들어가서, 거래한 날마다 수십~수백원이
+                            #  '입출금'으로 새어 나온다. 실측 2026-08-31: 가상계좌에 입출금이
+                            #  없는데 net_transfer 77원이 기록됐다. 한 번은 무해하지만 매일
+                            #  쌓이면 get_max_daily_asset 의 환산(고점)을 갉는다.
+                            #  오프라인 경로는 같은 이유로 이미 이 바닥을 갖고 있었다 —
+                            #  판정이 같으니 문턱도 같아야 한다([[seed-spend-guard-parity]]).
+                            #  5만원(알림 문턱)이 아니라 100원인 이유: 소액 계좌에서는 1만원
+                            #  출금도 전 재산에 가깝고, 이 값은 사이징·차단기의 보정에 쓰인다.
+                            if abs(_net) < OFFLINE_TRANSFER_FLOOR:
+                                _net = 0
                             if _net != getattr(self, 'net_transfer_today', 0):
                                 self.net_transfer_today = _net
                                 # [여러 날 보정] 오늘 행에 남겨야 내일부터의 드로다운 기준이 맞는다.

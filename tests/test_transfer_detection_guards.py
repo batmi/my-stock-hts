@@ -114,3 +114,46 @@ def test_a_stale_correction_does_not_survive_a_failed_measurement():
     t.net_transfer_today = -3_000_000
     t.net_transfer_today = 0                      # 못 잰 주기가 하는 일
     assert t.effective_baseline() == 10_000_000
+
+
+# ==========================================================
+# 잡음 바닥 — 장중 기록 경로에도 오프라인과 같은 문턱이 있어야 한다 (2026-09-01)
+#
+# [실측 2026-08-31] 가상계좌에 입출금이 없는데 daily_asset_history.net_transfer 에 77원이
+# 기록됐다. 원인은 current_principal = 현금 + 매입원가 − 실현손익 인데 **매수 수수료는
+# 현금만 깎고 매입원가에는 안 들어가는** 것이다. 거래한 날마다 잔차가 남는다.
+#
+# 한 번은 무해하지만 매일 쌓이면 get_max_daily_asset 의 환산(고점)을 갉는다. 오프라인
+# 경로는 같은 이유로 이미 OFFLINE_TRANSFER_FLOOR 를 갖고 있었다 — 같은 판정이면 같은
+# 문턱이어야 한다.
+# ==========================================================
+
+def test_rounding_noise_is_not_a_transfer():
+    """실측값 77원은 입출금이 아니다."""
+    from modules.auto_trade.trader import OFFLINE_TRANSFER_FLOOR
+
+    assert abs(77) < OFFLINE_TRANSFER_FLOOR, \
+        "잡음 바닥이 실측 잔차(77원)를 못 거른다"
+
+
+def test_the_floor_is_low_enough_for_a_small_account():
+    """5만원(알림 문턱)을 쓰면 소액 계좌의 진짜 출금이 통째로 사라진다.
+
+    운영 DB에 10,027원 계좌의 1만원 출금 사례가 있다 — 그 계좌엔 전 재산이다.
+    이 값은 사이징·차단기의 보정에 쓰이므로 알림 문턱과 같으면 안 된다.
+    """
+    from modules.auto_trade.trader import OFFLINE_TRANSFER_FLOOR
+
+    assert OFFLINE_TRANSFER_FLOOR <= 10_000
+
+
+def test_the_recording_path_actually_applies_the_floor():
+    """산식이 아니라 **그 자리**에 문턱이 걸렸는지 본다 — 종전엔 여기만 비어 있었다."""
+    import inspect
+    from modules.auto_trade import trader as tr
+
+    src = inspect.getsource(tr)
+    i = src.index("_net = int(current_principal - self.baseline_principal)")
+    window = src[i:i + 1400]
+    assert "abs(_net) < OFFLINE_TRANSFER_FLOOR" in window, \
+        "장중 net_transfer 기록 경로에 잡음 바닥이 없다"

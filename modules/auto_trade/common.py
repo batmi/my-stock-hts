@@ -528,6 +528,23 @@ def load_daily_principal(account_key):
 #  engine.check_loss_limit 이 current_total 에 이미 쓰고 있는 것과 같은 기준(0.5)이다.
 BASELINE_SANITY_RATIO = 0.5
 
+# 위쪽 '경고' 배수. 넘어도 **거부하지 않고 로그만 남긴다.**
+#  [실측 2026-08-23] 가상투자 자산 이력에 10,028,670 → 20,028,670 행이 남았다. 차이가
+#  정확히 시드(1,000만)라 자산에 시드가 한 번 더 더해진 것이다. 그 행 하나로 자산 고점이
+#  두 배가 되고 드로다운이 -49.98%가 된다(실데이터 재현). db_manager.get_max_daily_asset
+#  의 고립 이상치 제거가 잡아 -1.05%로 끝났고, 다음 일요일에는 재현되지 않았다.
+#
+#  [왜 거부하지 않는가] 거부하면 **정당한 입금 다음 날 기준선이 옛 값으로 굳는다.**
+#   1,000만 계좌에 4,000만을 입금하면 오늘 기준선은 5,000만이 맞는데, 막으면 분모가
+#   1,000만으로 남아 손실률이 늘 큰 양수가 된다 = 차단기가 종일 발동하지 않는다. 이 함수가
+#   막으려던 바로 그 실패 모드다(test_growth_is_never_suspicious 가 이 결정을 고정한다).
+#   드문 중복 계상을 막자고 입금일마다 보호 장치를 끄는 것은 남는 장사가 아니다.
+#   드로다운 쪽 방어는 get_max_daily_asset 이 이미 맡고 있으므로, 여기서는 **보이게만** 한다.
+#  [값] 1.5 — db_manager.HWM_OUTLIER_RATIO 와 같다. 같은 판단('이 자산 값이 이력에서
+#   튀는가')을 두 곳이 다른 배수로 하면 한쪽만 짖는다. 실측 사고는 1.997배였다 —
+#   2.0 으로 뒀다면 정확히 그 행을 놓쳤을 것이다.
+BASELINE_SANITY_MAX_RATIO = 1.5
+
 
 def is_plausible_baseline(account_key, tot_asset, last_known=None):
     """오늘의 시작 자산으로 받아들여도 되는 값인가.
@@ -543,6 +560,10 @@ def is_plausible_baseline(account_key, tot_asset, last_known=None):
     않는다**. 아무도 모르는 채로 보호 장치만 사라지는 것이 가장 나쁜 상태다.
 
     last_known 이 없으면(첫 운용·이력 없음) 판단 근거가 없으므로 통과시킨다.
+
+    [양쪽을 본다] 종전에는 하한만 봤다. 그런데 기준선이 실제보다 **크게** 박히는 것도
+     같은 종류의 사고다 — 자산 고점이 부풀어 가짜 드로다운이 생기고, 리스크 스케일링이
+     그 값으로 조여진다. 2026-08-23 실측이 정확히 그것이었다(위 상수 주석).
     """
     if tot_asset <= 0:
         return False
@@ -555,6 +576,12 @@ def is_plausible_baseline(account_key, tot_asset, last_known=None):
             last_known = None
     if not last_known or last_known <= 0:
         return True
+    if tot_asset > last_known * BASELINE_SANITY_MAX_RATIO:
+        # 거부하지 않는다 — 아래 상수 주석 참조. 보이게만 한다.
+        logger.warning(
+            f"[기준선] 자산이 직전 대비 {tot_asset / last_known:.1f}배다 "
+            f"({last_known:,.0f} → {tot_asset:,.0f}). 입금이라면 정상이고, 아니라면 "
+            f"중복 계상이다 — daily_asset_history 를 확인하십시오.")
     return tot_asset >= last_known * BASELINE_SANITY_RATIO
 
 
