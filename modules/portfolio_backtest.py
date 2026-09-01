@@ -23,6 +23,7 @@
  닿아 1 → 2 → 3차가 이어지는 실매매 동작이 그대로 재현된다.
  인자를 주지 않으면 종전(종가) 동작 그대로다.
 """
+import logging
 import math
 
 import pandas as pd
@@ -37,6 +38,8 @@ from core import indicators
 from core import utils
 from modules import backtest
 from core import trading_cost
+
+logger = logging.getLogger(__name__)
 
 # 분봉 캐시는 선택 의존이다 — 없으면 종가 모델로 돌아간다(감사 도구 전용 경로가 아니라
 #  메뉴 백테스트의 기본 경로가 되므로, 임포트 실패가 백테스트 전체를 막으면 안 된다).
@@ -272,6 +275,67 @@ def _trend_quality_cached(df, lookback):
     return out
 
 
+# 백테스트가 **재현하지 못하는** 실매매 청산 경로. decide_sell 에 아예 없는 것들이다.
+#  (키, 재현 불가로 보는 조건, 사람이 읽을 이름)
+#
+# [왜 여기 있나] 전부 기본 OFF라 지금은 무해하다. 그러나 켜는 순간 백테스트는 그 청산을
+#  **한 번도 밟지 않은 채** 그럴듯한 수익률을 내놓는다 — 아무도 모르는 것이 가장 나쁘다.
+#  이 저장소는 정확히 그 형태의 결함을 이미 여러 번 겪었다(히트의 BEP 토글·이익보호선,
+#  audit_exit_parity 의 time_stop_min 누락). 선언은 시간이 지나면 거짓이 되므로,
+#  '알고 남긴 것'을 주석이 아니라 **경고**로 남긴다.
+UNMODELED_SELL_TOGGLES = (
+    ("TAKE_PROFIT_RATE", lambda v: (v or 0) > 0, "고정 익절"),
+    ("TAKE_PROFIT_RSI", lambda v: (v or 0) > 0, "RSI 과열 익절"),
+    ("HALF_TAKE_PROFIT_USE", bool, "반익절"),
+    ("DEFENSIVE_HALF_SELL_USE", bool, "방어적 반매도"),
+)
+
+
+def unmodeled_sell_features(sell_cfg=None):
+    """지금 켜져 있는데 백테스트가 재현하지 못하는 청산 기능 이름 목록."""
+    s = config.SELL_STRATEGY if sell_cfg is None else sell_cfg
+    return [name for key, is_on, name in UNMODELED_SELL_TOGGLES if is_on(s.get(key))]
+
+
+def warn_if_unmodeled(where="백테스트"):
+    """재현 불가 기능이 켜져 있으면 알린다. 조용히 지나가지 않는 것이 요점이다."""
+    on = unmodeled_sell_features()
+    if on:
+        msg = (f"[{where}] ⚠️ 실매매에는 있고 이 시뮬레이션에는 **없는** 청산이 켜져 있다: "
+               f"{' · '.join(on)}. 결과는 그 청산이 한 번도 일어나지 않은 세계의 것이다.")
+        logger.warning(msg)
+        try:
+            config.console.print(f"[bold yellow]{msg}[/]")
+        except Exception:
+            print(msg)
+    return on
+
+
+# 실매매에는 늘 켜져 있는데 run_portfolio 는 **인자를 줘야만** 켜지는 게이트들.
+#  주지 않으면 조용히 꺼진 채로 도는데, 감사 도구 대부분이 주지 않는다(실측: daily_loss_limit
+#  1개 / reentry_block 1개 / oversize_limit 1개 뿐). 각각 따로 측정돼 '무해'로 판정됐지만
+#  (→ live-only-axes-audited), '측정하고 무해로 둔 것'과 '아무도 안 준 것'은 다르다.
+#  프로세스당 한 번만 알려 로그 도배 없이 그 사실을 드러낸다.
+_HOOK_WARNED = set()
+
+
+def _warn_missing_live_hooks(daily_loss_limit, reentry_block, oversize_limit):
+    """실매매에 있는 게이트가 이 실행에 안 넘어왔으면 프로세스당 1회 알린다."""
+    missing = []
+    if not daily_loss_limit and getattr(config, "SYSTEM_DAILY_LOSS_LIMIT", 0) > 0:
+        missing.append(f"방어 모드(일일 손실 -{config.SYSTEM_DAILY_LOSS_LIMIT:g}%)")
+    if not reentry_block:
+        missing.append("손절 후 재진입 차단")
+    if not oversize_limit or oversize_limit <= 1.0:
+        missing.append("최소 주문 금액 보정")
+    for m in missing:
+        if m not in _HOOK_WARNED:
+            _HOOK_WARNED.add(m)
+            logger.info(f"[백테스트] 실매매에는 있고 이 실행에는 없는 게이트: {m} "
+                        f"(해당 인자를 넘기면 켜진다)")
+    return missing
+
+
 def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                   pyramiding_max=None, heat_cap_pct=None, invest_ratio=None,
                   atr_mult=None, market_filter_dates=None, reserved_cash=0.0,
@@ -477,6 +541,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     atr_mult = atr_mult if atr_mult is not None else sell_cfg.get("ATR_STOP_MULTIPLIER", 2.0)
     if heat_cap_pct is None:
         heat_cap_pct = getattr(config, "SYSTEM_MAX_PORTFOLIO_RISK", 10.0)
+    _warn_missing_live_hooks(daily_loss_limit, reentry_block, oversize_limit)
 
     # [사이징 파리티] 1주 값이 배분액을 넘을 때 얼마까지 초과 집행을 허용하는가.
     #  종전 백테스트는 무조건 건너뛰었는데(=1.0) 실매매는 무제한 허용이라 두 경로가
@@ -1485,6 +1550,10 @@ def prepare_universe(targets, days, progress_cb=None, is_overseas=False):
     Returns: (dfs, market_filter_dates, dates, failed)
     """
     from datetime import datetime, timedelta
+
+    # 이 함수는 메뉴 백테스트와 감사 도구 전부가 지나는 문이다 — 재현 못 하는 청산이
+    #  켜져 있으면 여기서 한 번 알린다(run_portfolio 안에서 부르면 주기마다 쏟아진다).
+    warn_if_unmodeled()
 
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
     dfs, mf_dates, failed = {}, {}, []

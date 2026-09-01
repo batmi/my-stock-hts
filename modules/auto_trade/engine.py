@@ -2124,7 +2124,9 @@ class RiskManager:
           ② **USE_BREAK_EVEN_STOP이 켜져 있고** 최고가 기준 max_profit이 BEP 발동선
              (ATR 손절 시 손절폭과 동일) 이상이면 본전(매수가)으로 상향.
              꺼져 있으면 상향하지 않는다 — 없는 손절선을 가정하면 리스크를 과소 계상한다.
-          ③ max_profit이 트레일링 발동선 이상이면 최고가×(1-실효콜백%)으로 상향.
+          ③ **PROFIT_LOCK_USE가 켜져 있고** max_profit이 PROFIT_LOCK_MIN_MFE 이상이면
+             이익 보호선(매수가 + MFE×(1-giveback))으로 상향. TS 무장 전 구간의 선이다.
+          ④ max_profit이 트레일링 발동선 이상이면 최고가×(1-실효콜백%)으로 상향.
              실효콜백은 청산 로직과 같은 effective_callback(하한, ATR×배수)을 쓴다 —
              고정 하한만 쓰면 실제보다 높은 손절선을 가정해 리스크가 과소 계상된다.
         손절선이 매수가 위(이익 잠김)면 해당 포지션의 자본 리스크는 0으로 본다.
@@ -2249,6 +2251,16 @@ class RiskManager:
                     if str(sell_cfg.get("TS_ACTIVATION_MODE", "fixed")).lower() == "breakeven":
                         act = breakeven_activation_rate(est_atr, buy_price, ts_cb,
                                                         use_atr=bool(use_atr_stop))
+                    # [이익 보호선] TS 무장 **전** 구간에만 걸리는 별도의 선. 매도 판정
+                    #  (analyze_sell → profit_lock_stop_rate)이 쓰는데 히트가 안 보면,
+                    #  이미 +25% 이상 오른 포지션의 손절선을 실제보다 낮게 가정해
+                    #  **리스크를 과대 계상**한다 — 승자의 증액이 캡에 막히는 방향이다.
+                    #  BEP 결함(토글을 안 보던 것)과 같은 계열이라 토글을 함께 읽는다.
+                    if sell_cfg.get("PROFIT_LOCK_USE", False):
+                        lock = profit_lock_stop_rate(max_profit)
+                        if lock is not None:
+                            stop_price = max(stop_price, buy_price * (1 + lock / 100.0))
+
                     if act > 0 and ts_cb > 0 and max_profit >= act:
                         # [SSOT] 콜백은 청산 로직(compute_trailing_stop)과 같은 식을 쓴다.
                         #  종전에는 고정 하한(TRAILING_STOP_CALLBACK_RATE, 5%)만 썼다. 실제
