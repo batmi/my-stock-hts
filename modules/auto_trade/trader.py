@@ -892,8 +892,9 @@ class AutoTrader:
 
                     if is_data_valid:
                         final_asset = deposit + stock_eval
-                        profit = final_asset - self.initial_asset
-                        profit_rate = 0.0 if self.initial_asset <= 0 else (profit / self.initial_asset) * 100
+                        _base = self.daily_pnl_base()
+                        profit = final_asset - _base
+                        profit_rate = 0.0 if _base <= 0 else (profit / _base) * 100
                         stock_rate = (tot_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
 
                         msg += f"\n최종 예수금: {deposit:,}원"
@@ -1075,6 +1076,22 @@ class AutoTrader:
         #  갈라지면 세 장치가 서로 다른 자본을 보게 된다.
         return self.risk_manager._equity_baseline()
 
+    def daily_pnl_base(self):
+        """표시용 일일 손익의 분모. **판정과 같은 기준선**을 쓴다(입출금 보정 포함).
+
+        [왜] 출금은 손실이 아니다. 원본 시작 자산으로 나누면 1,000만 계좌에서 300만을 뺀
+        순간 화면·텔레그램·종료 요약이 모두 -30%를 띄운다. 판정(차단기·사이징)은 이미
+        보정된 기준선을 보는데 표시만 안 보면, 운용자는 시스템이 못 본 손실이 난 줄 알고
+        개입하게 된다 — 자동으로 도는 시스템에서 가장 나쁜 종류의 오표시다.
+        """
+        base = self.effective_baseline()
+        return float(base) if base > 0 else float(self.initial_asset or 0)
+
+    def transfer_note(self):
+        """오늘 순입출금이 있으면 손익 옆에 붙일 꼬리말. 없으면 빈 문자열."""
+        net = getattr(self, 'net_transfer_today', 0) or 0
+        return f" ※{'입금' if net > 0 else '출금'} {abs(int(net)):,}원 제외" if net else ""
+
     @staticmethod
     def _offline_transfer_threshold(baseline_principal):
         """오프라인 입출금으로 확정할 최소 금액. (상수 주석 참조)"""
@@ -1114,6 +1131,11 @@ class AutoTrader:
             return 0
         try:
             today = datetime.now().strftime("%Y-%m-%d")
+            # [하루 1회] 시세 결손 등으로 그날 기준 자산이 끝내 안 잡히면 이 블록이 매 주기
+            #  다시 돌 수 있다. 그러면 같은 입출금을 주기마다 가산한다 — 오늘 대조점을 남기는
+            #  것만으로는 못 막는다(대조점은 기준 자산이 잡혀야 저장되기 때문).
+            if getattr(self, '_offline_reconcile_date', None) == today:
+                return 0
             snap = db_manager.db.get_last_principal_snapshot(account_key, today)
             if not snap:
                 return 0                       # 대조점 없음 = 이 계좌의 첫 운용
@@ -1137,7 +1159,8 @@ class AutoTrader:
                 last_date, yesterday, account_key)
             if not ok:
                 self.log("[오프라인 입출금] 구간 실현손익 조회 실패 — 보정하지 않습니다.")
-                return 0
+                return 0          # 못 쟀으면 표시하지 않는다 — 다음 주기에 다시 해 본다
+            self._offline_reconcile_date = today      # 쟀다 = 오늘 몫은 끝났다
 
             residual = float(current_principal) - float(last_principal) - float(realized)
             if abs(residual) < self._offline_transfer_threshold(last_principal):
@@ -1353,9 +1376,11 @@ class AutoTrader:
             msg += f"오늘 현재 자산: {current_asset:,}원\n"
             
             if self.initial_asset > 0:
-                daily_profit = current_asset - self.initial_asset
-                daily_profit_rate = (daily_profit / self.initial_asset) * 100
-                msg += f"오늘 현재 손익: {daily_profit:+,}원 ({daily_profit_rate:+.2f}%)\n"
+                _base = self.daily_pnl_base()
+                daily_profit = current_asset - _base
+                daily_profit_rate = (daily_profit / _base) * 100 if _base > 0 else 0.0
+                msg += (f"오늘 현재 손익: {daily_profit:+,}원 "
+                        f"({daily_profit_rate:+.2f}%){self.transfer_note()}\n")
                 
             realized_profit = 0
             try:
@@ -1385,7 +1410,8 @@ class AutoTrader:
                 realized_profit = sum(int(t.get('profit_amt') or 0) for t in sell_trades)
             except Exception: pass
             
-            realized_rate = (realized_profit / self.initial_asset * 100) if self.initial_asset > 0 else 0.0
+            _base = self.daily_pnl_base()
+            realized_rate = (realized_profit / _base * 100) if _base > 0 else 0.0
             msg += f"오늘 실현 손익: {realized_profit:+,}원 ({realized_rate:+.2f}%)\n"
             msg += f"주문 가능 금액: {deposit:,}원\n"
             msg += f"증권 평가 자산: {tot_evlu:,}원\n"
@@ -2428,12 +2454,15 @@ class AutoTrader:
                 table.add_row("오늘 시작 자산", f"{self.initial_asset:,}원")
                 table.add_row("오늘 현재 자산", f"{current_asset:,}원")
                 
-                daily_profit = current_asset - self.initial_asset
-                daily_profit_rate = (daily_profit / self.initial_asset) * 100
+                _base = self.daily_pnl_base()
+                daily_profit = current_asset - _base
+                daily_profit_rate = (daily_profit / _base) * 100 if _base > 0 else 0.0
                 dp_color = "[red]" if daily_profit > 0 else ("[blue]" if daily_profit < 0 else "[white]")
-                table.add_row("오늘 현재 손익", f"{dp_color}{daily_profit:+,}원 ({daily_profit_rate:+.2f}%)[/]")
+                table.add_row("오늘 현재 손익",
+                              f"{dp_color}{daily_profit:+,}원 ({daily_profit_rate:+.2f}%)[/]"
+                              f"{self.transfer_note()}")
                 
-                realized_rate = (today_profit / self.initial_asset) * 100
+                realized_rate = (today_profit / _base) * 100 if _base > 0 else 0.0
                 rp_color = "[red]" if today_profit > 0 else ("[blue]" if today_profit < 0 else "[white]")
                 table.add_row("오늘 실현 손익", f"{rp_color}{today_profit:+,}원 ({realized_rate:+.2f}%)[/]")
             else:
@@ -3990,8 +4019,15 @@ class AutoTrader:
         """
         try:
             # 비정상 급감(API 누락 의심) 데이터는 기준자산에 반영하지 않는다.
-            if current_total > 0 and not (self.initial_asset > 0
-                                          and current_total < self.initial_asset * 0.5):
+            # [Fix 2026-09-01] 기준을 initial_asset(원본)이 아니라 **입출금 보정된 기준선**과
+            #  대야 한다. 자산의 절반이 넘는 출금은 정상 거래인데, 원본과 대면 그날 내내
+            #  '비정상 급감'으로 읽혀 current_total_asset 이 출금 전 값에 얼어붙는다. 그 값은
+            #  히트 캡의 분모이자 드로다운의 현재 자산이므로, 없는 돈 기준으로 한도가
+            #  계산되고 드로다운은 과소평가된다(= 한도가 조용히 열린다).
+            #  check_loss_limit 은 이미 같은 판정을 보정된 기준선으로 한다 — 둘을 맞춘다.
+            _floor_base = self.effective_baseline() or self.initial_asset
+            if current_total > 0 and not (_floor_base > 0
+                                          and current_total < _floor_base * 0.5):
                 self.current_total_asset = current_total
             self.risk_manager.check_loss_limit(current_total)
             self.circuit_breaker_ran_at = time.time()
@@ -4148,16 +4184,37 @@ class AutoTrader:
                             if saved_initial > 0:
                                 self.initial_asset = saved_initial
                                 self.log(f"[시스템 보정] 기존 초기 자산 기록 로드: {self.initial_asset:,}원")
-                            else:
+                            elif is_plausible_baseline(acc_str, current_total):
                                 self.initial_asset = current_total
                                 save_daily_initial_asset(acc_str, self.initial_asset)
                                 self.log(f"[시스템 보정] 초기 자산 정보 갱신 및 저장: {self.initial_asset:,}원")
+                            else:
+                                # [Fix 2026-09-01] 여기에 검사가 없어 initialize()의 안전장치가
+                                #  무력했다. 기동 경로가 '직전 기록의 반토막 이하'라며 거부한
+                                #  값을 이 루프가 한 주기 뒤 그대로 기준선으로 박았기 때문이다.
+                                #  기준선이 작게 박히면 손실률이 늘 큰 양수라 **차단기가 종일
+                                #  발동하지 않는다**. 0으로 두고(=차단기 스킵·사이징은 예수금
+                                #  폴백) 다음 주기에 다시 잰다 — 시세가 돌아오면 스스로 낫는다.
+                                today_str = datetime.now().strftime("%Y-%m-%d")
+                                if getattr(self, '_baseline_reject_date', None) != today_str:
+                                    self._baseline_reject_date = today_str
+                                    warn = (f"⚠️ [시작 자산 이상] 조회값 {current_total:,}원이 직전 "
+                                            f"기록 대비 지나치게 작습니다.\n시세 결손(주식 평가액 0 "
+                                            f"수신)이 의심되어 오늘 기준 자산으로 삼지 않습니다.\n"
+                                            f"계좌 차단기(일일 손실 한도)가 그때까지 동작하지 "
+                                            f"않습니다 — 시세가 정상화되면 스스로 잡습니다.")
+                                    self.log(warn)
+                                    try:
+                                        api.send_telegram_message(warn)
+                                    except Exception:
+                                        pass
 
                             # [추가] DB에 기록
-                            try:
-                                today_str = datetime.now().strftime("%Y-%m-%d")
-                                db_manager.db.save_daily_asset(today_str, acc_str, self.initial_asset)
-                            except Exception: pass
+                            if self.initial_asset > 0:
+                                try:
+                                    today_str = datetime.now().strftime("%Y-%m-%d")
+                                    db_manager.db.save_daily_asset(today_str, acc_str, self.initial_asset)
+                                except Exception: pass
 
                         # [안전장치] 계좌 차단기(일일 손실 한도)를 **표시 코드보다 먼저** 돌린다.
                         #  종전에는 이 함수 맨 끝(265줄 아래)에 있었고 함수 전체가
@@ -6728,7 +6785,12 @@ class AutoTrader:
             self._hwm_cache = hwm
             self._hwm_cache_date = today
 
-        hwm = max(getattr(self, '_hwm_cache', 0.0), float(self.initial_asset or 0))
+        # [Fix 2026-09-01] 바닥값은 원본 시작 자산이 아니라 **오늘 입출금까지 반영한**
+        #  기준선이다. 원본을 쓰면 오늘 나간 출금이 그대로 고점으로 남아, 정상적인 출금
+        #  한 번이 그날 내내 가짜 드로다운(1,000만에서 300만 출금 = 30%)을 만들고 경보까지
+        #  울린다. DB 이력 쪽은 net_transfer 로 이미 환산되는데 이 한 줄만 빠져 있었다.
+        hwm = max(getattr(self, '_hwm_cache', 0.0),
+                  float(self.effective_baseline() or self.initial_asset or 0))
         if hwm <= 0:
             return 0.0
         return max(0.0, (hwm - equity) / hwm * 100.0)

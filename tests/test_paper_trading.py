@@ -231,62 +231,43 @@ def test_withdraw_limited_by_cash(paper):
     assert paper.get_seed() == 4_000_000
 
 
-def test_deposit_shifts_drawdown_baseline(paper):
-    """입출금은 일일 자산 이력을 함께 평행이동한다 — 가짜 드로다운을 남기지 않는다.
+def test_deposit_never_rewrites_the_asset_history(paper):
+    """[설계 전환 2026-09-01] 가상 입출금도 이력을 **옮기지 않는다**.
 
-    [사고 2026-08-23] adjust_seed 가 현금·시드만 옮기고 기준선을 두던 시절, 가상계좌에
-     1,000만원이 들어왔다 나간 흔적 한 줄(20,028,670원)이 daily_asset_history 에 남았다.
-     이 값이 HWM 으로 잡혀 드로다운 49.5% → 리스크 스케일 x0.8 → 히트 캡 10%가 8%로
-     묶였고, 휩소율 x0.85 가 겹친 실효 캡 6.8%를 실제 오픈 리스크 6.85%가 넘겨 신규
-     매수·피라미딩이 통째로 막혔다. 룩백이 90일이라 한 줄이 석 달을 간다.
+    종전에는 adjust_seed 가 daily_asset_history 전체를 평행이동했다(2026-08-23 사고의
+    대증요법). 실계좌는 2026-08-30에 그 방식을 폐기했다 — 되돌릴 수 없고, 추정이 틀리면
+    고점이 낮아져 드로다운을 **과소**평가한다(= 리스크 한도가 조용히 열린다). 원본을 두고
+    읽을 때 환산하는 쪽(net_transfer)으로 통일됐는데 가상 계좌만 옛 방식이 남아 있었다.
 
-    [왜 삭제가 아니라 이동인가] 지우면 드로다운 기준 자체가 사라져 한도가 조용히 열린다.
-     이동은 곡선의 모양을 보존하고, 반대 방향 입출금에 그대로 되돌아온다(아래에서 확인).
+    남겨 두면 이중 보정이 된다: 이동은 메모리의 baseline_principal 만 옮기고 DB 대조점
+    (daily_asset_history.principal)은 두므로, 다음 기동의 오프라인 보정이 같은 입출금을
+    한 번 더 잡아 net_transfer 까지 적는다.
+
+    [그럼 가짜 드로다운은 누가 막나] 실계좌와 같은 경로다 — 원금 불변량이 움직이므로
+     · 가동 중이면 net_transfer_today 가 매 주기 다시 재고 그날 행에 기록되며
+       (tests/test_transfer_detection.py::test_the_transfer_is_recorded_on_todays_asset_row)
+     · 정지 중이었으면 다음 기동에 되찾는다
+       (tests/test_offline_transfer.py::test_the_real_incident_heals_itself).
     """
     key = paper._account_key()
     db = db_manager.db
     db.save_daily_asset("2026-08-21", key, 5_000_000)
     db.save_daily_asset("2026-08-22", key, 5_100_000)
 
-    ok, _ = paper.adjust_seed(2_000_000)
-    assert ok
-    # 과거 고점이 '입금 후 자본' 기준으로 올라온다 → 현재 700만원 대비 드로다운 없음
-    assert db.get_max_daily_asset("2026-08-01", key) == pytest.approx(7_100_000)
-
-    # 같은 돈을 도로 빼면 원래 곡선으로 돌아온다 — 가짜 고점이 남지 않는 것이 요점이다.
-    ok, _ = paper.adjust_seed(-2_000_000)
-    assert ok
-    assert db.get_max_daily_asset("2026-08-01", key) == pytest.approx(5_100_000)
-
-
-def test_deposit_shifts_the_daily_loss_baseline(paper, tmp_path, monkeypatch):
-    """입출금은 **일일 손실 한도의 분모**(오늘 시작 자산)도 함께 옮긴다.
-
-    이걸 빼면 500만으로 시작한 날 200만을 넣는 순간 자산이 +40%로 읽혀 한도가 헐거워지고,
-    반대로 출금하면 매매와 무관하게 방어 모드가 걸린다. 종전에는 자산 이력(HWM) 이동만
-    테스트가 있었고, 세 기준선 중 나머지 둘은 검증되지 않았다(2026-08-30 커버리지 실측).
-    """
-    from core import jsonio
-    from modules.auto_trade import common as at_common
-
-    state = tmp_path / "daily_asset_state.json"
-    key = paper._account_key()
-    jsonio.save_json(str(state), {"accounts": {key: 5_000_000}})
-    monkeypatch.setattr(at_common, 'DAILY_STATE_FILE', str(state), raising=False)
-
     assert paper.adjust_seed(2_000_000)[0]
-    assert jsonio.load_json(str(state))["accounts"][key] == 7_000_000
 
-    assert paper.adjust_seed(-2_000_000)[0]
-    assert jsonio.load_json(str(state))["accounts"][key] == 5_000_000, \
-        "반대 방향 입출금에 기준선이 되돌아오지 않았다"
+    rows = dict(db._get_conn().execute(
+        "SELECT date, asset FROM daily_asset_history WHERE account = ?", (key,)).fetchall())
+    assert rows == {"2026-08-21": 5_000_000, "2026-08-22": 5_100_000}, \
+        "이력을 옮겼다 — 되돌릴 수 없는 상태를 만든다"
 
 
-def test_deposit_shifts_the_running_traders_baseline(paper, tmp_path, monkeypatch):
-    """실행 중인 트레이더의 메모리 기준선·HWM 캐시도 재기동 없이 따라와야 한다.
+def test_deposit_never_moves_the_running_traders_baseline(paper, tmp_path, monkeypatch):
+    """실행 중 트레이더의 기준선도 옮기지 않는다 — 옮기면 파생 보정이 사라진다.
 
-    HWM 캐시는 하루 1회만 갱신되므로, 여기서 옮기지 않으면 입출금한 그날 하루는
-    옛 고점으로 드로다운이 계산된다 — 사고 2026-08-23과 같은 계열의 오차다.
+    기준선(effective_baseline = 시작 자산 + net_transfer_today)은 원금 차이로 매 주기
+    다시 재는 값이다. 여기서 initial_asset·baseline_principal 을 같이 옮기면 그 차이가
+    0이 되어 **보정이 통째로 없어진다**. 옮기지 않아야 다음 주기에 저절로 맞는다.
     """
     from modules.auto_trade import AutoTrader
     from modules.auto_trade import common as at_common
@@ -296,28 +277,23 @@ def test_deposit_shifts_the_running_traders_baseline(paper, tmp_path, monkeypatc
     t = AutoTrader()
     t.initial_asset = 5_000_000
     t.baseline_principal = 5_000_000
-    t._hwm_cache = 5_100_000
 
     assert paper.adjust_seed(1_000_000)[0]
-    assert t.initial_asset == 6_000_000
-    assert t.baseline_principal == 6_000_000
-    assert t._hwm_cache == pytest.approx(6_100_000)
+    assert (t.initial_asset, t.baseline_principal) == (5_000_000, 5_000_000)
 
 
-def test_an_unmeasured_baseline_is_left_alone(paper, tmp_path, monkeypatch):
-    """0(미설정)은 건드리지 않는다 — 다음 측정 때 새 자산으로 잡히는 것이 맞다."""
+def test_deposit_makes_the_drawdown_be_measured_again(paper, tmp_path, monkeypatch):
+    """HWM 캐시는 하루 1회만 갱신된다 — 풀어 주지 않으면 그날 하루 옛 고점으로 잰다."""
     from modules.auto_trade import AutoTrader
     from modules.auto_trade import common as at_common
     monkeypatch.setattr(at_common, 'DAILY_STATE_FILE', str(tmp_path / "s.json"), raising=False)
 
     AutoTrader._instance = None
     t = AutoTrader()
-    t.initial_asset = 0
-    t.baseline_principal = 0
-    t._hwm_cache = 0.0
+    t._hwm_cache_date = "2026-08-22"
 
     assert paper.adjust_seed(1_000_000)[0]
-    assert (t.initial_asset, t.baseline_principal, t._hwm_cache) == (0, 0, 0.0)
+    assert t._hwm_cache_date is None
 
 
 def test_equity_snapshot_freezes_seed_of_that_day(paper):
