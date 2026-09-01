@@ -37,6 +37,39 @@ def fetch_today_profit_summary(cano=None, acnt_prdt_cd=None, target_date=None):
     except Exception: pass
     return summary
 
+def fetch_period_realized(cano=None, acnt_prdt_cd=None, start_date=None, end_date=None):
+    """증권사가 집계한 기간 실현손익. 조회할 수 없으면 **None**을 돌려준다.
+
+    [0과 '모른다'를 가른다] 이 값은 우리 DB 합계와 대조해 '우리가 실현손익을 다 알고
+    있는가'를 판정하는 데 쓴다. 못 구했는데 0을 돌려주면 그 대조가 '완벽히 일치'로 읽혀
+    가장 위험한 경우(모르는 매매가 있다)를 그냥 통과시킨다.
+
+    반환: {'realized': 실현손익, 'cost': 제비용} 또는 None.
+      · 두 값을 함께 주는 이유: rlzt_pfls 가 제비용을 포함하는지 여부가 계좌·응답에 따라
+        다르게 관측된다. 판정하는 쪽이 두 해석(포함/미포함) 중 하나라도 맞으면 통과시킨다.
+    날짜는 YYYY-MM-DD 또는 YYYYMMDD 를 받는다.
+    """
+    def _ymd(d):
+        return d.replace("-", "") if d else None
+
+    try:
+        data = api.get_period_profit_summary(cano, acnt_prdt_cd,
+                                             start_date=_ymd(start_date), end_date=_ymd(end_date))
+        if not data or data.get('rt_cd') != '0':
+            return None
+        out2 = data.get('output2')
+        if not isinstance(out2, list) or not out2:
+            return None                      # 미지원(모의·토스·관찰 모드) 또는 빈 응답
+        row = out2[0]
+        if row.get('rlzt_pfls') is None:
+            return None
+        return {'realized': api.safe_int(row.get('rlzt_pfls')),
+                'cost': api.safe_int(row.get('thdt_tlex_amt'))}
+    except Exception as e:
+        logger.debug(f"[기간 실현손익] 조회 실패: {e}")
+        return None
+
+
 def fetch_today_history(cano=None, acnt_prdt_cd=None, target_date=None):
     summary = {'buy_total': 0, 'sell_total': 0}
     try:

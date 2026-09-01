@@ -104,7 +104,9 @@ def test_missing_virt_key_is_warned(monkeypatch, capsys):
 # ───────────────── 실계좌 차단 ─────────────────
 
 ACCOUNT_FUNCS = [
-    "get_domestic_balance", "get_overseas_balance", "get_today_profit_summary",
+    # get_today_profit_summary 는 get_period_profit_summary 로 위임하는 얇은 껍데기라
+    #  계좌를 직접 요구하지 않는다(가드는 위임받는 쪽에 있다).
+    "get_domestic_balance", "get_overseas_balance", "get_period_profit_summary",
     "get_today_history", "get_period_entry_dates", "get_overseas_today_history",
     "get_domestic_open_orders", "get_overseas_open_orders", "place_order",
     "revise_cancel_order", "get_deposit", "get_foreign_deposit", "get_deposit_balance",

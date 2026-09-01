@@ -228,3 +228,82 @@ def test_a_zero_asset_row_is_not_a_reference_point(db):
     """자산 0인 행에 순입출금을 적으면 환산(WHERE asset > 0)에서 통째로 빠진다."""
     db.save_daily_asset(_d(3), ACC, 0.0, principal=900.0)
     assert db.get_last_principal_snapshot(ACC, _d(2)) is None
+
+
+# ───────── ⑤ 우리가 모르는 매매가 있으면 보정하지 않는다 ─────────
+
+def test_an_external_sell_blocks_the_gap_sum(db, trader):
+    """[핵심] 실현손익을 모르는 외부 매도가 구간에 있으면 그 금액이 가짜 입출금이 된다."""
+    db.save_daily_asset(_d(10), ACC, 10_000_000.0, principal=10_000_000.0)
+    db.save_daily_asset(_d(1), ACC, 10_500_000.0)
+    _sell(db, _d(5), 0, odno="EXT")                 # 외부 매도, 손익 미상
+    db._get_conn().execute("UPDATE trades SET type = '매도(외부)' WHERE odno = 'EXT'")
+    db._get_conn().commit()
+
+    total, ok = db.get_realized_profit_between(_d(10), _d(1), ACC)
+    assert (total, ok) == (0, False)
+    assert _reconcile(trader, 10_500_000)[0] == 0, "모르는 매도를 입출금으로 적었다"
+
+
+def test_a_backfilled_external_sell_is_trusted(db, trader):
+    """[반대 방향] 기동 동기화가 손익을 채운 외부 매도는 정상이다 — 게이트가 과하면 안 된다.
+
+    holdings_backfill.build_records 는 평단을 전진 재생해 매도의 실현손익까지 채운다.
+    채워진 값까지 '모른다'로 보면 수동 매수분을 들고 있는 계좌는 영영 보정되지 않는다.
+    """
+    db.save_daily_asset(_d(10), ACC, 10_000_000.0, principal=10_000_000.0)
+    db.save_daily_asset(_d(1), ACC, 10_500_000.0)
+    _sell(db, _d(5), 500_000, odno="EXT")
+    db._get_conn().execute("UPDATE trades SET type = '매도(외부)' WHERE odno = 'EXT'")
+    db._get_conn().commit()
+
+    total, ok = db.get_realized_profit_between(_d(10), _d(1), ACC)
+    assert (total, ok) == (500_000, True)
+    assert _reconcile(trader, 10_500_000)[0] == 0     # 실현손익으로 전부 설명된다
+
+
+# ───────── ⑥ 증권사 장부와 대조한다 (정지 중 왕복매매) ─────────
+
+def _broker(trader, book):
+    return patch('modules.auto_trade.account.fetch_period_realized', return_value=book)
+
+
+def test_a_roundtrip_while_off_is_caught_by_the_broker_book(db, trader):
+    """[핵심] 꺼진 사이에 사서 그 사이에 판 매매는 우리 DB에 **행조차 없다**.
+
+    holdings_backfill 은 지금 보유 중인 종목을 역산해 채우므로 왕복매매는 복원되지 않는다
+    (그 모듈의 [한계] 주석). 그러면 그 실현손익이 통째로 가짜 입출금이 된다 — 손실 쪽이면
+    자산 고점을 낮춰 리스크 한도가 조용히 열린다. 증권사 장부만이 답을 안다.
+    """
+    db.save_daily_asset(_d(10), ACC, 10_000_000.0, principal=10_000_000.0)
+    db.save_daily_asset(_d(1), ACC, 9_000_000.0)
+    with _broker(trader, {'realized': -1_000_000, 'cost': 0}):   # 왕복매매로 100만 손실
+        assert _reconcile(trader, 9_000_000)[0] == 0, "모르는 매매를 출금으로 적었다"
+
+
+def test_the_broker_book_agreeing_lets_the_correction_through(db, trader):
+    """장부가 우리 기록과 맞으면 그대로 보정한다 — 대조가 기능을 막으면 안 된다."""
+    _fill_incident(db)
+    with _broker(trader, {'realized': 0, 'cost': 0}):
+        assert _reconcile(trader, 27)[0] == -10_000
+
+
+def test_the_cost_convention_is_tolerated(trader):
+    """rlzt_pfls 가 제비용을 포함하는지가 응답마다 달라 보인다 — 둘 중 하나만 맞으면 된다."""
+    with _broker(trader, {'realized': 530_000, 'cost': 30_000}):
+        assert trader._realized_matches_broker("2026-08-01", "2026-08-10", 500_000, 50_000)
+
+
+def test_no_broker_book_does_not_block(trader):
+    """모의·토스·관찰 모드는 이 조회를 못 한다 — 대조 불가가 기능 정지가 되면 안 된다."""
+    with _broker(trader, None):
+        assert trader._realized_matches_broker("2026-08-01", "2026-08-10", 500_000, 50_000)
+
+
+def test_a_blocked_reconcile_is_retried_next_cycle(db, trader):
+    """보류는 '오늘 몫을 썼다'가 아니다 — 장부가 늦게 맞아떨어지면 그때 보정해야 한다."""
+    _fill_incident(db)
+    with _broker(trader, {'realized': 900_000, 'cost': 0}):
+        assert _reconcile(trader, 27)[0] == 0
+    with _broker(trader, {'realized': 0, 'cost': 0}):
+        assert _reconcile(trader, 27)[0] == -10_000

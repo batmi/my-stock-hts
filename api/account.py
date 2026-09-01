@@ -103,7 +103,20 @@ def get_overseas_balance(cano=None, acnt_prdt_cd=None, retries=None):
     return all_holdings
 
 def get_today_profit_summary(cano=None, acnt_prdt_cd=None, target_date=None):
-    """금일 투자 손익 요약 조회"""
+    """금일 투자 손익 요약 조회 (기간 조회의 하루짜리 특수형)"""
+    today = target_date if target_date else datetime.now().strftime("%Y%m%d")
+    return get_period_profit_summary(cano, acnt_prdt_cd, today, today)
+
+
+def get_period_profit_summary(cano=None, acnt_prdt_cd=None, start_date=None, end_date=None):
+    """기간별 매매손익 요약 조회 (증권사가 집계한 실현손익).
+
+    [왜 기간이 필요한가] 이 값은 **증권사 장부**라 우리가 모르는 매매(HTS/MTS 수동 매매,
+    시스템이 꺼진 사이의 왕복매매)까지 포함한다. 우리 DB 합계와 대조해 '우리가 실현손익을
+    다 알고 있는가'를 판정하는 데 쓴다 — 모르면 입출금 감지를 보류해야 한다
+    (trader._reconcile_offline_transfer).
+    날짜는 YYYYMMDD.
+    """
     # [관찰 모드] 실계좌 손익이 아니다. 가상 손익은 paper_broker/DB가 갖고 있다.
     if _paper_active():
         return {'rt_cd': '0', 'output2': []}
@@ -114,10 +127,12 @@ def get_today_profit_summary(cano=None, acnt_prdt_cd=None, target_date=None):
     # 따라서 모의투자일 경우 API 호출을 생략하고 빈 값 반환하여 에러 로그 방지
 
     cano, acnt_prdt_cd = _api()._prepare_account_params(cano, acnt_prdt_cd)
-    today = target_date if target_date else datetime.now().strftime("%Y%m%d")
+    today = datetime.now().strftime("%Y%m%d")
+    start_date = start_date or today
+    end_date = end_date or start_date
     params = {
         "CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd,
-        "INQR_STRT_DT": today, "INQR_END_DT": today,
+        "INQR_STRT_DT": start_date, "INQR_END_DT": end_date,
         "SLL_BUY_DVSN_CD": "00", "INQR_DVSN": "00", 
         "PDNO": "", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
         "AFHR_FLPR_YN": "N", "OFL_YN": "N", "UNPR_DVSN": "01",          

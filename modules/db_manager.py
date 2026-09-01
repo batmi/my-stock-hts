@@ -1754,10 +1754,19 @@ class DBManager:
         picked = {}
         loose = 0
         for _id, day, odno, type_str, profit in rows:
-            if "매도" not in str(type_str or "") and "sell" not in str(type_str or "").lower():
+            type_str = str(type_str or "")
+            if "매도" not in type_str and "sell" not in type_str.lower():
                 continue
             profit = int(profit or 0)
             if not profit:
+                # [외부 매도] 운용자가 HTS/MTS로 직접 판 체결은 우리 주문 기록이 없어
+                #  실현손익이 0으로 남는다(conclusion._recalc_realized: origin_trade 없음).
+                #  그 금액은 '0'이 아니라 '모른다'다. 0으로 세면 그만큼이 그대로 가짜
+                #  입출금이 된다 — 100만원 이익 실현이 100만원 입금으로 둔갑한다.
+                if "(외부)" in type_str:
+                    logger.info(f"[DB] 실현손익을 모르는 외부 매도가 있다({account} {day}) "
+                                f"— 구간 실현손익을 신뢰할 수 없다.")
+                    return 0, False
                 continue
             if odno:
                 picked[(day, odno)] = profit      # 나중 행이 앞 행을 덮는다(id 오름차순)

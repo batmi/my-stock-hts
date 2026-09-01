@@ -1099,6 +1099,40 @@ class AutoTrader:
         return max(OFFLINE_TRANSFER_FLOOR,
                    min(OFFLINE_TRANSFER_ABS_MIN, base * OFFLINE_TRANSFER_RATIO))
 
+    def _realized_matches_broker(self, start_date, end_date, realized_db, tolerance):
+        """구간 실현손익을 **우리가 다 알고 있는가**를 증권사 장부와 대조한다.
+
+        [왜 필요한가] 우리 DB는 우리가 아는 매매만 담는다. 기동 동기화(holdings_backfill)는
+         **지금 보유 중인 종목**을 역산해 채우므로, 시스템이 꺼진 사이에 사서 그 사이에 판
+         왕복매매는 기록이 아예 없다(그 모듈의 [한계] 주석). 그러면 그 실현손익이 통째로
+         가짜 입출금이 된다 — 손실 쪽이면 자산 고점을 낮춰 **리스크 한도가 조용히 열린다**.
+         행이 없으니 '외부 매도' 표식으로도 잡을 수 없다. 증권사 장부만이 답을 안다.
+
+        [값으로 쓰지 않고 대조만 한다] rlzt_pfls 가 제비용을 포함하는지가 계좌·응답에 따라
+         다르게 관측된다. 그 숫자를 그대로 식에 넣으면 규약이 어긋난 순간 없는 입출금을
+         만들어낸다. 그래서 두 해석(제비용 포함/미포함) 중 **하나라도** 우리 합계와 맞으면
+         '알고 있다'로 보고 통과시키고, 둘 다 어긋날 때만 보류한다.
+
+        조회 자체가 불가능하면(모의·토스·관찰 모드, 통신 실패) 대조를 건너뛴다 — 이 대조는
+        추가 방어막이지 전제 조건이 아니다. 여기서 막으면 정작 필요한 보정까지 사라진다.
+        """
+        try:
+            cano, acnt = _get_trade_account()
+            book = account.fetch_period_realized(cano, acnt, start_date, end_date)
+            if not book:
+                return True                    # 대조 불가 — 기존 판정을 유지한다
+            gap = min(abs(realized_db - book['realized']),
+                      abs(realized_db - (book['realized'] - book['cost'])))
+            if gap <= max(tolerance, 1000.0):
+                return True
+            self.log(f"[오프라인 입출금] 증권사 실현손익({book['realized']:+,}원)과 기록"
+                     f"({realized_db:+,}원)이 {gap:,.0f}원 어긋납니다 — 우리가 모르는 매매가 "
+                     f"있어 보정을 보류합니다. (수동 매매 기록은 보유 종목만 복원됩니다)")
+            return False
+        except Exception as e:
+            logger.debug(f"[오프라인 입출금] 증권사 실현손익 대조 실패(보정은 계속): {e}")
+            return True
+
     def _reconcile_offline_transfer(self, account_key, current_principal, realized_ok):
         """프로그램이 꺼져 있던 사이의 입출금을 스스로 되찾아 자산 이력에 적는다.
 
@@ -1158,12 +1192,16 @@ class AutoTrader:
             realized, ok = db_manager.db.get_realized_profit_between(
                 last_date, yesterday, account_key)
             if not ok:
-                self.log("[오프라인 입출금] 구간 실현손익 조회 실패 — 보정하지 않습니다.")
+                self.log("[오프라인 입출금] 구간 실현손익을 신뢰할 수 없어 보정하지 않습니다.")
                 return 0          # 못 쟀으면 표시하지 않는다 — 다음 주기에 다시 해 본다
+
+            threshold = self._offline_transfer_threshold(last_principal)
+            if not self._realized_matches_broker(last_date, yesterday, realized, threshold):
+                return 0
             self._offline_reconcile_date = today      # 쟀다 = 오늘 몫은 끝났다
 
             residual = float(current_principal) - float(last_principal) - float(realized)
-            if abs(residual) < self._offline_transfer_threshold(last_principal):
+            if abs(residual) < threshold:
                 return 0
 
             amount = int(round(residual))
@@ -4256,6 +4294,20 @@ class AutoTrader:
                             today_trades_refined = self._refine_trade_records(today_trades_parsed)
                             sell_trades = [x for x in today_trades_refined if x['type'] == 'sell']
                             realized_profit = sum(int(t.get('profit_amt') or 0) for t in sell_trades)
+
+                            # [외부 매도] 운용자가 HTS/MTS로 자동매매 계좌에서 직접 팔면 우리
+                            #  주문 기록이 없어 실현손익이 0으로 남는다(conclusion 은 origin_trade
+                            #  가 있어야 손익을 채운다). 그 금액은 '0'이 아니라 '모른다'다 —
+                            #  0으로 세면 100만원 이익 실현이 **100만원 입금**으로 둔갑해
+                            #  기준 자산이 부풀고(차단기가 늦어진다) 자산 이력에도 남는다.
+                            #  이 파일의 원칙 그대로, 모르면 감지하지 않는다.
+                            if any("매도" in str(r['type']) and "(외부)" in str(r['type'])
+                                   and not (r['profit_amt'] or 0) for r in today_trades):
+                                realized_ok = False
+                                if getattr(self, '_ext_sell_gate_date', None) != today_str:
+                                    self._ext_sell_gate_date = today_str
+                                    self.log("[입출금감지] 실현손익을 모르는 외부(HTS/MTS) 매도가 "
+                                             "있어 오늘 입출금 자동 감지를 보류합니다.")
                         except Exception as _rp_e:
                             realized_ok = False
                             logger.warning(f"[입출금감지] 당일 실현손익 조회 실패 — 감지를 보류한다: {_rp_e}")

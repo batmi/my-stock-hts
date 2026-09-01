@@ -45,8 +45,12 @@ def _holdings(qty=10, buy=100_000, price=100_000):
              'evlu_pfls_rt': f"{(evlu - pchs) / pchs * 100:.2f}"}]
 
 
-def _cycle(trader, cash, holdings, realized=0):
-    """한 주기 실행 → 텔레그램 mock. 자산은 현금 + 평가금으로 구성한다."""
+def _cycle(trader, cash, holdings, realized=0, external_sell=False):
+    """한 주기 실행 → 텔레그램 mock. 자산은 현금 + 평가금으로 구성한다.
+
+    external_sell: 운용자가 HTS/MTS로 직접 판 체결(우리 주문 기록이 없어 실현손익이 0으로
+      남는 행)을 섞는다. 그 0을 실현손익으로 세면 가짜 입출금이 된다.
+    """
     evlu = sum(int(h['evlu_amt']) for h in holdings)
     asset = {'tot_asset': cash + evlu, 'sec_eval': evlu, 'order_possible': cash}
     deposit = {'deposit': cash, 'd2_deposit': cash, 'd2_real': cash,
@@ -59,6 +63,10 @@ def _cycle(trader, cash, holdings, realized=0):
                 'price': 0, 'profit_amt': realized, 'profit_rate': 0.0,
                 'order_status': '체결', 'odno': 'X', 'time': '2026-08-04 10:00:00'}]
               if realized else [])
+    if external_sell:
+        trades.append({'type': '매도(외부)', 'code': CODE, 'name': NAME, 'qty': 1,
+                       'price': 0, 'profit_amt': 0, 'profit_rate': 0.0,
+                       'order_status': '체결', 'odno': 'EXT', 'time': '2026-08-04 11:00:00'})
 
     with patch('modules.auto_trade.account.get_asset_status_data', return_value=asset), \
          patch('modules.auto_trade.db_manager.db.get_trades', return_value=trades), \
@@ -239,3 +247,33 @@ def test_transient_blip_does_not_confirm(trader):
     assert trader.initial_asset == before
 
 
+
+
+# ───────────────── 수동(외부) 매매가 입출금으로 둔갑하지 않는가 ─────────────────
+
+def test_an_external_sell_is_not_a_deposit(trader):
+    """[핵심] 운용자가 HTS/MTS로 직접 판 이익이 '입금'으로 잡히면 안 된다.
+
+    외부 체결은 우리 주문 기록(odno)이 없어 실현손익이 0으로 저장된다
+    (conclusion._recalc_realized 는 origin_trade 가 있어야 손익을 채운다).
+    그 0을 그대로 실현손익으로 세면 원금이 이익만큼 늘어 보이고, 3주기 뒤
+    **이익 전액이 입금으로 확정된다** — 기준 자산이 부풀어 차단기가 늦어지고,
+    자산 이력에도 그 금액이 순입출금으로 남는다.
+    """
+    _cycle(trader, 1_000_000, _holdings(qty=10))            # 기준 확립
+    # 10주 중 5주를 외부에서 팔아 60만원이 들어왔다(원가 50만 + 이익 10만)
+    for _ in range(4):
+        tg = _cycle(trader, 1_600_000, _holdings(qty=5), external_sell=True)
+        assert not _transfer_alerts(tg), "외부 매도 이익이 입금으로 잡혔다"
+    assert trader.net_transfer_today == 0, "모르는 실현손익이 순입출금으로 남았다"
+
+
+def test_a_known_sell_still_measures_transfers(trader):
+    """[반대 방향] 실현손익을 아는 매도는 감지를 막지 않는다 — 게이트가 과하면 안 된다."""
+    _cycle(trader, 1_000_000, _holdings(qty=10))
+    alerts = []
+    for _ in range(4):     # 확정에 3주기가 필요하고, 알림은 하루 1회라 전 주기를 모은다
+        alerts += _transfer_alerts(_cycle(trader, 2_600_000, _holdings(qty=5),
+                                          realized=100_000))
+    assert alerts, "정상 매도까지 감지를 막았다"
+    assert trader.net_transfer_today == 1_000_000
