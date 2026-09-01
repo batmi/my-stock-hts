@@ -230,6 +230,10 @@ class _HeatShim:
         #  있으면 그 값을 그대로 빌리고, 없으면 1.0으로 두되 호출부가 '명목'이라고 밝힌다.
         self.risk_scale = 1.0
         self.risk_scale_known = False
+        # [표시=판정] 엔진은 직전 주기 매도 판정이 실제로 쓴 손절률·ATR로 오픈 리스크를
+        #  잰다(engine.compute_portfolio_heat live_map). 화면이 그걸 안 보면 역산 근사로
+        #  더 작은 리스크를 띄워, 엔진이 캡으로 막은 이유가 화면에서 사라진다.
+        self.live_risk_map = {}
         try:
             import modules.auto_trade as _at
             inst = getattr(_at.AutoTrader, "_instance", None)
@@ -237,6 +241,9 @@ class _HeatShim:
             if scale and 0 < float(scale) <= 1.0:
                 self.risk_scale = float(scale)
                 self.risk_scale_known = True
+            live = getattr(inst, "holding_risk_cache", None) if inst is not None else None
+            if isinstance(live, dict):
+                self.live_risk_map = dict(live)
         except Exception:
             pass
 
@@ -245,12 +252,12 @@ class _HeatShim:
 
 
 def _position_open_risk(positions):
-    """종목별 오픈 리스크(원)·남은 예산·실효 캡(%)·스케일 반영 여부. 실패 시 ({}, None, None, False).
+    """종목별 (손절선, 오픈 리스크)·남은 예산·실효 캡(%)·스케일 반영 여부.
+    실패 시 ({}, None, None, False).
 
-    [손절선 역산] compute_portfolio_heat 은 손절선이 현재가 위면 리스크를 0으로 자른다
-    (이익 잠김). 그 상태로는 '선이 얼마나 위인지' 알 수 없으므로, 충분히 높은 가격을
-    넣어 클립을 피한 뒤 `손절선 = 넣은 가격 − 리스크` 로 되짚는다. 표시부는 그 선과
-    실제 현재가로 리스크를 다시 계산한다.
+    [detail] 종전에는 총합에서 손절선을 되짚었다(충분히 높은 가격을 넣어 0 클립을 피한 뒤
+    빼는 역산). 히트 기준이 매수가로 바뀌면서 그 트릭은 성립하지 않는다 — 이익이 잠긴
+    포지션은 리스크가 0이라 되짚을 것이 없다. 엔진이 손절선을 직접 돌려주게 했다.
     """
     from modules import db_manager
     from modules.auto_trade import engine
@@ -262,17 +269,17 @@ def _position_open_risk(positions):
         codes = [p["code"] for p in positions]
         buy_map = db_manager.db.get_buy_trades_for_current_holdings(codes) or {}
 
-        risks = {}
-        for p in positions:
-            code, qty = p["code"], p["qty"]
-            cur = paper_broker.valuation_price(code, p["avg_price"])
-            probe = max(cur, float(highs.get(code) or 0.0)) * 10.0
-            one = [{'pdno': code, 'hldg_qty': str(qty),
-                    'pchs_avg_pric': f"{p['avg_price']:.4f}", 'prpr': str(int(probe))}]
-            stop = probe - rm.compute_portfolio_heat(one, {code: buy_map.get(code) or []}) / qty
-            risks[code] = (stop, qty * max(0.0, cur - stop))
+        entries = [{'pdno': p["code"], 'hldg_qty': str(p["qty"]),
+                    'pchs_avg_pric': f'{p["avg_price"]:.4f}',
+                    'prpr': str(int(paper_broker.valuation_price(code=p["code"],
+                                                                 fallback=p["avg_price"])))}
+                   for p in positions]
+        total, detail = rm.compute_portfolio_heat(
+            entries, {p["code"]: buy_map.get(p["code"]) or [] for p in positions},
+            live_map=shim.live_risk_map, detail=True)
+        risks = {c: (stop, risk) for c, (stop, risk) in detail.items()}
 
-        shim.portfolio_heat_amt = sum(r for _s, r in risks.values())
+        shim.portfolio_heat_amt = total
         return (risks, rm.portfolio_risk_budget_left(), rm.effective_portfolio_cap(),
                 shim.risk_scale_known)
     except Exception as e:

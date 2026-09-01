@@ -247,8 +247,10 @@ def test_broken_holding_is_counted_conservatively_not_as_zero(rm, caplog):
     with caplog.at_level("WARNING"):
         heat = r.compute_portfolio_heat([h], {"005930": _BrokenTrades()})
 
+    # 기준은 매수가다 — 히트 전체가 '진입 대비 손실'이므로 폴백도 같은 자로 재야
+    #  총계에 섞였을 때 단위가 어긋나지 않는다(2026-09-01 정의 변경).
     default_sl = config.SELL_STRATEGY["STOP_LOSS_RATE"]
-    expected = 10 * 80000 * abs(default_sl) / 100.0
+    expected = 10 * 70000 * abs(default_sl) / 100.0
     assert heat == pytest.approx(expected), "실패한 종목이 0원으로 계상됐다 — 캡이 느슨해진다"
     assert heat > 0
     assert any("오픈 리스크 산출 실패" in rec.message for rec in caplog.records), \

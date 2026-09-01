@@ -188,6 +188,9 @@ class AutoTrader:
             cls._instance.half_tp_cache = set()       # [추가] 반익절 실행 여부 추적 캐시
             cls._instance.portfolio_heat_amt = 0.0    # [추가] 포트폴리오 히트(총 오픈 리스크, 원) 주기별 스냅샷
             cls._instance.portfolio_heat_unknown = False  # 산출 실패 여부 — '0(없음)'과 '못 셈'을 가른다
+            # 보유 종목별 '직전 주기 매도 판정이 실제로 쓴' 손절률·ATR — 오픈 리스크
+            #  산출이 역산 근사 대신 이 실측값을 쓴다(engine.compute_portfolio_heat live_map).
+            cls._instance.holding_risk_cache = {}
             cls._instance.last_emergency_alert_time = 0 # [추가] 긴급 알림 쿨타임용 타임스탬프
             cls._instance.last_wait_alert_time = 0    # [추가] 대기 모드 진입 알림 쿨타임 (진입/복구 반복 시 스팸 방지)
             cls._instance._wait_alert_sent = False    # [추가] 진입 알림 발송 여부 (복구 알림과 짝 맞춤)
@@ -4494,6 +4497,20 @@ class AutoTrader:
             except Exception: pass
         return None
 
+    def _live_risk_map(self, hold_codes):
+        """오픈 리스크 산출에 넘길 '직전 주기 실측 손절선' 스냅샷 (보유분만).
+
+        [왜 거르는가] 이 캐시는 매도 판정이 종목마다 채우고 스스로 지우지 않는다.
+        판 종목의 값이 남아 있어도 히트는 잔고를 도니 곧바로 틀리진 않지만, 같은 종목을
+        다시 담았을 때 **예전 포지션의 손절선**이 새 포지션의 리스크로 계상된다.
+        보유분만 남기면 그 경로가 닫힌다(재진입 시엔 값이 없어 종전 근사로 돌아간다).
+        """
+        codes = set(hold_codes or ())
+        with self._lock:
+            self.holding_risk_cache = {k: v for k, v in self.holding_risk_cache.items()
+                                       if k in codes}
+            return dict(self.holding_risk_cache)
+
     def _effective_stop_loss_rate(self, buy_trades=None, rule=None, fallback_atr_rate=None):
         """포지션의 실효 손절률(%) — 매도 판정이 실제로 쓰는 그 값. 미사용(0)이면 None.
 
@@ -4960,6 +4977,8 @@ class AutoTrader:
         if not holdings:
             self.portfolio_heat_amt = 0.0  # 보유 없음 = 오픈 리스크 0 (매수 경로의 히트 캡 판정용)
             self.portfolio_heat_unknown = False
+            with self._lock:
+                self.holding_risk_cache.clear()
             return
 
         # [추가] 개별 룰 로드 ([최적화] 루프에서 주기당 1회 로드해 전달받으면 재조회 생략)
@@ -4992,7 +5011,8 @@ class AutoTrader:
         #  다음 주기의 이 재계산으로 리셋된다). 미체결은 보통 한 주기 안에 체결·취소로
         #  정리되고, 과소평가 폭은 그 한 주문분이라 캡을 실질적으로 무너뜨리지 않는다.
         try:
-            self.portfolio_heat_amt = self.risk_manager.compute_portfolio_heat(holdings, buy_trades_map)
+            self.portfolio_heat_amt = self.risk_manager.compute_portfolio_heat(
+                holdings, buy_trades_map, live_map=self._live_risk_map(_all_hold_codes))
             self.portfolio_heat_unknown = False
         except Exception as e:
             # [fail-closed] 0으로 두면 '오픈 리스크 없음'이 되어 히트 캡의 예산이 통째로 열린다.
@@ -5197,6 +5217,22 @@ class AutoTrader:
             self.set_stock_state(code, result['state'])
             
             ind = result['ind']
+
+            # [히트] 이번 주기 판정이 실제로 쓴 손절선 재료를 남긴다. 오픈 리스크 산출은
+            #  주기 앞머리(잔고 직후)에서 도는데 그 자리엔 차트가 없어, 종전에는 매수 시점
+            #  손절률에서 ATR을 역산했다 — 추세가 길어질수록 실제 ATR이 커져 실제 콜백이
+            #  넓어지는 만큼 리스크를 과소 계상한다(방어가 무뎌지는 한 방향).
+            #  다음 주기가 이 값을 쓴다(60초 전의 일봉 ATR이라 실질 차이가 없다).
+            try:
+                with self._lock:
+                    self.holding_risk_cache[code] = {
+                        'sl_rate': float(thresholds.get(
+                            "STOP_LOSS_RATE", config.SELL_STRATEGY.get("STOP_LOSS_RATE", -7.0)) or 0.0),
+                        'atr': float(ind.get('atr') or 0.0),
+                    }
+            except (TypeError, ValueError):
+                pass
+
             rsi_val = f"{ind.get('rsi'):.1f}" if ind.get('rsi') is not None else "-"
             adx_val = f"{ind.get('adx'):.1f}" if ind.get('adx') is not None else "-"
             cci_val = f"{ind.get('cci'):.1f}" if ind.get('cci') is not None else "-"

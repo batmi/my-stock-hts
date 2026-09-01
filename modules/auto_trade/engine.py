@@ -2098,12 +2098,25 @@ class RiskManager:
         # 오픈 리스크 산출에 실패한 종목 — 주기마다(60초) 같은 경고가 쌓이지 않게 한 번만 남긴다.
         self._heat_failed_codes = set()
 
-    def compute_portfolio_heat(self, holdings, buy_trades_map=None):
+    def compute_portfolio_heat(self, holdings, buy_trades_map=None, live_map=None,
+                               detail=False):
         """포트폴리오 히트(총 오픈 리스크, 원) 계산
 
-        보유 각 포지션이 '현재가 → 유효 손절선'까지 하락했을 때의 잠재 손실을 합산한다.
+        보유 각 포지션이 유효 손절선까지 밀렸을 때 **투입 자본에서** 잃는 금액을 합산한다.
         SYSTEM_RISK_PER_TRADE가 종목당 손실을 통제한다면, 이 값은 '전 종목 동시 손절'
         시나리오의 합산 손실을 SYSTEM_MAX_PORTFOLIO_RISK 이하로 묶기 위한 기준값이다.
+
+        [기준 = 매수가 (2026-09-01 변경)] 종전에는 '현재가 → 손절선'으로 쟀다. 그러면
+        손절선이 고정된 채 현재가만 올라도 히트가 부푼다 — 한국콜마 실측으로 진입 대비
+        +10%(피라미딩 발동선)에서 1.80배, TS 무장 직전 최대 2.45배였다. 피라미딩 창과
+        TS 무장 사이가 정확히 히트 최대 구간이므로, **추세가 잘 될수록 증액이 막힌다**
+        (실측 2026-08-28 가상투자에서 한국콜마 증액이 206주기 차단). 추세추종의 정반대다.
+        벌어 둔 미실현 이익을 되뱉는 것은 자본의 손실이 아니고, 그 반납을 관리하는 장치는
+        캡이 아니라 트레일링 스탑이다. 그래서 기준을 매수가로 바꿨다 — 터틀식 '총 유닛
+        리스크'와 같은 정의이고, 손절선이 매수가 위로 올라간 포지션(TS 무장·BEP)은
+        자본 리스크가 0이 되어 캡에서 저절로 빠진다.
+        부수 효과로 매수·증액 경로의 **예약액 산식(수량×주문가×|손절률|)과 단위가 같아진다**
+        — 종전에는 총계는 현재가 기준, 예약은 매수가 기준이라 서로 다른 자를 대고 있었다.
 
         유효 손절선 추정(매도 로직의 근사, 보수적 = 리스크 과대평가 방향):
           ① 매수가 × (1 + 손절률): 손절률은 보유분 매수 기록의 수량가중 평균(ATR 손절 저장값),
@@ -2114,11 +2127,26 @@ class RiskManager:
           ③ max_profit이 트레일링 발동선 이상이면 최고가×(1-실효콜백%)으로 상향.
              실효콜백은 청산 로직과 같은 effective_callback(하한, ATR×배수)을 쓴다 —
              고정 하한만 쓰면 실제보다 높은 손절선을 가정해 리스크가 과소 계상된다.
-        손절선이 현재가 위(이미 이익 잠김)면 해당 포지션 리스크는 0으로 본다.
+        손절선이 매수가 위(이익 잠김)면 해당 포지션의 자본 리스크는 0으로 본다.
+
+        live_map: {code: {'sl_rate': 실효 손절률(%), 'atr': 그 시점 ATR}} — 직전 주기의
+          매도 판정이 **실제로 쓴** 값이다. 주면 위 ①의 수량가중 평균과 ③의 ATR 역산을
+          대신한다. 역산은 매수 시점 손절률에서 ATR을 되돌리는 근사라, 추세가 길어질수록
+          실제 ATR이 커져 실제 콜백이 넓어지는 만큼 **오픈 리스크를 과소 계상**했다
+          (audit_heat_formula 실측: 히트 중앙 4.81% vs 실제 7.01%, 캡 초과일 3.7% vs 26.7%).
+          매수 기록이 없는 포지션(HTS·MTS 직접 매수)도 마찬가지다 — 여기서는 전역 고정
+          손절률로 떨어지는데 실제 판정은 진입 봉 ATR로 복원한 값(최대 MAX_ATR_STOP_LOSS_RATE)을
+          쓴다. 둘 다 '방어가 무뎌지는' 한 방향이라 실측값이 있으면 그쪽이 항상 맞다.
+          없거나 숫자가 아니면 종전 근사로 돌아간다 — 모르면 안 건드린다.
+
+        detail=True면 (총합, {code: (손절선, 리스크)})를 돌려준다. 표시부가 총합에서
+          손절선을 되짚느라 쓰던 역산 트릭을 없애기 위한 것이다 — 되짚기는 리스크가
+          0으로 잘린 포지션에서 성립하지 않는다.
         """
         total_risk = 0.0
+        per_code = {}
         if not holdings:
-            return total_risk
+            return (total_risk, per_code) if detail else total_risk
 
         sell_cfg = config.SELL_STRATEGY
         default_sl = sell_cfg.get("STOP_LOSS_RATE", -5.0)
@@ -2141,7 +2169,19 @@ class RiskManager:
                     continue
                 code = h.get('pdno')
 
+                live = (live_map or {}).get(code) or {}
+
                 sl_rate = None
+                # [SSOT] 직전 주기의 매도 판정이 쓴 실효 손절률이 있으면 그것이 진짜 선이다.
+                #  아래 수량가중 평균은 build_sell_thresholds 의 한 갈래만 복제한 근사다
+                #  (개별 룰의 조이기·매수 기록 없는 포지션의 ATR 복원을 보지 못한다).
+                try:
+                    live_sl = float(live.get('sl_rate'))
+                except (TypeError, ValueError):
+                    live_sl = 0.0
+                if live_sl < 0:
+                    sl_rate = live_sl
+
                 trades = (buy_trades_map or {}).get(code) or []
                 tq, ws = 0, 0.0
                 for t in trades:
@@ -2153,7 +2193,7 @@ class RiskManager:
                     if q > 0 and s != 0.0:
                         tq += q
                         ws += q * s
-                if tq > 0:
+                if sl_rate is None and tq > 0:
                     sl_rate = ws / tq
                 if sl_rate is None or sl_rate >= 0:
                     sl_rate = default_sl if default_sl < 0 else -5.0
@@ -2187,7 +2227,8 @@ class RiskManager:
                     if use_bep and bep_threshold > 0 and max_profit >= bep_threshold:
                         stop_price = max(stop_price, buy_price)
                     # 발동 기준은 설정 모드를 따른다(고정 % / 손익분기 연동).
-                    #  여기엔 ATR 시계열이 없지만 sl_rate가 매수 시점 ATR 손절률이므로
+                    #  여기엔 ATR 시계열이 없다(live_map을 받으면 그 실측값을 쓴다). 없으면
+                    #  sl_rate가 매수 시점 ATR 손절률이므로
                     #  ATR/매수가 = |sl_rate| / ATR_STOP_MULTIPLIER 로 역산할 수 있다.
                     #  하한(콜백)만으로 근사하면 실제보다 훨씬 일찍 무장한 것으로 보여
                     #  손절선을 과대 상향 → 오픈 리스크를 과소평가한다(반대 방향 위험).
@@ -2195,7 +2236,15 @@ class RiskManager:
                     #   발동선과 콜백이 **같은 재료**를 써야 실제 청산선과 어긋나지 않는다.
                     #   (MAX_ATR_STOP_LOSS_RATE 캡에 걸린 종목은 역산값이 실제 ATR보다 작아
                     #    콜백을 조금 좁게 잡는다 — 남은 과소 계상은 이 캡 폭 안쪽이다.)
+                    # 실측 ATR이 있으면 역산을 쓰지 않는다 — 청산 로직(compute_trailing_stop)이
+                    #  보는 것이 바로 이 값이다. 역산은 그것을 흉내 낸 근사일 뿐이다.
                     est_atr = (abs(sl_rate) / 100.0 * buy_price / atr_mult) if use_atr_stop else 0.0
+                    try:
+                        live_atr = float(live.get('atr') or 0.0)
+                    except (TypeError, ValueError):
+                        live_atr = 0.0
+                    if use_atr_stop and live_atr > 0:
+                        est_atr = live_atr
                     act = ts_act
                     if str(sell_cfg.get("TS_ACTIVATION_MODE", "fixed")).lower() == "breakeven":
                         act = breakeven_activation_rate(est_atr, buy_price, ts_cb,
@@ -2226,7 +2275,9 @@ class RiskManager:
                                                     max_profit)
                         stop_price = max(stop_price, highest * (1 - cb / 100.0))
 
-                total_risk += qty * max(0.0, cur - stop_price)
+                risk = qty * max(0.0, buy_price - stop_price)
+                total_risk += risk
+                per_code[code] = (stop_price, risk)
             except Exception as e:
                 # [fail-closed] 여기서 조용히 continue 하면 그 종목의 오픈 리스크가 **0으로**
                 #  계상된다. 총 히트가 과소평가되고 캡이 그만큼 느슨해진다 — 이 함수가
@@ -2240,19 +2291,22 @@ class RiskManager:
                 code = h.get('pdno', '?')
                 try:
                     q = api.safe_int(h.get('hldg_qty', 0))
-                    c = float(h.get('prpr') or 0)
+                    # 기준은 매수가다(위 참조). 못 구하면 현재가로 대신한다 — 진입 대비
+                    #  기준을 잃느니 근사라도 세는 편이 fail-closed 방향이다.
+                    c = float(h.get('pchs_avg_pric') or 0) or float(h.get('prpr') or 0)
                 except Exception:
                     q, c = 0, 0.0
                 if q <= 0 or c <= 0:
                     raise
                 fallback = q * c * abs(default_sl) / 100.0
                 total_risk += fallback
+                per_code[code] = (c * (1 + default_sl / 100.0), fallback)
                 if code not in self._heat_failed_codes:
                     self._heat_failed_codes.add(code)
                     logger.warning(f"[히트] {code} 오픈 리스크 산출 실패 — 기본 손절폭으로 "
                                    f"보수 계상({fallback:,.0f}원): {e}")
 
-        return total_risk
+        return (total_risk, per_code) if detail else total_risk
 
     def current_risk_scale(self, market_type=None):
         """[리스크 스케일링] 트레이더가 주기마다 갱신한 리스크 한도 배수 (0<scale≤1)

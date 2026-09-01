@@ -173,30 +173,34 @@ def true_stop(rec):
     return stop
 
 
-def heat_of(day_recs, qty_map, rm, trader, price_override=None):
-    """현행 compute_portfolio_heat 로 그날의 총 오픈 리스크(원)를 낸다.
-
-    price_override: 현재가를 강제한다. 정합성 측정에서 손절선을 역산할 때 쓴다 —
-     손절선이 현재가 위면 산식이 리스크를 0으로 자르므로(이익 잠김), 그 상태로는
-     '얼마나 위인지'를 알 수 없다. 충분히 높은 가격을 넣으면 클립이 걸리지 않아
-     손절선 = 현재가 − 리스크 로 정확히 되짚을 수 있다.
-    """
+def _stage(day_recs, qty_map, rm, trader):
     holdings, buy_map = [], {}
     trader.trailing_stop_cache = {}
     for code, rec in day_recs:
         qty = qty_map[code]
-        px = price_override if price_override is not None else rec['close']
         holdings.append({'pdno': code, 'hldg_qty': str(qty),
-                         'pchs_avg_pric': f"{rec['avg']:.4f}", 'prpr': str(int(px))})
+                         'pchs_avg_pric': f"{rec['avg']:.4f}", 'prpr': str(int(rec['close']))})
         buy_map[code] = [{'qty': qty, 'stop_loss_rate': rec['sl']}]
         trader.trailing_stop_cache[code] = rec['high']
+    return holdings, buy_map
+
+
+def heat_of(day_recs, qty_map, rm, trader):
+    """현행 compute_portfolio_heat 로 그날의 총 오픈 리스크(원)를 낸다."""
+    holdings, buy_map = _stage(day_recs, qty_map, rm, trader)
     return rm.compute_portfolio_heat(holdings, buy_map)
 
 
 def assumed_stop(rec, rm, trader):
-    """히트 산식이 그 포지션에 가정하는 손절선(원). 리스크 클립을 피해 역산한다."""
-    probe = max(rec['close'], rec['high']) * 10.0
-    return probe - heat_of([("PROBE", rec)], {"PROBE": 1}, rm, trader, price_override=probe)
+    """히트 산식이 그 포지션에 가정하는 손절선(원).
+
+    [2026-09-01] 종전에는 '충분히 높은 가격을 넣고 현재가 − 리스크'로 되짚었다.
+    히트 기준이 매수가로 바뀌어 그 트릭은 성립하지 않으므로(이익 잠긴 포지션은
+    리스크가 0이라 되짚을 것이 없다) 엔진이 손절선을 직접 돌려주게 한다.
+    """
+    holdings, buy_map = _stage([("PROBE", rec)], {"PROBE": 1}, rm, trader)
+    _total, detail = rm.compute_portfolio_heat(holdings, buy_map, detail=True)
+    return detail["PROBE"][0]
 
 
 def main():
@@ -293,15 +297,12 @@ def main():
             qty_map[c] = max(1, int(args.equity / slots / r["avg"]))
         day_recs = [(c, r) for c, r in held]
 
-        orig = engine.effective_callback
-        try:
-            engine.effective_callback = as_old()
-            h_old = heat_of(day_recs, qty_map, rm, trader)
-        finally:
-            engine.effective_callback = orig
         h_new = heat_of(day_recs, qty_map, rm, trader)
-        h_true = sum(qty_map[c] * max(0.0, r["close"] - true_stop(r)) for c, r in day_recs)
-        rows.append((date, h_old, h_new, h_true))
+        # 두 정의를 같은 날 나란히 세운다. 손절선은 둘 다 **실제 청산선**을 쓴다 —
+        #  비교 대상은 산식의 정확도가 아니라 '무엇을 리스크로 부르는가'이다.
+        h_mark = sum(qty_map[c] * max(0.0, r["close"] - true_stop(r)) for c, r in day_recs)
+        h_cost = sum(qty_map[c] * max(0.0, r["avg"] - true_stop(r)) for c, r in day_recs)
+        rows.append((date, h_new, h_mark, h_cost))
 
     cap_pct = getattr(config, "SYSTEM_MAX_PORTFOLIO_RISK", 10.0)
     cap = args.equity * cap_pct / 100.0
@@ -312,12 +313,12 @@ def main():
             return
         arr = np.array([[r[1], r[2], r[3]] for r in sel], dtype=float)
         print(f"\n{title}  ({len(sel):,}일)")
-        print(f"{'산식':<10}{'중앙 히트%':>12}{'평균%':>9}{'최대%':>9}"
+        print(f"{'정의':<12}{'중앙 히트%':>12}{'평균%':>9}{'최대%':>9}"
               f"{f'캡{cap_pct:g}% 초과일':>14}{'캡6.8% 초과일':>15}")
-        print("-" * 70)
-        for k, label in ((0, "old(고정)"), (1, "new(실효)"), (2, "true(실제)")):
+        print("-" * 72)
+        for k, label in ((0, "엔진(현행)"), (1, "현재가대비"), (2, "진입대비")):
             col = arr[:, k]
-            print(f"{label:<10}{np.median(col) / args.equity * 100:>12.2f}"
+            print(f"{label:<12}{np.median(col) / args.equity * 100:>12.2f}"
                   f"{col.mean() / args.equity * 100:>9.2f}{col.max() / args.equity * 100:>9.2f}"
                   f"{(col > cap).mean() * 100:>13.1f}%{(col > cap_scaled).mean() * 100:>14.1f}%")
 
@@ -329,8 +330,37 @@ def main():
         sel = [r for r in rows if r[0] in span]
         report(sel, f"[{label} {chunk[0]}~{chunk[-1]}]" if chunk else f"[{label}]")
 
-    print("\n[해석] new 가 true 에 가깝고 old 가 그보다 위(=리스크 과소)면 이번 수정은 "
-          "'히트가 실제 청산선을 보게 만든 것'이고, 캡 초과일 증가는 그 정직해진 값의 결과다.")
+    # --------------------------------------------------------------- 3) 등가 캡
+    # 히트가 정직해지면 같은 캡(%)이 훨씬 자주 물린다. 그 자체는 옳은 방향이지만,
+    #  캡 값은 **과소 계상된 히트로 잰 채** 정해져 있었다. 다이얼의 의미가 바뀌므로,
+    #  '노출을 그대로 두려면 캡을 얼마로 놓아야 하는가'를 함께 낸다 — 정직해진 계량기와
+    #  다이얼 재보정은 한 묶음으로 결정해야 한다(따로 넣으면 아무도 안 잰 노출 삭감이 된다).
+    def equiv(sel, title):
+        if not sel:
+            return
+        arr = np.array([[r[2], r[3]] for r in sel], dtype=float)
+        print(f"\n{title}  ({len(sel):,}일)")
+        print(f"{'기준 캡':<12}{'현재가대비 구속일':>18}{'등가 진입대비 캡':>18}{'배수':>8}")
+        print("-" * 58)
+        for base_pct in (cap_pct, cap_pct * 0.68):
+            base = args.equity * base_pct / 100.0
+            q = (arr[:, 0] > base).mean()
+            # 같은 구속 빈도를 내는 true 쪽 캡 = true 히트의 (1-q) 분위수
+            eq = np.quantile(arr[:, 1], 1.0 - q) / args.equity * 100.0 if q > 0 else float('nan')
+            print(f"{base_pct:>7.1f}%     {q * 100:>16.1f}%{eq:>17.2f}%{eq / base_pct:>8.2f}")
+
+    print(f"\n=== 3) 노출을 그대로 두려면 캡을 얼마로 — 등가 캡 ===")
+    equiv(rows, "[전체 구간]")
+    for label, chunk in windows(dates, 3):
+        span = set(chunk)
+        equiv([r for r in rows if r[0] in span],
+              f"[{label} {chunk[0]}~{chunk[-1]}]" if chunk else f"[{label}]")
+
+    print("\n[해석] 1)은 산식이 가정하는 청산선이 실제와 얼마나 어긋나는가이고(작을수록 좋다),")
+    print("       2)는 그 선을 무엇에 대고 재는가의 차이다 — '현재가대비'는 미실현 이익 반납을")
+    print("       리스크로 세므로 추세가 잘 될수록 부풀고, '진입대비'는 자본 손실만 센다.")
+    print("[주의] 3)의 등가 캡은 '노출 중립'을 맞추는 값일 뿐 최적값이 아니다. "
+          "캡을 실제로 옮기려면 성과·MDD 백테스트가 따로 필요하다.")
 
 
 if __name__ == "__main__":

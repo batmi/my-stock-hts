@@ -281,7 +281,7 @@ def _holding(code, qty, buy, cur):
 
 
 def test_portfolio_heat_basic(monkeypatch):
-    """오픈 리스크 = 수량 × (현재가 - 손절선). 손절률은 매수기록 수량가중 평균 사용"""
+    """오픈 리스크 = 수량 × (매수가 - 손절선). 손절률은 매수기록 수량가중 평균 사용"""
     trader = MockHeatTrader()
     rm = RiskManager(trader)
     monkeypatch.setitem(config.SELL_STRATEGY, 'USE_ATR_STOP', True)
@@ -318,12 +318,12 @@ def test_portfolio_heat_bep_uplift_follows_toggle(monkeypatch):
     trades = {'000001': [{'qty': 10, 'stop_loss_rate': -5.0}]}
 
     monkeypatch.setitem(config.SELL_STRATEGY, 'USE_BREAK_EVEN_STOP', True)
-    # 손절선이 본전(10000)으로 상향 → 리스크 = 10주 × (10300 - 10000)
-    assert rm.compute_portfolio_heat(holding, trades) == pytest.approx(10 * 300)
+    # 손절선이 본전(10000)으로 상향 → 자본 리스크 0 (더 이상 원금을 잃지 않는다)
+    assert rm.compute_portfolio_heat(holding, trades) == pytest.approx(0.0)
 
     monkeypatch.setitem(config.SELL_STRATEGY, 'USE_BREAK_EVEN_STOP', False)
-    # 상향 없음 → 손절선은 그대로 9500 → 리스크 = 10주 × (10300 - 9500)
-    assert rm.compute_portfolio_heat(holding, trades) == pytest.approx(10 * 800)
+    # 상향 없음 → 손절선은 그대로 9500 → 리스크 = 10주 × (10000 - 9500)
+    assert rm.compute_portfolio_heat(holding, trades) == pytest.approx(10 * 500)
 
 
 def test_portfolio_heat_ts_uplift(monkeypatch):
@@ -342,15 +342,16 @@ def test_portfolio_heat_ts_uplift(monkeypatch):
     monkeypatch.setitem(config.SELL_STRATEGY, 'TRAILING_ATR_MULTIPLIER', 3.5)
 
     # 역산 ATR = 5%×10000/2 = 250 → 실효 콜백 = max(5%, 250×3.5/12000) = 7.29%
-    #  → 손절선 = 12000×(1-7.29%) = 11125 → 리스크 = 10주 × 375원
+    #  → 손절선 = 12000×(1-7.29%) = 11125. 매수가(10000) 위이므로 자본 리스크는 0이다 —
+    #  진입 대비 기준에서 '무장한 승자'는 캡을 쓰지 않는다(추세추종의 요점).
     trader.trailing_stop_cache['000002'] = 12000.0
     heat2 = rm.compute_portfolio_heat(
         [_holding('000002', 10, 10000, 11500)],
         {'000002': [{'qty': 10, 'stop_loss_rate': -5.0}]},
     )
-    assert heat2 == pytest.approx(10 * 375)
-    # 무장 전(손절선 9500)보다는 작다 — 상향 자체는 여전히 일어난다.
-    assert heat2 < 10 * (11500 - 9500)
+    assert heat2 == pytest.approx(0.0)
+    # 무장 전(손절선 9500 → 5,000원)보다 작다 — 상향 자체는 여전히 일어난다.
+    assert heat2 < 10 * (10000 - 9500)
 
 
 def test_portfolio_heat_ts_callback_matches_exit_logic(monkeypatch):
@@ -385,11 +386,16 @@ def test_portfolio_heat_ts_callback_matches_exit_logic(monkeypatch):
     info = engine.compute_trailing_stop(highest_price=high, buy_price=buy,
                                         current_price=cur, ind={'atr': atr})
     assert info['armed'], "이 표본은 TS가 무장한 상태여야 한다"
-    assert heat == pytest.approx(qty * (cur - info['stop_price']))
+    assert heat == pytest.approx(qty * max(0.0, buy - info['stop_price']))
 
-    # 고정 콜백(옛 산식)이었다면 리스크를 이만큼 작게 봤을 것이다 — 회귀 시 여기서 갈린다.
-    old_style = qty * (cur - high * (1 - 5.0 / 100.0))
-    assert heat > old_style
+    # 고정 콜백(옛 산식)이었다면 청산선을 高×0.95 = 13300 으로 봤을 것이다. 진입 대비
+    #  기준에서는 두 선 다 매수가 위라 결과가 0으로 같아지므로, 청산선 자체를 건다.
+    _t, detail = rm.compute_portfolio_heat(
+        [_holding('000004', qty, buy, cur)],
+        {'000004': [{'qty': qty, 'stop_loss_rate': sl_rate}]}, detail=True)
+    assert detail['000004'][0] == pytest.approx(info['stop_price'])
+    assert detail['000004'][0] < high * (1 - 5.0 / 100.0), \
+        "고정 하한 콜백으로 되돌아갔다 — 실제보다 높은 청산선을 가정한다"
 
 
 def test_portfolio_heat_locked_position_zero_risk(monkeypatch):
@@ -446,3 +452,136 @@ def test_portfolio_risk_budget_scaled_by_risk_scale(monkeypatch):
     assert rm.portfolio_risk_budget_left() == pytest.approx(500_000)
     assert rm.effective_portfolio_cap() == pytest.approx(5.0)
     trader.risk_scale = 1.0
+
+# ─────────── 실측 손절선(live_map) — 역산 근사가 리스크를 과소 계상한다 ───────────
+
+def test_portfolio_heat_uses_live_atr_instead_of_back_derivation(monkeypatch):
+    """[핵심] 히트는 **지금의 ATR**로 청산선을 잡아야 한다 — 진입 시점 역산은 과소 계상한다.
+
+    역산(ATR = |진입 손절률|×매수가/배수)은 '진입 시점의 변동성이 지금도 그대로'라는
+    가정이다. 추세추종에서는 변동성이 커지는 쪽이 흔하고, 그러면 트레일링 **발동선**이
+    뒤로 밀린다. 역산은 그 사실을 모르므로 아직 무장하지도 않은 포지션을 '무장했다'고
+    보고 청산선을 매수가 위로 올려 버린다 = **자본 리스크를 0으로 착각한다.**
+
+    이 표본이 정확히 그 경우다. 진입 후 ATR이 250 → 600이 되면 발동선은 8.1% → 22.0%로
+    밀리는데, 지금 수익률은 +15%다 — 실제로는 아직 무장 전이고 원금의 5%가 걸려 있다.
+    """
+    trader = MockHeatTrader()
+    rm = RiskManager(trader)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'USE_ATR_STOP', True)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'USE_BREAK_EVEN_STOP', False)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'TS_ACTIVATION_MODE', 'breakeven')
+    monkeypatch.setitem(config.SELL_STRATEGY, 'TRAILING_STOP_CALLBACK_RATE', 5.0)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'ATR_STOP_MULTIPLIER', 2.0)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'TRAILING_ATR_MULTIPLIER', 3.5)
+
+    buy, high, cur, qty = 10000.0, 11500.0, 11400.0, 10
+    live_atr = 600.0                       # 지금의 ATR (진입 시 250에서 확대)
+    trades = {'000005': [{'qty': qty, 'stop_loss_rate': -5.0}]}   # 역산 ATR = 250
+    holding = [_holding('000005', qty, buy, cur)]
+    trader.trailing_stop_cache['000005'] = high
+
+    assert engine.breakeven_activation_rate(250.0, buy, 5.0) < 15.0 < \
+        engine.breakeven_activation_rate(live_atr, buy, 5.0), \
+        "이 표본은 '역산은 무장, 실제는 대기'여야 의미가 있다"
+
+    before = rm.compute_portfolio_heat(holding, trades)
+    after = rm.compute_portfolio_heat(
+        holding, trades, live_map={'000005': {'sl_rate': -5.0, 'atr': live_atr}})
+
+    assert before == 0.0, "역산은 이 포지션을 '리스크 없음'으로 본다"
+    assert after == pytest.approx(qty * (buy - buy * 0.95)), \
+        "실제로는 아직 무장 전이라 원금의 5%가 걸려 있다"
+
+
+def test_portfolio_heat_uses_live_stop_when_there_is_no_buy_record(monkeypatch):
+    """매수 기록이 없는 포지션(HTS·MTS 직접 매수)의 손절선도 실제 판정과 맞아야 한다.
+
+    여기서는 기록이 없으면 전역 STOP_LOSS_RATE로 떨어진다. 그러나 실제 매도 판정은
+    build_sell_thresholds가 **진입 봉 ATR에서 복원한** 손절률을 쓴다(최대
+    MAX_ATR_STOP_LOSS_RATE, 현행 -15%). 전역값(-7%)보다 넓으므로 종전 산식은
+    같은 방향으로 리스크를 과소 계상했다.
+    """
+    trader = MockHeatTrader()
+    rm = RiskManager(trader)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'USE_ATR_STOP', True)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'USE_BREAK_EVEN_STOP', False)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'STOP_LOSS_RATE', -7.0)
+    # 손실 중이라 TS는 무장하지 않는다 — 손절선 하나만 비교한다.
+    holding = [_holding('000006', 10, 10000, 9800)]
+    trader.trailing_stop_cache['000006'] = 10000.0
+
+    before = rm.compute_portfolio_heat(holding, {})
+    after = rm.compute_portfolio_heat(
+        holding, {}, live_map={'000006': {'sl_rate': -15.0, 'atr': 750.0}})
+
+    assert before == pytest.approx(10 * (10000 - 9300))    # 전역 -7%
+    assert after == pytest.approx(10 * (10000 - 8500))     # 실제 판정선 -15%
+
+
+def test_portfolio_heat_falls_back_when_live_values_are_unusable(monkeypatch):
+    """[모르면 안 건드린다] 실측값이 없거나 숫자가 아니면 종전 근사로 돌아간다.
+
+    이 캐시는 직전 주기의 매도 판정이 채운다 — 기동 직후나 분석에 실패한 종목은
+    비어 있다. 비었다고 리스크를 0으로 보거나 예외를 내면, 채우려던 구멍보다
+    큰 구멍이 생긴다.
+    """
+    trader = MockHeatTrader()
+    rm = RiskManager(trader)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'USE_ATR_STOP', True)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'USE_BREAK_EVEN_STOP', False)
+    trader.trailing_stop_cache['000007'] = 10000.0
+    holding = [_holding('000007', 10, 10000, 9800)]
+    trades = {'000007': [{'qty': 10, 'stop_loss_rate': -5.0}]}
+
+    base = rm.compute_portfolio_heat(holding, trades)
+    for live in ({}, {'000007': {}}, {'000007': {'sl_rate': None, 'atr': None}},
+                 {'000007': {'sl_rate': 'x', 'atr': 'y'}},
+                 {'000007': {'sl_rate': 3.0, 'atr': -5.0}},      # 양수 손절·음수 ATR = 쓸 수 없다
+                 {'999999': {'sl_rate': -15.0, 'atr': 900.0}}):  # 다른 종목의 값
+        assert rm.compute_portfolio_heat(holding, trades, live_map=live) == pytest.approx(base), live
+
+
+def test_open_risk_is_measured_from_the_entry_not_the_mark(monkeypatch):
+    """[정의] 오픈 리스크 = 진입 대비 손실. 현재가가 올라도 히트는 커지지 않는다.
+
+    [왜 이 정의인가 · 2026-09-01] 종전에는 '현재가 → 손절선'으로 쟀다. 그러면 손절선이
+    고정된 채 현재가만 올라도 히트가 부푼다 — 실측(한국콜마)으로 +10%에서 1.80배,
+    TS 무장 직전 최대 2.45배. 피라미딩 발동선(+10%)과 TS 무장(+23%) 사이가 정확히 히트
+    최대 구간이라, **추세가 잘 될수록 증액이 캡에 막혔다**(2026-08-28 실운영에서 206주기
+    차단). 추세추종의 정반대다. 벌어 둔 미실현 이익을 되뱉는 것은 자본의 손실이 아니고,
+    그 반납을 관리하는 장치는 캡이 아니라 트레일링 스탑이다.
+
+    이 테스트가 깨지면 그 성질이 되돌아온 것이다.
+    """
+    trader = MockHeatTrader()
+    rm = RiskManager(trader)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'USE_ATR_STOP', True)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'USE_BREAK_EVEN_STOP', False)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'TS_ACTIVATION_MODE', 'breakeven')
+    trades = {'000008': [{'qty': 10, 'stop_loss_rate': -5.0}]}
+    trader.trailing_stop_cache['000008'] = 10000.0     # 고점 = 매수가 → TS 대기
+
+    at_entry = rm.compute_portfolio_heat([_holding('000008', 10, 10000, 10000)], trades)
+    up_8pct = rm.compute_portfolio_heat([_holding('000008', 10, 10000, 10800)], trades)
+    assert at_entry == pytest.approx(10 * 500)
+    assert up_8pct == pytest.approx(at_entry), "이익이 나자 히트가 부풀었다 — 기준이 현재가로 돌아갔다"
+
+
+def test_detail_reports_the_stop_line_per_position(monkeypatch):
+    """표시부가 총합에서 손절선을 되짚지 않아도 되게 한다.
+
+    되짚기(충분히 높은 가격을 넣고 빼기)는 진입 대비 기준에서 성립하지 않는다 —
+    이익이 잠긴 포지션은 리스크가 0이라 되짚을 것이 없다.
+    """
+    trader = MockHeatTrader()
+    rm = RiskManager(trader)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'USE_ATR_STOP', True)
+    monkeypatch.setitem(config.SELL_STRATEGY, 'USE_BREAK_EVEN_STOP', False)
+    trader.trailing_stop_cache['000009'] = 10000.0
+    total, detail = rm.compute_portfolio_heat(
+        [_holding('000009', 10, 10000, 9800)],
+        {'000009': [{'qty': 10, 'stop_loss_rate': -5.0}]}, detail=True)
+    assert total == pytest.approx(10 * 500)
+    assert detail['000009'] == (pytest.approx(9500.0), pytest.approx(5000.0))
+    assert rm.compute_portfolio_heat([], {}, detail=True) == (0.0, {})
