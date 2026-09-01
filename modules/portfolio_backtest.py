@@ -286,7 +286,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                   pyr_next_open=False, sell_structure_ma=None,
                   intraday_status=None, intraday_entry=False, entry_bar_times=None,
                   buy_score_fn=None, daily_loss_limit=None, invest_ratio_fn=None,
-                  reentry_block=False):
+                  reentry_block=False, heat_basis="cost"):
     """N슬롯 포트폴리오 시뮬레이션.
 
     Args:
@@ -594,6 +594,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     risk_per_trade_cap = getattr(config, "SYSTEM_RISK_PER_TRADE", 4.0) or float("inf")
     # [소액 시드 진단] 배분액이 1주 값에 못 미쳐 버려진 기회. 시드가 작을수록 급증한다.
     skipped_qty0, pyramid_blocked_qty0 = 0, 0
+    # 히트 캡이 실제로 물린 횟수 — '안 걸리는 다이얼'과 '걸리는 다이얼'을 가른다.
+    heat_capped_buys, heat_capped_pyr = 0, 0
     # [진단] TS 발동 기준이 실제로 구속한 일수 — 콜백은 충족했는데 MFE가 기준 미달이라
     #  청산이 보류된 날. 이 값이 0이면 발동 기준을 올려도 내려도 결과가 같다는 뜻이다.
     ts_gated_days = 0
@@ -716,7 +718,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
         ref_row: 손절률 계산에 쓸 지표 소스(일봉 경로는 그날 봉, 분봉 경로는 그 시점 ATR).
         반환 False면 그날은 더 얹을 수 없다(수량·현금·히트 부족).
         """
-        nonlocal cash, heat_budget, pyramid_blocked_qty0
+        nonlocal cash, heat_budget, pyramid_blocked_qty0, heat_capped_pyr
         add_qty = int(pos["qty"] * pyr_ratio)
         if add_qty < 1:
             # 보유 수량이 적으면(1주 등) 증액 비율 0.5로는 1주도 안 나온다 = 피라미딩 불발
@@ -730,6 +732,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                       else _atr_stop_rate(ref_row.get("ATR", 0), add_price, atr_mult, day))
         if heat_budget is not None and add_sl:
             affordable = heat_budget / (add_price * (abs(add_sl) / 100.0))
+            if int(max(0, affordable)) < add_qty:
+                heat_capped_pyr += 1
             add_qty = min(add_qty, int(max(0, affordable)))
         if add_qty < 1:
             return False
@@ -749,6 +753,17 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                        "profit_amt": 0, "profit": 0, "days": 0,
                        "nth_today": nth, "fill": add_price})
         return True
+
+    def _ts_act_eff(pos, row):
+        """그 포지션·그날의 트레일링 발동선(%). 매도 루프와 히트 산출이 같은 값을 봐야 한다."""
+        if ts_act_fn is not None:
+            return float(ts_act_fn(row.get("ATR", 0), pos["avg"]))
+        if ts_breakeven:
+            from modules.auto_trade.engine import (breakeven_activation_rate,
+                                                   ts_activation_atr_mult)
+            return breakeven_activation_rate(row.get("ATR", 0), pos["avg"],
+                                             ts_callback, ts_activation_atr_mult(), use_atr)
+        return ts_act
 
     def _intraday_stop_level(pos, row, hwm, day, ts_act_eff, only_override="__keep__"):
         """장중에 **먼저 닿는** 청산선. (가격, 사유) 또는 None.
@@ -877,15 +892,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                          pending[1], pending[2])
                 continue
 
-            ts_act_eff = ts_act
-            if ts_act_fn is not None:
-                ts_act_eff = float(ts_act_fn(row.get("ATR", 0), pos["avg"]))
-            elif ts_breakeven:
-                from modules.auto_trade.engine import (breakeven_activation_rate,
-                                                       ts_activation_atr_mult)
-                ts_act_eff = breakeven_activation_rate(row.get("ATR", 0), pos["avg"],
-                                                       ts_callback, ts_activation_atr_mult(),
-                                                       use_atr)
+            ts_act_eff = _ts_act_eff(pos, row)
 
             # ---------- [분봉 리플레이] 실제 장중 봉으로 하루를 되감는다 ----------
             bars = (intraday_bars or {}).get(code, {}).get(day) if intraday_bars else None
@@ -1051,6 +1058,21 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 halted_today = True
         prev_equity = _equity(day)
 
+        # ---------- 포트폴리오 히트(총 오픈 리스크) ----------
+        # [패리티 2026-09-01] 종전에는 `수량 × 종가 × |손절률|` 이었다. 실매매
+        #  (engine.RiskManager.compute_portfolio_heat)와 **세 군데**가 달랐다:
+        #   ① 청산선이 아니라 진입 손절률만 봤다(TS 무장 상향·이익보호를 반영하지 않아,
+        #      이미 이익이 잠긴 포지션도 최초 손절폭만큼 예산을 계속 먹었다).
+        #   ② 기준이 종가라, 손절선이 고정된 채 값만 올라도 히트가 부풀었다.
+        #   ③ 그래서 백테스트 히트가 실매매식의 2.3배였고, 캡이 배분액을 깎은 매수가
+        #      8장 합 799건 — 무동작 다이얼이 아니라 **모든 감사에 다른 세기로 걸려 있었다.**
+        #  이제 청산선은 _intraday_stop_level(매도 경로와 같은 SSOT)에서 받고,
+        #  기준은 heat_basis 가 정한다.
+        #    "cost"(기본·현행 실매매) : 수량 × max(0, 매수가 − 청산선) — 진입 대비 자본 손실.
+        #       손절선이 매수가 위로 올라간 포지션(TS 무장·BEP)은 리스크 0이 되어 캡에서
+        #       빠진다. 미실현 이익 반납은 자본 손실이 아니고, 그 관리는 TS의 일이다.
+        #    "mark"(폐기된 종전 정의) : 수량 × max(0, 종가 − 청산선). 대조군으로만 남긴다 —
+        #       추세가 잘 될수록 히트가 부풀어 증액이 막히는 성질을 재기 위한 것이다.
         heat_budget = None
         if heat_cap_pct and heat_cap_pct > 0:
             heat = 0.0
@@ -1058,9 +1080,23 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 row = rows[code].get(day)
                 if row is None:
                     continue
-                sl_rate, _applied, _bep = _effective_sl(pos)
-                if sl_rate < 0:
-                    heat += pos["qty"] * row["close"] * (abs(sl_rate) / 100.0)
+                lvl = _intraday_stop_level(pos, row, pos["high"], day, _ts_act_eff(pos, row))
+                if lvl is not None:
+                    stop = lvl[0]
+                else:
+                    sl_rate, _applied, _bep = _effective_sl(pos)
+                    if sl_rate >= 0:
+                        continue      # 청산 기준이 없다 — 셀 수 있는 리스크가 아니다
+                    stop = pos["avg"] * (1 + sl_rate / 100.0)
+                if heat_basis == "legacy":
+                    # [대조군] 2026-09-01 이전 백테스트 산식. 이전 감사 수치가 어떤
+                    #  세기의 캡 아래에서 나왔는지 되짚기 위해서만 남긴다.
+                    sl_rate, _applied, _bep = _effective_sl(pos)
+                    if sl_rate < 0:
+                        heat += pos["qty"] * row["close"] * (abs(sl_rate) / 100.0)
+                    continue
+                ref = pos["avg"] if heat_basis == "cost" else row["close"]
+                heat += pos["qty"] * max(0.0, ref - stop)
             heat_budget = _equity(day) * (heat_cap_pct * day_scale) / 100.0 - heat
 
         # ---------- 2) 피라미딩 (수익 포지션 증액) ----------
@@ -1307,7 +1343,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
         def _buy(code, row, price_src, day):
             """후보 1건 집행. 종가 경로와 분봉 경로가 같은 사이징·회계를 쓰게 모은다."""
             nonlocal cash, max_buy_weight, max_buy_risk, risk_cap_breaches
-            nonlocal skipped_qty0, oversized_buys, heat_budget
+            nonlocal skipped_qty0, oversized_buys, heat_budget, heat_capped_buys
             buy_price = utils.adjust_to_tick(price_src * (1 + slippage), False) or price_src
             sl_rate = default_sl
             if use_atr:
@@ -1317,7 +1353,10 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             amount = allocate_amount(_equity(day), cash, _ratio * day_scale, sl_rate,
                                      row.get("ATR", 0), buy_price)
             if heat_budget is not None and sl_rate:
-                amount = min(amount, max(0, heat_budget / (abs(sl_rate) / 100.0)))
+                capped = max(0, heat_budget / (abs(sl_rate) / 100.0))
+                if capped < amount:
+                    heat_capped_buys += 1
+                amount = min(amount, capped)
             qty = int(amount / buy_price)
             if qty < 1:
                 # 배분액 < 1주 값. 실매매는 여기서 배분액을 1주 값까지 끌어올린다
@@ -1417,6 +1456,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
         "pyramid_blocked_qty0": pyramid_blocked_qty0,    # 보유 수량이 적어 불발된 증액 기회
         "ts_gated_days": ts_gated_days,                  # TS 발동 기준이 청산을 막은 일수
         "oversized_buys": oversized_buys,                # 배분액을 넘겨 집행한 매수(1주 강제)
+        "heat_capped_buys": heat_capped_buys,            # 히트 캡이 배분액을 깎은 신규 매수
+        "heat_capped_pyr": heat_capped_pyr,              # 히트 캡이 수량을 깎은 증액
         "rotations": rotations,                          # 슬롯 교체로 비운 포지션 수
         "max_pos_weight": max_pos_weight,                # 한 종목의 최대 계좌 비중(%, 피라미딩 포함)
         "max_buy_weight": max_buy_weight,                # 진입 순간의 최대 비중(%)

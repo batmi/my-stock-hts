@@ -741,3 +741,57 @@ def test_the_intraday_path_is_free_of_lookahead_too(universe):
     seen, truncated = _lookahead_pair(dfs, cut=180, exit_intraday=True)
     assert seen, "대조 조건이 깨졌다 — 잘린 구간에 거래가 없다"
     assert seen == truncated
+
+
+# ─────────── 히트 기준(heat_basis) — 실매매와 같은 자를 쓰는가 ───────────
+
+def _heat_run(universe, basis, cap=1.0):
+    dfs, status, dates = universe
+    return pbt.run_portfolio(dfs, status, dates, slots=3,
+                             heat_cap_pct=cap, heat_basis=basis)
+
+
+def test_heat_basis_cost_is_looser_than_mark(universe):
+    """[정의] 진입 대비 기준은 현재가 대비보다 캡을 덜 물린다 — 그게 바꾼 이유다.
+
+    현재가 대비는 손절선이 고정된 채 값만 올라도 히트가 부푼다. 그래서 추세가 잘
+    가는 구간(피라미딩 발동선 ~ TS 무장 사이)에서 증액을 막았다 — 추세추종의 정반대다.
+    진입 대비는 자본 손실만 세므로, 손절선이 매수가 위로 올라간 포지션은 캡에서 빠진다.
+
+    두 기준이 같은 수로 수렴하면 정의 변경이 사문화된 것이다.
+    """
+    cost = _heat_run(universe, "cost")
+    mark = _heat_run(universe, "mark")
+    blocked = lambda r: r["heat_capped_buys"] + r["heat_capped_pyr"]  # noqa: E731
+    assert blocked(mark) > blocked(cost), "현재가 대비가 더 자주 막지 않는다 — 기준이 안 갈렸다"
+    assert cost["avg_cash_ratio"] < mark["avg_cash_ratio"], \
+        "진입 대비인데 노출이 늘지 않았다"
+
+
+def test_heat_uses_the_exit_line_not_just_the_entry_stop(universe):
+    """[패리티] 히트의 손절선은 매도 경로가 쓰는 그 선이어야 한다.
+
+    종전 백테스트 산식(legacy)은 진입 손절률만 봤다 — TS 무장 상향·본전청산·이익보호를
+    반영하지 않으므로, 이미 이익이 잠긴 포지션도 최초 손절폭만큼 예산을 계속 먹었다.
+    그 결과 백테스트 히트가 실매매식의 2.3배였고, 캡이 다른 세기로 걸린 채 모든 감사가
+    돌았다. 이제 _intraday_stop_level(매도 경로와 같은 SSOT)에서 선을 받는다.
+    """
+    legacy = _heat_run(universe, "legacy")
+    cost = _heat_run(universe, "cost")
+    blocked = lambda r: r["heat_capped_buys"] + r["heat_capped_pyr"]  # noqa: E731
+    assert blocked(legacy) > blocked(cost), \
+        "청산선을 반영해도 예산 소모가 줄지 않는다 — 상향이 안 들어갔다"
+
+
+def test_heat_counters_are_zero_when_the_cap_is_off(universe):
+    """캡을 끄면 셀 것도 없다 — 계수기가 다른 이유로 오르면 신호가 오염된다."""
+    r = pbt.run_portfolio(*universe, slots=3, heat_cap_pct=0.0)
+    assert (r["heat_capped_buys"], r["heat_capped_pyr"]) == (0, 0)
+
+
+def test_heat_basis_defaults_to_cost(universe):
+    """기본값이 실매매 정의여야 한다 — 감사 도구가 인자를 안 주면 이 값으로 돈다."""
+    default = pbt.run_portfolio(*universe, slots=3, heat_cap_pct=1.0)
+    cost = _heat_run(universe, "cost")
+    assert default["total_return"] == pytest.approx(cost["total_return"])
+    assert default["heat_capped_buys"] == cost["heat_capped_buys"]

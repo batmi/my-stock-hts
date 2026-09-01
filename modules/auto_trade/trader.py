@@ -895,8 +895,10 @@ class AutoTrader:
 
                     if is_data_valid:
                         final_asset = deposit + stock_eval
+                        # 기준선은 입출금 보정을 담아 float 로 온다. 금액 표시는 원 단위이므로
+                        #  여기서 정수로 되돌린다 — 안 그러면 '+100,000.0원'이 나간다.
                         _base = self.daily_pnl_base()
-                        profit = final_asset - _base
+                        profit = int(round(final_asset - _base))
                         profit_rate = 0.0 if _base <= 0 else (profit / _base) * 100
                         stock_rate = (tot_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
 
@@ -1418,7 +1420,7 @@ class AutoTrader:
             
             if self.initial_asset > 0:
                 _base = self.daily_pnl_base()
-                daily_profit = current_asset - _base
+                daily_profit = int(round(current_asset - _base))   # 기준선은 float 다 (원 단위로 표시)
                 daily_profit_rate = (daily_profit / _base) * 100 if _base > 0 else 0.0
                 msg += (f"오늘 현재 손익: {daily_profit:+,}원 "
                         f"({daily_profit_rate:+.2f}%){self.transfer_note()}\n")
@@ -2496,7 +2498,7 @@ class AutoTrader:
                 table.add_row("오늘 현재 자산", f"{current_asset:,}원")
                 
                 _base = self.daily_pnl_base()
-                daily_profit = current_asset - _base
+                daily_profit = int(round(current_asset - _base))   # 기준선은 float 다 (원 단위로 표시)
                 daily_profit_rate = (daily_profit / _base) * 100 if _base > 0 else 0.0
                 dp_color = "[red]" if daily_profit > 0 else ("[blue]" if daily_profit < 0 else "[white]")
                 table.add_row("오늘 현재 손익",
