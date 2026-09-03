@@ -431,3 +431,81 @@ def test_배너_억제는_모듈_print만_바꾼다():
     assert _sys.stdout is original
     # 계정 ID 는 로거로도 흘리지 않는다
     assert auth.print("  로그인 ID: someone") is None
+
+
+# ---------------------------------------------------------------------------
+# 시장 수급·공매도 (지수 표 컬럼)
+# ---------------------------------------------------------------------------
+def _flow_frames():
+    """실측(2026-09-03) 응답 모양을 그대로 옮긴 목 3종."""
+    idx = pd.to_datetime(["2026-09-02", "2026-09-03"])
+    flow = pd.DataFrame(
+        {"기관합계": [-2036139637417, 914345120731],
+         "기타법인": [1650534697187, -615293518],
+         "개인": [2302860310409, -955168464632],
+         "외국인합계": [-1917255370179, 41438637419]}, index=idx)
+    shorts = pd.DataFrame({"합계": [2143154072118, 1734190181626]}, index=idx)
+    ohlcv = pd.DataFrame({"거래대금": [18776771340679, 22165009579126]}, index=idx)
+    return flow, shorts, ohlcv
+
+
+def _patch_pykrx(flow, shorts, ohlcv):
+    """`from pykrx import stock` 을 목으로 바꾼다."""
+    import sys
+    import types
+    fake = types.SimpleNamespace(
+        get_market_trading_value_by_date=lambda *a, **k: flow,
+        get_shorting_investor_value_by_date=lambda *a, **k: shorts,
+        get_index_ohlcv=lambda *a, **k: ohlcv,
+    )
+    mod = types.ModuleType("pykrx")
+    mod.stock = fake
+    return patch.dict(sys.modules, {"pykrx": mod, "pykrx.stock": fake})
+
+
+def test_market_flow_maps_investors_and_short_ratio():
+    flow, shorts, ohlcv = _flow_frames()
+    with _patch_pykrx(flow, shorts, ohlcv):
+        df = krx_data.get_market_flow_daily("KOSPI", days=10)
+
+    assert list(df['date']) == ["20260902", "20260903"]
+    last = df.iloc[-1]
+    # 컬럼 이름이 밀리면 개인 순매수가 기관으로 뜬다 — 값으로 못을 박는다.
+    assert last['indi'] == -955168464632
+    assert last['frgn'] == 41438637419
+    assert last['inst'] == 914345120731
+    # 공매도 비중 = 공매도 거래대금 / 시장 거래대금
+    assert round(last['short_ratio'], 2) == 7.82
+
+
+def test_market_flow_is_none_for_non_market_indices():
+    """코스피200·코스닥150은 시장이 아니라 지수의 부분집합 — 집계 자체가 없다.
+
+    여기서 걸러내지 않으면 KRX 가 빈 응답을 주고, 표에는 이유 없는 '-' 만 남는다.
+    """
+    for code in ("KOSPI200", "KOSDAQ150", "VKOSPI", "", None):
+        assert krx_data.get_market_flow_daily(code) is None
+
+
+def test_market_flow_is_none_without_credentials():
+    """자격증명이 없으면 pykrx 는 **예외가 아니라 빈 표**를 준다 — 미리 걸러야 한다."""
+    with patch.dict(os.environ, {"KRX_ID": "", "KRX_PW": ""}):
+        assert krx_data.get_market_flow_daily("KOSPI") is None
+
+
+def test_market_flow_empty_response_is_not_silent(caplog):
+    """빈 응답을 그대로 흘리면 컬럼이 '-' 로만 뜨고 이유가 어디에도 안 남는다."""
+    with _patch_pykrx(pd.DataFrame(), pd.DataFrame(), pd.DataFrame()):
+        with caplog.at_level("INFO"):
+            assert krx_data.get_market_flow_daily("KOSPI") is None
+    assert any("수급" in r.message for r in caplog.records)
+
+
+def test_market_flow_survives_missing_short_data():
+    """공매도만 비어도 수급은 나와야 한다 — 한 축의 결측이 다른 축을 죽이면 안 된다."""
+    flow, _shorts, ohlcv = _flow_frames()
+    with _patch_pykrx(flow, pd.DataFrame(), ohlcv):
+        df = krx_data.get_market_flow_daily("KOSPI", days=10)
+    assert df is not None and len(df) == 2
+    assert df['short_ratio'].isna().all()
+    assert df.iloc[-1]['indi'] == -955168464632

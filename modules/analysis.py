@@ -6026,6 +6026,7 @@ def _print_period_price_common(code, is_overseas, limit=20):
     # [수정] 단순 조회이므로 status 사용
     df = None
     investor_map = {} # [추가]
+    market_flow_map = {}   # [추가] 지수 전용 — 시장 수급·공매도 (KRX)
     
     is_domestic_index = not is_overseas and code in ["KOSPI", "KOSDAQ", "KOSPI200", "KOSDAQ150", "VKOSPI"]
 
@@ -6105,6 +6106,19 @@ def _print_period_price_common(code, is_overseas, limit=20):
                             current_hldn -= f_net
             except Exception: pass
 
+        # [추가] 지수는 종목과 원천이 다르다 — 시장 단위 투자자별 순매수·공매도(KRX).
+        #  코스피·코스닥만 있다. 코스피200·코스닥150은 시장이 아니라 지수의 부분집합이라
+        #  집계 자체가 존재하지 않는다(krx_data.get_market_flow_daily 참고).
+        if is_domestic_index:
+            try:
+                from modules import krx_data
+                flow_df = krx_data.get_market_flow_daily(code, days=(limit or 30) * 2 + 20)
+                if flow_df is not None:
+                    for _, r in flow_df.iterrows():
+                        market_flow_map[str(r['date'])] = r
+            except Exception as e:
+                logger.debug(f"[Analysis] {code} 시장 수급 조회 실패(표에서 생략): {e}")
+
     if df is None or df.empty: return
 
     # 이동평균선 계산
@@ -6153,6 +6167,14 @@ def _print_period_price_common(code, is_overseas, limit=20):
         table.add_column("외인률", justify="right") # [추가]
         table.add_column("공매도", justify="right") # [추가]
         table.add_column("수급(개/외/기)", justify="center") # [수정]
+    elif market_flow_map:
+        # [추가] 지수는 외인률이 없다 — 상장주식수가 없어 '외국인 보유비율'이 정의되지 않는다.
+        #  **단위는 종목 표와 다르다**: 공매도=거래대금 비중, 수급=순매수 대금(원).
+        #  지수엔 주식 수 개념이 없어 주식 수 기준 집계가 애초에 존재하지 않는다.
+        #  (헤더에 단위를 적었다가 걷어냈다 — 표가 시끄러워진다. 값의 자릿수가 B·T 라
+        #   금액임이 드러나고, 종목 표는 K·M 이라 눈으로도 갈린다.)
+        table.add_column("공매도", justify="right")
+        table.add_column("수급(개/외/기)", justify="center")
 
     for i, (idx, row) in enumerate(recent_df.iterrows()):
         date_str = str(row['date'])
@@ -6253,13 +6275,40 @@ def _print_period_price_common(code, is_overseas, limit=20):
                 def _fmt_i(val):
                     if val == 0: return "[dim]-[/dim]"
                     abs_val = abs(val)
+                    # elif 여야 한다 — if 를 두 번 쓰면 10억 이상이 곧바로 M 분기에
+                    #  덮여 B 표기가 **한 번도 나오지 않는다**(억 단위 수급이 'M' 으로 뜬다).
                     if abs_val >= 1_000_000_000: s = f"{val/1_000_000_000:,.1f}B"
-                    if abs_val >= 1_000_000: s = f"{val/1_000_000:,.1f}M"
+                    elif abs_val >= 1_000_000: s = f"{val/1_000_000:,.1f}M"
                     elif abs_val >= 1000: s = f"{val/1000:,.0f}K"
                     else: s = f"{val:,}"
                     return f"[red]{s}[/]" if val > 0 else f"[blue]{s}[/]"
                 
                 inv_str = f"{_fmt_i(p)} {_fmt_i(f)} {_fmt_i(o)}"
+
+        # [추가] 지수 — 시장 수급·공매도 (금액 단위)
+        flow_inv_str = "[dim]-[/dim]"
+        flow_short_str = "[dim]-[/dim]"
+        if market_flow_map:
+            fr = market_flow_map.get(str(row['date']).replace('-', '')[:8])
+            if fr is not None:
+                ratio = fr.get('short_ratio')
+                if ratio is not None and not pd.isna(ratio):
+                    flow_short_str = f"{float(ratio):.2f}%"
+
+                def _fmt_money(val):
+                    if val is None or pd.isna(val) or float(val) == 0:
+                        return "[dim]-[/dim]"
+                    val = float(val)
+                    s_abs = abs(val)
+                    if s_abs >= 999_950_000_000: txt = f"{val/1_000_000_000_000:+,.1f}T"
+                    elif s_abs >= 999_950_000: txt = f"{val/1_000_000_000:+,.1f}B"
+                    elif s_abs >= 999_500: txt = f"{val/1_000_000:+,.1f}M"
+                    else: txt = f"{val:+,.0f}"
+                    return f"[red]{txt}[/]" if val > 0 else f"[blue]{txt}[/]"
+
+                flow_inv_str = (f"{_fmt_money(fr.get('indi'))} "
+                                f"{_fmt_money(fr.get('frgn'))} "
+                                f"{_fmt_money(fr.get('inst'))}")
 
         row_data = [
             date_str, 
@@ -6278,6 +6327,9 @@ def _print_period_price_common(code, is_overseas, limit=20):
             row_data.append(foreign_rate_str)
             row_data.append(short_sale_str)
             row_data.append(inv_str)
+        elif market_flow_map:
+            row_data.append(flow_short_str)
+            row_data.append(flow_inv_str)
 
         table.add_row(*row_data)
         

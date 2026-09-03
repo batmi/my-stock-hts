@@ -169,7 +169,7 @@ def is_available():
 
 
 # 이 자격증명이 켜고 끄는 것들 — 문구 하나로 관리한다(폴백이 조용하면 안 되는 이유).
-KRX_COVERAGE = "금현물 OHLC·지수 확정봉·V코스피200·과거 수급"
+KRX_COVERAGE = "금현물 OHLC·지수 확정봉·V코스피200·과거 수급·지수 표의 시장 수급/공매도"
 
 
 def status_text():
@@ -578,3 +578,93 @@ def get_vkospi_daily(days=400, use_cache=True):
     df = _finish(rows, "KRX")
     _cache_put(key, df)
     return df
+
+
+# ---------------------------------------------------------------------------
+# 시장 수급·공매도 (지수 표의 '수급(개/외/기)'·'공매도' 컬럼)
+# ---------------------------------------------------------------------------
+# 지수 티커 — 시장 전체 거래대금(공매도 비중의 분모)을 얻는 데 쓴다.
+_MARKET_INDEX_TICKER = {"KOSPI": "1001", "KOSDAQ": "2001"}
+
+
+def get_market_flow_daily(market="KOSPI", days=40, use_cache=True):
+    """시장 단위 수급·공매도 일별 추이. 조회 불가 시 None.
+
+    반환: DataFrame['date'(YYYYMMDD), 'indi', 'frgn', 'inst', 'short_ratio']
+      indi/frgn/inst — 투자자별 **순매수 대금(원)**. 지수에는 주식 수가 없어 종목 표의
+        '수급(개/외/기)'(주식 수)와 단위가 다르다. 세로로 비교하면 안 된다.
+      short_ratio    — 공매도 **거래대금** 비중(%). 종목 표의 공매도는 거래량 비중이라
+        이 역시 단위가 다르다.
+
+    **시장 단위 통계라 코스피·코스닥만 있다.** 코스피200·코스닥150은 시장이 아니라 지수의
+    부분집합이어서 투자자별·공매도 집계가 존재하지 않는다 — 호출부가 미리 걸러야 한다.
+
+    자격증명(KRX_ID/KRX_PW)이 없으면 pykrx 가 **예외가 아니라 빈 DataFrame** 을 돌려준다.
+    그대로 두면 컬럼이 통째로 '-' 로 뜨면서 이유가 어디에도 남지 않으므로, is_available()
+    로 먼저 거르고 실패는 로그로 남긴다.
+    """
+    market = str(market or "").upper()
+    ticker = _MARKET_INDEX_TICKER.get(market)
+    if not ticker:
+        return None
+    if not is_available():
+        return None
+
+    key = f"flow:{market}:{int(days)}"
+    if use_cache:
+        hit = _cache_get(key)
+        if hit is False:
+            return None
+        if hit is not None:
+            return hit
+
+    start, end = _clamp_range(days)
+    try:
+        _lazy_import()
+        from pykrx import stock as _stock
+
+        # 순매수 대금 — 컬럼은 기관합계/기타법인/개인/외국인합계.
+        flow = _stock.get_market_trading_value_by_date(start, end, market)
+        # 공매도 거래대금(투자자별)의 '합계' 와 지수 거래대금으로 비중을 만든다.
+        shorts = _stock.get_shorting_investor_value_by_date(start, end, market)
+        ohlcv = _stock.get_index_ohlcv(start, end, ticker)
+    except Exception as e:      # noqa: BLE001
+        logger.info(f"[KRXDATA] {market} 시장 수급·공매도 조회 실패: {e}")
+        _cache_put(key, None)
+        return None
+
+    if flow is None or flow.empty:
+        logger.info(f"[KRXDATA] {market} 시장 수급이 비어 있다 — KRX 로그인 상태를 확인하세요")
+        _cache_put(key, None)
+        return None
+
+    def _at(df, day, col):
+        try:
+            if df is None or df.empty or col not in df.columns or day not in df.index:
+                return None
+            return float(df.loc[day, col])
+        except Exception:       # noqa: BLE001
+            return None
+
+    rows = []
+    for day in flow.index:
+        total_value = _at(ohlcv, day, "거래대금")
+        short_value = _at(shorts, day, "합계")
+        ratio = None
+        if total_value and short_value is not None and total_value > 0:
+            ratio = short_value / total_value * 100
+        rows.append({
+            "date": day.strftime("%Y%m%d"),
+            "indi": _at(flow, day, "개인"),
+            "frgn": _at(flow, day, "외국인합계"),
+            "inst": _at(flow, day, "기관합계"),
+            "short_ratio": ratio,
+        })
+
+    out = pd.DataFrame(rows)
+    if out.empty:
+        _cache_put(key, None)
+        return None
+    out = out.drop_duplicates(subset=["date"], keep="last").sort_values("date").reset_index(drop=True)
+    _cache_put(key, out)
+    return out
