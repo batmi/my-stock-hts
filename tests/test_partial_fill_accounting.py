@@ -66,10 +66,17 @@ def _filled_qty_in_db():
 
 
 def _poll(monitor, payload):
+    # [테스트 격리] 매도 체결은 매매 부검(AI)을 **데몬 스레드**로 띄운다. 그 스레드는
+    #  테스트보다 오래 살아서, conftest 의 네트워크 차단이 풀린 뒤(세션 종료 시점)
+    #  실제 KIS·Gemini 로 나갈 수 있다. 실측: 이 파일에 매도 검사를 더하자
+    #  inquire-balance 가 실 서버 응답(OPSQ2000)을 받아 왔다. 스레드를 띄우는 지점 자체를
+    #  막는다 — 부검은 이 파일이 검증하는 대상이 아니다.
     with patch('modules.auto_trade.api.get_today_history', return_value=payload), \
          patch('modules.auto_trade.api.get_overseas_today_history', return_value=_EMPTY), \
          patch('modules.auto_trade.api.send_telegram_message'), \
          patch('modules.auto_trade.api.get_current_price_data', return_value={"rt_cd": "1"}), \
+         patch('modules.auto_trade.api.get_domestic_balance', return_value=(None, None)), \
+         patch.object(ConclusionMonitor, '_send_trading_autopsy', lambda *a, **k: None), \
          patch('modules.auto_trade.api.get_chart_data', return_value=None):
         monitor._check_conclusions(initial=False)
 
@@ -126,3 +133,89 @@ def test_accepted_row_keeps_ordered_quantity(monitor):
     assert accepted and int(accepted[0]['qty']) == 100, \
         "접수 행의 주문 수량이 체결 수량으로 덮어써졌다 — 미체결·취소 추적이 무너진다"
     assert filled and sum(int(r['qty']) for r in filled) == 30
+
+
+# ---------------------------------------------------------------- 실현손익
+# 위 검사는 전부 **매수** 주문이다. 매수는 실현손익이 없어 _recalc_realized 가 곧바로
+# 빠져나가므로, 손익이 누적을 따라오는지는 한 번도 확인되지 않았다.
+#
+# [무엇이 틀렸었나 · 2026-09-03] 부분체결 갱신 분기가 수량·단가만 고치고 profit_amt 는
+# **첫 관측 시점의 수량으로 계산된 값** 그대로 두었다. 실측: 30주 관측 후 100주 체결 시
+# 실현손익이 70% 과소 기록. 이 값은 성과 지표에서 끝나지 않는다 —
+# db.get_realized_profit_between 을 지나 **입출금 판정**까지 가므로, 적게 센 만큼이
+# 가짜 입금으로 둔갑해 자산 기준선이 밀린다(daily-asset-baseline-transfers).
+#
+# 관찰 모드는 즉시 전량 체결이라 이 경로를 밟지 않는다. 실계좌 자동매매를 시작하는
+# 순간 처음 나타나는 자리다.
+SELL_ODNO = "0000654321"
+BUY_PRICE = 70000.0
+SELL_PRICE = 77000.0
+
+
+def _sell_history(ord_qty, ccld_qty, rmn_qty, avg_price=SELL_PRICE):
+    return {
+        "rt_cd": "0", "msg_cd": "",
+        "output1": [{
+            "odno": SELL_ODNO, "pdno": CODE, "prdt_name": NAME,
+            "ord_qty": str(ord_qty), "tot_ccld_qty": str(ccld_qty),
+            "cncl_cfrm_qty": "0", "rmn_qty": str(rmn_qty),
+            "avg_prvs": str(avg_price), "sll_buy_dvsn_cd_name": "매도",
+            "sll_buy_dvsn_cd": "01", "ord_dt": "20260903", "ord_tmd": "091500",
+        }],
+        "output2": {},
+    }
+
+
+def _sell_row():
+    for r in (db_manager.db.get_trades(limit=300) or []):
+        if str(r.get('odno')) == SELL_ODNO and r.get('order_status') == "체결":
+            return r
+    return None
+
+
+@pytest.fixture
+def sell_order():
+    """매도 접수 기록을 심는다 — buy_price 가 있어야 손익을 다시 계산할 수 있다."""
+    db_manager.db.insert_trade("sell(AUTO)", CODE, NAME, 100, str(SELL_PRICE), SELL_ODNO,
+                               order_status="접수", reason="트레일링스탑",
+                               buy_price=BUY_PRICE, profit_amt=0, profit_rate=0.0)
+    yield
+
+
+def test_partial_sell_profit_follows_the_accumulated_quantity(monitor, sell_order):
+    """분할 매도의 실현손익이 최종 체결 수량 기준으로 남아야 한다."""
+    from core import trading_cost
+
+    _poll(monitor, _sell_history(ord_qty=100, ccld_qty=30, rmn_qty=70))
+    first = _sell_row()
+    assert first is not None, "1차 부분체결이 기록되지 않았다"
+    expected_30 = int(trading_cost.net_realized_profit(BUY_PRICE, SELL_PRICE, 30)[0])
+    assert abs(int(first['profit_amt']) - expected_30) <= 1, (
+        f"1차 손익이 30주 기준이 아니다: {first['profit_amt']}")
+
+    _poll(monitor, _sell_history(ord_qty=100, ccld_qty=100, rmn_qty=0))
+    final = _sell_row()
+    expected_100 = int(trading_cost.net_realized_profit(BUY_PRICE, SELL_PRICE, 100)[0])
+    assert int(final['qty']) == 100
+    assert abs(int(final['profit_amt']) - expected_100) <= 1, (
+        f"실현손익이 첫 관측 수량에 굳었다: {final['profit_amt']} (기대 {expected_100}). "
+        f"이 값은 성과 지표뿐 아니라 입출금 판정까지 간다")
+
+
+def test_partial_sell_profit_rate_is_quantity_independent(monitor, sell_order):
+    """수익률은 수량과 무관하므로 두 시점이 같아야 한다 — 산식이 바뀌면 여기서 걸린다."""
+    _poll(monitor, _sell_history(ord_qty=100, ccld_qty=30, rmn_qty=70))
+    rate_30 = float(_sell_row()['profit_rate'])
+    _poll(monitor, _sell_history(ord_qty=100, ccld_qty=100, rmn_qty=0))
+    rate_100 = float(_sell_row()['profit_rate'])
+    assert abs(rate_30 - rate_100) < 0.01, f"{rate_30} vs {rate_100}"
+
+
+def test_buy_order_profit_is_left_alone(monitor):
+    """매수는 실현손익이 없다 — 갱신이 0이 아닌 값을 밀어 넣으면 안 된다."""
+    _poll(monitor, _history(ord_qty=100, ccld_qty=30, rmn_qty=70))
+    _poll(monitor, _history(ord_qty=100, ccld_qty=100, rmn_qty=0))
+    rows = [r for r in (db_manager.db.get_trades(limit=300) or [])
+            if str(r.get('odno')) == ODNO and r.get('order_status') == "체결"]
+    assert rows, "체결 행이 없다"
+    assert not int(rows[0]['profit_amt'] or 0), f"매수에 손익이 붙었다: {rows[0]['profit_amt']}"

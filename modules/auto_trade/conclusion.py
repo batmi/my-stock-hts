@@ -761,10 +761,24 @@ class ConclusionMonitor:
                                     #  tot_ccld_qty는 누적값이므로, 기존 체결 행의 수량·평균단가를 최신
                                     #  누적으로 갱신한다(행을 늘리지 않아 odno 단위 조회는 그대로 동작).
                                     #  '접수' 행은 주문 수량을 보존해야 하므로 where_status로 분리한다.
+                                    #  [Fix 2026-09-03] 손익도 함께 갱신한다. 종전에는 수량·단가만
+                                    #   고치고 profit_amt 는 **첫 관측 시점의 수량으로 계산된 값**
+                                    #   그대로 남았다(실측: 30주 관측 후 100주 체결 → 실현손익 70%
+                                    #   과소). 그 값은 성과 지표뿐 아니라
+                                    #   db.get_realized_profit_between 을 지나 **입출금 판정**까지
+                                    #   간다 — 실현손익을 적게 세면 그 차액이 가짜 입금으로 둔갑해
+                                    #   자산 기준선이 밀린다([[daily-asset-baseline-transfers]]).
+                                    #   profit_rate 는 수량과 무관해 값이 같지만, 산식이 바뀌어도
+                                    #   따라오도록 함께 넘긴다.
+                                    _p_amt, _p_rate = _recalc_realized(
+                                        origin_trade, avg_price, tot_ccld_qty,
+                                        is_overseas_trade, None, None)
                                     db_manager.db.update_trade(odno, qty=tot_ccld_qty, price=avg_price,
+                                                               profit_amt=_p_amt, profit_rate=_p_rate,
                                                                where_status="체결")
                                     logger.debug(
-                                        f"[ORDER_DEBUG] 부분체결 누적 갱신: {odno} → {tot_ccld_qty}주 @ {avg_price}")
+                                        f"[ORDER_DEBUG] 부분체결 누적 갱신: {odno} → {tot_ccld_qty}주 "
+                                        f"@ {avg_price} (손익 {_p_amt})")
                 except Exception as e:
                     logger.error(f"계좌({cano}) 체결 확인 중 오류: {e}")
                     has_error = True
