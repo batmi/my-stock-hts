@@ -3,6 +3,7 @@ from unittest.mock import patch, MagicMock
 import pandas as pd
 import os
 import sys
+import time
 
 # 프로젝트 루트 경로 추가
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -112,3 +113,35 @@ def test_generate_visual_chart_exception(mock_get_data, mock_plt):
     # 예외가 전파되는지 확인 (상위 호출자에서 처리)
     with pytest.raises(Exception, match="API Error"):
         chart.generate_visual_chart("005930", "삼성전자", False)
+
+# ==========================================================
+# [메모리] 렌더 직렬화 — 두 스레드가 동시에 그리면 피크가 합산된다
+# ==========================================================
+def test_render_lock_serializes_concurrent_renders():
+    """_serialized_render 로 감싼 구간에는 한 번에 하나만 들어간다."""
+    import threading
+
+    inside = []
+    overlap = []
+
+    @chart._serialized_render
+    def fake_render():
+        inside.append(1)
+        if len(inside) > 1:
+            overlap.append(1)
+        time.sleep(0.05)
+        inside.pop()
+
+    threads = [threading.Thread(target=fake_render) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not overlap, "렌더 구간에 두 스레드가 동시에 들어갔다"
+
+
+def test_render_entrypoints_are_serialized():
+    """차트 진입점 두 개가 실제로 락에 싸여 있는지(데코레이터 유실 방지)."""
+    assert hasattr(chart.generate_visual_chart, '__wrapped__')
+    assert hasattr(chart.generate_monte_carlo_histogram, '__wrapped__')

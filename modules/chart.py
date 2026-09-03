@@ -1,8 +1,10 @@
 # modules/chart.py
+import functools
 import logging
 import platform
 import os
 import re
+import threading
 import config
 import api
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
@@ -53,6 +55,50 @@ def setup_korean_font():
         else: rc('font', family='NanumGothic')
     except Exception: pass
     plt.rcParams['axes.unicode_minus'] = False
+
+# ==========================================================
+# [메모리] 분석 차트 캔버스 크기
+# ==========================================================
+#  [왜 20x28 에서 내렸나 · 2026-09-03] 렌더 피크는 figsize x dpi 로 정해진다.
+#   20x28인치 300DPI = 6000x8400px 는 A2 포스터급이고, 그것을 100% 로 보는 사람은 없다.
+#   실측(130봉): 20x28 -> 피크 +228MB / 16x22.4 -> +146MB / 12x16.8 -> +94MB.
+#   폰트 크기는 포인트(물리 단위)라 캔버스를 줄이면 글자는 **상대적으로 커진다** —
+#   화면에 맞춰 축소해 보는 실사용에서는 오히려 읽기 쉬워진다. dpi 는 300 그대로 둔다.
+#  [함께 보라] bbox_inches='tight' 는 절대 넣지 말 것. 두 번 렌더해 피크가 422MB 가 된다.
+CHART_FIGSIZE = (16, 22.4)
+
+
+# ==========================================================
+# [메모리] 렌더는 프로세스 전체에서 한 번에 하나만
+# ==========================================================
+#  [왜 필요한가 · 2026-09-03] 차트 한 장의 피크 메모리는 사실상 캔버스 크기
+#   (figsize x dpi x 4바이트) 하나로 정해진다. 20x28인치 300DPI 면 6000x8400 = 201MB,
+#   실측 피크 증가분 228MB 다. 문제는 이 경로에 진입자가 둘이라는 것이다 —
+#   메뉴/분석(300DPI)과 텔레그램 폴링 스레드(dpi=100, telegram_bot 의 /chart).
+#   겹치면 피크가 **합산**되고, 1GB 라즈베리파이의 OOM Killer 는 평균이 아니라
+#   최악의 피크를 보고 방아쇠를 당긴다(2026-08-26 실측 사망 사례).
+#   락으로 직렬화하면 출력물은 한 픽셀도 바뀌지 않으면서 최악 피크만 내려간다.
+#  [덤] pyplot 은 전역 상태(gcf/gca)를 쓴다. 두 스레드가 동시에 그리면 서로의 Figure 에
+#   그릴 수 있는 구조였는데, 같은 락이 그것도 함께 막는다.
+#  [범위] 데이터 조회까지 포함해 함수 전체를 잡는다. 조회분(pandas)도 메모리를 쓰고,
+#   차트 요청은 동시에 몰릴 일이 드물어 대기 비용보다 안전이 크다.
+#  [RLock] 같은 스레드가 렌더 함수를 겹쳐 부르더라도 자기 자신에 막히지 않게 한다.
+_RENDER_LOCK = threading.RLock()
+
+
+def _serialized_render(fn):
+    """차트 렌더 진입점을 프로세스 내에서 직렬화한다."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not _RENDER_LOCK.acquire(blocking=False):
+            logger.debug(f"[chart] 다른 차트를 그리는 중이라 대기한다: {fn.__name__}")
+            _RENDER_LOCK.acquire()
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _RENDER_LOCK.release()
+    return wrapper
+
 
 def _save_thumbnail(file_path):
     """살아 있는 Figure 에서 갤러리용 축소본을 한 장 더 저장한다.
@@ -164,6 +210,7 @@ def open_image_viewer(file_path):
 #   · 락이 없어, 메뉴 스레드와 텔레그램 폴링 스레드가 동시에 그리면 안쪽 호출의
 #     finally 가 바깥쪽 렌더링 도중에 서버를 되살렸다
 #  차트 렌더링의 실제 메모리 부담은 matplotlib 이고, 그건 이미 지연 로딩으로 다룬다.
+@_serialized_render
 def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=None, quiet=False, period_type='daily', months=6):
     # [토스] 시봉(시간봉) 미제공 → KIS 데이터 없음. 일반 실패 대신 명확한 안내 후 종료.
     # (matplotlib 적재 전에 차단하여 라즈베리파이 메모리 점유도 방지)
@@ -279,7 +326,7 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=None, qui
                 df = df.iloc[-disp_rows:].reset_index(drop=True)
 
         # [변경] 서브플롯 7개로 조정 (캔들 바로 아래 하이킨 아시 패널, 이후 이격도/MACD…)
-        fig, (ax1, ax_ha, ax6, ax2, ax3, ax4, ax5) = plt.subplots(7, 1, figsize=(20, 28), sharex=True, gridspec_kw={'height_ratios': [4, 1, 1, 1, 1, 1, 1]})
+        fig, (ax1, ax_ha, ax6, ax2, ax3, ax4, ax5) = plt.subplots(7, 1, figsize=CHART_FIGSIZE, sharex=True, gridspec_kw={'height_ratios': [4, 1, 1, 1, 1, 1, 1]})
 
         # [1] Price Chart
         ax1.plot(df.index, df['BB_up'], color='gray', linestyle=':', linewidth=1, alpha=0.4)
@@ -401,7 +448,14 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=None, qui
                 box_period = config.INDICATOR_PARAMS.get("BOX_PERIOD", 30)
                 box_va_pct = config.INDICATOR_PARAMS.get("BOX_VALUE_AREA_PCT", 50.0)
                 box_unit = {'weekly': '주', 'daily': '일', 'hourly': '시간'}.get(period_type, '분')
-                ax1.text(0.99, 0.94, f"{box_period}{box_unit} / {box_va_pct:g}%", transform=ax1.transAxes,
+                # [겹침 방지 · 2026-09-03] 종전에는 배지 바로 아래를 축 높이의 0.03 으로 잡았다.
+                #  배지 높이는 폰트(11pt)+테두리 여백이라 **물리 단위로 고정**인데, 0.03 은 축이
+                #  줄면 함께 줄어든다. 캔버스를 16x22.4 로 내리자 0.03 이 배지보다 작아져 글씨가
+                #  테두리에 물렸다. 배지 높이(약 24pt)를 축 높이로 나눠 그때그때 환산한다.
+                _ax1_h_in = max(ax1.get_position().height * float(fig.get_size_inches()[1]), 0.1)
+                _badge_gap = (24 / 72) / _ax1_h_in
+                ax1.text(0.99, 0.97 - _badge_gap, f"{box_period}{box_unit} / {box_va_pct:g}%",
+                         transform=ax1.transAxes,
                          fontsize=9.5, fontweight='bold', color='dimgray', va='top', ha='right', alpha=0.95)
 
             # [추세선] 추세 레그의 평행 회귀 채널
@@ -563,7 +617,14 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=None, qui
         ax6.legend(loc='upper left', ncol=4, fontsize=8)
 
         # [X축 설정]
-        tick_indices = np.linspace(0, len(df) - 1, 15, dtype=int)
+        #  [왜 폭에 연동하나 · 2026-09-03] 눈금 라벨('2025-01-17')과 우측 주석(박스상단 등)의
+        #   크기는 포인트(물리 단위)라 캔버스 폭이 줄면 **상대적으로 넓어진다**. 20인치에
+        #   맞춰 박아둔 15개/6% 를 그대로 두고 폭만 줄이면 날짜가 서로 닿고 우측 라벨이
+        #   잘린다(16인치에서 실측). 폭에서 역산해 20인치일 때 종전 값(15개·6%)이 그대로
+        #   나오게 맞춘다 — 캔버스를 다시 조정하더라도 따라온다.
+        _fig_w = float(CHART_FIGSIZE[0])
+        tick_count = max(6, min(15, int(_fig_w / 1.25)))
+        tick_indices = np.linspace(0, len(df) - 1, tick_count, dtype=int)
         
         def format_date(date_val):
             # Timestamp 객체 등 날짜형식인 경우 strftime 사용
@@ -588,7 +649,10 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=None, qui
             ax.tick_params(axis='x', labeltop=False, labelbottom=True)
 
         # 우측 여백 확보 — 박스상단/하단 등 우측 라벨이 잘리지 않도록 (sharex라 ax1만 조정)
-        ax1.set_xlim(right=(len(df) - 1) + max(len(df) * 0.06, 4))
+        #  라벨이 차지하는 물리 폭(약 1.08인치)을 데이터 단위로 환산한다. 축 폭은 캔버스에서
+        #  좌우 여백(약 2인치)을 뺀 값으로 본다. 20인치면 6% 로, 종전 값과 같아진다.
+        _right_pad = 1.08 / max(_fig_w - 2.0, 1.0)
+        ax1.set_xlim(right=(len(df) - 1) + max(len(df) * _right_pad, 4))
 
         plt.tight_layout()
         safe_code = re.sub(r'[=\-\.\^]', '', code)
@@ -628,6 +692,7 @@ def _purge_legacy_mc_charts(safe_code):
             logger.debug(f"[차트] 옛 몬테카를로 파일 정리 실패({old_path}): {e}")
 
 
+@_serialized_render
 def generate_monte_carlo_histogram(returns, name, code, open_file=True):
     """Monte Carlo 시뮬레이션 수익률 분포 히스토그램 생성"""
     setup_korean_font()
