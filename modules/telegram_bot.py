@@ -1083,8 +1083,20 @@ class TelegramCommander:
         memo = " ".join(args[1:]) if len(args) > 1 else "텔레그램 원격 차단"
         
         auto_trade.add_restricted_stock(code, name, memo, is_overseas=is_overseas)
-        
-        msg = f"🚫 [제한 종목 추가 완료]\n• 종목: {name}({code})\n• 사유: {memo}\n\n즉시 글로벌 자동매매 대상에서 차단되었습니다."
+
+        msg = (f"🚫 [제한 종목 추가 완료]\n• 종목: {name}({code})\n• 사유: {memo}\n\n"
+               f"즉시 글로벌 자동매매 대상에서 차단되었습니다.")
+        # [무엇이 함께 꺼지는가] 제한은 매수만 막는 것이 아니라 **매도 판정에서도 통째로
+        #  뺀다** — 들고 있는 종목이면 손절·트레일링이 그 순간 멈춘다. /stop 은 이 사실을
+        #  응답에서 밝히는데 여기는 "차단되었습니다"로만 끝나, 같은 크기의 결정을 더 가벼운
+        #  말로 안내하고 있었다. 보유 중일 때만 덧붙인다(안 든 종목엔 해당 없는 경고다).
+        try:
+            held = code in (getattr(self.trader, 'trailing_stop_cache', {}) or {})
+        except Exception:
+            held = False
+        if held:
+            msg += ("\n\n⛔ 이 종목은 보유 중입니다 — 손절·트레일링 자동 청산도 함께 멈춥니다.\n"
+                    "(손절선을 이탈하면 알림은 계속 갑니다. 청산은 직접 하셔야 합니다)")
         return msg
 
     def _cmd_delrestrict(self, args):

@@ -2800,8 +2800,14 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             try:
                 if api.chart_overlay_enabled(is_overseas) or not api.display_price_krx_fixed(is_overseas):
                     rt_price = float(api.get_current_price(code, is_overseas=is_overseas) or 0)
-                if rt_price > 0 and api.chart_overlay_enabled(is_overseas):
-                    indicators.apply_realtime_price(df, rt_price, market_date=utils.market_today(is_overseas))
+                # [SSOT] 봉 반영 여부는 api.chart_overlay_price 가 단독으로 정한다.
+                #  종전에는 그 함수의 내부 조건(chart_overlay_enabled)을 여기서 손으로
+                #  한 번 더 썼다 — 값은 같았지만 게이트에 조건이 하나 늘면 이 자리만
+                #  따라오지 않는다. 위 조회 여부 판단에는 여전히 enabled 가 필요하다
+                #  (표시에도 쓸 일이 없으면 API 호출 자체를 아낀다).
+                _overlay = api.chart_overlay_price(rt_price, is_overseas)
+                if _overlay > 0:
+                    indicators.apply_realtime_price(df, _overlay, market_date=utils.market_today(is_overseas))
             except Exception: pass
 
         # 2. 지표 계산
@@ -3983,8 +3989,10 @@ def _analyze_stock_worker(stock, params=None, restricted_stocks=None, rules_map=
             # 모든 장 마감 후 KRX 고정(설정 True)이면 표시에도 쓸 일이 없어 조회 자체를 생략한다.
             if api.chart_overlay_enabled(False) or not api.display_price_krx_fixed(False):
                 rt_price = float(api.get_current_price(code, is_overseas=False) or 0)
-            if rt_price > 0 and api.chart_overlay_enabled(False):
-                indicators.apply_realtime_price(df, rt_price, market_date=utils.market_today(False))
+            # [SSOT] 위와 같은 이유로 chart_overlay_price 를 지난다.
+            _overlay = api.chart_overlay_price(rt_price, False)
+            if _overlay > 0:
+                indicators.apply_realtime_price(df, _overlay, market_date=utils.market_today(False))
         except Exception: pass
 
         current_price = float(df.iloc[-1]['close'])   # [판단 기준] 지표·상태·점수·52주 위치
