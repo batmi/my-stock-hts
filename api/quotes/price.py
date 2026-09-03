@@ -338,6 +338,15 @@ def get_daily_short_selling(code: str, limit: int = 30):
     return []
 
 def get_investor_trend(code, market_div="J"):
+    """투자자별 순매수(개인·외국인·기관) 일별 목록.
+
+    [반환 계약] **최신 거래일이 [0]** 이다. 소비하는 쪽이 전부 위치로 읽는다 —
+     표의 수급 셀은 inv_list[0], 스마트머니 판정(analysis.check_smart_money_turnaround)은
+     [0]=당일·[1]=전일·[2]=전전일로 '턴어라운드'를 본다. 즉 순서가 뒤집히면 표시가 아니라
+     **판단이 뒤집힌다**(과거를 최신으로 읽고 턴어라운드 방향이 거꾸로 선다).
+     KIS 응답은 최신이 먼저라 여태 성립했지만, 그것은 어느 계층에도 적혀 있지 않았고
+     토스 어댑터는 응답 순서를 그대로 흘려보냈다(2026-09-04 감사). 경계에서 맞춘다.
+    """
     cache_key = f"inv_{code}_{market_div}"
     cached = _api()._get_micro_cache(cache_key, ttl=300.0) # [수정] 수급 정보는 장중 잠정치가 천천히 갱신되는 일단위 집계라 5분 캐시로 REST/TPS 절감
     if cached is not None: return cached
@@ -362,6 +371,9 @@ def get_investor_trend(code, market_div="J"):
                     'orgn_ntby_qty': str(orgn.get('netBuyVolume', 0) or 0),
                 }
                 kis_output.append(item)
+            #  응답 순서를 신뢰하지 않고 날짜로 세운다(최신 우선) — 위 반환 계약.
+            #  날짜가 없는 행은 뒤로 보내 [0] 을 차지하지 못하게 한다.
+            kis_output.sort(key=lambda x: x['stck_bsop_date'] or "", reverse=True)
             _api()._set_micro_cache(cache_key, kis_output)
             return kis_output
         except Exception as e:

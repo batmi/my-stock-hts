@@ -5552,9 +5552,28 @@ def _name_map_from(data_list):
     return out
 
 
+def _toss_investor_suppressed():
+    """토스 모드에서 KRX 정규장 중에는 수급 컬럼을 쓰지 않는다(= OBV 로 간다).
+
+    [왜 · 2026-09-04] 컬럼 선택은 '수급 최신 행의 값이 0인가'라는 간접 판정이었다
+    (_probe_investor_data). 그 판정이 모드마다 정반대로 굴러갔다.
+      · KIS(mode 1·2) — 장이 서면 당일 행이 0으로 생겨 판정이 거짓 → OBV 로 전환
+      · 토스(mode 3)  — 당일 행 자체가 없다. 수급 API 가 **전일 확정치만** 주고 다음날
+        06:50 에 갱신된다(2026-09-04 실측: 09-04 08:43 조회에 최신 레코드가 09-03).
+        그래서 판정이 늘 참 → 온종일 수급 컬럼이 남고, 그 값은 **전일 것**이다.
+    같은 화면이 모드에 따라 다른 것을 뜻하면 안 되므로 KIS 동작에 맞춘다.
+    """
+    if not getattr(config.session, 'is_toss', False):
+        return False
+    try:
+        return api.domestic_session_phase() == 'krx'
+    except Exception:      # noqa: BLE001 - 세션 판정 실패는 종전 동작(수급 허용)으로 둔다
+        return False
+
+
 def print_table(title, data_list, is_overseas=False, market_regime_adj=None, is_etf=None):
     use_investor_data = False
-    if not is_overseas and data_list:
+    if not is_overseas and data_list and not _toss_investor_suppressed():
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -6226,6 +6245,7 @@ def _print_period_price_common(code, is_overseas, limit=20):
         table.add_column("공매도", justify="right")
         table.add_column("수급(개/외/기)", justify="center")
 
+    rows_buf = []
     for i, (idx, row) in enumerate(recent_df.iterrows()):
         date_str = str(row['date'])
         if len(date_str) == 8: date_str = f"{date_str[:4]}/{date_str[4:6]}/{date_str[6:]}"
@@ -6245,7 +6265,10 @@ def _print_period_price_common(code, is_overseas, limit=20):
             return f"{val:+.2f}" if is_overseas else f"{int(val):+}"
         
         c_color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
-        diff_str = f"{c_color}{fmt_diff(diff)} ({rate:+.2f}%)[/]"
+        #  [정렬] 등락폭·등락률을 값 단위로 나눠 담는다 — 표에 넣기 직전 폭을 맞춘다
+        #   (utils.align_rows_column). 셀 전체 우측 정렬만으로는 오른쪽 끝만 맞는다.
+        diff_str = (f"{c_color}{fmt_diff(diff)}[/]{utils.CELL_PART_SEP}"
+                    f"{c_color}({rate:+.2f}%)[/]")
         
         # [수정] 이동평균선 색상 규칙 변경 (이평선 간 배열 기준)
         ma5_val, ma20_val = row['ma5'], row['ma20']
@@ -6381,11 +6404,15 @@ def _print_period_price_common(code, is_overseas, limit=20):
             row_data.append(flow_short_str)
             row_data.append(flow_inv_str)
 
+        rows_buf.append(row_data)
+
+    #  등락 컬럼(2번)은 한 셀에 값 둘을 담는다. 표에 넣기 전에 그 표의 실제 값으로 폭을 맞춘다.
+    utils.align_rows_column(rows_buf, 2)
+    for i, row_data in enumerate(rows_buf):
         table.add_row(*row_data)
-        
-        if (i + 1) % 5 == 0 and (i + 1) < len(recent_df):
+        if (i + 1) % 5 == 0 and (i + 1) < len(rows_buf):
             table.add_section()
-    
+
     config.console.print(table)
 
 def _print_period_price_30(code, is_overseas):

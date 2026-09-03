@@ -22,7 +22,11 @@ def trader():
 def test_run_loop_market_closed(mock_tg, mock_deposit, mock_balance, trader):
     """장 마감 시 루프 동작 테스트"""
     # 장 마감 상태 모킹 (휴장일이면 "휴장일" 문구로 갈라지므로 거래일로 고정)
+    #  [Fix 2026-09-04] 단일가 휴게(08:50~09:00 · 15:20~15:30)도 함께 고정한다. 안 하면
+    #   그 20분 동안 문구가 '휴게 시간 대기'로 갈려 **코드가 아니라 벽시계 때문에** 실패한다
+    #   (실측 08:5x). 같은 계열의 시각 의존이 매수 경로에도 있다.
     with patch('api.is_holiday_today', return_value=False), \
+         patch('modules.auto_trade.trader.is_single_price_break', return_value=False), \
          patch.object(trader, 'is_market_open', return_value=False):
         # 한 번만 실행하고 종료되도록 설정
         with patch('time.sleep', side_effect=InterruptedError):

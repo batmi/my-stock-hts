@@ -2317,3 +2317,54 @@ def test_toss_yf_krx_close_ignores_other_dates():
                       return_value=_yf_frame("X.KS", "2026-07-10", 999.0)):
         assert api._toss_yf_krx_close("TSTW", "20260713") is None
     api._toss_yf_base_miss.clear()
+
+
+# ---------------------------------------------------------------------------
+# [감사 2026-09-04] 수급 목록의 순서는 계약이다
+# ---------------------------------------------------------------------------
+def test_toss_investor_trend_is_normalised_newest_first(monkeypatch):
+    """토스 수급을 날짜 내림차순으로 세운다 — 소비하는 쪽이 전부 위치로 읽는다.
+
+    표의 수급 셀은 [0], 스마트머니 판정은 [0]=당일·[1]=전일·[2]=전전일로 턴어라운드를
+    본다. 순서가 뒤집히면 표시가 아니라 **판단이 뒤집힌다**. 토스 응답은 실측상 최신이
+    먼저지만(2026-09-04), 그것은 어느 계층에도 적혀 있지 않던 전제였다 — 경계에서 맞춘다.
+    """
+    import api
+    from brokers import toss_api as ta
+
+    def _rec(d, ind):
+        return {"date": d, "individual": {"netBuyVolume": ind},
+                "foreigner": {"netBuyVolume": 1}, "institution": {"netBuyVolume": 2}}
+
+    #  일부러 뒤죽박죽으로 준다(오래된 것 먼저 + 중간에 최신)
+    payload = {"records": [_rec("2026-08-28", 10), _rec("2026-09-03", 30), _rec("2026-09-01", 20)]}
+
+    monkeypatch.setattr(config.session, "is_toss", True, raising=False)
+    monkeypatch.setattr(ta, "get_investor_trend", lambda symbol, count=30: payload)
+    monkeypatch.setattr(api, "_get_micro_cache", lambda *a, **k: None)
+    monkeypatch.setattr(api, "_set_micro_cache", lambda *a, **k: None)
+
+    out = api.get_investor_trend("005930")
+
+    assert [r["stck_bsop_date"] for r in out] == ["20260903", "20260901", "20260828"]
+    assert out[0]["prsn_ntby_qty"] == "30", "가장 최근 거래일이 [0] 이어야 한다"
+
+
+def test_toss_investor_trend_puts_dateless_rows_last(monkeypatch):
+    """날짜 없는 행이 [0] 을 차지해 '최신'으로 읽히면 안 된다."""
+    import api
+    from brokers import toss_api as ta
+
+    payload = {"records": [
+        {"individual": {"netBuyVolume": 99}, "foreigner": {}, "institution": {}},
+        {"date": "2026-09-03", "individual": {"netBuyVolume": 7},
+         "foreigner": {}, "institution": {}},
+    ]}
+    monkeypatch.setattr(config.session, "is_toss", True, raising=False)
+    monkeypatch.setattr(ta, "get_investor_trend", lambda symbol, count=30: payload)
+    monkeypatch.setattr(api, "_get_micro_cache", lambda *a, **k: None)
+    monkeypatch.setattr(api, "_set_micro_cache", lambda *a, **k: None)
+
+    out = api.get_investor_trend("005930")
+    assert out[0]["stck_bsop_date"] == "20260903"
+    assert out[-1]["prsn_ntby_qty"] == "99"

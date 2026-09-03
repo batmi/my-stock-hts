@@ -781,3 +781,16 @@ def align_cell_parts(cells):
             padded.append(" " * max(0, widths[i] - _width(p)) + p)
         out.append(" ".join(padded))
     return out
+
+
+def align_rows_column(rows, index):
+    """행 목록(list of list)의 특정 컬럼을 값 단위로 정렬해 **제자리에서** 바꾼다.
+
+    표에 넣기 전 행을 모아 두는 화면에서 쓴다(add_row 를 부르기 직전에 한 번).
+    align_cell_parts 와 같은 규칙이며, 컬럼이 없는 짧은 행은 건너뛴다.
+    """
+    cells = [r[index] if len(r) > index else "" for r in rows]
+    for r, c in zip(rows, align_cell_parts(cells)):
+        if len(r) > index:
+            r[index] = c
+    return rows
