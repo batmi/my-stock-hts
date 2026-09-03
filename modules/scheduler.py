@@ -60,7 +60,13 @@ class SystemScheduler:
                     self._check_disclosure_alerts()
                 if getattr(config.settings, 'AUTO_CALENDAR_ALERT_USE', False):
                     self._check_calendar_alerts()
-                if getattr(config, 'MARKET_HALT_ALERT_USE', True):
+                #  [Fix 2026-09-04] 종전에는 CB 스위치(MARKET_HALT_ALERT_USE) 하나로
+                #   check() 진입 자체를 막았다. market_halt 는 CB 와 VI 를 독립 스위치로
+                #   설계했는데(그 안에서 각각 다시 본다), 여기서 한꺼번에 막히니 CB 를 끈
+                #   사용자는 VI 를 켜도 아무 일도 일어나지 않았다 — 메뉴 토글이 거짓말을 했다.
+                #   둘 중 하나라도 켜져 있으면 넘기고, 무엇을 볼지는 check() 가 정한다.
+                if (getattr(config, 'MARKET_HALT_ALERT_USE', True)
+                        or getattr(config, 'MARKET_HALT_VI_USE', False)):
                     self._check_market_halt()
                 self._check_heartbeat()
             except Exception as e:
@@ -180,11 +186,16 @@ class SystemScheduler:
         """사망 알림에 실을 상황 정보. 조회 비용이 있는 것은 넣지 않는다
         (이미 들고 있는 캐시값만 읽는다 — 하트비트가 API를 부르면 본말이 전도된다)."""
         try:
+            #  [Fix 2026-09-04] 종전에는 마지막 줄이 분기 밖에 있어 무엇으로 떴든
+            #   항상 "실전"으로 덮였다. 파이(가상투자)와 맥북(실전) 두 인스턴스를
+            #   함께 돌리는데, 사망 알림이 둘 다 '실전'이라고 하면 어느 쪽이 죽었는지
+            #   모른 채 실계좌부터 확인하게 된다. 알림의 값어치가 여기에 달려 있다.
             if getattr(config.session, 'is_paper', False):
-                mode = "관찰(가상)"
-            elif config.session.is_toss:
+                mode = "가상투자"
+            elif getattr(config.session, 'is_toss', False):
                 mode = "토스"
-            mode = "실전"
+            else:
+                mode = "실전"
         except Exception:
             mode = None
         return {

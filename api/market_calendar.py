@@ -219,15 +219,29 @@ _TRADING_DAY_CACHE = {}
 
 def _is_closed_day(dt, country):
     """해당 일자가 주말·휴장일이면 True. 오늘(KR)은 실시간 캘린더(토스/KIS API) 판정을
-    우선해 holidays 라이브러리에 없는 임시휴장까지 반영하고, 그 외 일자는 라이브러리로 판정한다."""
+    우선해 holidays 라이브러리에 없는 임시휴장까지 반영하고, 그 외 일자는 달력으로 판정한다.
+
+    [Fix 2026-09-04] 미국은 **연방공휴일이 아니라 NYSE(XNYS) 달력**을 쓴다. 같은 파일이
+     is_us_holiday_on 에서 이미 그렇게 고쳤는데(EXCHANGE_CALENDARS 주석: "증시는 성금요일에
+     쉬고 콜럼버스데이·재향군인의 날에는 열어서, 연방공휴일로 보면 양방향으로 틀렸다")
+     이 함수만 연방공휴일에 남아 있었다. 이 판정은 market_today(True) → last_trading_day
+     경로로 '미국 종목의 오늘'을 정하므로, 틀리면 양방향으로 봉이 오염된다.
+       · 성금요일(휴장·연방공휴일 아님) → 거래일로 봐서 가짜 당일 봉이 붙고 등락률 0%
+       · 콜럼버스데이·재향군인의 날(개장·연방공휴일) → 직전 거래일로 되돌려, 실제 거래일의
+         현재가가 **확정된 전날 봉을 덮어쓴다**
+    """
     if dt.weekday() > 4:
         return True
     d_str = dt.strftime('%Y%m%d')
-    if country == 'KR' and d_str == datetime.now().strftime('%Y%m%d'):
-        try:
-            return bool(is_holiday_today())
-        except Exception:
-            pass
+    if country == 'KR':
+        if d_str == datetime.now().strftime('%Y%m%d'):
+            try:
+                return bool(is_holiday_today())
+            except Exception:
+                pass
+        return get_holiday_name(d_str, country='KR') is not None
+    if country == 'US':
+        return is_exchange_holiday(dt, "XNYS")
     return get_holiday_name(d_str, country=country) is not None
 
 def last_trading_day(dt, country='KR'):

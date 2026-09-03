@@ -128,3 +128,55 @@ def test_check_calendar_alerts_skips_outside_window(mock_thread, scheduler):
             mock_dt.strptime = datetime.strptime
             scheduler._check_calendar_alerts()
         assert scheduler.last_calendar_alert_date is None
+
+
+# ==========================================================
+# [감사 2026-09-04] 하트비트 상황 정보 · 시장정지 점검 게이트
+# ==========================================================
+
+@pytest.mark.parametrize("flags,expected", [
+    ({"is_paper": True, "is_toss": False}, "가상투자"),
+    ({"is_paper": False, "is_toss": True}, "토스"),
+    ({"is_paper": False, "is_toss": False}, "실전"),
+])
+def test_heartbeat_context_reports_the_actual_mode(scheduler, monkeypatch, flags, expected):
+    """사망 알림의 '모드'가 실제로 뜬 모드여야 한다.
+
+    종전에는 mode = "실전" 이 분기 밖에 있어 무엇으로 떴든 항상 '실전'으로 덮였다.
+    파이(가상투자)와 맥북(실전)을 함께 돌리는데 둘 다 '실전'이라고 알리면, 어느 쪽이
+    죽었는지 모른 채 실계좌부터 확인하게 된다.
+    """
+    for k, v in flags.items():
+        monkeypatch.setattr(config.session, k, v, raising=False)
+    assert scheduler._heartbeat_context()["mode"] == expected
+
+
+@pytest.mark.parametrize("cb_on,vi_on,should_check", [
+    (True, False, True),      # CB 만 켬 — 종전에도 돌았다
+    (False, True, True),      # VI 만 켬 — 종전에는 아무 일도 일어나지 않았다
+    (True, True, True),
+    (False, False, False),    # 둘 다 끄면 들어가지 않는다
+])
+def test_market_halt_gate_honours_both_switches(scheduler, monkeypatch, cb_on, vi_on, should_check):
+    """CB 스위치 하나가 VI 까지 막으면 안 된다(메뉴 토글이 거짓말을 한다)."""
+    monkeypatch.setattr(config, 'MARKET_HALT_ALERT_USE', cb_on, raising=False)
+    monkeypatch.setattr(config, 'MARKET_HALT_VI_USE', vi_on, raising=False)
+    monkeypatch.setattr(config, 'AUTO_MORNING_BRIEFING_USE', False, raising=False)
+
+    called = []
+    monkeypatch.setattr(scheduler, '_check_holiday_notification', lambda: None)
+    monkeypatch.setattr(scheduler, '_check_heartbeat', lambda: None)
+    monkeypatch.setattr(scheduler, '_check_market_halt', lambda: called.append(True))
+
+    #  루프를 한 바퀴만 돌린다 — sleep 이 곧 종료 신호다.
+    def _stop(_sec):
+        scheduler.is_running = False
+    monkeypatch.setattr('modules.scheduler.time.sleep', _stop)
+
+    scheduler.is_running = True
+    try:
+        scheduler._run_loop()
+    finally:
+        scheduler.is_running = False
+
+    assert bool(called) is should_check

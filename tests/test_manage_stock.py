@@ -37,17 +37,23 @@ def test_load_stock_config_success(session_manager):
             assert len(session_manager.stock_data["stocks_kr"]) == 1
             assert session_manager.stock_data["stocks_kr"][0]["code"] == "005930"
 
-def test_save_stock_config(session_manager):
-    """설정 파일 저장 테스트"""
+def test_save_stock_config(session_manager, tmp_path, monkeypatch):
+    """설정 파일 저장 테스트.
+
+    [2026-09-04] 저장은 core/jsonio.save_json 을 타며 **원자적**이다(임시 파일에 쓰고
+    os.replace). 그래서 '최종 경로를 'w' 로 연다'는 종전 검증은 더 이상 성립하지 않는다
+    — 그 동작이야말로 쓰다 만 관심종목 파일을 남기던 원인이라 일부러 없앴다.
+    구현 대신 결과를 본다: 파일에 그대로 들어갔고, 임시 파일이 남지 않는다.
+    """
+    target = tmp_path / "stock.json"
+    monkeypatch.setattr(config, "STOCK_DATA_FILE", str(target))
     data = {"stocks_kr": [{"name": "테스트", "code": "123456"}]}
-    
-    with patch("builtins.open", mock_open()) as mock_file:
-        session_manager.save_stock_config(data)
-        
-        mock_file.assert_called_with(config.STOCK_DATA_FILE, 'w', encoding='utf-8')
-        handle = mock_file()
-        # json.dump가 write를 호출했는지 확인
-        assert handle.write.called
+
+    session_manager.save_stock_config(data)
+
+    assert json.loads(target.read_text(encoding="utf-8")) == data
+    assert session_manager.stock_data == data
+    assert [p.name for p in tmp_path.iterdir() if p.name.endswith(".tmp")] == []
 
 def test_add_stock_logic(session_manager):
     """종목 추가 로직 시뮬레이션"""

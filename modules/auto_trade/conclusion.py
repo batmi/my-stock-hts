@@ -669,7 +669,19 @@ class ConclusionMonitor:
                                     
                                     # [추가] 매도 체결 시 AI 매매 복기 실행
                                     if type_name == "매도" and found_record:
-                                        threading.Thread(target=self._send_trading_autopsy, args=(code, name, found_record), daemon=True).start()
+                                        #  [Fix 2026-09-04] 계좌 컨텍스트를 제출 스레드에서
+                                        #   싸서 넘긴다. 복기는 db.get_latest_buy_trade 로
+                                        #   매수 시점·점수를 읽는데, 그 조회는 계좌로 갈린다
+                                        #   (b7fea18). 맨 스레드로 띄우면 threading.local 이
+                                        #   상속되지 않아 수동 계좌를 뒤지고, 자동매매가 산
+                                        #   종목의 매수 기록을 못 찾아 리포트가 '알 수 없음'이
+                                        #   된 채로 AI 에게 넘어간다.
+                                        #   캡처는 그 체결의 계좌(cano) 안에서 해야 한다 —
+                                        #   위의 AccountContext 는 이미 닫혔고, 감시 루프의
+                                        #   기본값을 싸 봐야 같은 실수를 반복한다.
+                                        with utils.AccountContext(cano):
+                                            _autopsy = utils.inherit_account_context(self._send_trading_autopsy)
+                                        threading.Thread(target=_autopsy, args=(code, name, found_record), daemon=True).start()
 
                                 else:
                                     logger.debug(f"[Init] 체결 내역 동기화: {name} {tot_ccld_qty}주 (ODNO: {odno})")

@@ -102,3 +102,54 @@ def test_vi_diff_alerts():
         assert m.vi_active == {"000660", "247540"}
     finally:
         market_halt.api.send_telegram_message = market_halt.api_send_backup
+
+
+# ==========================================================
+# [감사 2026-09-04] VI 감시 대상은 '시스템 트레이딩 계좌'의 보유 종목이다
+# ==========================================================
+
+def test_vi_targets_use_the_system_trading_account(monkeypatch):
+    """스케줄러 스레드에서도 자동 계좌 잔고를 물어야 한다.
+
+    context.trade_context 는 threading.local 이라 상속되지 않는다. 종전에는 계좌
+    컨텍스트 없이 api.get_domestic_balance() 를 불러 **수동 계좌** 잔고가 돌아왔고,
+    실전(mode 2)에서 자동매매 보유 종목이 통째로 VI 감시에서 빠졌다.
+    """
+    from core import context
+
+    s = config.session
+    for k, v in (('cano', '11111111'), ('acnt_prdt_cd', '01'),
+                 ('auto_cano', '22222222'), ('auto_acnt_prdt_cd', '01')):
+        monkeypatch.setattr(s, k, v, raising=False)
+    monkeypatch.setattr(context.trade_context, 'use_auto_account', False, raising=False)
+    monkeypatch.setattr(config.session, 'stock_data', {}, raising=False)
+
+    seen = {}
+
+    def _balance(cano=None, acnt=None, *a, **k):
+        seen['cano'] = cano
+        seen['use_auto'] = getattr(context.trade_context, 'use_auto_account', False)
+        return ([{"pdno": "005930", "prdt_name": "삼성전자", "hldg_qty": "10"}], {})
+
+    monkeypatch.setattr(market_halt.api, "get_domestic_balance", _balance)
+
+    targets = _fresh_monitor()._domestic_targets()
+
+    assert seen['cano'] == '22222222', "자동매매 계좌로 물어야 한다"
+    assert seen['use_auto'] is True, "계좌 컨텍스트가 조회 시점에 걸려 있어야 한다"
+    assert targets == {"005930": "삼성전자"}
+    # 컨텍스트는 되돌아온다(스케줄러의 다른 작업으로 새면 안 된다)
+    assert getattr(context.trade_context, 'use_auto_account', False) is False
+
+
+def test_cb_alert_does_not_claim_trading_is_paused(monkeypatch):
+    """알림은 하지 않는 일을 알리지 않는다 — CB 중에도 자동매매는 돈다."""
+    m = _fresh_monitor()
+    sent = []
+    monkeypatch.setattr(market_halt.api, "send_telegram_message", lambda msg, *a, **k: sent.append(msg))
+    monkeypatch.setattr(market_halt.MarketHaltMonitor, "_index_rate", lambda self, mk: None)
+
+    m._alert_cb("KOSPI", True)
+
+    assert "매매가 보류됩니다" not in sent[0]
+    assert "자동매매는 계속 가동됩니다" in sent[0]

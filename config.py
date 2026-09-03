@@ -3885,15 +3885,15 @@ def _apply_config_data(data):
 
 
 def _read_config_file(path):
-    import json
-    if not os.path.exists(path):
-        return None
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"[Config] 설정 파일 로드 실패({os.path.basename(path)}): {e}")
-        return None
+    """설정 파일 한 벌을 읽는다. 없으면 None(정상), 손상이면 격리 후 None.
+
+    jsonio 를 쓴다 — 종전에는 여기서 직접 열어 읽고, 손상 시 한 줄 출력하고 None 을
+    돌려줬다. 그러면 사용자가 조정한 리스크 파라미터 전부가 조용히 클래스 기본값으로
+    되돌아간다(그 상태로 저장이 한 번 일어나면 원본도 사라진다). jsonio 는 깨진 파일을
+    `.corrupt.<타임스탬프>` 로 치워 원본을 지키고 화면에도 알린다.
+    """
+    from core import jsonio
+    return jsonio.load_json(path, default=None)
 
 
 def diff_against_base(data, base=None):
@@ -3978,9 +3978,13 @@ def reset_custom_settings(keys_to_reset):
 
     with _settings_lock:
         try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                
+            from core import jsonio
+            data = jsonio.load_json(config_path, default=None)
+            if data is None:
+                #  손상 파일은 jsonio 가 격리하고 알린다. 여기서 빈 딕셔너리로 이어가면
+                #  '되돌리기'가 설정 전체를 날리는 동작이 되므로 그만둔다.
+                return
+
             for key_path in keys_to_reset:
                 if '.' in key_path:
                     parent, child = key_path.split('.', 1)
@@ -3992,8 +3996,8 @@ def reset_custom_settings(keys_to_reset):
                     if key_path in data:
                         del data[key_path]
 
-            with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=4, ensure_ascii=False)
+            from core import jsonio
+            jsonio.save_json(config_path, data)
             
             # 초기 상태를 베이스로 새 설정 덮어씌우기
             #  (재적용까지 한 잠금 안에서 끝낸다 — 나누면 그 사이에 다른 스레드가

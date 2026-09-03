@@ -141,3 +141,42 @@ def test_send_order_pins_the_auto_account_from_any_thread(separated_accounts, mo
     for action, cano, appkey in seen:
         assert cano == AUTO_CANO, f"{action} 주문이 수동 계좌로 나갔다: {cano}"
         assert appkey == "AUTO_KEY", f"{action} 주문이 수동 앱키를 썼다: {appkey}"
+
+
+# ==========================================================
+# [감사 2026-09-04] AI 매매 복기도 계좌를 타고 가야 한다
+# ==========================================================
+
+def test_trading_autopsy_thread_carries_the_trade_account(separated_accounts):
+    """복기 스레드가 매도 체결의 계좌 컨텍스트를 물고 가야 한다.
+
+    복기는 db.get_latest_buy_trade 로 매수 시점·점수를 읽는데 그 조회는 계좌로 갈린다.
+    맨 스레드로 띄우면 threading.local 이 상속되지 않아 수동 계좌를 뒤지고, 자동매매가
+    산 종목의 매수 기록을 못 찾아 리포트가 '알 수 없음'인 채 AI 에게 넘어간다.
+    """
+    seen = {}
+
+    def _autopsy_body(code, name, record):
+        seen['use_auto'] = getattr(context.trade_context, 'use_auto_account', False)
+
+    #  체결 계좌(AUTO_CANO) 안에서 캡처한다 — 감시 루프의 기본값(수동)을 싸면 의미가 없다.
+    with utils.AccountContext(AUTO_CANO):
+        wrapped = utils.inherit_account_context(_autopsy_body)
+
+    t = threading.Thread(target=wrapped, args=("005930", "삼성전자", {}), daemon=True)
+    t.start()
+    t.join(timeout=3)
+
+    assert seen.get('use_auto') is True, "복기가 수동 계좌를 뒤진다"
+
+
+def test_autopsy_call_site_is_wrapped():
+    """호출 지점이 실제로 래핑되어 있는지 — 원래 결함이 있던 자리를 못 박는다."""
+    import inspect
+
+    from modules.auto_trade import conclusion
+
+    src = inspect.getsource(conclusion.ConclusionMonitor)
+    idx = src.find("_send_trading_autopsy, args=")
+    assert idx == -1, "복기 스레드에 맨 메서드를 그대로 넘기고 있다(계좌 컨텍스트 유실)"
+    assert "utils.inherit_account_context(self._send_trading_autopsy)" in src

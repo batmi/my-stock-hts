@@ -335,15 +335,10 @@ class SessionManager:
         _config().console.print(f"[dim]   - 매매일지 웹 연동: {journal_note}[/dim]")
 
     def load_stock_config(self):
-        if os.path.exists(_config().STOCK_DATA_FILE):
-            try:
-                with open(_config().STOCK_DATA_FILE, 'r', encoding='utf-8') as f:
-                    self.stock_data = json.load(f)
-            except Exception as e:
-                _config().console.print(f"[red]종목 설정 로드 실패: {e}[/red]")
-                self.stock_data = {"stocks_kr": [], "etfs_kr": [], "stocks_us": [], "etfs_us": []}
-        else:
-            self.stock_data = {"stocks_kr": [], "etfs_kr": [], "stocks_us": [], "etfs_us": []}
+        #  jsonio 를 쓴다 — 관심종목도 상태 파일이다. 손상되면 원본을 격리하고 알린 뒤
+        #  빈 목록으로 계속한다(그래야 다음 저장이 깨진 원본을 덮지 않는다).
+        empty = {"stocks_kr": [], "etfs_kr": [], "stocks_us": [], "etfs_us": []}
+        self.stock_data = jsonio.load_json(_config().STOCK_DATA_FILE, default=None) or empty
             
         # 거래소 캐시 초기화
         self.exchange_cache = {}
@@ -354,11 +349,10 @@ class SessionManager:
 
     def save_stock_config(self, data):
         self.stock_data = data
-        try:
-            with open(_config().STOCK_DATA_FILE, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=4)
-        except Exception as e:
-            _config().console.print(f"[red]종목 설정 저장 실패: {e}[/red]")
+        #  원자적 저장(core/jsonio.save_json). 종전에는 파일을 먼저 비우고 써서,
+        #  쓰는 도중 프로세스가 죽으면 관심종목이 통째로 반쪽 JSON 이 됐다.
+        if not jsonio.save_json(_config().STOCK_DATA_FILE, data):
+            _config().console.print("[red]종목 설정 저장 실패 (상세는 로그 참조)[/red]")
 
     def update_cache_and_save(self, code, exchange):
         self.exchange_cache[code] = exchange

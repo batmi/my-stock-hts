@@ -19,6 +19,7 @@ from datetime import datetime
 
 import config
 import api
+from core import utils
 
 logger = logging.getLogger(__name__)
 
@@ -128,9 +129,15 @@ class MarketHaltMonitor:
                 c = it.get("code")
                 if _is_kr_domestic_code(c):
                     targets[c] = it.get("name", c)
-        # 보유종목 (세션 계좌)
+        # 보유종목 (시스템 트레이딩 계좌)
+        #  [Fix 2026-09-04] 종전에는 계좌 컨텍스트 없이 잔고를 물었다. 이 코드는
+        #   스케줄러 스레드에서 도는데 context.trade_context 는 threading.local 이라
+        #   상속되지 않아 **수동 계좌** 잔고가 돌아온다(core/utils.inherit_account_context
+        #   주석 참조). 실전(mode 2)에서 자동매매 보유 종목이 통째로 VI 감시에서 빠졌다.
         try:
-            holdings, _ = api.get_domestic_balance()
+            cano, acnt = utils.system_trading_account()
+            with utils.AccountContext(cano):
+                holdings, _ = api.get_domestic_balance(cano, acnt)
             for h in holdings or []:
                 c = h.get("pdno")
                 if _is_kr_domestic_code(c) and int(h.get("hldg_qty", 0) or 0) > 0:
@@ -194,9 +201,15 @@ class MarketHaltMonitor:
         rate = self._index_rate(market)
         rate_str = f" (지수 {rate:+.2f}%)" if rate is not None else ""
         if active:
+            #  [Fix 2026-09-04] 종전 문구는 "자동매매 시스템도 매매가 보류됩니다"였다.
+            #   그런 장치는 없다 — cb_active 를 읽는 곳이 매매 경로에 하나도 없고,
+            #   CB 중에도 감시·주문은 그대로 돈다. 알림이 하지 않는 일을 알리면 사람이
+            #   손대야 할 순간에 손을 놓는다. 사실만 적고 판단은 사람에게 남긴다.
+            #   (CB 중 매매 보류를 실제로 넣을지는 별도 결정 사항이다 — 재개 직후의
+            #    급변동에서 손절이 함께 멈추는 대가가 있어 측정 없이 넣지 않는다.)
             msg = (f"🛑 [서킷브레이커 발동] {name} 시장{rate_str}\n"
                    f"전 종목 거래가 일시 정지된 것으로 감지되었습니다.\n"
-                   f"자동매매 시스템도 매매가 보류됩니다.")
+                   f"⚠️ 자동매매는 계속 가동됩니다 — 필요하면 직접 중지하세요.")
         else:
             msg = (f"✅ [서킷브레이커 해제] {name} 시장{rate_str}\n"
                    f"거래가 재개된 것으로 감지되었습니다.")
