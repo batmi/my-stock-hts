@@ -19,6 +19,16 @@ from datetime import datetime, timedelta, timezone
 logger = logging.getLogger(__name__)
 
 
+def is_overseas_code(code):
+    """종목코드 형태로 해외 여부를 판단한다 (국내는 6자리 숫자).
+
+    [SSOT] 같은 한 줄이 여러 모듈에 흩어져 있었다. 판정이 갈리면 해외 종목의 가격 표기
+    (달러/원)와 거래일 귀속이 모듈마다 달라진다 — 값이 그럴듯해서 눈에 잘 안 띈다.
+    """
+    code = (code or '').strip()
+    return not (len(code) == 6 and code.isdigit())
+
+
 def market_today(is_overseas=False):
     """실시간 현재가 반영 시 '당일' 판정에 쓰는 시장 기준일(YYYYMMDD 문자열).
 

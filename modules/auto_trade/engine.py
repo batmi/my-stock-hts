@@ -280,6 +280,68 @@ def compute_trailing_stop(highest_price, buy_price, current_price, ind=None, thr
     }
 
 
+def format_exit_levels(buy_price, sl_rate=None, label=None, ts=None,
+                       highest_price=0, atr=None, is_overseas=False):
+    """청산선을 매매 기록에 남길 한 줄로 만든다. 9-2 잔고 화면의 '청산선' 열과 같은 값.
+
+    [왜 기록에 남기나] 히스토리에는 '왜 샀나/팔았나'만 있고 **어디서 끊길 예정이었나**가
+    없었다. 그런데 이 시스템의 성패는 진입보다 청산선이 정한다(추세추종). 나중에 매매를
+    복기할 때 당시 청산선을 알 수 없으면 '그때 손절이 적절했나'를 판단할 수 없고, 화면은
+    현재 상태만 보여 주므로 청산이 끝난 종목은 그 값을 영영 복원할 수 없다.
+
+    [%에 가격을 병기하는 이유] -7% 만으로는 그 선이 어디인지 매번 역산해야 한다. 기록은
+    나중에 읽는 것이라 그 자리에서 계산할 수 없다 — 가격을 같이 박아 둔다.
+
+    ts 를 주면 그 상태(무장 전/후)를 그대로 쓰고, 없으면 atr 로 **진입 시점의 예상 발동가**를
+    계산한다(매수 기록에는 아직 고점이 없다).
+    """
+    def _p(v):
+        return f"${v:,.2f}" if is_overseas else f"{round(v):,}"
+
+    if not buy_price or buy_price <= 0:
+        return ""
+
+    parts = []
+    if sl_rate is not None and sl_rate != 0:
+        parts.append(f"{label or '손절'}:{sl_rate:+.1f}%({_p(buy_price * (1 + sl_rate / 100))})")
+
+    act = cb = None
+    arm_price = stop_price = None
+    if ts:
+        act = ts.get('activation') or 0
+        if ts.get('armed'):
+            parts.append(f"TS:-{ts['callback']:.1f}%({_p(ts['stop_price'])})")
+            act = None      # 무장 후에는 발동가를 다시 적지 않는다
+        elif act > 0:
+            arm_price = buy_price * (1 + act / 100)
+            cb = ts.get('callback') or 0
+            if cb > 0 and highest_price and highest_price > 0:
+                # 콜백은 고점에 비례해 좁아진다 — 발동가 기준으로 환산해야 그때 생길
+                #  청산선이 나온다(잔고 화면의 청산선 열과 같은 환산).
+                cb = max(config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0),
+                         cb * highest_price / arm_price)
+                stop_price = arm_price * (1 - cb / 100)
+    elif atr is not None:
+        # 매수 시점 — 고점이 없으므로 발동선·콜백을 진입가에서 직접 뽑는다.
+        base_cb = config.SELL_STRATEGY.get("TRAILING_STOP_CALLBACK_RATE", 5.0)
+        act = breakeven_activation_rate(atr, buy_price, base_cb, ts_activation_atr_mult(),
+                                        config.SELL_STRATEGY.get("USE_ATR_STOP", True))
+        if act and act > 0:
+            arm_price = buy_price * (1 + act / 100)
+            mult = config.SELL_STRATEGY.get("TRAILING_ATR_MULTIPLIER", 3.5)
+            dyn = (float(atr) * mult / arm_price) * 100 if atr and arm_price > 0 else 0.0
+            cb = effective_callback(base_cb, dyn, act)
+            stop_price = arm_price * (1 - cb / 100)
+
+    if arm_price is not None and act:
+        seg = f"TS:+{act:.0f}%({_p(arm_price)})"
+        if stop_price is not None and cb:
+            seg += f"→-{cb:.0f}%({_p(stop_price)})"
+        parts.append(seg)
+
+    return f"[청산선 {' '.join(parts)}]" if parts else ""
+
+
 def effective_callback(ts_callback, dynamic_callback, max_profit_rate):
     """실효 콜백(%) — 하한·상한을 한 곳에서 적용한다. (순수 함수)
 
@@ -1492,6 +1554,20 @@ class DefaultStrategy:
                     else:
                         reason = f"추세이탈({state}/점수하락+60일선이탈) [점수:{score}, RSI:{rsi_val}, ADX:{adx_val}, CCI:{cci_val}]"
             
+        # [기록] 매도 사유에 그때의 청산선을 붙인다. 사유만으로는 '어디서 끊길 예정이었나'가
+        #  남지 않아, 청산이 끝난 뒤에는 그 값을 어디서도 복원할 수 없다(화면은 현재만 보여준다).
+        if reason:
+            levels = format_exit_levels(
+                buy_price, sl_rate=sl_rate,
+                label=("BEP" if is_bep_applied else
+                       ("이익보호" if is_lock_applied else
+                        ("ATR" if (thresholds and thresholds.get("ATR_APPLIED_SL_RATE") is not None)
+                         else "고정"))),
+                ts=ts_info, highest_price=highest_price,
+                is_overseas=utils.is_overseas_code(code))
+            if levels:
+                reason = f"{reason} {levels}"
+
         return {
             'action': 'sell' if reason else 'hold',
             'reason': reason,

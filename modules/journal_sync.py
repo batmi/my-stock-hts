@@ -280,9 +280,9 @@ def _account_text(cano, product_code):
 # ══════════════════════════════════════════════════════════════════════
 
 def _is_overseas(code):
-    """종목코드 형태로 해외 여부를 판단한다 (국내는 6자리 숫자)."""
-    code = (code or '').strip()
-    return not (len(code) == 6 and code.isdigit())
+    """종목코드 형태로 해외 여부를 판단한다. 판정은 core.utils 가 단독으로 소유한다."""
+    from core import utils
+    return utils.is_overseas_code(code)
 
 
 def _exchange_for(code, overseas):

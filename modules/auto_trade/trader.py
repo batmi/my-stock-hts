@@ -6558,12 +6558,21 @@ class AutoTrader:
                 annual_vol = (atr_val / price_val) * math.sqrt(252) * 100
                 atr_msg += f"[ATR:{int(atr_val):,}/변동성:{annual_vol:.1f}%]"
             
-            if use_atr_stop:
-                if atr_msg: atr_msg += " "
-                atr_msg += f"[ATR손절:{sl_rate:.0f}%]"
-            
+            # [ATR손절:-7%] 는 걷어냈다 — 바로 아래 청산선이 같은 값을 **가격까지 붙여**
+            #  적는다. 두 번 적으면 한쪽만 고쳐질 때 기록끼리 어긋난다.
             if atr_msg:
                 reason += f" {atr_msg}"
+
+            # [기록] 진입 시점의 청산선을 함께 남긴다 — %만으로는 나중에 그 선이 어디였는지
+            #  역산해야 하고, 청산이 끝난 종목은 화면 어디에도 그 값이 남지 않는다.
+            #  TS 는 아직 무장 전이라 '언제 켜지고(발동가) 그때 어디서 잘리나'를 계산해 둔다.
+            levels = _pkg().format_exit_levels(
+                order_price, sl_rate=sl_rate,
+                label=("ATR" if use_atr_stop else "고정"),
+                atr=(atr_val if atr_val > 0 else None),
+                is_overseas=utils.is_overseas_code(cand['code']))
+            if levels:
+                reason += f" {levels}"
 
             # [Fix] 신규 포지션 매수 전 이전 보유분의 잔존 상태 초기화.
             #  외부(MTS/HTS) 전량 매도는 엔진 매도 경로를 거치지 않아 트레일링 최고가·반익절
