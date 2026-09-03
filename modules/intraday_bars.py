@@ -139,15 +139,68 @@ def status_cache_path(code, interval="60m"):
     return os.path.join(CACHE_DIR, f"status_{code}_{interval}.pkl")
 
 
-def load_status(code, interval="60m"):
+# 시점판정 캐시에 함께 저장하는 '무엇으로 만들었나' 표식. 날짜 키(YYYYMMDD)와 섞이지
+#  않도록 밑줄로 시작한다.
+STATUS_META_KEY = "_meta"
+
+
+def current_thresholds():
+    """시점판정을 만들 때 쓰는 임계값 한 벌. 빌더와 게이트가 같은 것을 봐야 한다.
+
+    종전에는 tools/build_intraday_status.py 안에만 있어, 게이트는 '어떤 임계값으로 만든
+    판정인가'를 물어볼 방법이 없었다.
+    """
+    return {
+        "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
+        "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
+        "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"],
+        "WEIGHTS": dict(config.SCORING_WEIGHTS),
+    }
+
+
+def status_meta(thresholds, lookback, bars_last):
+    """시점판정 캐시의 표식. 이 셋 중 하나라도 달라지면 그 판정은 지금 것이 아니다."""
+    return {"thresholds": thresholds, "lookback": lookback, "bars_last": str(bars_last)}
+
+
+def bars_last_date(code, interval="60m"):
+    """캐시된 분봉의 마지막 날짜(YYYY-MM-DD 문자열). 없으면 None."""
+    df = load(code, interval)
+    if df is None or df.empty:
+        return None
+    return str(df.index[-1].date())
+
+
+def save_status(code, interval, data, thresholds, lookback):
+    """시점판정을 표식과 함께 저장한다."""
+    payload = dict(data)
+    payload[STATUS_META_KEY] = status_meta(thresholds, lookback,
+                                           bars_last_date(code, interval))
+    pd.to_pickle(payload, status_cache_path(code, interval))
+
+
+def load_status(code, interval="60m", expect=None):
+    """시점판정 캐시. 없거나 **지금 설정으로 만든 것이 아니면** None.
+
+    [왜 검증하는가 · 2026-09-04] 이 캐시에는 만들 당시의 임계값·가중치·룩백과 그때의
+     분봉이 통째로 구워져 있다(진입 가부 판정까지 들어 있다). 그런데 무엇으로 만들었는지
+     적어 두지 않아서, 임계값을 바꾸거나 분봉을 새로 받아도 빌더는 '이미 있다'며 건너뛰고
+     감사 도구는 **옛 설정의 판정**으로 결과를 냈다. 계측기가 조용히 다른 것을 재는
+     상황이라, 표식이 없거나 어긋나면 없는 것으로 친다(호출부는 시끄럽게 실패한다).
+    """
     p = status_cache_path(code, interval)
     if not os.path.exists(p):
         return None
     try:
         d = pd.read_pickle(p)
-        return d if isinstance(d, dict) and d else None
     except Exception:
         return None
+    if not isinstance(d, dict) or not d:
+        return None
+    meta = d.pop(STATUS_META_KEY, None)
+    if expect is not None and meta != expect:
+        return None
+    return d or None
 
 
 # 장중 한 시점의 판정 결과. run_portfolio 의 진입 게이트·사이징이 쓰는 값만 담는다.
@@ -215,7 +268,8 @@ def precompute_intraday_status(code, bars_by_day, thresholds, days=1200, lookbac
     return out
 
 
-def gate_universe(dfs, interval="60m", min_match=98.0, min_coverage=0.9, need_status=True):
+def gate_universe(dfs, interval="60m", min_match=98.0, min_coverage=0.9, need_status=True,
+                  lookback=260):
     """분봉으로 돌릴 수 있는 종목만 남긴다. (bars, status, keep, drop)
 
     두 관문을 통과해야 한다.
@@ -230,16 +284,24 @@ def gate_universe(dfs, interval="60m", min_match=98.0, min_coverage=0.9, need_st
     """
     import numpy as np
 
+    #  시점판정은 '지금 설정으로 만든 것'만 받는다(load_status 주석 참조). 표식이 없거나
+    #   임계값·룩백·분봉 끝날짜가 어긋나면 없는 것으로 치고 사유를 남긴다 — 옛 판정으로
+    #   조용히 재는 것보다 감사가 멈추는 편이 낫다.
+    th = current_thresholds() if need_status else None
+
     bars, status, keep, drop = {}, {}, [], []
     for code, df in dfs.items():
         raw = load(code, interval)
-        st = load_status(code, interval) if need_status else {}
         if raw is None:
             drop.append((code, "분봉 없음"))
             continue
-        if need_status and not st:
-            drop.append((code, "시점판정 없음"))
-            continue
+        st = {}
+        if need_status:
+            last = str(raw.index[-1].date()) if not raw.empty else None
+            st = load_status(code, interval, expect=status_meta(th, lookback, last))
+            if not st:
+                drop.append((code, "시점판정 없음/낡음 → tools/build_intraday_status.py 재실행"))
+                continue
         g = raw.groupby(raw.index.date).agg(open=("open", "first"), high=("high", "max"),
                                             low=("low", "min"), close=("close", "last"))
         d = df.copy()

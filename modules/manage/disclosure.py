@@ -5,6 +5,7 @@
 - 스케줄러 알림(scheduler)에서도 분류 로직을 재사용한다.
 """
 import concurrent.futures
+import logging
 import contextlib
 from datetime import datetime, timedelta
 
@@ -15,6 +16,8 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 import config
 import api
 from core import utils
+
+logger = logging.getLogger(__name__)
 
 DART_VIEWER_URL = "https://dart.fss.or.kr/dsaf001/main.do?rcpNo={}"
 
@@ -572,12 +575,21 @@ def check_and_alert_disclosures(min_level=2, days=2):
                f"· 일자: {_fmt_date(e['date'])}\n"
                f"{detail_line}"
                f"{DART_VIEWER_URL.format(rcept)}")
+        #  [Fix 2026-09-04] 전달을 확인한 뒤에 표시한다. 종전에는 비동기 발송을 try 로
+        #   감싸고 곧바로 mark_disclosure_notified 를 불렀는데, 그 함수는 스레드에 넘기고
+        #   즉시 돌아오므로 예외가 올 리 없다. 파이의 네트워크가 끊긴 동안 접수된 공시가
+        #   '발송 완료'로 굳어 영영 다시 오지 않았다. 이 경로는 이미 전용 스레드에서 도니
+        #   동기 발송의 대기 비용이 매매를 막지 않는다.
         try:
-            api.send_telegram_message(msg)
+            if not api.send_telegram_message(msg, sync=True):
+                logger.warning(f"[Disclosure] 전송 실패 — 표시하지 않고 다음 주기에 재시도: {rcept}")
+                continue
             db_manager.db.mark_disclosure_notified(rcept)
             sent += 1
-        except Exception:
-            pass
+        except Exception as e:
+            #  발송은 됐는데 표시에 실패한 경우다. 다음 주기에 한 번 더 갈 수 있지만,
+            #  '못 받는 것'보다 '두 번 받는 것'이 낫다. 조용히 넘기지는 않는다.
+            logger.error(f"[Disclosure] 알림 기록 실패({rcept}): {e}")
     return sent
 
 

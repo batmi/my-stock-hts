@@ -102,9 +102,19 @@ def _get_telegram_footer():
         else f"[{instance_name} | {acc_label}]"
 
 def send_telegram_message(message, reply_markup=None, is_urgent=False, sync=False):
-    """텔레그램 메시지 전송 (시스템 트레이딩 알림용)"""
+    """텔레그램 메시지 전송 (시스템 트레이딩 알림용).
+
+    [반환값] sync=True 일 때만 **실제 전달 여부(bool)** 를 돌려준다. 비동기 전송은
+     스레드/큐에 넘기고 즉시 돌아오므로 그 시점에는 성패를 알 수 없어 None 이다.
+
+    [왜 이 구분이 필요한가 · 2026-09-04] '보냈다'를 DB에 표시해 중복을 막는 알림
+     (공시·캘린더)이 이 함수를 try 로 감싸고 성공으로 간주했다. 이 함수는 비동기라
+     예외를 던지지 않으므로 그 try 는 아무것도 잡지 못한다 — 파이의 네트워크가 끊긴
+     동안 도착한 공시는 '발송 완료'로 굳어 **영영 다시 오지 않는다**. 표시하기 전에
+     확인할 수단을 준다.
+    """
     if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
-        return
+        return False if sync else None
 
     account_info = _get_telegram_footer()
     
@@ -269,7 +279,7 @@ def send_telegram_message(message, reply_markup=None, is_urgent=False, sync=Fals
         summary = " ".join(str(message).split())[:120]
         if sent_all:
             _record_delivery(True)
-            return
+            return True
         streak = _record_delivery(False, summary=summary, error=last_error)
         logger.error(f"[Telegram] 미전달 메시지(연속 {streak}건째): {summary}")
         if streak >= DELIVERY_ALERT_THRESHOLD and context.is_screen_output_allowed():
@@ -278,10 +288,11 @@ def send_telegram_message(message, reply_markup=None, is_urgent=False, sync=Fals
                 f"알림이 도착하지 않고 있습니다.[/bold red]")
             config.console.print(f"[dim red]  마지막 오류: {last_error or '알 수 없음'}[/dim red]")
             config.console.print(f"[dim red]  미전달: {summary}[/dim red]")
+        return False
 
     # [수정] 긴급 발송 여부에 따라 큐(Queue) 대기열 우회 처리
     if sync:
-        _send_task()
+        return _send_task()
     elif is_urgent:
         threading.Thread(target=_send_task, daemon=True, name="TgUrgentSender").start()
     else:

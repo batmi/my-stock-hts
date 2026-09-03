@@ -26,26 +26,28 @@ _TH = None
 
 
 def _thresholds():
-    return {
-        "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
-        "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
-        "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"],
-        "WEIGHTS": config.SCORING_WEIGHTS,
-    }
+    """임계값 한 벌은 modules/intraday_bars 가 갖는다 — 게이트도 같은 것을 봐야 한다."""
+    return ib.current_thresholds()
 
 
 def _one(args):
     code, interval, days, lookback, force = args
-    if not force and ib.load_status(code, interval) is not None:
-        return code, -1
+    #  [Fix 2026-09-04] '이미 있으면 건너뛴다'를 표식 대조로 바꾼다. 종전에는 임계값·
+    #   가중치를 바꾸거나 분봉을 새로 받아도 옛 판정을 그대로 두고 넘어갔고, 감사 도구는
+    #   그것을 지금 설정의 판정인 양 썼다. 지금 설정으로 만든 것이 아니면 다시 만든다.
+    th = _thresholds()
+    if not force:
+        last = ib.bars_last_date(code, interval)
+        if ib.load_status(code, interval,
+                          expect=ib.status_meta(th, lookback, last)) is not None:
+            return code, -1
     raw = ib.load(code, interval)
     if raw is None:
         return code, 0
-    import pandas as pd
-    d = ib.precompute_intraday_status(code, ib.by_day(raw), _thresholds(), days, lookback)
+    d = ib.precompute_intraday_status(code, ib.by_day(raw), th, days, lookback)
     if not d:
         return code, 0
-    pd.to_pickle(d, ib.status_cache_path(code, interval))
+    ib.save_status(code, interval, d, th, lookback)
     return code, sum(len(v) for v in d.values())
 
 

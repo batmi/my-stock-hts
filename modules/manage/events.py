@@ -7,6 +7,7 @@
 """
 import calendar as _cal
 import concurrent.futures
+import logging
 from datetime import datetime, date, timedelta
 
 from rich.table import Table
@@ -16,6 +17,8 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 import config
 import api
 from core import utils
+
+logger = logging.getLogger(__name__)
 
 try:
     import yfinance as yf
@@ -529,12 +532,19 @@ def check_and_alert_calendar(lead_days=ALERT_LEAD_DAYS):
                                        prev_td=gap in prev_td_gaps))
         lines.extend(targets[gap])
 
+    #  [Fix 2026-09-04] '발송이 성공한 뒤에만 기록한다'는 의도는 맞았지만 수단이 없었다.
+    #   send_telegram_message 는 비동기라 예외를 던지지 않아 아래 try 가 아무것도 잡지
+    #   못했고, 네트워크가 끊겨 있어도 전부 '보냈다'로 굳었다. 캘린더 알림은 하루 한 번뿐이라
+    #   한 번 놓치면 그 일정은 끝이다. 동기로 보내고 전달을 확인한다.
     try:
-        api.send_telegram_message("\n".join(lines))
-    except Exception:
+        delivered = api.send_telegram_message("\n".join(lines), sync=True)
+    except Exception as e:
+        logger.error(f"[Calendar] 알림 전송 오류: {e}")
+        return 0
+    if not delivered:
+        logger.warning("[Calendar] 알림 전송 실패 — 표시하지 않는다(다음 기회에 다시 시도)")
         return 0
 
-    # 발송이 성공한 뒤에만 기록한다 — 실패한 알림까지 '보냈다'로 굳으면 영영 못 받는다
     for key in keys:
         db_manager.db.mark_disclosure_notified(key)
     return 1
