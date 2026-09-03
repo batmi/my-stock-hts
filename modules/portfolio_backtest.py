@@ -150,36 +150,48 @@ def decide_sell(*, price, high, avg, sl_rate, atr_applied, is_bep, holding_days,
             reason = "이익보호"
         else:
             reason = "본전청산" if is_bep else ("ATR손절" if (use_atr and atr_applied) else "손절")
-    elif use_time_stop and holding_days >= time_stop_days and loss_rate < time_stop_min:
-        # 시간청산 유예: 매수 계열 상태 유지 + 상방 모멘텀(최근 5일 고점 ≥ 10일 고점)
-        grace = state in ("매수", "강매수", "역매수", "상승", "대기") and \
-            roll_high_5 >= roll_high_10
-        if not grace:
-            sell, reason = True, "시간청산"
-    elif high > 0 and (ts_breakeven or max_profit >= ts_act):
-        drop = (high - price) / high * 100
-        callback = ts_callback
-        if use_atr and atr and atr > 0:
-            dynamic = (atr * ts_atr_mult / high) * 100
-            # [SSOT] 반납 상한(TS_MAX_GIVEBACK_RATIO)은 engine.giveback_callback_cap이 단독
-            #  보유한다. 실매매(compute_trailing_stop)·단일종목 백테스트는 이미 이 캡을 쓰는데
-            #  포트폴리오 백테스트만 순수 샹들리에로 돌고 있었다. 캡이 없으면 콜백이 더 커져
-            #  청산이 늦고, 그만큼 백테스트가 실매매보다 낙관적으로 나온다
-            #  (실측 2026-08-04: 청산 판정 불일치의 96%가 이 한 가지 · 3년 수익 +82.8%p 과대).
-            from modules.auto_trade.engine import effective_callback
-            callback = effective_callback(ts_callback, dynamic, max_profit)
-        # [손익분기 연동] 되돌림 한 번(3.5 ATR)을 맞고도 본전 이상인 지점부터 무장한다.
-        #  [SSOT] 발동선 산식은 engine.breakeven_activation_rate가 단독 보유한다 —
-        #  백테스트가 실매매와 다른 식을 쓰면 튜닝 결과가 무의미해진다(콜백 캡과 같은 규약).
-        if ts_breakeven:
-            from modules.auto_trade.engine import (breakeven_activation_rate,
-                                                   ts_activation_atr_mult)
-            armed = max_profit >= breakeven_activation_rate(atr, avg, ts_callback,
-                                                            ts_activation_atr_mult(), use_atr)
-        else:
-            armed = max_profit >= ts_act
-        if armed and drop >= callback:
-            sell, reason = True, "트레일링스탑"
+    else:
+        # [체인을 소비하지 않는다] 종전에는 이 절이 elif 였다. 시간청산 조건이 참인데
+        #  **유예**되면 reason 이 비어 있는 채로 체인이 끝나, 아래 트레일링 스탑 판정이
+        #  그날 통째로 건너뛰어졌다 — 승자가 무너지는 순간 청산을 미루는 방향이다.
+        #  바로 위 반익절 절이 같은 형태로 한 번 고쳐진 적이 있다(그 주석 참조).
+        #  [실측 2026-09-01] 현재 설정에서 삼킨 사례는 0건이고, TIME_STOP_MIN_PROFIT_RATE 를
+        #   5·10 으로 올려 유예를 146·417건까지 늘려도 여전히 0이다. 우연이 아니라 구조다 —
+        #   유예 조건(최근 5일 고점 ≥ 10일 고점 = 고점을 최근에 찍었다)과 TS 발동 조건
+        #   (고점 대비 콜백만큼 하락)이 논리적으로 거의 배타적이기 때문이다. 그래서 이 수정은
+        #   **수치를 바꾸지 않는다.** 그럼에도 고치는 이유는 그 안전이 유예 조건의 형태에
+        #   기대고 있어서, 그 조건을 손대는 순간 되살아나는 함정이기 때문이다.
+        if use_time_stop and holding_days >= time_stop_days and loss_rate < time_stop_min:
+            # 시간청산 유예: 매수 계열 상태 유지 + 상방 모멘텀(최근 5일 고점 ≥ 10일 고점)
+            grace = state in ("매수", "강매수", "역매수", "상승", "대기") and \
+                roll_high_5 >= roll_high_10
+            if not grace:
+                sell, reason = True, "시간청산"
+
+        if not sell and high > 0 and (ts_breakeven or max_profit >= ts_act):
+            drop = (high - price) / high * 100
+            callback = ts_callback
+            if use_atr and atr and atr > 0:
+                dynamic = (atr * ts_atr_mult / high) * 100
+                # [SSOT] 반납 상한(TS_MAX_GIVEBACK_RATIO)은 engine.giveback_callback_cap이 단독
+                #  보유한다. 실매매(compute_trailing_stop)·단일종목 백테스트는 이미 이 캡을 쓰는데
+                #  포트폴리오 백테스트만 순수 샹들리에로 돌고 있었다. 캡이 없으면 콜백이 더 커져
+                #  청산이 늦고, 그만큼 백테스트가 실매매보다 낙관적으로 나온다
+                #  (실측 2026-08-04: 청산 판정 불일치의 96%가 이 한 가지 · 3년 수익 +82.8%p 과대).
+                from modules.auto_trade.engine import effective_callback
+                callback = effective_callback(ts_callback, dynamic, max_profit)
+            # [손익분기 연동] 되돌림 한 번(3.5 ATR)을 맞고도 본전 이상인 지점부터 무장한다.
+            #  [SSOT] 발동선 산식은 engine.breakeven_activation_rate가 단독 보유한다 —
+            #  백테스트가 실매매와 다른 식을 쓰면 튜닝 결과가 무의미해진다(콜백 캡과 같은 규약).
+            if ts_breakeven:
+                from modules.auto_trade.engine import (breakeven_activation_rate,
+                                                       ts_activation_atr_mult)
+                armed = max_profit >= breakeven_activation_rate(atr, avg, ts_callback,
+                                                                ts_activation_atr_mult(), use_atr)
+            else:
+                armed = max_profit >= ts_act
+            if armed and drop >= callback:
+                sell, reason = True, "트레일링스탑"
 
     if not sell:
         # 점수 매도는 추세 구조 훼손(주가<60일선 또는 '매도' 상태) 동시 충족 시에만

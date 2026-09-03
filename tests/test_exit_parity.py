@@ -222,3 +222,84 @@ def test_trailing_atr_multiplier_fallback_matches_live():
     assert pbt.build_sell_cfg({})["ts_atr_mult"] == 3.5
     assert pbt.build_sell_cfg({})["ts_act"] == 10.0
     assert pbt.build_sell_cfg({})["sell_score_limit"] == 4.0
+
+
+# ==========================================================
+# 시간청산 '유예'가 트레일링 스탑을 삼키지 않는다 (2026-09-01)
+#
+# [배경] 두 구현 모두 청산 판정이 if/elif 체인이었다. 시간청산 조건이 참인데 유예되면
+# (매수 계열 상태 + 상방 모멘텀) reason 이 빈 채로 체인이 끝나, 그날 트레일링 스탑 판정이
+# 통째로 건너뛰어졌다 — 승자가 무너지는 순간 청산을 미루는 방향이다. 바로 위 반익절 절이
+# 같은 형태로 이미 한 번 고쳐졌는데 여기만 남아 있었다.
+#
+# [왜 지금까지 안 드러났나] 유예 조건('최근 5일 고점 ≥ 10일 고점' = 고점을 최근에 찍었다)과
+# TS 발동 조건('고점 대비 콜백만큼 하락')이 논리적으로 거의 배타적이다. 백테스트 10년에서
+# 삼킨 사례 0건이고, TIME_STOP_MIN_PROFIT_RATE 를 5·10 으로 올려 유예를 146·417건까지
+# 늘려도 0이었다. 그래서 이 수정은 수치를 바꾸지 않는다 — 함정만 없앤다.
+# 그리고 백테스트·실매매가 **같은 결함을 공유**했으므로 청산 패리티 감사로는 못 잡혔다.
+# ==========================================================
+
+def test_time_stop_grace_does_not_swallow_the_trailing_stop():
+    """[핵심] 유예된 날에도 TS 는 판정된다."""
+    from modules import portfolio_backtest as pb
+
+    cfg = pb.build_sell_cfg()
+    cfg.update({"use_time_stop": True, "time_stop_days": 15, "time_stop_min": 0.0,
+                "ts_breakeven": False, "ts_act": 10.0, "ts_callback": 5.0,
+                "use_atr": False})
+    # 유예가 서는 상태: 보유 20일 · 손실 중 · 매수 계열 · 상방 모멘텀(5일고 = 10일고)
+    # 동시에 TS 도 서는 상태: MFE +50% 인데 고점 대비 33% 하락
+    sell, reason = pb.decide_sell(
+        price=100.0, high=150.0, avg=100.5, sl_rate=-30.0, atr_applied=False,
+        is_bep=False, holding_days=20, state="상승", state_reason="", raw_score=6.0,
+        sell_check=6.0, ema60=90.0, atr=0.0,
+        roll_high_5=150.0, roll_high_10=150.0, cfg=cfg)
+
+    assert sell and reason == "트레일링스탑", \
+        f"시간청산 유예가 트레일링 스탑을 삼켰다 (sell={sell}, reason={reason!r})"
+
+
+def test_the_grace_itself_still_works():
+    """유예는 살아 있어야 한다 — TS 가 안 걸리면 그날은 팔지 않는다."""
+    from modules import portfolio_backtest as pb
+
+    cfg = pb.build_sell_cfg()
+    cfg.update({"use_time_stop": True, "time_stop_days": 15, "time_stop_min": 0.0,
+                "ts_breakeven": False, "ts_act": 10.0, "ts_callback": 5.0,
+                "use_atr": False})
+    sell, reason = pb.decide_sell(
+        price=100.0, high=100.5, avg=100.5, sl_rate=-30.0, atr_applied=False,
+        is_bep=False, holding_days=20, state="상승", state_reason="", raw_score=6.0,
+        sell_check=6.0, ema60=90.0, atr=0.0,
+        roll_high_5=100.5, roll_high_10=100.5, cfg=cfg)
+
+    assert not sell, f"유예가 사라졌다 — 상방 모멘텀이 살아있는데 팔았다 ({reason!r})"
+
+
+def test_time_stop_still_fires_without_grace():
+    """상방 모멘텀이 없으면 종전대로 시간청산된다."""
+    from modules import portfolio_backtest as pb
+
+    cfg = pb.build_sell_cfg()
+    cfg.update({"use_time_stop": True, "time_stop_days": 15, "time_stop_min": 0.0,
+                "ts_breakeven": False, "ts_act": 10.0, "ts_callback": 5.0,
+                "use_atr": False})
+    sell, reason = pb.decide_sell(
+        price=100.0, high=100.5, avg=100.5, sl_rate=-30.0, atr_applied=False,
+        is_bep=False, holding_days=20, state="상승", state_reason="", raw_score=6.0,
+        sell_check=6.0, ema60=90.0, atr=0.0,
+        roll_high_5=95.0, roll_high_10=100.5, cfg=cfg)
+
+    assert sell and reason == "시간청산", f"시간청산이 안 걸렸다 ({sell}, {reason!r})"
+
+
+def test_the_live_path_no_longer_uses_elif_for_the_trailing_stop():
+    """실매매 쪽도 같은 형태였다 — 두 구현이 같은 결함을 공유해 패리티로는 못 잡혔다."""
+    import inspect
+    from modules.auto_trade import engine
+
+    src = inspect.getsource(engine.DefaultStrategy.analyze_sell)
+    # 주석에는 옛 형태가 설명으로 남아 있다 — 코드 줄만 본다.
+    code = "\n".join(l for l in src.split("\n") if not l.strip().startswith("#"))
+    assert "elif ts_msg:" not in code, "실매매 트레일링 스탑이 여전히 elif 체인에 묶여 있다"
+    assert "if not reason and ts_msg:" in code
