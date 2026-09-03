@@ -540,10 +540,18 @@ def view_system_config(group=None):
             "변동성 타겟팅\n[dim]ATR 기반 비중 조절 — 변동성 큰 종목의 비중을 자동 축소[/dim]",
             "[dim](추세추종 검증값 — 조정 잠금)[/dim]", f"{_vt_on}")
         if _vt_on:
+            # [실효 범위] 상한은 VOLATILITY_SCALING_MAX(2.0)가 아니라 **1.0**이다.
+            #  allocate_budget/allocate_amount 가 `min(int(base_amt * scale), base_amt)` 로
+            #  확대를 봉인해, 배수가 1을 넘어도 기초 비중을 못 넘긴다(리스크 층의 축소분을
+            #  되돌리면 손실액 캡을 넘길 수 있어 의도적으로 막은 것이다).
+            #  화면에 2.0을 적으면 '저변동성 종목은 두 배까지 키운다'로 읽히는데 실제로는
+            #  그런 일이 없다 — 실측 2026-09-01(10년·사이징 421회): 배수 ≥ 1.0 은 1.0%뿐,
+            #  중앙 0.513, 변동성 층이 최종액을 정한 비율 99.0%.
+            #  BREAK_EVEN_PROFIT_RATE 를 실제 동작(1R)과 달라 숨긴 것과 같은 취지다.
             table.add_row(
                 f"  [dim]└ 목표 연간 변동성 {getattr(config.settings, 'TARGET_VOLATILITY', 0.20)} / "
-                f"비중 배수 {getattr(config.settings, 'VOLATILITY_SCALING_MIN', 0.4)} ~ "
-                f"{getattr(config.settings, 'VOLATILITY_SCALING_MAX', 2.0)}[/dim]", "", "")
+                f"비중 배수 {getattr(config.settings, 'VOLATILITY_SCALING_MIN', 0.4)} ~ 1.0 "
+                f"(확대 없음 — 기초 비중이 상한)[/dim]", "", "")
 
         subheader("3-2. 매수 필터")
         row("시장 필터링 사용", "지수 하락 시 신규 매수 보류", "USE_MARKET_FILTER", f"{getattr(config.settings, 'USE_MARKET_FILTER', True)}", key="USE_MARKET_FILTER")

@@ -242,3 +242,58 @@ def test_증액_OFF는_양쪽_모두_막는다():
             profit_rate=50.0, state="강매수", score=9.0, pyramid_count=0)
     assert live is False
     assert _backtest_pyramid_allowed("강매수", 50.0, 0, 0, 10.0) is False
+
+
+# ==========================================================
+# 사이징 3층 중 실제로 구속하는 층 (2026-09-01 원칙 감사)
+#
+# [실측 10년·사이징 421회] 변동성 99.0% · 기초비중 1.0% · **리스크한도 0회**.
+# 배수 중앙 0.513(사분위 0.400~0.599), 하한(0.4)에 붙은 것은 25.7%뿐 — 즉 이 층은
+# 일률 삭감이 아니라 실제로 변동성에 비례해 조절한다.
+#
+# 여기서 고정하는 것은 **확대가 봉인돼 있다**는 사실이다. VOLATILITY_SCALING_MAX(2.0)는
+# `min(int(base_amt * scale), base_amt)` 때문에 사문이고, 실효 상한은 1.0 이다.
+# 이걸 모르면 '저변동성 종목은 두 배까지 키운다'로 오독한다(화면도 그렇게 적고 있었다).
+# ==========================================================
+
+def test_the_volatility_layer_can_shrink_but_never_expand():
+    """[핵심] 배수가 1을 넘어도 기초 비중을 못 넘는다."""
+    import config
+    from modules import portfolio_backtest as pb
+
+    equity, ratio = 10_000_000, 0.25
+    base = int(equity * ratio)
+    # 아주 낮은 변동성 → scale = TARGET_VOLATILITY / annual_vol 이 1을 크게 넘는다
+    got = pb.allocate_amount(equity, cash=equity, invest_ratio=ratio,
+                             sl_rate=-7.0, atr=1.0, price=100_000.0)
+    assert got <= base, f"확대 봉인이 풀렸다 — 기초 {base:,} 인데 {got:,}"
+
+    # 그 반대: 높은 변동성이면 확실히 깎인다
+    small = pb.allocate_amount(equity, cash=equity, invest_ratio=ratio,
+                               sl_rate=-7.0, atr=8_000.0, price=100_000.0)
+    assert small < base, "고변동성인데 안 깎였다"
+    floor = getattr(config, "VOLATILITY_SCALING_MIN", 0.4)
+    assert small >= int(base * floor) - 1, "하한 아래로 깎였다"
+
+
+def test_the_risk_layer_is_not_what_binds():
+    """리스크 한도를 크게 흔들어도 배분액이 안 변한다 — 이 층은 구속하지 않는다.
+
+    'SYSTEM_RISK_PER_TRADE 를 낮추면 MDD 가 준다'는 옛 결론은 곱 결합 시절의 것이다
+    (min 결합 fix 이후 실효 다이얼은 TARGET_VOLATILITY 로 옮겨갔다).
+    """
+    import config
+    from modules import portfolio_backtest as pb
+
+    kw = dict(equity=10_000_000, cash=10_000_000, invest_ratio=0.25,
+              sl_rate=-7.0, atr=3_000.0, price=100_000.0)
+    orig = getattr(config, "SYSTEM_RISK_PER_TRADE", 4.0)
+    try:
+        config.SYSTEM_RISK_PER_TRADE = 4.0
+        a = pb.allocate_amount(**kw)
+        config.SYSTEM_RISK_PER_TRADE = 3.0
+        b = pb.allocate_amount(**kw)
+    finally:
+        config.SYSTEM_RISK_PER_TRADE = orig
+
+    assert a == b, f"리스크 층이 구속하고 있다 (4% → {a:,} / 3% → {b:,})"
