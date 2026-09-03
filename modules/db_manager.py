@@ -326,7 +326,8 @@ class DBManager:
                         remote_id TEXT,
                         dead_at TEXT,
                         reject_count INTEGER DEFAULT 0,
-                        is_backlog INTEGER DEFAULT 0
+                        is_backlog INTEGER DEFAULT 0,
+                        needs_patch INTEGER DEFAULT 0
                     )
                 ''')
                 # dead_at      : 서버가 반복 거절한 행을 대기열에서 뺀다. 지우지 않고 표시만
@@ -339,9 +340,14 @@ class DBManager:
                 outbox_columns = [info[1] for info in cursor.fetchall()]
                 # is_backlog  : 재동기화처럼 뒤늦게 밀어 넣은 행. 정렬에서 뒤로 보내
                 #               실시간 체결이 대량 backlog 뒤에 줄 서지 않게 한다.
+                # needs_patch : 이미 서버에 들어간 기록의 **정정분**. 서버는 같은
+                #               brokerExecutionId 를 duplicate 로 건너뛰기만 하므로
+                #               (덮어쓰지 않는다) 다시 POST 해서는 값이 갱신되지 않는다.
+                #               이 표시가 붙은 행은 PATCH 로 보낸다.
                 for col, dtype in (("dead_at", "TEXT"),
                                    ("reject_count", "INTEGER DEFAULT 0"),
-                                   ("is_backlog", "INTEGER DEFAULT 0")):
+                                   ("is_backlog", "INTEGER DEFAULT 0"),
+                                   ("needs_patch", "INTEGER DEFAULT 0")):
                     if col not in outbox_columns:
                         try:
                             cursor.execute(f"ALTER TABLE journal_outbox ADD COLUMN {col} {dtype}")
@@ -359,6 +365,20 @@ class DBManager:
                     "CREATE INDEX IF NOT EXISTS idx_journal_outbox_queue_v2 "
                     "ON journal_outbox(synced_at, dead_at, is_backlog, id)")
                 
+                # [추가] 기초잔고 전송 표시 — 계좌당 한 번만 보낸다.
+                #  연동 이전부터 들고 있던 종목은 매수 기록이 서버에 영영 없다. 그러면
+                #  그 종목의 첫 매도가 '매수 기록 없음'으로 찍히고 보유 수량이 음수로
+                #  내려간다. 기초잔고는 그 구멍을 메우는 1회성 씨앗이라, 두 번 보내면
+                #  거꾸로 없는 매수를 만들어 낸다 — 보냈다는 사실을 반드시 남겨야 한다.
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS journal_opening (
+                        account TEXT PRIMARY KEY,
+                        as_of TEXT,
+                        sent_at TEXT,
+                        count INTEGER DEFAULT 0
+                    )
+                ''')
+
                 # [추가] 예약 주문 테이블 생성
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS reserved_orders (
@@ -658,9 +678,11 @@ class DBManager:
         (실측 2026-09-03: 로컬 681,999원 / 전송된 값 204,601원)
 
         웹 매매일지는 사람이 성과를 판단하는 화면이므로 로컬과 갈리면 안 된다.
-        `resend=True` 는 큐에 있던 행의 payload 를 덮고 전송 대기로 되돌린다. 서버는
-        brokerExecutionId 로 멱등 처리하므로 이미 보낸 건도 안전하게 갱신된다.
-        전송 포기(dead-letter)된 행은 건드리지 않는다.
+        `resend=True` 는 큐에 있던 행의 payload 를 덮고 전송 대기로 되돌린다.
+        **이미 보낸 건은 다시 POST 해도 갱신되지 않는다** — 서버는 같은
+        brokerExecutionId 를 duplicate 로 건너뛰기만 하고 값을 덮지 않는다
+        (stock-memo: trading_api/entries._insert_trade). 그래서 journal_sync 가
+        remote_id 를 보고 PATCH 로 보낸다. 전송 포기(dead-letter)된 행은 건드리지 않는다.
 
         일지 전송은 부가 기능이다 — 어떤 이유로든 여기서 거래 기록 갱신을 막지 않는다.
         """

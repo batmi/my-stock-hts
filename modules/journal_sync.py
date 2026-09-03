@@ -9,6 +9,8 @@ Outbox 패턴
   - 체결 확인 루프가 네트워크 지연(수 초)에 묶이지 않는다
   - 라즈베리파이가 단절·재부팅돼도 큐가 DB에 남아 자동으로 복구된다
   - 서버가 brokerExecutionId 로 멱등 처리하므로 재전송이 언제나 안전하다
+    (다만 **갱신되지는 않는다** — 이미 있는 건은 duplicate 로 건너뛴다.
+     뒤늦은 정정은 PATCH 로 보낸다. `_send_corrections` 참고)
 
 2단 방어
 --------
@@ -165,7 +167,11 @@ def is_enabled():
 
     가상투자(mode 1)도 같은 스위치를 쓴다. 설정은 모드별 프로필로 갈리므로
     (dynamic_config.paper.json), 가상에서 켜고 끈 것이 실전으로 새지 않는다.
-    대신 전송되는 건은 `isSimulated=true` 로 실려 서버에서 실거래와 갈린다.
+
+    **가상투자는 웹저널 계정 자체를 따로 쓴다** — 실전과 다른 기기에서 돌고
+    `JOURNAL_API_KEY` 가 그 기기의 `~/.htsrc` 에 따로 있다. 그래서 두 기록이
+    서버에서 섞일 일이 없다. 전송되는 건에 `isSimulated=true` 를 싣는 것은 그
+    분리와 별개로, 계정 안에서 한 번 더 표시해 두기 위한 것이다.
     """
     if not getattr(config.settings, 'JOURNAL_SYNC_USE', False):
         return False
@@ -632,12 +638,18 @@ def enqueue(cursor, trade, quiet=False, backlog=False, resend=False):
     row = (payload['brokerExecutionId'], json.dumps(payload, ensure_ascii=False),
            datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S'), 1 if backlog else 0)
     if resend:
+        # remote_id 는 **지우지 않는다.** 서버는 같은 brokerExecutionId 를 duplicate 로
+        #  건너뛰기만 하고 덮어쓰지 않으므로(stock-memo: trading_api/entries._insert_trade),
+        #  이미 들어간 기록의 정정분을 다시 POST 하면 조용히 무시된다. 서버 id 를 들고
+        #  있어야 PATCH 로 고칠 수 있다. needs_patch 가 그 갈림길이다 —
+        #  이미 보낸 건이면 PATCH, 아직 안 보낸 건이면 종전대로 POST.
         cursor.execute(
             "INSERT INTO journal_outbox (exec_id, payload, created_at, is_backlog) "
             "VALUES (?, ?, ?, ?) "
             "ON CONFLICT(exec_id) DO UPDATE SET "
             "  payload = excluded.payload, is_backlog = excluded.is_backlog, "
-            "  synced_at = NULL, remote_id = NULL, attempts = 0, "
+            "  synced_at = NULL, attempts = 0, "
+            "  needs_patch = CASE WHEN journal_outbox.remote_id IS NOT NULL THEN 1 ELSE 0 END, "
             "  last_attempt_at = NULL, last_error = NULL "
             "WHERE dead_at IS NULL", row)
     else:
@@ -796,6 +808,7 @@ def _fetch_pending(limit=_BATCH_SIZE):
         cursor.execute(
             "SELECT id, exec_id, payload, attempts, last_attempt_at FROM journal_outbox "
             "WHERE synced_at IS NULL AND dead_at IS NULL "
+            "  AND COALESCE(needs_patch, 0) = 0 "
             "  AND (last_attempt_at IS NULL "
             f"      OR CAST(strftime('%s', last_attempt_at) AS INTEGER) + {_BACKOFF_SQL} "
             "          <= CAST(strftime('%s', ?) AS INTEGER)) "
@@ -953,14 +966,304 @@ def _send_batch(payloads, outbox_ids, exec_ids):
     return ok, fail
 
 
+# ══════════════════════════════════════════════════════════════════════
+# 기초잔고 — 연동 이전부터 들고 있던 종목의 씨앗
+# ══════════════════════════════════════════════════════════════════════
+
+def _opening_marker(account):
+    """이 계좌의 기초잔고를 이미 보냈는가."""
+    from modules import db_manager
+    try:
+        conn = db_manager.db._get_conn()
+        row = conn.execute("SELECT sent_at FROM journal_opening WHERE account = ?",
+                           (account,)).fetchone()
+        return bool(row and row['sent_at'])
+    except Exception as e:
+        # 표시를 못 읽으면 **보낸 것으로 친다**. 두 번 보내면 없는 매수가 생겨
+        # 보유 수량이 부풀지만, 안 보내면 경고 한 줄로 끝난다.
+        logger.warning(f"[Journal] 기초잔고 표시 조회 실패 — 전송을 건너뜁니다: {e}")
+        return True
+
+
+def _mark_opening_sent(account, as_of, count):
+    from modules import db_manager
+    try:
+        with db_manager.db.lock:
+            conn = db_manager.db._get_conn()
+            conn.execute(
+                "INSERT INTO journal_opening (account, as_of, sent_at, count) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT(account) DO UPDATE SET "
+                "  as_of = excluded.as_of, sent_at = excluded.sent_at, count = excluded.count",
+                (account, as_of, datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S'), count))
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"[Journal] 기초잔고 표시 기록 실패 — 다음 기동에 또 보낼 수 있습니다: {e}")
+
+
+def _codes_with_local_buys():
+    """로컬에 매수 체결 기록이 있는 종목 코드 집합.
+
+    이 종목들은 기초잔고에서 뺀다. 기록이 있으면 그 매수가 정상 경로나 백필로
+    서버에 닿으므로, 합성 기초잔고를 더하면 **없는 매수를 하나 더 만드는 셈**이다.
+    반대로 기록이 아예 없는 종목은 서버가 그 매수를 영영 알 수 없다 —
+    기초잔고가 메우려는 구멍이 정확히 그것이다.
+
+    (기록은 있는데 백필 범위를 벗어나 끝내 안 올라가는 종목은 씨앗을 못 받는다.
+     덜 심는 쪽이 두 번 심는 쪽보다 낫다 — 잘못된 매수는 되돌리기 어렵다.)
+    """
+    from modules import db_manager
+    try:
+        conn = db_manager.db._get_conn()
+        rows = conn.execute(
+            "SELECT DISTINCT code FROM trades WHERE order_status IN "
+            f"({','.join('?' * len(_SYNCABLE_STATUS))}) AND type LIKE '%매수%'",
+            tuple(_SYNCABLE_STATUS)).fetchall()
+        codes = {(r['code'] or '').strip().upper() for r in rows}
+        rows = conn.execute(
+            "SELECT DISTINCT code FROM trades WHERE order_status IN "
+            f"({','.join('?' * len(_SYNCABLE_STATUS))}) AND type LIKE '%buy%'",
+            tuple(_SYNCABLE_STATUS)).fetchall()
+        return codes | {(r['code'] or '').strip().upper() for r in rows}
+    except Exception as e:
+        # 못 읽으면 전량 제외 — 무엇이 이미 기록됐는지 모르는 채로 씨를 뿌리면 안 된다.
+        logger.warning(f"[Journal] 기존 매수 기록 조회 실패 — 기초잔고를 건너뜁니다: {e}")
+        return None
+
+
+def _current_positions():
+    """현재 보유 종목. 조회 자체가 실패하면 None (빈 계좌와 구분해야 한다)."""
+    import api
+
+    positions = []
+    try:
+        res = api.get_domestic_balance() or {}
+    except Exception as e:
+        logger.warning(f"[Journal] 기초잔고 — 국내 잔고 조회 실패: {e}")
+        return None
+    if str(res.get('rt_cd', '1')) != '0':
+        logger.warning(f"[Journal] 기초잔고 — 국내 잔고 조회 실패: {res.get('msg1')}")
+        return None
+
+    for item in (res.get('output1') or []):
+        try:
+            qty = float(item.get('hldg_qty') or 0)
+        except (TypeError, ValueError):
+            qty = 0
+        if qty <= 0:
+            continue
+        positions.append({
+            'symbol': (item.get('pdno') or '').strip(),
+            'name': item.get('prdt_name') or '',
+            'volume': qty,
+            'avgPrice': float(item.get('pchs_avg_pric') or 0),
+            'currency': 'KRW',
+            'exchange': 'KRX',
+        })
+
+    # 해외는 조회 실패해도 국내분은 보낸다 — 해외 계좌가 없는 설치가 대부분이다.
+    try:
+        res = api.get_overseas_balance() or {}
+        if str(res.get('rt_cd', '1')) == '0':
+            for item in (res.get('output1') or []):
+                qty = float(item.get('ovrs_cblc_qty') or 0)
+                if qty <= 0:
+                    continue
+                code = (item.get('ovrs_pdno') or '').strip()
+                positions.append({
+                    'symbol': code,
+                    'name': item.get('ovrs_item_name') or '',
+                    'volume': qty,
+                    'avgPrice': float(item.get('pchs_avg_pric') or 0),
+                    'currency': 'USD',
+                    'exchange': _exchange_for(code, True),
+                })
+    except Exception as e:
+        logger.warning(f"[Journal] 기초잔고 — 해외 잔고 조회 실패(국내분만 보냅니다): {e}")
+
+    return [p for p in positions if p['symbol'] and p['avgPrice'] > 0]
+
+
+def opening_once():
+    """연동 시작 시점의 보유 잔고를 서버에 매수 기록으로 심는다. (전송 건수)
+
+    **왜 필요한가**: 연동 이전부터 들고 있던 종목은 서버에 매수 기록이 없다. 그러면
+    그 종목의 첫 매도가 `needsReview`('매수 기록 없음')로 찍히고 보유 수량 집계가
+    음수로 내려간다 — 서버의 매도 무결성 검사가 그 상태를 계속 경고한다.
+
+    **계좌당 한 번만** 보낸다. 서버 멱등키에 날짜가 박히므로(`OPENING:{env}:{날짜}:{종목}`)
+    다른 날 또 보내면 같은 종목의 기초잔고가 하나 더 생긴다 — 없는 매수를 만드는 것이라
+    첫 문제보다 나쁘다. 그래서 로컬에 보낸 사실을 남기고, 그것을 못 읽으면 보내지 않는다.
+    """
+    if not is_enabled():
+        return 0
+
+    try:
+        account = _account_text(config.session.cano, config.session.acnt_prdt_cd)
+    except Exception:      # noqa: BLE001
+        account = ''
+    if not account:
+        return 0
+    if _opening_marker(account):
+        return 0
+
+    known = _codes_with_local_buys()
+    if known is None:
+        return 0
+
+    positions = _current_positions()
+    if positions is None:
+        return 0        # 조회 실패 — 표시를 남기지 않아 다음 기동에 다시 시도한다
+
+    as_of = datetime.now(KST).strftime('%Y-%m-%d')
+    seeds = [p for p in positions if p['symbol'].upper() not in known]
+    if not seeds:
+        # 심을 것이 없다는 것도 결론이다. 표시를 남겨 매 기동마다 잔고를 묻지 않는다.
+        _mark_opening_sent(account, as_of, 0)
+        logger.info(f"[Journal] 기초잔고 — 심을 종목 없음 (보유 {len(positions)}건은 "
+                    f"모두 로컬 매수 기록이 있습니다)")
+        return 0
+
+    body = {
+        'asOf': as_of,
+        'isSimulated': _is_paper(),
+        'source': _source(),
+        'positions': [dict(p, subAccount=account.replace('-', '')) for p in seeds],
+    }
+    res = _request('POST', '/api/v1/positions/opening', json_body=body)
+    if res is None or res.status_code not in (200, 201):
+        reason = f'{res.status_code}: {res.text[:200]}' if res is not None else '응답 없음'
+        logger.warning(f"[Journal] 기초잔고 전송 실패 ({reason}) — 다음 기동에 다시 시도합니다")
+        return 0
+
+    try:
+        result = res.json() or {}
+    except Exception:
+        result = {}
+    inserted = int(result.get('inserted') or 0)
+    _mark_opening_sent(account, as_of, inserted)
+    logger.info(f"[Journal] 기초잔고 등록 — {inserted}건 "
+                f"(대상 {len(seeds)}건 / 보유 {len(positions)}건, 기준일 {as_of})")
+    return inserted
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 정정분 — 이미 서버에 들어간 기록을 고친다
+# ══════════════════════════════════════════════════════════════════════
+
+# PATCH 로 고칠 수 있는 필드(서버 trading_api/routes._PATCHABLE 과 짝을 이룬다).
+# 여기 없는 필드가 바뀌면 서버는 옛 값을 그대로 들고 있게 되므로, 서버가 목록을
+# 넓히면 여기도 함께 넓혀야 한다.
+_PATCHABLE_FIELDS = (
+    'price', 'volume', 'status', 'confidence', 'realizedPnl', 'realizedPnlRate',
+    'fee', 'tax', 'strategyScore', 'stopLossRate', 'memo', 'name',
+)
+
+
+def _fetch_corrections(limit=_BATCH_SIZE):
+    """PATCH 로 보내야 하는 정정 행. 백오프·dead-letter 는 대기열과 같은 규칙."""
+    from modules import db_manager
+    now_str = datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')
+    try:
+        conn = db_manager.db._get_conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, exec_id, payload, remote_id FROM journal_outbox "
+            "WHERE synced_at IS NULL AND dead_at IS NULL "
+            "  AND COALESCE(needs_patch, 0) = 1 AND remote_id IS NOT NULL "
+            "  AND (last_attempt_at IS NULL "
+            f"      OR CAST(strftime('%s', last_attempt_at) AS INTEGER) + {_BACKOFF_SQL} "
+            "          <= CAST(strftime('%s', ?) AS INTEGER)) "
+            "ORDER BY id LIMIT ?", (now_str, limit))
+        return cursor.fetchall()
+    except Exception as e:
+        logger.warning(f"[Journal] 정정 대기열 조회 실패: {e}")
+        return []
+
+
+def _clear_patch_flag(outbox_id):
+    """PATCH 를 포기하고 신규 등록(POST) 경로로 되돌린다.
+
+    서버에 그 기록이 없을 때(404) 쓴다 — 운용자가 웹에서 지웠거나, API 로 손댈 수
+    없는 기록이 된 경우다. 정정분을 삼키는 것보다 다시 올리는 편이 낫다:
+    로컬 체결 기록이 원본이고, 재동기화(resync)가 하려는 일도 정확히 그것이다.
+    """
+    from modules import db_manager
+    try:
+        with db_manager.db.lock:
+            conn = db_manager.db._get_conn()
+            conn.execute("UPDATE journal_outbox SET needs_patch = 0, remote_id = NULL "
+                         "WHERE id = ?", (outbox_id,))
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"[Journal] 정정 플래그 해제 실패(outbox#{outbox_id}): {e}")
+
+
+def _send_corrections():
+    """정정 행을 하나씩 PATCH 한다. (성공, 실패) 반환.
+
+    **왜 배치가 아니라 건별인가**: 서버의 배치 엔드포인트는 같은 brokerExecutionId 를
+    `duplicate` 로 건너뛰기만 하고 값을 덮지 않는다. 그래서 정정분을 배치로 다시
+    보내면 클라이언트는 '전송 완료'로 도장을 찍는데 서버 값은 옛것 그대로 남는다 —
+    로컬과 웹 매매일지의 손익이 조용히 갈린다. 갱신 경로는 PATCH 하나뿐이다.
+    """
+    rows = _fetch_corrections()
+    if not rows:
+        return 0, 0
+
+    now_str = datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')
+    marks = {}
+    ok = fail = 0
+    for row in rows:
+        try:
+            payload = json.loads(row['payload'])
+        except Exception:
+            marks[row['id']] = (False, None, '페이로드 파싱 불가', True)
+            fail += 1
+            continue
+
+        body = {k: payload[k] for k in _PATCHABLE_FIELDS if k in payload}
+        if not body:
+            # 고칠 것이 없으면 이미 서버 값과 같다 — 다시 보낼 이유가 없다.
+            marks[row['id']] = (True, row['remote_id'], None, False)
+            ok += 1
+            continue
+
+        res = _request('PATCH', f"/api/v1/trades/{row['remote_id']}", json_body=body)
+        if res is None:
+            marks[row['id']] = (False, None, '서버 응답 없음', False)
+            fail += 1
+        elif res.status_code == 200:
+            marks[row['id']] = (True, row['remote_id'], None, False)
+            ok += 1
+            logger.info(f"[Journal] 정정 반영: {payload.get('name')}({payload.get('symbol')}) "
+                        f"[{row['exec_id']}]")
+        elif res.status_code == 404:
+            # 서버에 그 기록이 없다 — PATCH 로는 영영 안 된다. 신규 등록으로 되돌린다.
+            logger.info(f"[Journal] 정정 대상이 서버에 없음 — 신규 등록으로 전환 "
+                        f"[{row['exec_id']}]")
+            _clear_patch_flag(row['id'])
+        elif res.status_code == 429 or res.status_code >= 500:
+            marks[row['id']] = (False, None, f'{res.status_code}', False)
+            fail += 1
+        else:
+            marks[row['id']] = (False, None, f'{res.status_code}: {res.text[:200]}', True)
+            fail += 1
+
+    _mark_result(marks, now_str)
+    return ok, fail
+
+
 def flush_once():
     """대기열을 한 번 비운다. (전송 성공 건수, 실패 건수) 반환."""
     if not is_enabled():
         return 0, 0
 
+    # 정정분을 먼저 보낸다. 뒤로 미루면 사람이 보는 화면에 옛 손익이 더 오래 남는다.
+    ok_patch, fail_patch = _send_corrections()
+
     rows = _fetch_pending()
     if not rows:
-        return 0, 0
+        return ok_patch, fail_patch
 
     payloads, outbox_ids, exec_ids = [], [], []
     for row in rows:
@@ -974,9 +1277,11 @@ def flush_once():
                          datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S'))
 
     if not payloads:
-        return 0, 0
+        return ok_patch, fail_patch
 
     ok, fail = _send_batch(payloads, outbox_ids, exec_ids)
+    ok += ok_patch
+    fail += fail_patch
     if ok or fail:
         logger.info(f"[Journal] 전송 완료 {ok}건 / 실패 {fail}건 "
                     f"(대기 잔량 {pending_count()}건)")
@@ -1482,6 +1787,9 @@ class JournalSyncWorker:
                 # 다시 시도하면 되므로 여기서 예외를 따로 잡지 않는다(루프가 삼킨다).
                 if time.time() >= self._next_backfill:
                     self._next_backfill = time.time() + _BACKFILL_INTERVAL_SEC
+                    # 기초잔고가 백필보다 먼저다. 연동 이전 보유분의 씨앗이 없으면
+                    #  그 종목의 첫 매도가 '매수 기록 없음'으로 찍힌다.
+                    opening_once()
                     queued, _ = backfill_once()
                     if queued:
                         self._force_flush = True   # 회수분은 다음 순회까지 기다리지 않는다

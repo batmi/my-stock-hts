@@ -444,6 +444,15 @@ export JOURNAL_BOT_LABEL=""                         # optional — display name 
 
 > The toggle **and** both URL and key must be present; the menu tells you what is missing.
 > Running several hosts? `JOURNAL_SOURCE` must differ per machine, or the backfill checkpoints overwrite each other and leave gaps.
+> Virtual trading (mode 1) uses **its own journal account** — put a separate `JOURNAL_API_KEY` in that machine's `~/.htsrc` and its records never mix with the live ones on the server.
+
+The sync has three strands.
+
+| Strand | What it does |
+|---|---|
+| **Queued send** | Fills are queued in the same transaction that records them; a background worker sends them in batches, so the trading loop never waits on the network. |
+| **Correction (PATCH)** | When a partial fill settles across several polling cycles, the quantity and realized P&L are recomputed; that correction is pushed to the server. Re-POSTing a fill the server already has is discarded as a duplicate, so an already-sent record can only be fixed with `PATCH`. |
+| **Opening balance** | Positions held when the sync is first switched on are seeded as buy records, **once per account**. Without them the first sell of a pre-existing holding is flagged "no buy record" and the position count goes negative. Symbols that already have a local buy record are skipped — that buy reaches the server on its own, and a seed on top would create a second one. |
 
 ---
 

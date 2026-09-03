@@ -281,7 +281,7 @@ class SessionManager:
         # [추가] 토스 모드: KIS식 계좌 입력/표시를 건너뛰고 별도 안내
         if self.is_toss:
             key_status = "OK" if self.toss_app_key and self.toss_app_secret else "MISSING"
-            # mode 4(가상투자)는 KIS 실전 시세를 쓰므로 이 분기에 들어오지 않는다(is_toss=False).
+            # 가상투자(mode 1)는 KIS 실전 시세를 쓰므로 이 분기에 들어오지 않는다(is_toss=False).
             _config().console.print("\n[dim magenta][토스증권] 설정 로드 확인[/dim magenta]")
             _config().console.print(f"[dim]   - TOSS_APP_KEY 상태: {key_status}[/dim]")
             _config().console.print(f"[dim]   - 계좌번호(TOSS_ACC_NUM): {self.toss_acc_num or '(미지정 → 첫 계좌 사용)'}[/dim]")
@@ -396,8 +396,8 @@ class SessionManager:
         """만료 시각과 **발급 앱키**가 모두 맞아야 유효하다.
 
         [중요] 만료만 보면 안 된다. token_cache.json은 파일 하나이고 슬롯 이름이
-          REAL/AUTO 뿐인데, 관찰모드(mode 1)는 real_app_key·auto_app_key를
-          VIRT_APP_KEY로 덮어쓴다(아래 load 로직). 즉 mode 4가 VIRT 키로 받은 토큰이
+          REAL/AUTO 뿐인데, 가상투자(mode 1)는 real_app_key·auto_app_key를
+          VIRT_APP_KEY로 덮어쓴다(아래 load 로직). 즉 가상투자가 VIRT 키로 받은 토큰이
           'REAL' 슬롯에 남는다. 만료 전(최대 24시간)에 mode 2로 바꾸면 그 토큰을
           '아직 유효함'으로 판정해 남의 앱키 토큰을 그대로 쓰고, KIS는 이를 거부한다.
           앱키 지문을 함께 검사하면 슬롯이 겹쳐도 서로의 토큰을 집지 않는다.
