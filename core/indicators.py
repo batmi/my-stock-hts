@@ -576,6 +576,19 @@ def get_swing_points(df, order=5):
             swing_lows.append((i, float(lows[i])))
     return swing_highs, swing_lows
 
+# [박스권] 하루치 거래량 상한(윈도 중앙값 대비). 선물 연결 시리즈는 월물 교체일 하루가
+#  구간 거래량의 대부분을 차지한다(2026-09-03 실측: 금 GC=F 67%, 은 SI=F 73%. 주식·ETF 는
+#  AAPL 9%·SPY 5%). 그러면 그 하루가 속한 가격 칸 하나로 밸류에어리어 50% 가 이미 채워져
+#  확장 루프가 한 번도 돌지 않고, 박스가 그날 가격대에 한 칸으로 못박힌다.
+#  중앙값의 몇 배로 잘라내면 주식·ETF 는 사실상 그대로이고 선물만 제자리를 찾는다.
+BOX_VOLUME_CAP_MULT = 5.0
+# [박스권] 밸류에어리어가 이 칸 수 미만이면 '구간'이 아니라 점이다 — 그리지 않는다.
+BOX_MIN_BINS = 2
+# [박스권] 현재가가 박스에서 (박스 높이 x 이 배수)보다 멀어졌으면 더는 박스로 설명되는
+#  국면이 아니다(추세장). 낡은 구간을 지지·저항인 양 그려두는 편이 더 해롭다.
+BOX_MAX_DISTANCE_MULT = 2.0
+
+
 def detect_recent_box(df, window=None, value_area_pct=None):
     """
     지정 일수 기준 실제 '거래량(Volume)'이 가장 많이 몰려있는 핵심 매물대 구간을 박스로 산출합니다.
@@ -599,9 +612,16 @@ def detect_recent_box(df, window=None, value_area_pct=None):
     
     # Mode 1/2/3 호환성 처리: volume 데이터가 누락되거나 NaN일 경우의 방어
     if 'volume' in df_w.columns:
-        volumes = np.nan_to_num(df_w['volume'].values)
+        volumes = np.nan_to_num(df_w['volume'].values).astype(float)
     else:
         volumes = np.ones_like(closes)
+
+    # 하루치 이상 거래량을 잘라낸다(위 BOX_VOLUME_CAP_MULT 주석 참조).
+    _positive = volumes[volumes > 0]
+    if _positive.size:
+        _cap = float(np.median(_positive)) * BOX_VOLUME_CAP_MULT
+        if _cap > 0:
+            volumes = np.minimum(volumes, _cap)
         
     min_val = np.min(lows)
     max_val = np.max(highs)
@@ -647,8 +667,18 @@ def detect_recent_box(df, window=None, value_area_pct=None):
             
     box_low = bins[lower_idx]
     box_high = bins[upper_idx + 1]
-    
+
+    # [무의미한 박스는 그리지 않는다] 한 칸짜리는 구간이 아니고, 현재가가 멀리 떠난
+    #  박스는 지지·저항이 아니라 옛 흔적이다. 둘 다 차트에서 오해를 부른다.
+    if (upper_idx - lower_idx + 1) < BOX_MIN_BINS:
+        return None
+
     last = float(df['close'].iloc[-1])
+    box_height = box_high - box_low
+    if box_height > 0:
+        distance = max(last - box_high, box_low - last, 0.0)
+        if distance > box_height * BOX_MAX_DISTANCE_MULT:
+            return None
     if last > box_high:
         status = '상단 돌파'
     elif last < box_low:

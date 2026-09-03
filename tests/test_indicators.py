@@ -80,3 +80,51 @@ def test_롤링_추세품질은_실매매_산식과_같은_값을_낸다(sample_
     # 이력이 모자란 앞부분은 값이 없어야 한다 — 랭킹에서 '검증 불가'로 최하순위가 된다.
     assert all(v is None for v in list(mapped.values())[:lookback - 1])
     assert mapped[str(df["date"].iloc[lookback - 1])] is not None
+
+
+# ==========================================================
+# [박스권] 거래량 이상치·무의미한 박스 (2026-09-03)
+# ==========================================================
+def _box_df(prices, volumes):
+    """detect_recent_box 용 최소 데이터프레임."""
+    return pd.DataFrame({
+        'high': [p * 1.005 for p in prices],
+        'low': [p * 0.995 for p in prices],
+        'close': prices,
+        'open': prices,
+        'volume': volumes,
+    })
+
+
+def test_box_ignores_single_volume_spike():
+    """하루가 거래량 대부분을 먹어도 박스가 그 한 칸에 못박히지 않는다.
+
+    선물 연결 시리즈(금·은)의 월물 교체일이 실제로 이랬다(구간 거래량의 67~73%).
+    """
+    # 40봉을 4,000 -> 4,600 으로 올린 뒤, 초반 한 봉에만 거래량을 몰아준다.
+    prices = [4000 + i * 15 for i in range(42)]
+    volumes = [1000] * 42
+    volumes[3] = 500000          # 구간 거래량의 대부분
+    box = indicators.detect_recent_box(_box_df(prices, volumes), window=40)
+
+    assert box is not None
+    # 그 한 봉(약 4,045)만의 칸이 아니라, 실제로 머문 가격대를 덮어야 한다.
+    assert box['high'] - box['low'] > (max(prices) - min(prices)) * 0.1
+
+
+def test_box_hidden_when_price_left_it_far_behind():
+    """현재가가 박스에서 멀리 떠났으면 그리지 않는다(추세장)."""
+    # 앞 35봉은 4,000 근처에 머물고, 마지막 몇 봉이 급등해 박스를 크게 벗어난다.
+    prices = [4000 + (i % 3) for i in range(38)] + [7000, 7200, 7400, 7600]
+    box = indicators.detect_recent_box(_box_df(prices, [1000] * 42), window=40)
+
+    assert box is None
+
+
+def test_box_kept_when_price_is_near():
+    """현재가가 박스 근처면 종전대로 그린다(정상 케이스 회귀 방지)."""
+    prices = [4000 + (i % 40) for i in range(42)]
+    box = indicators.detect_recent_box(_box_df(prices, [1000] * 42), window=40)
+
+    assert box is not None
+    assert box['low'] <= prices[-1] * 1.05
