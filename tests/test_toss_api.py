@@ -10,6 +10,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 import config
+from core import utils
 from brokers import toss_api
 
 
@@ -996,7 +997,8 @@ def test_print_table_worker_toss_enriches_change_and_52w():
         config.session.is_toss = False
 
     row = result[0]
-    rate_str = row[4]   # 등락폭 (등락률)
+    #  셀은 값 경계(utils.CELL_PART_SEP)로 나뉘어 있다 — 화면에 찍히는 모양으로 되돌려 본다.
+    rate_str = row[4].replace(utils.CELL_PART_SEP, " ")   # 등락폭 (등락률)
     w52_str = row[5]    # 52주 위치
     assert "+0 (+0.00%)" not in rate_str   # 등락이 0이 아니라 차트로 계산됨
     assert "%" in w52_str and "dim]-" not in w52_str  # 52주 위치 표시됨
@@ -1039,7 +1041,7 @@ def test_print_table_worker_toss_shows_ask_bid_ratio():
     finally:
         config.session.is_toss = False
 
-    rate_str = result[0][4]  # 등락폭 (등락률) [매도비] 셀
+    rate_str = result[0][4].replace(utils.CELL_PART_SEP, " ")  # 등락폭 (등락률) [매도비] 셀
     assert "2.00" in rate_str     # 매도잔량비 숫자만 표시
     assert "배" not in rate_str    # '배' 단위 제거
     assert "[0%]" not in rate_str  # 체결강도(강도) 형식 아님
@@ -1081,7 +1083,7 @@ def test_print_table_worker_toss_hides_ask_bid_outside_nxt_hours():
     finally:
         config.session.is_toss = False
 
-    rate_str = result[0][4]  # 등락폭 (등락률) 셀 — 매도비 접미사 자체가 없어야 함
+    rate_str = result[0][4].replace(utils.CELL_PART_SEP, " ")  # 등락폭 (등락률) 셀 — 매도비 접미사 자체가 없어야 함
     assert "2.00" not in rate_str
     assert "[-]" not in rate_str
 

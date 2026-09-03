@@ -508,6 +508,10 @@ def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=
     if is_overseas:
         # 0. [최적화] 워머가 예열해 둔 캐시가 전 종목 신선하면 라이브 조회 생략
         if skip_if_fresh_sec:
+            #  skip_if_fresh_sec 은 화면 경로만 넘긴다(워머는 쓰면 안 된다 — 위 주석).
+            #  그래서 이 인자가 왔다는 것은 '사람이 개요를 보고 있다'는 뜻이고,
+            #  워머는 그 신호를 근거로 유휴 시간에 스스로 멈춘다(start_overview_warmer).
+            note_warm_consumer()
             if all(_api()._get_micro_cache(f"yf_fi_{c}", ttl=skip_if_fresh_sec) for c in codes):
                 if progress_updater:
                     for _ in codes: progress_updater()
@@ -676,6 +680,19 @@ def prefetch_watchlists_async():
     return t # [수정] 테스트 코드에서 제어할 수 있도록 스레드 객체 반환
 
 _OVERVIEW_WARMER_STARTED = False
+#  개요 예열 결과를 화면이 마지막으로 쓴 시각. 기동 시각으로 시작해, 아무도 개요를
+#  열지 않으면 워머가 조용해진다(첫 화면의 이점은 그대로 두기 위해 0 이 아니라 지금이다).
+_WARM_LAST_CONSUMED = [time.time()]
+
+
+def note_warm_consumer():
+    """화면이 예열 결과를 소비했다 — 워머를 다시 깨우는 신호."""
+    _WARM_LAST_CONSUMED[0] = time.time()
+
+
+def warm_idle_seconds():
+    """개요 예열 결과가 마지막으로 쓰인 뒤 흐른 시간(초)."""
+    return time.time() - _WARM_LAST_CONSUMED[0]
 
 def start_overview_warmer():
     """[최적화] 해외 종목 시세/시장 지수를 백그라운드에서 주기적으로 마이크로 캐시에 예열한다.
@@ -694,10 +711,29 @@ def start_overview_warmer():
         return None  # 토스 모드는 별도 캐시 경로 사용
 
     interval = max(5, int(getattr(config, 'OVERVIEW_WARM_INTERVAL_SEC', 15)))
+    #  [Fix 2026-09-04] 예열은 '사람이 개요 화면을 볼 때'만 값이 있다. 종전에는 기동하면
+    #   프로세스가 사는 내내 15초마다 돌았다 — 장이 닫힌 새벽에도, 아무도 화면을 보지
+    #   않는 동안에도 하루 5,760 사이클씩 TradingView 일괄 조회와 yfinance fast_info(지수
+    #   여러 개, 워커 4)를 냈다. 램 1GB 라즈베리파이에서 순수 낭비이고, 외부 소스의
+    #   레이트리밋을 공짜로 갉아먹는다(레이트리밋에 걸리면 조용한 폴백이 생긴다).
+    #   달력을 보지 않고 '쓰이는가'로 가른다 — 유휴면 조회를 건너뛰고, 화면이 예열 결과를
+    #   읽는 순간(note_warm_consumer) 다음 순회부터 즉시 되살아난다. 유휴 중 화면을 열면
+    #   그 화면이 자기 예열을 인라인으로 돌리므로(종전 폴백 경로) 결과는 같고 조금 느릴 뿐이다.
+    idle_after = max(interval, int(getattr(config, 'OVERVIEW_WARM_IDLE_SEC', 600)))
 
     def worker():
-        logger.info(f"[Warm] 개요 백그라운드 예열 시작 (주기 {interval}s)")
+        logger.info(f"[Warm] 개요 백그라운드 예열 시작 (주기 {interval}s · 유휴 {idle_after}s 후 대기)")
+        idle_logged = False
         while True:
+            if warm_idle_seconds() > idle_after:
+                if not idle_logged:
+                    logger.info("[Warm] 개요를 보는 사람이 없어 예열을 멈춘다(화면을 열면 재개).")
+                    idle_logged = True
+                time.sleep(interval)
+                continue
+            if idle_logged:
+                logger.info("[Warm] 개요 예열 재개")
+                idle_logged = False
             try:
                 stock_data = config.session.stock_data or {}
                 ovs_codes = []

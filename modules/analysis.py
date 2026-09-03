@@ -5238,7 +5238,12 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                 diff_str = f"{diff:+}"
 
             rate_color = "[red]" if rate > 0 else ("[blue]" if rate < 0 else "[white]")
-            rate_str = f"{rate_color}{diff_str} ({rate:+.2f}%)[/]{strength_display}"
+            #  [정렬] 등락폭·등락률·강도를 구분자로 나눠 담는다. 표에 넣기 직전에
+            #   utils.align_cell_parts 가 값마다 폭을 맞춰 세로로 읽히게 한다 —
+            #   셀 전체를 우측 정렬하면 오른쪽 끝만 맞고 안쪽 값들은 어긋난다.
+            rate_str = (f"{rate_color}{diff_str}[/]{utils.CELL_PART_SEP}"
+                        f"{rate_color}({rate:+.2f}%)[/]{utils.CELL_PART_SEP}"
+                        f"{strength_display.strip()}")
 
             # 전일 RSI — calculate_indicators가 계산한 값 재사용 (중복 계산 제거·SSOT)
             prev_rsi_val = ind.get('prev_rsi') if chart_df is not None and not chart_df.empty and len(chart_df) >= 16 else None
@@ -5743,6 +5748,15 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None, is_
                         logger.error(f"Analyze worker error: {e}")
                         results[idx] = _fail_row(idx)
                     progress.advance(task_a)
+
+        # [정렬] 등락 컬럼은 한 셀에 값 셋(등락폭·등락률·강도)을 담는다. 표에 넣기 전에
+        #  그 표에 실제로 담긴 값들로 폭을 맞춘다(utils.align_cell_parts 주석 참조).
+        _CHG_COL = 4
+        _rows = [r[0] for r in results if r]
+        _aligned = utils.align_cell_parts([r[_CHG_COL] if len(r) > _CHG_COL else "" for r in _rows])
+        for _row, _cell in zip(_rows, _aligned):
+            if len(_row) > _CHG_COL:
+                _row[_CHG_COL] = _cell
 
         # 결과 테이블 추가
         for idx, result_item in enumerate(results):

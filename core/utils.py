@@ -724,3 +724,60 @@ def print_krx_fallback_warning(name_map=None):
         "[yellow]   → ATR이 6~15% 부풀고 ADX가 최대 9.45 어긋날 수 있습니다"
         " (손절폭·포지션 크기에 영향). 지표를 그대로 신뢰하지 마세요.[/yellow]")
     config.console.print()
+
+
+# ==========================================================
+# [표 정렬] 한 셀에 여러 값을 담은 컬럼을 값 단위로 세로 정렬한다
+# ==========================================================
+#  [왜 필요한가 · 2026-09-04] '등락폭 (등락률) [강도]'처럼 한 컬럼에 값 세 개를 담으면,
+#   rich 는 셀 **전체**를 우측 정렬하므로 오른쪽 끝만 맞고 안쪽 값들은 어긋난다.
+#       +2000 (+0.80%) [111%]
+#      +14000 (+0.88%) [89%]      ← 등락률·강도가 세로로 안 읽힌다
+#   셀을 쪼개 컬럼을 늘리면 표가 넓어지고(터미널 폭 상한이 있다) 헤더도 셋이 된다.
+#   대신 **셀 안에서** 값마다 폭을 맞춘다 — 같은 발상을 이미 '분류 (TQ)' 셀이 쓴다.
+#   폭은 그 표에 실제로 담긴 값에서 잡으므로 컬럼이 지금보다 넓어지지 않는다.
+CELL_PART_SEP = "\x00"      # 셀 안의 값 경계. 화면에 찍히지 않고 실제 데이터에 나올 수 없다.
+
+
+def align_cell_parts(cells):
+    """CELL_PART_SEP 으로 나뉜 셀들을 값 단위로 우측 정렬해 돌려준다.
+
+    · 폭은 rich 마크업을 걷어낸 **표시폭**(cell_len)으로 잰다 — 한글은 2폭이라
+      len() 으로 세면 어긋난다.
+    · 구분자가 없는 셀('실패', '-')은 손대지 않는다. 그런 칸까지 늘리면 값이 없는 행이
+      컬럼 폭을 끌어올린다.
+    · 값이 빈 행(예: 체결강도 미표시)에는 공백을 채운다 — 그래야 그 행의 앞 값들이
+      다른 행과 같은 자리에 선다.
+    """
+    from rich.cells import cell_len
+    from rich.markup import render
+
+    def _width(s):
+        try:
+            return cell_len(render(s).plain)
+        except Exception:      # noqa: BLE001 - 마크업이 깨져 있어도 정렬 때문에 죽지 않는다
+            return cell_len(s)
+
+    split = [c.split(CELL_PART_SEP) if isinstance(c, str) else None for c in cells]
+    n = max((len(p) for p in split if p and len(p) > 1), default=0)
+    if n < 2:
+        return list(cells)
+
+    widths = [0] * n
+    for parts in split:
+        if not parts or len(parts) < 2:
+            continue
+        for i, p in enumerate(parts[:n]):
+            widths[i] = max(widths[i], _width(p))
+
+    out = []
+    for cell, parts in zip(cells, split):
+        if not parts or len(parts) < 2:
+            out.append(cell)
+            continue
+        padded = []
+        for i in range(n):
+            p = parts[i] if i < len(parts) else ""
+            padded.append(" " * max(0, widths[i] - _width(p)) + p)
+        out.append(" ".join(padded))
+    return out
