@@ -184,13 +184,19 @@ def _collect_supply(code, name, days):
         m["cur_price"] = cur_price
         m["total_shares"] = total_shares
         m["exercised"] = exercised
-        if not rem_map:
+        #  [Fix 2026-09-04] 잔존 물량을 모를 때는 **전량 남았다고 본다**. 종전에는
+        #   rem_map.get(round, 0) 이라 회차 번호가 맵에 없으면 오버행이 조용히 '0주'가 됐다.
+        #   _get_rem_shares 는 공시 원문을 줄 번호 산술로 훑는 휴리스틱이라 부분적으로만
+        #   채워지는 일이 실제로 있고(회차 표기가 '3' 이 아니라 '제3회'인 경우 등), 그때
+        #   잠재 매도물량이 없는 것처럼 보인다. 오버행은 '모르면 위험 쪽'으로 두어야 한다.
+        #   대신 확인된 값이 아니라는 사실을 표에 함께 밝힌다(rem_estimated).
+        if not rem_map or m["rcept_dt"] > exercise_dt:
             m["rem_shares"] = m["shares"]
+            m["rem_estimated"] = not rem_map
         else:
-            if m["rcept_dt"] > exercise_dt:
-                m["rem_shares"] = m["shares"]
-            else:
-                m["rem_shares"] = rem_map.get(m["round_num"], 0)
+            found = rem_map.get(m["round_num"])
+            m["rem_shares"] = m["shares"] if found is None else found
+            m["rem_estimated"] = found is None
 
     return treasury, frees, mezz
 
@@ -353,19 +359,26 @@ def _render_overhang(rows, limit=20):
             status = "[dim]-[/dim]"
         ts = r.get("total_shares")
         rem = r.get("rem_shares", r["shares"])
-        pct = f"{rem / ts * 100:.1f}%" if ts and rem else "-"
+        #  rem 이 0 이면 '전량 전환 완료'라는 정보다 — '-'로 지우면 모른다는 뜻이 되어
+        #  잔존을 확인 못 한 행과 구별되지 않는다.
+        pct = f"{rem / ts * 100:.1f}%" if ts and rem is not None else "-"
+        rem_str = f"{rem:,.0f}"
+        if r.get("rem_estimated"):
+            #  공시에서 잔존을 확인하지 못해 전량으로 본 값이다(과소평가하지 않기 위해서).
+            rem_str = f"[dim]~[/]{rem_str}"
         if r.get("exercised"):
             status += f" [yellow]행사공시 {r['exercised']}건[/]"
         table.add_row(
             _fmt_date(r["rcept_dt"]), f"{r['name']} ({r['code']})", r["kind"],
             _fmt_eok(r["amount"]), f"{prc:,.0f}", f"{cur:,.0f}" if cur else "-",
-            f"{r['shares']:,.0f}", f"{rem:,.0f}", pct, status,
+            f"{r['shares']:,.0f}", rem_str, pct, status,
         )
     config.console.print(table)
     if len(rows) > limit:
         config.console.print(f"  [dim]… 외 {len(rows) - limit}건[/dim]")
     config.console.print("  [dim]※ 현재가 ≥ 전환가면 상승 시 전환·매도 물량(오버행)이 상방 저항이 될 수 있습니다. "
-                         "전환가는 발행 결정 시점 기준(리픽싱 미반영), 행사공시=최근 90일 전환청구권·신주인수권 행사.[/dim]\n")
+                         "전환가는 발행 결정 시점 기준(리픽싱 미반영), 행사공시=최근 90일 전환청구권·신주인수권 행사. "
+                         "잔존물량 앞의 ~ 는 공시에서 확인하지 못해 전량으로 본 값입니다.[/dim]\n")
 
 
 def _apply_real_chg(insiders):

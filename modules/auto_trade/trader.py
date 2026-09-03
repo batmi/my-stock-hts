@@ -136,6 +136,18 @@ def candidate_priority_key(c):
             -(c.get('w52_pos') or 0.0), -(c.get('vol_strength') or 0.0))
 
 
+def index_source_note(stat):
+    """지수 상태에 붙일 출처 꼬리표. 최후 폴백일 때만 표시한다.
+
+    지수는 KRX 확정 봉 위에 KIS·토스·tvDatafeed·yfinance 중 하나를 얹어 만든다
+    (analysis._fetch_domestic_index_data). 평상시 출처까지 화면에 늘어놓으면 읽는 데
+    방해가 되지만, **최후 폴백(yfinance)** 은 다르다 — 최신 거래일 종가를 결측으로 주는
+    일이 잦아 시장 필터가 어긋났을 때 가장 먼저 의심할 자리다. 그때만 밝힌다.
+    """
+    src = (stat or {}).get('source') or "" if isinstance(stat, dict) else ""
+    return " [dim](yfinance 폴백)[/]" if "YFINANCE" in str(src).upper() else ""
+
+
 class AutoTrader:
     _instance = None
     
@@ -2333,7 +2345,7 @@ class AutoTrader:
                 current = stat.get('current', 0)
                 trend_icon = "(상승)" if is_healthy else "(하락)"
                 color = "red" if is_healthy else "blue"
-                return f"[{color}]{current:,.0f} {trend_icon}[/]"
+                return f"[{color}]{current:,.0f} {trend_icon}[/]{index_source_note(stat)}"
             
             table.add_row("지수 추세", f"KOSPI: {get_stat_msg(kospi_stat)} / KOSDAQ: {get_stat_msg(kosdaq_stat)}")
             
@@ -6660,7 +6672,8 @@ class AutoTrader:
 
                 if df is None or df.empty or len(df) < ma_period:
                     self.log(f"{market_name} 지수 데이터 부족/조회 실패 → 시장 방향 판단 불가로 신규 매수를 보류합니다. (매도·손절은 정상 동작)")
-                    self.market_index_status[market_name] = {"is_healthy": False, "unknown": True, "current": 0}
+                    self.market_index_status[market_name] = {"is_healthy": False, "unknown": True, "current": 0,
+                                                             "source": analysis.index_source(df)}
                     self._notify_market_unknown(market_name, notify)
                     continue
 
@@ -6670,10 +6683,17 @@ class AutoTrader:
                 is_healthy = not bool(indicators.get_market_filter_blocked(
                     df['close'], ma_period, band_pct).iloc[-1])
 
+                #  [Fix 2026-09-04] 판단에 쓴 지수가 **어디서 온 값인지** 함께 남긴다.
+                #   지수는 KRX 확정 봉 위에 KIS/토스/tvDatafeed/yfinance 중 하나를 얹어
+                #   만드는데(analysis._fetch_domestic_index_data), 종전에는 그 출처가
+                #   attrs 에만 있고 아무도 읽지 않았다. 최후 폴백(yfinance)은 최신 종가를
+                #   결측으로 주는 일이 잦아, 매수 중단·재개가 어긋났을 때 무엇으로 판단한
+                #   것인지 되짚을 수 없었다.
                 self.market_index_status[market_name] = {
                     "is_healthy": is_healthy,
                     "unknown": False,
-                    "current": current_idx
+                    "current": current_idx,
+                    "source": analysis.index_source(df),
                 }
 
                 # [동적 손절 캡] KOSPI 실현변동성의 장기 대비 배율을 갱신한다. 이 값이
@@ -6706,7 +6726,9 @@ class AutoTrader:
                     self.market_status_notified[market_name] = False
             except Exception as e:
                 self.log(f"{market_name} 지수 조회 실패: {e} → 시장 방향 판단 불가로 신규 매수를 보류합니다. (매도·손절은 정상 동작)")
-                self.market_index_status[market_name] = {"is_healthy": False, "unknown": True, "current": 0}
+                #  예외 경로라 df 를 신뢰할 수 없다 — 출처는 비워 둔다(모른다를 모른다로 남긴다).
+                self.market_index_status[market_name] = {"is_healthy": False, "unknown": True, "current": 0,
+                                                         "source": None}
                 self._notify_market_unknown(market_name, notify)
 
     def _notify_market_unknown(self, market_name, notify=True):

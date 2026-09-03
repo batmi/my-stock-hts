@@ -126,7 +126,11 @@ def _collect_metrics(code, year, reprt):
 
     roe, debt = _pick(year, reprt)
     if roe is None and debt is None and reprt != "11011":
-        roe, debt = _pick(year if reprt == "11014" else year - 1, "11011")
+        #  [Fix 2026-09-04] 폴백은 **직전 연도** 사업보고서다. 종전에는 3분기(11014)만
+        #   같은 해(year)를 봤는데, 그 해 사업보고서는 이듬해 3/31 에야 제출된다 —
+        #   있을 수 없는 보고서를 물으니 폴백이 늘 빈손이었고, 3분기 기준으로 잡힌
+        #   종목은 ROE·부채비율이 이유 없이 비어 보였다.
+        roe, debt = _pick(year - 1, "11011")
     return roe, debt
 
 

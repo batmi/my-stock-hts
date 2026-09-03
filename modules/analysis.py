@@ -304,7 +304,12 @@ def _merge_index_history(hist, live):
     if not tail.empty:
         out = pd.concat([out, tail[out.columns]], ignore_index=True)
     out = out.sort_values("date").reset_index(drop=True)
-    out.attrs["source"] = hist.attrs.get("source", "KRX")
+    #  [Fix 2026-09-04] 종전에는 hist(KRX)의 출처로 덮어써서, 당일 봉을 어디서 받았는지가
+    #   사라졌다. 판단(지표)의 뼈대와 당일 값의 출처는 다를 수 있고, 그 둘을 구분하지
+    #   못하면 '최후 폴백으로 시장 필터가 돌았다'를 나중에 확인할 방법이 없다.
+    hist_src = hist.attrs.get("source", "KRX")
+    live_src = live.attrs.get("source")
+    out.attrs["source"] = f"{hist_src}+{live_src}" if (not tail.empty and live_src) else hist_src
     return out
 
 
@@ -1539,6 +1544,30 @@ def _trigger_async_refresh(market_type):
         logger.warning(f"[MARKET_INDEX] {market_type} 재검증 스레드 기동 실패: {e}")
         _release()
 
+#  최후 폴백 경고를 (지수, 거래일)당 한 번만 내기 위한 표시.
+_INDEX_LAST_RESORT_WARNED = set()
+
+
+def _warn_index_last_resort(market_type, ticker):
+    key = (market_type, _current_market_day())
+    if key in _INDEX_LAST_RESORT_WARNED:
+        return
+    _INDEX_LAST_RESORT_WARNED.add(key)
+    logger.warning(f"[MARKET_INDEX] {market_type} 지수를 최후 폴백(yfinance {ticker})으로 받았습니다 — "
+                   f"시장 필터·국면 판정이 이 값으로 돕니다. 최신 종가 결측 여부를 확인하세요.")
+
+
+def index_source(df):
+    """지수 DataFrame이 어디서 왔는지('KRX+TVDATAFEED' 등). 모르면 None.
+
+    출처를 기록만 하고 아무도 읽지 않으면 기록이 없는 것과 같다 — 판단 로그가 이것을 싣는다.
+    """
+    try:
+        return df.attrs.get("source")
+    except Exception:      # noqa: BLE001
+        return None
+
+
 def _fetch_domestic_index_data(market_type):
     """국내 지수 데이터를 실제 조회한다(캐시 미적용).
 
@@ -1665,6 +1694,11 @@ def _fetch_domestic_index_data(market_type):
             if yf_df is not None and not yf_df.empty:
                 yf_df.attrs['source'] = 'YFINANCE'
                 df = yf_df
+                #  [Fix 2026-09-04] 최후 폴백은 조용히 지나가면 안 된다. 이 지수로 시장
+                #   필터(이평 이탈 → 신규 매수 중단)와 국면 판정이 돈다. yfinance 는 최신
+                #   거래일 종가를 NaN 으로 주는 일이 잦아 하필 판단이 필요한 날 어긋난다.
+                #   거래일마다 지수당 한 번만 남긴다(캐시 TTL 5분마다 울리면 소음이 된다).
+                _warn_index_last_resort(market_type, yf_ticker)
         except Exception as e:
             logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} yfinance 폴백 실패: {e}")
 

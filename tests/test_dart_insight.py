@@ -212,3 +212,77 @@ def test_kr_dividend_plan_monthly():
     """월 10회 이상 지급이면 월배당으로 판정."""
     months, label = calendar_events._kr_dividend_plan(12, "12")
     assert label == "월배당" and months == list(range(1, 13))
+
+
+# ---------------------------------------------------------------------------
+# [감사 2026-09-04] 모르는 값은 위험 쪽으로 · 폴백은 있을 수 있는 보고서로
+# ---------------------------------------------------------------------------
+def test_overhang_unknown_remainder_counts_as_full():
+    """잔존 물량을 공시에서 확인하지 못하면 '전량 남았다'로 본다.
+
+    종전에는 rem_map.get(회차, 0) 이라, 회차 번호가 파싱된 맵에 없으면 잠재 매도물량이
+    조용히 0주가 됐다. 오버행은 상방 저항을 보는 지표이므로 모를 때는 위험 쪽에 서야 한다.
+    """
+    from modules.manage import insider
+
+    bond = {"bd_fta": "10,000,000,000", "cv_prc": "10,000", "bd_tm": "제3회",
+            "rcept_dt": "2026-01-05"}
+    with patch.object(api, "get_dart_treasury_decisions", return_value=[]), \
+         patch.object(api, "get_dart_free_increase_detail", return_value=[]), \
+         patch.object(api, "get_dart_bond_issue_detail",
+                      side_effect=lambda c, b, e, kind=None: [bond] if kind == "CB" else []), \
+         patch.object(api, "get_dart_disclosures", return_value=[]), \
+         patch.object(api, "get_current_price", return_value=12000), \
+         patch.object(api, "get_dart_shares_outstanding", return_value=(2_000_000, None)), \
+         patch.object(insider, "_get_rem_shares", return_value=({"1": 0}, "20260601")):
+        _, _, mezz = insider._collect_supply("005930", "삼성전자", 90)
+
+    assert len(mezz) == 1
+    m = mezz[0]
+    assert m["shares"] == 1_000_000
+    assert m["rem_shares"] == 1_000_000, "회차를 못 찾았는데 오버행이 0주로 사라졌다"
+    assert m["rem_estimated"] is True, "확인된 값이 아님을 표시해야 한다"
+
+
+def test_overhang_known_remainder_is_used_as_is():
+    """공시에서 회차를 찾으면 그 값을 그대로 쓴다(0이면 전량 전환 완료라는 정보다)."""
+    from modules.manage import insider
+
+    bond = {"bd_fta": "10,000,000,000", "cv_prc": "10,000", "bd_tm": "1",
+            "rcept_dt": "2026-01-05"}
+    with patch.object(api, "get_dart_treasury_decisions", return_value=[]), \
+         patch.object(api, "get_dart_free_increase_detail", return_value=[]), \
+         patch.object(api, "get_dart_bond_issue_detail",
+                      side_effect=lambda c, b, e, kind=None: [bond] if kind == "CB" else []), \
+         patch.object(api, "get_dart_disclosures", return_value=[]), \
+         patch.object(api, "get_current_price", return_value=12000), \
+         patch.object(api, "get_dart_shares_outstanding", return_value=(2_000_000, None)), \
+         patch.object(insider, "_get_rem_shares", return_value=({"1": 250_000}, "20260601")):
+        _, _, mezz = insider._collect_supply("005930", "삼성전자", 90)
+
+    assert mezz[0]["rem_shares"] == 250_000
+    assert mezz[0]["rem_estimated"] is False
+
+
+def test_metrics_fallback_asks_for_a_report_that_can_exist():
+    """분기 지표가 없을 때의 폴백은 **직전 연도** 사업보고서다.
+
+    종전에는 3분기만 같은 해 사업보고서를 물었는데, 그 보고서는 이듬해 3/31에야 나온다.
+    있을 수 없는 것을 물으니 폴백이 늘 빈손이었고 ROE·부채비율이 이유 없이 비었다.
+    """
+    asked = []
+
+    def _index(code, year, reprt, idx):
+        asked.append((year, reprt))
+        if reprt == "11011" and idx == "M210000":
+            return [{"idx_nm": "ROE", "idx_val": "12.3"}]
+        if reprt == "11011" and idx == "M220000":
+            return [{"idx_nm": "부채비율", "idx_val": "45.6"}]
+        return []
+
+    with patch.object(api, "get_dart_financial_index", side_effect=_index):
+        roe, debt = financials._collect_metrics("005930", 2026, "11014")
+
+    assert (2026, "11011") not in asked, "아직 제출되지도 않은 사업보고서를 물었다"
+    assert (2025, "11011") in asked
+    assert roe == 12.3 and debt == 45.6
