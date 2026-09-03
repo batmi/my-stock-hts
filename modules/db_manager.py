@@ -649,6 +649,38 @@ class DBManager:
             # 조용히 넘기면 나중에 누락 원인을 못 찾으므로 반드시 남긴다.
             logger.warning(f"[Journal] 전송 대기열 적재 실패 (거래 기록은 정상 저장됨): {e}")
 
+    def _requeue_journal_after_update(self, cursor, odno, where_status):
+        """정정된 체결 기록을 매매일지 대기열에 **다시 반영**한다.
+
+        outbox 의 payload 는 적재 시점 스냅샷이다. 그래서 뒤늦은 정정 — 부분체결이
+        여러 폴링 주기에 걸쳐 수량·평균단가가 확정되면서 실현손익이 다시 계산되는
+        경우가 대표적이다 — 이 로컬 DB 에만 남고 웹 매매일지에는 옛 값이 그대로 있었다.
+        (실측 2026-09-03: 로컬 681,999원 / 전송된 값 204,601원)
+
+        웹 매매일지는 사람이 성과를 판단하는 화면이므로 로컬과 갈리면 안 된다.
+        `resend=True` 는 큐에 있던 행의 payload 를 덮고 전송 대기로 되돌린다. 서버는
+        brokerExecutionId 로 멱등 처리하므로 이미 보낸 건도 안전하게 갱신된다.
+        전송 포기(dead-letter)된 행은 건드리지 않는다.
+
+        일지 전송은 부가 기능이다 — 어떤 이유로든 여기서 거래 기록 갱신을 막지 않는다.
+        """
+        try:
+            from modules import journal_sync
+            if not journal_sync.is_enabled():
+                return
+            q = "SELECT * FROM trades WHERE odno = ?"
+            params = [odno]
+            if where_status is not None:
+                q += " AND order_status = ?"
+                params.append(where_status)
+            for row in cursor.execute(q, params).fetchall():
+                trade = dict(row)
+                if trade.get('order_status') not in journal_sync._SYNCABLE_STATUS:
+                    continue
+                journal_sync.enqueue(cursor, trade, resend=True)
+        except Exception as e:
+            logger.warning(f"[Journal] 정정분 재적재 실패 (거래 기록은 정상 갱신됨): {e}")
+
     def insert_trade(self, type_str, code, name, qty, price, odno, org_odno=None, snapshot=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, order_status="접수", custom_time=None, stop_loss_rate=0.0, buy_price=0.0):
         """거래 내역 및 스냅샷 저장"""
         # 쓰기 작업은 락으로 보호하여 순차 처리 (SQLite 특성상 안전)
@@ -810,6 +842,12 @@ class DBManager:
                             where += " AND order_status = ?"
                             params.append(where_status)
                         cursor.execute(f"UPDATE trades SET {', '.join(updates)} WHERE {where}", params)
+
+                        # 체결 내용이 바뀌었으면 매매일지 대기열의 스냅샷도 같이 고친다.
+                        #  같은 트랜잭션에서 해야 '로컬은 고쳐졌는데 큐엔 옛 값'인 틈이 없다.
+                        if any(v is not None for v in (price, qty, profit_amt, profit_rate)):
+                            self._requeue_journal_after_update(cursor, odno, where_status)
+
                         conn.commit()
                     break
                 except sqlite3.OperationalError as e:

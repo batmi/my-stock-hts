@@ -67,6 +67,8 @@ username 으로 바뀐다). 그래서 키를 따로 발급해도 인스턴스는
 
 import json
 import logging
+import os
+import sys
 import re
 import threading
 import time
@@ -126,6 +128,28 @@ _SHUTDOWN_PING_TIMEOUT = 3    # 초 — 종료 통지가 프로그램 종료를 
 
 def _cfg(name, default=''):
     return getattr(config, name, default) or default
+
+
+def _egress_blocked():
+    """테스트 세션에서는 웹서버로 나가는 모든 요청을 원천 차단한다. (차단이면 사유 문자열)
+
+    [2026-09-03 사고] 부분체결 회계 테스트가 만든 가짜 삼성전자 매도 2건이 실제 웹저널에
+     기록됐다. 경로는 이랬다 — 테스트가 `db_manager.db`(운영 DB 핸들)로 insert_trade 를
+     부르자 같은 트랜잭션에서 journal_outbox 에 `isSimulated=false` 로 적재됐고, 같은
+     맥북에서 돌던 **실전(mode 2) 인스턴스의 워커**가 몇 초 뒤 그것을 집어 전송했다.
+     테스트 프로세스 안에 워커가 없어도 새어 나간다는 뜻이다.
+
+    그래서 방어를 세 겹으로 둔다. ① 테스트는 운영 DB 를 만지지 못한다(conftest 가 경로를
+    갈아끼운다) ② 테스트 세션의 HTTP 는 호스트 단위로 막힌다(conftest) ③ 그 둘을 다 뚫어도
+    이 함수가 마지막으로 막는다. 실매매가 아닌 기록이 웹저널에 한 건이라도 섞이면
+    승률·손익 통계가 곧바로 틀어지므로, 의심스러우면 보내지 않는 쪽으로 닫는다.
+
+    검증 목적으로 진짜 전송이 필요한 도구(tools/journal_sync_e2e.py)는 pytest 밖에서
+    돌므로 여기 걸리지 않는다.
+    """
+    if os.environ.get('PYTEST_CURRENT_TEST') or 'pytest' in sys.modules:
+        return "테스트 세션(pytest)에서는 매매일지 웹서버 전송이 차단됩니다"
+    return ''
 
 
 def _has_credentials():
@@ -671,6 +695,11 @@ class _TokenCache:
             if not force and self._token and time.time() < self._expires_at:
                 return self._token
 
+            blocked = _egress_blocked()
+            if blocked:
+                logger.warning(f"[Journal] 토큰 발급 차단 — {blocked}")
+                return None
+
             import requests
             try:
                 res = requests.post(
@@ -704,6 +733,11 @@ def _request(method, path, *, json_body=None, params=None, retry_on_401=True,
 
     quiet=True 는 호출부가 실패 로그를 직접 관리할 때 쓴다(하트비트 등).
     """
+    blocked = _egress_blocked()
+    if blocked:
+        logger.warning(f"[Journal] {method} {path} 차단 — {blocked}")
+        return None
+
     import requests
 
     token = _tokens.get()

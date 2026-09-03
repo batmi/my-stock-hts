@@ -1,6 +1,7 @@
 import json as _json
 import sys
 import os
+from urllib.parse import urlparse as _urlparse
 import pytest
 import pandas as pd
 import numpy as np
@@ -17,8 +18,43 @@ from modules.auto_trade import engine as _atr_engine  # [추가] 지수 변동�
 from modules.auto_trade import trader as _atr_trader  # [추가] 개장 보류 게이트 전역 격리
 from modules.telegram_bot import TelegramCommander
 
+PRODUCTION_DB_PATH = os.path.abspath(config.DB_FILE_PATH)
+
+
 @pytest.fixture(scope="session", autouse=True)
-def setup_config():
+def isolate_production_db(tmp_path_factory):
+    """[격리] 테스트가 **운영 DB 파일**을 만지지 못하게 세션 시작 시 경로를 갈아끼운다.
+
+    `isolate_test_files` 가 매 테스트마다 `config.DB_FILE_PATH` 를 임시 경로로 패치하지만,
+    그것만으로는 막히지 않는다. `db_manager.db` 는 **모듈 import 시점에 만들어진 싱글턴**이라
+    자기 `db_path` 를 이미 운영 경로로 붙잡고 있고, 대부분의 테스트는 그 싱글턴을 그대로
+    쓴다. 즉 config 패치는 새로 만든 DBManager 에만 듣는다.
+
+    [2026-09-03 사고] 이 구멍으로 부분체결 테스트의 가짜 체결 4행이 운영 trade_history.db 에
+     들어갔고, 같은 트랜잭션에서 journal_outbox 에 적재돼 **같은 맥북에서 돌던 실전(mode 2)
+     인스턴스의 워커가 실제 웹저널로 전송**했다. 테스트 프로세스에 워커가 없어도 새어 나간다.
+     운영 DB 는 매매일지뿐 아니라 성과 지표·자산 이력·시그널 원장의 원본이므로, 여기 섞인
+     가짜 한 행은 그대로 판단 근거의 오차가 된다.
+
+    세션 스코프로 한 번만 바꾼다(테스트마다 바꾸면 테이블 재생성 비용이 3,800회 든다).
+    """
+    from modules import db_manager as _dbm
+
+    test_db = tmp_path_factory.mktemp("session_db") / "trade_history.db"
+    _dbm.db.switch_path(str(test_db))
+    config.DB_FILE_PATH = str(test_db)
+
+    assert os.path.abspath(_dbm.db.db_path) != PRODUCTION_DB_PATH
+
+    yield str(test_db)
+
+    # 세션 도중 누가 운영 경로로 되돌렸다면 조용히 넘기지 않는다.
+    assert os.path.abspath(_dbm.db.db_path) != PRODUCTION_DB_PATH, (
+        "테스트 세션이 운영 DB 경로로 되돌아갔습니다 — 운영 데이터가 오염됐을 수 있습니다")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def setup_config(isolate_production_db):
     """테스트 세션 동안 사용할 설정 초기화 (한투증권 모드).
 
     [주의] mode 1은 **가상투자(paper)**다. 여기서 mode 1로 초기화하면 paper_broker가
@@ -99,14 +135,20 @@ def block_side_effects_for_whole_session():
     _TOSS_HOSTS = ("tossinvest.com",)
     _DART_HOSTS = ("opendart.fss.or.kr", "dart.fss.or.kr")
     _ETC_HOSTS = ("finance.naver.com", "stock.naver.com", "news.google.com", "krx.co.kr")
+    # [차단 2026-09-03] 매매일지 웹서버. 여기로 나간 요청은 되돌릴 수 없다 — 테스트가 만든
+    #  가짜 체결이 사람이 보는 매매일지에 실거래로 남는다(실제 사고). 호스트는 환경변수에서
+    #  뽑아 설치마다 달라도 따라가고, 미설정이면 막을 대상 자체가 없다.
+    _JOURNAL_HOSTS = tuple(
+        h for h in [_urlparse(getattr(config, "JOURNAL_API_URL", "") or "").hostname] if h)
 
     class _BlockedResponse:
         """차단 응답의 공통 껍데기 — 본문만 호스트별로 갈아끼운다."""
         status_code = 200
         headers = {}
 
-        def __init__(self, payload):
+        def __init__(self, payload, status=200):
             self._payload = payload
+            self.status_code = status
             self.text = _json.dumps(payload, ensure_ascii=False)
             self.content = self.text.encode("utf-8")
 
@@ -127,13 +169,18 @@ def block_side_effects_for_whole_session():
         if any(h in url for h in _DART_HOSTS):
             # DART status 013 = '조회된 데이터 없음'(정상 케이스) → 경고 로그 없이 빈 결과.
             return _BlockedResponse({"status": "013", "message": _BLOCKED_MSG, "list": []})
+        if any(h in url for h in _JOURNAL_HOSTS):
+            # 매매일지는 **성공을 흉내 내면 안 된다**. 200 을 돌려주면 flush 가 그 행을
+            #  '전송 완료'로 도장 찍어 큐에서 지우고, 진짜 체결이 영영 서버에 닿지 않는다.
+            #  503 은 서버가 죽었을 때의 형태라 호출부가 재시도 경로를 그대로 탄다.
+            return _BlockedResponse({"error": _BLOCKED_MSG}, status=503)
         if any(h in url for h in _ETC_HOSTS):
             return _BlockedResponse({})
         return _BlockedResponse({"rt_cd": "1", "msg_cd": "TEST_BLOCKED",
                                  "msg1": _BLOCKED_MSG,
                                  "output": {}, "output1": [], "output2": []})
 
-    _ALL_BLOCKED = _LIVE_HOSTS + _TOSS_HOSTS + _DART_HOSTS + _ETC_HOSTS
+    _ALL_BLOCKED = _LIVE_HOSTS + _TOSS_HOSTS + _DART_HOSTS + _ETC_HOSTS + _JOURNAL_HOSTS
 
     def _guarded_request(self, method, url, *args, **kwargs):
         u = str(url)
