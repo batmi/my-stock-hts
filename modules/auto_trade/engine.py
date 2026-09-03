@@ -1130,8 +1130,13 @@ def analyze_holdings(entries, max_workers=None, restricted_codes=None, account=N
         max_workers = 4
     max_workers = max(1, min(max_workers, len(entries)))
 
+    # [계좌 컨텍스트] trade_context 는 threading.local 이라 워커로 상속되지 않는다.
+    #  이 함수는 여러 계좌에서 불린다(잔고 화면·텔레그램·예약감시). 감싸지 않으면 워커의
+    #  시세 조회가 호출자와 다른 앱키로 나가, 화면이 보여주는 판정과 시스템이 쓰는 판정이
+    #  또 갈린다(core.utils.inherit_account_context 주석 참조). 제출 스레드에서 만든다.
+    _task = utils.inherit_account_context(_worker)
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="at_engine") as executor:
-        for code, res in executor.map(_worker, entries):
+        for code, res in executor.map(_task, entries):
             if res:
                 results[code] = res
 

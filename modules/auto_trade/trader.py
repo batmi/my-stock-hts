@@ -5876,8 +5876,11 @@ class AutoTrader:
                 _local_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="at_cand_io")
                 ex = _local_pool
             try:
-                fut_chart = ex.submit(api.get_chart_data, code, is_overseas=is_overseas_stock)
-                fut_vol = ex.submit(api.get_realtime_vol_strength, code) if not is_overseas_stock else None
+                # [계좌 컨텍스트] 이 풀도 별도 스레드다 — 워커가 물려받은 컨텍스트를
+                #  한 번 더 넘겨야 시세 조회가 같은 앱키로 나간다.
+                _io = utils.inherit_account_context
+                fut_chart = ex.submit(_io(api.get_chart_data), code, is_overseas=is_overseas_stock)
+                fut_vol = ex.submit(_io(api.get_realtime_vol_strength), code) if not is_overseas_stock else None
 
                 df = fut_chart.result()
                 try: vol_strength = fut_vol.result() if fut_vol else None
@@ -6174,7 +6177,17 @@ class AutoTrader:
                 else:
                     _out = 'other'
                 return {'type': 'log_only', 'log': log_msg, 'ledger': _ledger(_out)}
-        except Exception: return None
+        except Exception as e:
+            # [관측성] 종전에는 `except Exception: return None` 이었다. 후보 하나가 던지면
+            #  그 종목은 아무 흔적 없이 사라졌고 — 로그도, 신호 원장 행도 남지 않았다.
+            #  원장이 비면 게이트 차단율의 분모가 조용히 줄어 tools/audit_gate_forward.py 의
+            #  표본이 편향된다. 바깥 as_completed 쪽에 같은 목적의 가드가 있지만, 여기서
+            #  먼저 삼켜 버리므로 그 가드는 닿지 않는다. 매도측(_sell_worker_guarded)과
+            #  같은 형태로 남긴다.
+            self.log(f"[분석실패] {item.get('name') or item.get('code')}"
+                     f"({item.get('code')}): 매수 판정 중 오류 — {type(e).__name__}: {e}")
+            logger.exception(f"[매수분석] {item.get('code')} 판정 실패")
+            return None
 
     def _analyze_candidates(self, targets, holding_codes, rules_map, reentry_hurdles, holding_names_map, holding_groups_map, restricted_stocks=None, stop_exit_prices=None, buy_block=None):
         candidates = []
@@ -6249,9 +6262,15 @@ class AutoTrader:
         # [최적화] 워커 내부의 차트/체결강도/호가 동시 조회용 I/O 풀을 공유
         #  (기존에는 후보 종목마다 ThreadPoolExecutor(3)를 생성/파괴 — 저사양 환경에서 오버헤드)
         io_pool = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers * 3, thread_name_prefix="cand_io")
+        # [계좌 컨텍스트] trade_context 는 threading.local 이라 워커로 상속되지 않는다.
+        #  감싸지 않으면 워커의 시세 조회가 자동 계좌가 아니라 **수동 계좌 앱키**로 나간다
+        #  (core.utils.get_common_headers). 매도 워커는 이미 이렇게 감싸고 있었는데
+        #  매수측만 빠져 있었다 — 워커가 is_system_trading 만 손으로 세우고 있던 것이
+        #  그 흔적이다. 반드시 제출 스레드에서 만든다.
+        _cand_task = utils.inherit_account_context(self._analyze_candidate_worker)
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="at_cand") as executor:
-                futures = [executor.submit(self._analyze_candidate_worker, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles, holdings_dfs, holding_groups_map, io_pool=io_pool, stop_exit_prices=stop_exit_prices, buy_block=buy_block) for item in targets]
+                futures = [executor.submit(_cand_task, item, holding_codes, rules_map, restricted_stocks, market_regime_adj, safe_delay, reentry_hurdles, holdings_dfs, holding_groups_map, io_pool=io_pool, stop_exit_prices=stop_exit_prices, buy_block=buy_block) for item in targets]
 
                 for future in concurrent.futures.as_completed(futures):
                     if not self.is_running: break

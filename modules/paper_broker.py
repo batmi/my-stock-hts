@@ -30,6 +30,28 @@ logger = logging.getLogger(__name__)
 
 _lock = threading.RLock()
 
+# 가상 주문번호 일련번호. place_order 는 _lock 안에서만 돌므로 보호가 따로 필요 없다.
+_odno_seq = 0
+
+
+def _new_odno(code):
+    """가상 주문번호를 만든다. **같은 프로세스 안에서 절대 겹치지 않아야 한다.**
+
+    [왜] 종전 형식은 `P{초단위시각}{코드끝2자리}` 였다. 매도 워커는 4스레드 병렬이라,
+    급락으로 손절이 한꺼번에 나가면 같은 초에 두 주문이 생긴다. 코드 끝 2자리까지 같으면
+    (44종목 유니버스에서 드물지 않다) 주문번호가 충돌한다. 그 뒤가 나쁘다 —
+    get_fill_by_odno 도 get_trade_by_odno 도 주문번호 하나로만 찾으므로,
+    _apply_paper_fill 이 **다른 종목의 체결(수량·단가·손익)** 을 이 종목에 반영한다.
+
+    초 단위 시각에 마이크로초와 일련번호를 붙여 없앤다. 마이크로초는 재기동으로 일련번호가
+    0으로 돌아가도 겹치지 않게 하고, 일련번호는 같은 마이크로초에 두 건이 들어오는 경우를
+    막는다. 코드 끝 2자리는 로그에서 눈으로 짚기 위해 남긴다.
+    """
+    global _odno_seq
+    _odno_seq = (_odno_seq + 1) % 1000
+    return (f"P{datetime.now().strftime('%y%m%d%H%M%S%f')}"
+            f"{str(code)[-2:]}{_odno_seq:03d}")
+
 # 체결 비용·슬리피지는 config가 단일 소스다(modules/trading_cost 참조).
 # 종전에는 이 파일이 요율을 따로 들고 있었고 슬리피지는 아예 없어서, 같은 전략이라도
 # 백테스트와 관찰모드의 성과를 직접 비교할 수 없었다(2026-08-10 정합화).
@@ -343,7 +365,7 @@ def place_order(action, code, qty, price, name=None):
             "SELECT name, qty, avg_price, first_buy_at FROM paper_positions WHERE code=?",
             (code,), fetch='one')
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        odno = f"P{datetime.now().strftime('%y%m%d%H%M%S')}{code[-2:]}"
+        odno = _new_odno(code)
 
         price = fill_price(price, action, market=is_market)
 
