@@ -54,6 +54,25 @@ def setup_korean_font():
     except Exception: pass
     plt.rcParams['axes.unicode_minus'] = False
 
+def _save_thumbnail(file_path):
+    """살아 있는 Figure 에서 갤러리용 축소본을 한 장 더 저장한다.
+
+    [왜 여기서 그리나 · 2026-09-03] 갤러리 카드는 원본(6000x8400, 2.5MB)을 180px 로
+    줄여 보여줄 뿐인데 첫 접속에 원본을 전부 내려받고 있었다. 원본 PNG 를 다시 열어
+    줄이면 RGBA 버퍼만 200MB — 1GB 라즈베리파이에서는 못 쓴다. 반면 여기서는 이미
+    그려진 Figure 를 낮은 DPI 로 한 번 더 래스터라이즈하면 되고, 그 비용은 400px
+    폭짜리 렌더 한 번이다. 실패해도 원본 저장은 이미 끝났으므로 조용히 넘어간다
+    (갤러리는 썸네일이 없으면 원본을 건다).
+    """
+    try:
+        thumb_path = web_dashboard.thumbnail_path(file_path)
+        os.makedirs(os.path.dirname(thumb_path), exist_ok=True)
+        width_in = float(plt.gcf().get_size_inches()[0]) or 1.0
+        plt.savefig(thumb_path, dpi=max(8, web_dashboard.THUMB_WIDTH_PX / width_in))
+    except Exception as e:
+        logger.debug(f"[chart] 썸네일 생성 실패({os.path.basename(file_path)}): {e}")
+
+
 def _release_render_memory():
     """렌더링이 잡고 있던 메모리를 즉시 돌려준다.
 
@@ -576,6 +595,7 @@ def generate_visual_chart(code, name, is_overseas, open_file=True, dpi=None, qui
         file_name = f"analysis_{safe_code}_{period_type}.png"
         file_path = os.path.join(config.CHART_DIR, file_name)
         plt.savefig(file_path, dpi=dpi)
+        _save_thumbnail(file_path)
         _release_render_memory()
         
         # 갤러리 웹 대시보드 인덱스 생성 (헤드리스/SSH 환경에서만)
@@ -645,6 +665,7 @@ def generate_monte_carlo_histogram(returns, name, code, open_file=True):
     _purge_legacy_mc_charts(safe_code)
 
     plt.savefig(file_path, dpi=100)
+    _save_thumbnail(file_path)
     _release_render_memory()
     
     # 갤러리 웹 대시보드 인덱스 업데이트 (헤드리스/SSH 환경에서만)

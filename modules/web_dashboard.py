@@ -297,12 +297,62 @@ def parse_chart_filename(filename):
     return None, None
 
 
+# ==========================================================
+# [썸네일] 갤러리 첫 화면은 원본 PNG 를 내려받지 않는다
+# ==========================================================
+#  [왜 필요한가 · 2026-09-03] 분석 차트는 20x28인치를 300DPI 로 그려 6000x8400px,
+#   장당 2.5MB 다. 갤러리 카드는 그것을 180x130px 로 줄여 보여줄 뿐인데, 종전에는
+#   원본을 그대로 <img src> 로 걸었다. 차트가 30장이면 첫 접속에 75MB 를 받는다.
+#   그래서 차트를 그리는 김에(= 원본을 다시 디코드하지 않고, 살아 있는 Figure 에서)
+#   낮은 DPI 로 한 장 더 저장해 두고, 카드는 그 썸네일을 건다. 라이트박스를 열면
+#   그때 원본을 받는다.
+#  [왜 PNG 를 다시 읽어 줄이지 않나] 6000x8400 RGBA 를 PIL 로 열면 그것만 200MB 다.
+#   1GB 라즈베리파이에서 OOM Killer 를 부르는 크기라, 디코드 경로는 쓰지 않는다.
+#   그래서 **썸네일이 없으면 원본을 건다** — 종전 동작 그대로다(다시 그리면 생긴다).
+THUMB_DIRNAME = 'thumbs'
+THUMB_WIDTH_PX = 400          # 카드 표시 폭(180px)의 2배 남짓 — 고DPI 화면까지 감당
+
+
+def thumbnail_path(png_path):
+    """원본 차트 PNG 경로 → 썸네일 PNG 경로."""
+    directory, filename = os.path.split(png_path)
+    return os.path.join(directory, THUMB_DIRNAME, filename)
+
+
+def _thumb_src(chart_dir, filename, mtime):
+    """카드에 걸 이미지의 (상대경로, 원본여부). 썸네일이 낡았으면 원본을 쓴다."""
+    thumb = os.path.join(chart_dir, THUMB_DIRNAME, filename)
+    try:
+        if os.path.getmtime(thumb) >= mtime:
+            return f"{THUMB_DIRNAME}/{filename}"
+    except OSError:
+        pass
+    return filename
+
+
+def _purge_orphan_thumbs(chart_dir, live_names):
+    """원본이 사라진 썸네일을 지운다. 실패해도 인덱스 생성은 계속한다."""
+    thumb_dir = os.path.join(chart_dir, THUMB_DIRNAME)
+    try:
+        names = os.listdir(thumb_dir)
+    except OSError:
+        return
+    for name in names:
+        if name in live_names:
+            continue
+        try:
+            os.remove(os.path.join(thumb_dir, name))
+        except OSError as e:
+            logger.debug(f"[webchart] 고아 썸네일 삭제 실패({name}): {e}")
+
+
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Chart Dashboard</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ctext y=%22.9em%22 font-size=%2290%22%3E%F0%9F%93%88%3C/text%3E%3C/svg%3E">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
@@ -530,10 +580,14 @@ def update_chart_index(chart_dir):
         anim_delay = (idx % 10) * 0.1
         # 파일명·종목명은 전부 이스케이프한다(따옴표 하나에 카드가 깨지지 않도록).
         src = f"{html.escape(filename, quote=True)}?v={int(mtime)}"
+        # 카드에는 썸네일을, 라이트박스에는 원본을 건다.
+        thumb_src = (f"{html.escape(_thumb_src(chart_dir, filename, mtime), quote=True)}"
+                     f"?v={int(mtime)}")
 
         cards_html += f'''
         <div class="card" style="animation-delay: {anim_delay}s" onclick="openLightbox(&quot;{src}&quot;)">
-            <img src="{src}" alt="{html.escape(alt_text, quote=True)}" loading="lazy">
+            <img src="{thumb_src}" alt="{html.escape(alt_text, quote=True)}"
+                 loading="lazy" decoding="async">
             <div class="card-info">
                 <h3 class="card-title">{title_html}</h3>
                 <div class="card-meta">
@@ -546,6 +600,8 @@ def update_chart_index(chart_dir):
     if not cards_html:
         cards_html = ('<p style="grid-column: 1 / -1; text-align: center; color: var(--text-muted);">'
                       '아직 생성된 차트가 없습니다. 메뉴에서 차트를 만들면 여기에 쌓입니다.</p>')
+
+    _purge_orphan_thumbs(chart_dir, {os.path.basename(f) for f in png_files})
 
     html_content = HTML_TEMPLATE.replace('<!-- INJECT_CARDS -->', cards_html)
 
