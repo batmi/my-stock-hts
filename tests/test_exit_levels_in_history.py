@@ -78,8 +78,26 @@ def test_matches_the_balance_screen(monkeypatch):
 
 def test_overseas_prices_are_dollars():
     out = engine.format_exit_levels(250.5, sl_rate=-8.0, label="ATR", atr=6.0,
-                                    is_overseas=True)
+                                    is_usd=True)
     assert "$" in out, out
+
+
+def test_krw_quoted_non_stock_codes_are_won():
+    """KRX 금현물처럼 6자리 코드가 아니어도 원화면 $ 를 붙이지 않는다.
+
+    2026-09-03 텔레그램 청산 신호에서 ^KRXGOLD 가격에 $ 가 붙어 나갔다.
+    """
+    from core import utils
+
+    assert utils.is_usd_quoted("^KRXGOLD") is False
+    assert utils.is_usd_quoted("^KS11") is False
+    assert utils.is_usd_quoted("AAPL") is True
+    assert utils.is_usd_quoted("005930") is False
+
+    out = engine.format_exit_levels(229350, sl_rate=-3.9, label="ATR", atr=8000,
+                                    is_usd=utils.is_usd_quoted("^KRXGOLD"))
+    assert "$" not in out, out
+    assert "220,4" in out or "220," in out, out
 
 
 def test_no_levels_without_a_price():

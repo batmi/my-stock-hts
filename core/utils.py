@@ -29,6 +29,22 @@ def is_overseas_code(code):
     return not (len(code) == 6 and code.isdigit())
 
 
+# 6자리 숫자가 아니면서도 **원화로 값이 매겨지는** 코드들. is_overseas_code 는 '시세 소스와
+#  거래일' 축이라 이들을 해외로 본다(맞다 — KIS 국내 주식 API 로는 뽑을 수 없다). 하지만
+#  표기 통화는 다른 축이다: KRX 금현물은 원/g, 국내 지수는 포인트다. 두 축을 한 함수로
+#  답하게 두면 원화 값에 $ 가 붙는다(2026-09-03 텔레그램 청산선에서 실제로 그랬다).
+KRW_QUOTED_CODES = {
+    "^KRXGOLD",                                  # KRX 금현물(원/g)
+    "^KS11", "^KS200", "^KQ11", "^KQ150",        # 국내 지수
+    "^K200FUT", "^VKOSPI",                       # 코스피200 선물·변동성
+}
+
+
+def is_usd_quoted(code):
+    """가격을 달러로 적어야 하는 코드인가. (통화 축 — 거래일 축인 is_overseas_code 와 다르다)"""
+    return is_overseas_code(code) and (code or '').strip().upper() not in KRW_QUOTED_CODES
+
+
 def market_today(is_overseas=False):
     """실시간 현재가 반영 시 '당일' 판정에 쓰는 시장 기준일(YYYYMMDD 문자열).
 

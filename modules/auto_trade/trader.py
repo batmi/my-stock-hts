@@ -6570,7 +6570,7 @@ class AutoTrader:
                 order_price, sl_rate=sl_rate,
                 label=("ATR" if use_atr_stop else "고정"),
                 atr=(atr_val if atr_val > 0 else None),
-                is_overseas=utils.is_overseas_code(cand['code']))
+                is_usd=utils.is_usd_quoted(cand['code']))
             if levels:
                 reason += f" {levels}"
 

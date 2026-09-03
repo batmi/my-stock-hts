@@ -279,12 +279,6 @@ def _account_text(cano, product_code):
 # 페이로드 변환
 # ══════════════════════════════════════════════════════════════════════
 
-def _is_overseas(code):
-    """종목코드 형태로 해외 여부를 판단한다. 판정은 core.utils 가 단독으로 소유한다."""
-    from core import utils
-    return utils.is_overseas_code(code)
-
-
 def _exchange_for(code, overseas):
     """거래소 코드. 서버가 이 값으로 **현지 거래일**을 계산하므로 해외는 특히 중요하다.
 
@@ -473,7 +467,11 @@ def _compose_memo(trade, side, currency):
 def build_payload(trade):
     """로컬 trades 행(dict)을 API TradeRecordInput 으로 변환한다."""
     code = (trade.get('code') or '').strip()
-    overseas = _is_overseas(code)
+    # [통화·거래소 축] KRX 금현물(^KRXGOLD)처럼 6자리 코드가 아니면서 KRX 에서 원화로
+    #  거래되는 종목이 있다. 코드 형태만 보면 해외로 잡혀 원화 체결이 USD 로 기록되고
+    #  거래소가 빈칸이 된다. 통화·거래소는 '달러로 값이 매겨지는가'로 가른다.
+    from core import utils
+    overseas = utils.is_usd_quoted(code)
     status = trade.get('order_status')
     confidence = _SYNCABLE_STATUS.get(status, 'CONFIRMED')
 

@@ -3144,7 +3144,9 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         ema_align = "데이터 부족"; ema_color = "[dim]"
     table_tech.add_row("이평 배열", f"{ema_color}{ema_align}[/]", "5/20/60/120일선 배열")
     
-    def _fmt_ema(v): return f"{int(v):,}" if not is_overseas else f"${v:,.2f}"
+    # 가격·52주와 같은 기준으로 가른다 — 지수는 통화 기호 없이, 원화 종목(KRX 금현물 등)은 원.
+    _usd_ema = utils.is_usd_quoted(code) and not is_index
+    def _fmt_ema(v): return f"${v:,.2f}" if _usd_ema else f"{int(v):,}"
     
     v5 = ind.get('ema_5')
     v20 = ind.get('ema_20')

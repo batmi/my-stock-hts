@@ -281,7 +281,7 @@ def compute_trailing_stop(highest_price, buy_price, current_price, ind=None, thr
 
 
 def format_exit_levels(buy_price, sl_rate=None, label=None, ts=None,
-                       highest_price=0, atr=None, is_overseas=False):
+                       highest_price=0, atr=None, is_usd=False):
     """청산선을 매매 기록에 남길 한 줄로 만든다. 9-2 잔고 화면의 '청산선' 열과 같은 값.
 
     [왜 기록에 남기나] 히스토리에는 '왜 샀나/팔았나'만 있고 **어디서 끊길 예정이었나**가
@@ -296,7 +296,9 @@ def format_exit_levels(buy_price, sl_rate=None, label=None, ts=None,
     계산한다(매수 기록에는 아직 고점이 없다).
     """
     def _p(v):
-        return f"${v:,.2f}" if is_overseas else f"{round(v):,}"
+        # 통화 축이다. '해외 코드'가 아니라 '달러로 값이 매겨지는가'를 받는다 —
+        #  KRX 금현물(^KRXGOLD)은 6자리 코드가 아니지만 원/g 이다.
+        return f"${v:,.2f}" if is_usd else f"{round(v):,}"
 
     if not buy_price or buy_price <= 0:
         return ""
@@ -1564,7 +1566,7 @@ class DefaultStrategy:
                         ("ATR" if (thresholds and thresholds.get("ATR_APPLIED_SL_RATE") is not None)
                          else "고정"))),
                 ts=ts_info, highest_price=highest_price,
-                is_overseas=utils.is_overseas_code(code))
+                is_usd=utils.is_usd_quoted(code))
             if levels:
                 reason = f"{reason} {levels}"
 

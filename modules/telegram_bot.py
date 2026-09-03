@@ -1973,9 +1973,12 @@ class TelegramCommander:
             adx_str = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
             cci_str = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
             
-            price_fmt = f"${display_price:,.2f}" if is_overseas else f"{int(display_price):,}원"
-            h52_fmt = f"${high_52:,.2f}" if is_overseas else f"{int(high_52):,}원"
-            l52_fmt = f"${low_52:,.2f}" if is_overseas else f"{int(low_52):,}원"
+            # [통화 축] 해외 여부가 아니라 '달러로 값이 매겨지는가'로 가른다.
+            #  KRX 금현물(^KRXGOLD)·국내 지수는 6자리 코드가 아니어서 해외로 잡히지만 원화다.
+            _usd = utils.is_usd_quoted(code)
+            price_fmt = f"${display_price:,.2f}" if _usd else f"{int(display_price):,}원"
+            h52_fmt = f"${high_52:,.2f}" if _usd else f"{int(high_52):,}원"
+            l52_fmt = f"${low_52:,.2f}" if _usd else f"{int(low_52):,}원"
             
             # SAR 상태
             sar_state = "-"
@@ -2015,7 +2018,7 @@ class TelegramCommander:
                 if ind['ema_20'] > ind['ema_60'] > ind['ema_120']: ema_state = "정배열"
                 elif ind['ema_20'] < ind['ema_60'] < ind['ema_120']: ema_state = "역배열"
             
-            def _fmt_ema(v): return f"{int(v):,}" if not is_overseas else f"${v:,.2f}"
+            def _fmt_ema(v): return f"${v:,.2f}" if _usd else f"{int(v):,}"
             e5 = _fmt_ema(ind.get('ema_5')) if ind.get('ema_5') is not None else "-"
             e20 = _fmt_ema(ind.get('ema_20')) if ind.get('ema_20') is not None else "-"
             e60 = _fmt_ema(ind.get('ema_60')) if ind.get('ema_60') is not None else "-"
