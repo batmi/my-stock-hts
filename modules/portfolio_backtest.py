@@ -303,23 +303,69 @@ UNMODELED_SELL_TOGGLES = (
 )
 
 
+# 실매매에는 **늘 켜져 있는데** 백테스트가 아예 재현하지 못하는 진입 게이트.
+#  [왜 매도 토글과 따로인가] 위 UNMODELED_SELL_TOGGLES 는 전부 기본 OFF라 '켜면 갈라진다'는
+#   예방 경고였다. 이쪽은 반대다 — **기본값이 켜짐**이라 지금 이 순간에도 갈라져 있다.
+#   체결강도·호가잔량비는 일봉에 존재하지 않는 값이고(실시간 체결·호가창), 개장 직후
+#   보류는 종가 모델에 시각이 없어 밟을 수 없다. 백테스트는 이 셋이 **한 번도 막지 않은
+#   세계**를 굴린다.
+#  [크기] 라즈베리파이 관찰 모드(mode 1)의 신호 원장 실측, 2026-08-19~09-01:
+#   매수 상태였던 (일,종목) 52건 중 **15건(28.8%)이 완전 차단**됐다
+#   (체결강도 13 · 호가잔량비 4 · 상관 2, 중복 계상). 작지 않다.
+#   ※ 그 기계는 시장 필터를 끄고 돌던 중이라 실전 비율과 같다고 볼 수는 없다.
+#     자릿수만 참고하고, 게이트가 이익인지 손해인지는 tools/audit_gate_forward.py 가 답한다.
+#  [왜 경고인가] 주석으로만 두면 시간이 지나 거짓이 된다 — 이 저장소가 반복해서 겪은
+#   형태다. 매도 측과 정확히 같은 문(warn_if_unmodeled)에서 함께 알린다.
+UNMODELED_ENTRY_GATES = (
+    ("BUY_VOL_STRENGTH", lambda v: (v or 0) > 0, "체결강도 게이트"),
+    ("BUY_ASK_BID_RATIO", lambda v: (v or 0) > 0, "호가잔량비 게이트"),
+)
+
+
+def unmodeled_entry_features():
+    """지금 켜져 있는데 백테스트가 재현하지 못하는 **진입** 게이트 이름 목록."""
+    at = getattr(config, 'ANALYSIS_THRESHOLDS', {}) or {}
+    on = [name for key, is_on, name in UNMODELED_ENTRY_GATES if is_on(at.get(key))]
+    # 개장 직후 보류는 config 최상위에 있다(종목별 룰이 없다).
+    if getattr(config, 'SYSTEM_ENTRY_OPEN_DELAY_USE', False) and \
+            int(getattr(config, 'SYSTEM_ENTRY_OPEN_DELAY_MINUTES', 0) or 0) > 0:
+        # 종가 모델에는 시각이 없어 무동작이지만, 장중 스캔 모드에서는 실제로 갈린다.
+        on.append("개장 직후 진입 보류")
+    return on
+
+
 def unmodeled_sell_features(sell_cfg=None):
     """지금 켜져 있는데 백테스트가 재현하지 못하는 청산 기능 이름 목록."""
     s = config.SELL_STRATEGY if sell_cfg is None else sell_cfg
     return [name for key, is_on, name in UNMODELED_SELL_TOGGLES if is_on(s.get(key))]
 
 
+def _announce(msg, loud=True):
+    logger.warning(msg)
+    try:
+        config.console.print(f"[bold yellow]{msg}[/]" if loud else f"[dim yellow]※ {msg}[/dim yellow]")
+    except Exception:
+        print(msg)
+
+
 def warn_if_unmodeled(where="백테스트"):
-    """재현 불가 기능이 켜져 있으면 알린다. 조용히 지나가지 않는 것이 요점이다."""
+    """재현 불가 기능이 켜져 있으면 알린다. 조용히 지나가지 않는 것이 요점이다.
+
+    청산(기본 OFF · 켜면 갈라진다)과 진입(기본 ON · 지금 갈라져 있다)을 함께 본다.
+    반환은 종전 호출부 호환을 위해 **청산 목록**이다(진입은 알리기만 한다).
+    """
     on = unmodeled_sell_features()
     if on:
-        msg = (f"[{where}] ⚠️ 실매매에는 있고 이 시뮬레이션에는 **없는** 청산이 켜져 있다: "
-               f"{' · '.join(on)}. 결과는 그 청산이 한 번도 일어나지 않은 세계의 것이다.")
-        logger.warning(msg)
-        try:
-            config.console.print(f"[bold yellow]{msg}[/]")
-        except Exception:
-            print(msg)
+        _announce(f"[{where}] ⚠️ 실매매에는 있고 이 시뮬레이션에는 **없는** 청산이 켜져 있다: "
+                  f"{' · '.join(on)}. 결과는 그 청산이 한 번도 일어나지 않은 세계의 것이다.")
+
+    entry_on = unmodeled_entry_features()
+    if entry_on:
+        # 기본값이 켜짐이라 거의 항상 뜬다 — 그래서 조용한 톤으로 낸다. 요점은
+        #  '경보'가 아니라 '이 결과가 무엇을 안 밟았는지'를 결과 옆에 남기는 것이다.
+        _announce(f"[{where}] 실매매에만 있는 진입 게이트: {' · '.join(entry_on)}. "
+                  f"이 시뮬레이션은 이 게이트가 한 번도 막지 않은 세계다 "
+                  f"(차단 비중은 tools/audit_gate_forward.py 로 잰다).", loud=False)
     return on
 
 
