@@ -37,12 +37,17 @@ class ReservedOrderMonitor:
             cls._instance.corp_checked_at = {}
         return cls._instance
 
+    # 감시 주기(초). 스윙 투자에 맞춘 값이며, 운영기가 라즈베리파이라 더 조이지 않는다.
+    #  [SSOT] 기동 로그가 이 값을 읽는다 — 종전에는 로그만 "3초"로 남아 실제 주기(10초)와
+    #  갈라져 있었다. 값을 바꿔도 로그가 따라오지 않으면 그 로그는 거짓이 된다.
+    CHECK_INTERVAL_SEC = 10.0
+
     def start(self):
         if self.is_running: return
         self.is_running = True
         self.monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True, name="ReservedOrderMonitor")
         self.monitor_thread.start()
-        logger.info("[Reserve] 예약 주문 3초 주기 감시 스레드 시작")
+        logger.info(f"[Reserve] 예약 주문 {self.CHECK_INTERVAL_SEC:g}초 주기 감시 스레드 시작")
 
     def stop(self):
         self.is_running = False
@@ -53,7 +58,7 @@ class ReservedOrderMonitor:
                 self._check_orders()
             except Exception as e:
                 logger.error(f"[Reserve] 예약 주문 감시 에러: {e}")
-            time.sleep(10.0)  # 스윙 투자에 적합한 서버 최적화 주기 (10초)
+            time.sleep(self.CHECK_INTERVAL_SEC)
             
     # 종목별 권리 조정 점검 주기(초). 조정은 하루 한 번 있을까 말까 한 사건이라
     #  자주 볼 이유가 없고, 점검마다 일봉 조회가 한 번 나간다.
@@ -615,6 +620,38 @@ class ReservedOrderMonitor:
         except Exception:
             pass
 
+    def _abort_execution(self, order, exc, sent):
+        """발주 도중 예외로 빠져나갈 때 예약을 **읽을 수 있는 상태**로 남긴다.
+
+        sent=False (발주 전에 터짐 — 시세 조회 실패 등): 거래소에 아무것도 안 갔으므로
+         PENDING 으로 되돌린다. 다음 주기에 조건을 다시 보고, 조건이 아직 살아 있으면
+         그때 발주한다.
+        sent=True (발주 중·후에 터짐): 되돌리지 않는다. 이미 접수됐을 수 있고, 그때
+         재시도하면 같은 주문이 두 번 나간다([[order-timeout-no-resend]]).
+         FAILED 로 굳히고 **거래소 확인이 필요하다는 사실을 사람에게 알린다** —
+         응답 유실은 '실패'가 아니라 '모름'이다.
+        """
+        name = order.get('name') or order.get('code')
+        if not sent:
+            db_manager.db.update_reserved_order_status(order['id'], 'PENDING')
+            logger.warning(f"[Reserve] 발주 전 오류로 예약을 되돌립니다: {name} — {exc}")
+            return
+
+        db_manager.db.update_reserved_order_status(
+            order['id'], 'FAILED', fail_reason=f"발주 중 오류(결과 불명): {exc}")
+        logger.error(f"[Reserve] 발주 중 오류 — 결과 불명: {name} {exc}", exc_info=True)
+        try:
+            api.send_telegram_message(
+                f"⚠️ [예약 주문 결과 불명] {name}({order.get('code')})\n"
+                f"조건: {order.get('condition_type')} "
+                f"({'매수' if order.get('order_type') == 'buy' else '매도'} "
+                f"{api.safe_int(order.get('qty')):,}주)\n"
+                f"오류: {exc}\n\n"
+                f"주문이 거래소에 들어갔는지 알 수 없어 **재시도하지 않습니다**.\n"
+                f"HTS/MTS에서 주문 내역을 확인해 주세요. 이 예약은 다시 발동하지 않습니다.")
+        except Exception:
+            pass
+
     def _execute_order(self, order, reason):
         # [수량 대사] 매도는 발주 직전에 실제 매도가능수량과 맞춘다. 등록 시점과 발동 시점
         #  사이에 외부(HTS·MTS) 매매가 끼어들 수 있고, 수동 계좌에서는 그것이 일상이다.
@@ -628,45 +665,59 @@ class ReservedOrderMonitor:
                 reason = f"{reason} · {qty_note}"
 
         db_manager.db.update_reserved_order_status(order['id'], 'PROCESSING')
-        market_str = "domestic" if order['market'] == 'KR' else "overseas"
+        # [좀비 방지] 여기부터 발주 결과 확정까지 사이에 예외가 나면 예약이 PROCESSING에
+        #  갇힌다. 감시 루프는 PENDING 만 조회하므로 그 예약은 **다시는 돌아오지 않고**,
+        #  PROCESSING 을 읽는 코드가 어디에도 없어 화면에도 안 뜬다. 예약은 대개 손절·익절
+        #  조건이라 조용히 사라지면 그대로 보호 공백이다.
+        #  발주 전이면 PENDING 으로 되돌려 다음 주기에 다시 보고, 발주 뒤면 되돌리지
+        #  않는다 — 이미 거래소에 들어갔을 수 있어 재시도가 곧 이중 주문이다
+        #  (api.http._is_response_unknown 의 ConnectTimeout/ReadTimeout 구분과 같은 판단).
+        sent = False
+        try:
+            market_str = "domestic" if order['market'] == 'KR' else "overseas"
         
-        order_price = float(order['order_price'])
-        if order_price == 0:
-            if order['market'] == 'KR':
-                now_time = datetime.now().strftime("%H%M")
-                if ("1530" <= now_time <= "2000") or ("0800" <= now_time <= "0850"):
-                    ord_dvsn = "00"
-                    curr = api.get_current_price(order['code'], is_overseas=False)
-                    if curr > 0:
-                        slippage = getattr(config, 'SLIPPAGE_RATE', 0.002)
-                        adj_price = curr * (1 + slippage) if order['order_type'] == 'buy' else curr * (1 - slippage)
-                        curr = utils.adjust_to_tick(adj_price, is_overseas=False)
-                    price_str = str(int(curr)) if curr > 0 else "0"
+            order_price = float(order['order_price'])
+            if order_price == 0:
+                if order['market'] == 'KR':
+                    now_time = datetime.now().strftime("%H%M")
+                    if ("1530" <= now_time <= "2000") or ("0800" <= now_time <= "0850"):
+                        ord_dvsn = "00"
+                        curr = api.get_current_price(order['code'], is_overseas=False)
+                        if curr > 0:
+                            slippage = getattr(config, 'SLIPPAGE_RATE', 0.002)
+                            adj_price = curr * (1 + slippage) if order['order_type'] == 'buy' else curr * (1 - slippage)
+                            curr = utils.adjust_to_tick(adj_price, is_overseas=False)
+                        price_str = str(int(curr)) if curr > 0 else "0"
+                    else:
+                        ord_dvsn = "01"
+                        price_str = "0"
                 else:
-                    ord_dvsn = "01"
-                    price_str = "0"
+                    ord_dvsn = "00"
+                    curr_price = api.get_current_price(order['code'], is_overseas=True)
+                    if curr_price > 0:
+                        slippage = getattr(config, 'SLIPPAGE_RATE', 0.002)
+                        adj_price = curr_price * (1 + slippage) if order['order_type'] == 'buy' else curr_price * (1 - slippage)
+                        curr_price = utils.adjust_to_tick(adj_price, is_overseas=True)
+                    
+                        if curr_price >= 1.0: price_str = f"{curr_price:.2f}"
+                        else: price_str = f"{curr_price:.4f}"
+                    else:
+                        price_str = "0"
             else:
                 ord_dvsn = "00"
-                curr_price = api.get_current_price(order['code'], is_overseas=True)
-                if curr_price > 0:
-                    slippage = getattr(config, 'SLIPPAGE_RATE', 0.002)
-                    adj_price = curr_price * (1 + slippage) if order['order_type'] == 'buy' else curr_price * (1 - slippage)
-                    curr_price = utils.adjust_to_tick(adj_price, is_overseas=True)
-                    
-                    if curr_price >= 1.0: price_str = f"{curr_price:.2f}"
-                    else: price_str = f"{curr_price:.4f}"
-                else:
-                    price_str = "0"
-        else:
-            ord_dvsn = "00"
-            price_str = str(int(order_price)) if order['market'] == 'KR' else str(order_price)
+                price_str = str(int(order_price)) if order['market'] == 'KR' else str(order_price)
         
-        # [계좌 라우팅] 예약주문은 등록 시점의 계좌(order['cano'])에 매여 있다. 이 감시 루프는
-        #  전용 스레드(ReservedOrderMonitor)에서 돌고, 계좌 컨텍스트는 threading.local이라
-        #  상속되지 않는다 — 명시하지 않으면 자동매매 계좌에 걸어 둔 예약이 수동 계좌에서
-        #  발주된다.
-        with utils.AccountContext(order.get('cano')):
-            res = api.place_order(market_str, order['order_type'], order['code'], order_qty, price_str, ord_dvsn)
+            # [계좌 라우팅] 예약주문은 등록 시점의 계좌(order['cano'])에 매여 있다. 이 감시 루프는
+            #  전용 스레드(ReservedOrderMonitor)에서 돌고, 계좌 컨텍스트는 threading.local이라
+            #  상속되지 않는다 — 명시하지 않으면 자동매매 계좌에 걸어 둔 예약이 수동 계좌에서
+            #  발주된다.
+            with utils.AccountContext(order.get('cano')):
+                sent = True
+                res = api.place_order(market_str, order['order_type'], order['code'], order_qty, price_str, ord_dvsn)
+        except Exception as e:
+            self._abort_execution(order, e, sent)
+            return
+
         if res.get('rt_cd') == '0':
             odno = res.get('output', {}).get('ODNO') or res.get('output', {}).get('KRX_FWDG_ORD_ORGNO')
             db_manager.db.update_reserved_order_status(order['id'], 'TRIGGERED', odno)
