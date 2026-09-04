@@ -44,7 +44,7 @@ from modules import portfolio_backtest as pb  # noqa: E402
 from modules.auto_trade import engine  # noqa: E402
 
 from tools.audit_atr_cap_and_ts import metrics  # noqa: E402
-from tools.audit_common import seed_notice  # noqa: E402
+from tools.audit_common import seed_notice, windows as audit_windows  # noqa: E402
 
 INITIAL_CAPITAL = 10_000_000
 WINSOR_LOOKBACK = 60          # TR 분위수를 재는 창
@@ -320,9 +320,7 @@ def main():
            float(p.get("DD_SCALE_2", 0.8))) if p.get("USE_DRAWDOWN_RISK_SCALING", True) else None)
 
     codes = list(dfs.keys())
-    k = max(1, args.subperiods); size = len(dates) // k
-    windows = ([(f"구간{i+1}", dates[i*size:(i+1)*size if i < k-1 else len(dates)])
-                for i in range(k)] if k > 1 else [("전체", dates)])
+    windows = audit_windows(dates, args.subperiods)
 
     print(f"\n{'='*126}")
     print(f"진폭 감쇠 · 동적 캡 검증 — {args.trials}회 × {args.sample}종목 짝비교 "

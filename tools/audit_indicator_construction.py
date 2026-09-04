@@ -35,7 +35,7 @@ from tools.audit_defensive_sector import (  # noqa: E402
     INITIAL_CAPITAL, metrics, new_scale_fn_factory,
 )
 from tools.audit_universe import dead_targets, extend_targets  # noqa: E402
-from tools.audit_common import seed_notice  # noqa: E402
+from tools.audit_common import seed_notice, windows as audit_windows  # noqa: E402
 
 # (라벨, {INDICATOR_PARAMS 키: 값}) — None이면 기준선(현행)
 AXES = {
@@ -130,11 +130,7 @@ def main():
             picks[(sd, i)] = (rng.sample(dead_c, min(n_dead, len(dead_c)))
                               + rng.sample(live_c, args.size - n_dead))
 
-    k = max(1, args.subperiods)
-    step = max(1, len(dates) // k)
-    W = [("전체", list(dates))]
-    W += [(f"구간{i + 1}", dates[i * step:(i + 1) * step if i < k - 1 else len(dates)])
-          for i in range(k)]
+    W = audit_windows(dates, args.subperiods, whole=True)
 
     P = config.INDICATOR_PARAMS
     for ax in [a.strip() for a in args.axis.split(",")]:

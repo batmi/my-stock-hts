@@ -34,7 +34,7 @@ from tools.audit_defensive_sector import (  # noqa: E402
     INITIAL_CAPITAL, metrics, new_scale_fn_factory,
 )
 from tools.audit_universe import dead_targets, extend_targets  # noqa: E402
-from tools.audit_common import seed_notice  # noqa: E402
+from tools.audit_common import seed_notice, windows as audit_windows  # noqa: E402
 
 
 def rule_picked(need, pool, seed):
@@ -127,11 +127,7 @@ def main():
           f"{n_dead_base}) · 확장 팔 {len(live_c) + n_take + n_dead}종목(관심 {len(live_c)} + "
           f"확장 {n_take} + 폐지 {n_dead}) — 폐지 비율 양쪽 {args.dead_frac:.0%}", flush=True)
 
-    k = max(1, args.subperiods)
-    step = max(1, len(dates) // k)
-    W = [("전체", list(dates))]
-    W += [(f"구간{i + 1}", dates[i * step:(i + 1) * step if i < k - 1 else len(dates)])
-          for i in range(k)]
+    W = audit_windows(dates, args.subperiods, whole=True)
 
     picks = {}
     for sd in seeds:

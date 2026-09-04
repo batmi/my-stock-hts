@@ -33,7 +33,7 @@ from tools.audit_defensive_sector import (  # noqa: E402
     INITIAL_CAPITAL, metrics, new_scale_fn_factory,
 )
 from tools.audit_universe import extend_targets  # noqa: E402
-from tools.audit_common import seed_notice  # noqa: E402
+from tools.audit_common import seed_notice, windows as audit_windows  # noqa: E402
 
 
 def main():
@@ -94,11 +94,7 @@ def main():
             picks[(sd_, i, "add_etf")] = base + etf_c
             picks[(sd_, i, "add_stock")] = base + extra
 
-    k = max(1, args.subperiods)
-    step = max(1, len(dates) // k)
-    W = [("전체", list(dates))]
-    W += [(f"구간{i + 1}", dates[i * step:(i + 1) * step if i < k - 1 else len(dates)])
-          for i in range(k)]
+    W = audit_windows(dates, args.subperiods, whole=True)
 
     for wn, wd in W:
         print(f"\n########## {wn} ({len(wd)} 거래일) ##########")

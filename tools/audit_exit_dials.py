@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 
-from tools.audit_common import exits, seed_notice  # noqa: E402
+from tools.audit_common import exits, seed_notice, windows as audit_windows  # noqa: E402
 
 INITIAL_CAPITAL = 10_000_000  # 실거래 시드와 같게 둔다(seed-slot-sizing)
 BEP_OFF = -999.0   # sl < bep_stop 이 성립할 수 없게 만들어 BEP를 무력화한다
@@ -128,10 +128,7 @@ def main():
     codes = list(dfs.keys())
 
     # 구간 분할 — 한 구간에서만 좋은 값을 채택하는 과최적화를 막는다.
-    k = max(1, args.subperiods)
-    size = len(dates) // k
-    windows = [(f"구간{i+1}", dates[i * size:(i + 1) * size if i < k - 1 else len(dates)])
-               for i in range(k)] if k > 1 else [("전체", dates)]
+    windows = audit_windows(dates, args.subperiods)
 
     all_results = {}
     for wname, wdates in windows:

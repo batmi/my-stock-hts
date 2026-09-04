@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
-from tools.audit_common import seed_notice  # noqa: E402
+from tools.audit_common import seed_notice, windows as audit_windows  # noqa: E402
 
 INITIAL_CAPITAL = 10_000_000  # 실거래 시드와 같게 둔다(seed-slot-sizing)
 
@@ -96,11 +96,11 @@ def main():
     codes = list(dfs.keys())
     vs = variants()
 
-    if args.split > 1:
-        n = len(dates) // args.split
-        periods = [(f"구간{i + 1}", dates[i * n:(i + 1) * n]) for i in range(args.split)]
-    else:
-        periods = [("전체", dates)]
+    # 마지막 구간이 나머지를 흡수한다(audit_common.windows). 종전에는 여기서
+    #  dates[i*n:(i+1)*n] 로 잘라 **마지막 며칠이 어느 구간에도 안 들어갔다**
+    #  (거래일 1,095일·4분할이면 3일). 다른 도구와 경계가 달라 구간별 수치를
+    #  나란히 놓을 수 없는 상태였다.
+    periods = audit_windows(dates, args.split)
 
     for plabel, pdates in periods:
         results = {name: [] for name, _lim in vs}

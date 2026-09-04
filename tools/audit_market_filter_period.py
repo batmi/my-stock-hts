@@ -40,7 +40,7 @@ from tools.audit_defensive_sector import (  # noqa: E402
     INITIAL_CAPITAL, metrics, new_scale_fn_factory,
 )
 from tools.audit_universe import dead_targets, extend_targets  # noqa: E402
-from tools.audit_common import seed_notice  # noqa: E402
+from tools.audit_common import seed_notice, windows as audit_windows  # noqa: E402
 
 
 def _ticker_of(code):
@@ -171,11 +171,7 @@ def main():
             lab = f"SMA{cur_ma} ±{bd:g}%" + ("  ← 현행" if bd == cur_band else "")
             variants[lab] = blocked_by_code(codes, args.days, cur_ma, bd)
 
-    k = max(1, args.subperiods)
-    step = max(1, len(dates) // k)
-    W = [("전체", list(dates))]
-    W += [(f"구간{i + 1}", dates[i * step:(i + 1) * step if i < k - 1 else len(dates)])
-          for i in range(k)]
+    W = audit_windows(dates, args.subperiods, whole=True)
 
     def run(wd, mf_by_code):
         out = []

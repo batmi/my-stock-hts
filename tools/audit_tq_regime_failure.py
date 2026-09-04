@@ -27,7 +27,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tools.audit_common import SELL_REASONS, seed_notice  # noqa: E402
+from tools.audit_common import SELL_REASONS, seed_notice, windows as audit_windows  # noqa: E402
 
 import config  # noqa: E402
 from core import indicators  # noqa: E402
@@ -93,12 +93,7 @@ def main():
             col = rolling_trend_quality(df["close"], lb)
         tq_map[c] = dict(zip((str(d) for d in df["date"]), col))
 
-    k = max(1, args.subperiods)
-    step = max(1, len(dates) // k)
-    seg_of = {}
-    for i in range(k):
-        for d in dates[i * step:(i + 1) * step if i < k - 1 else len(dates)]:
-            seg_of[d] = f"구간{i + 1}"
+    seg_of = {d: name for name, wd in audit_windows(dates, args.subperiods) for d in wd}
 
     cap = (config.ANALYSIS_THRESHOLDS.get("TREND_QUALITY_MAX", 0)
            if args.tq_cap is None else args.tq_cap)

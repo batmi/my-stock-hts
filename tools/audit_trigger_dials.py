@@ -35,7 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 
-from tools.audit_common import exits, seed_notice  # noqa: E402
+from tools.audit_common import exits, seed_notice, windows as audit_windows  # noqa: E402
 
 INITIAL_CAPITAL = 10_000_000  # 실거래 시드와 같게 둔다(seed-slot-sizing)
 
@@ -206,10 +206,7 @@ def main():
     saved_thr = dict(config.ANALYSIS_THRESHOLDS)
     codes = list(dfs.keys())
 
-    k = max(1, args.subperiods)
-    size = len(dates) // k
-    windows = [(f"구간{i+1}", dates[i * size:(i + 1) * size if i < k - 1 else len(dates)])
-               for i in range(k)] if k > 1 else [("전체", dates)]
+    windows = audit_windows(dates, args.subperiods)
 
     all_results = {}
     for wname, wdates in windows:

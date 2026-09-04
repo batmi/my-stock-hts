@@ -45,7 +45,7 @@ from core import indicators  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 
 from tools.audit_atr_cap_and_ts import metrics  # noqa: E402
-from tools.audit_common import seed_notice  # noqa: E402
+from tools.audit_common import seed_notice, windows as audit_windows  # noqa: E402
 
 INITIAL_CAPITAL = 10_000_000
 
@@ -186,10 +186,7 @@ def main():
     saved_ind = dict(config.INDICATOR_PARAMS)
     codes = list(dfs.keys())
 
-    k = max(1, args.subperiods)
-    size = len(dates) // k
-    windows = ([(f"구간{i+1}", dates[i*size:(i+1)*size if i < k-1 else len(dates)])
-                for i in range(k)] if k > 1 else [("전체", dates)])
+    windows = audit_windows(dates, args.subperiods)
 
     print(f"\n{'='*126}")
     print(f"변동성 반응 다이얼 검증 — {args.trials}회 × {args.sample}종목 무작위 짝비교 "

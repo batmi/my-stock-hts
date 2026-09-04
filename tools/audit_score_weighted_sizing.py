@@ -42,7 +42,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tools.audit_common import seed_notice, windows as audit_windows  # noqa: E402
+from tools.audit_common import is_exit, seed_notice, windows as audit_windows  # noqa: E402
 
 import config  # noqa: E402
 from core import indicators  # noqa: E402
@@ -112,8 +112,6 @@ def main():
     # 청산 기록에는 진입일이 없으므로 종목별로 '첫 매수 → 다음 청산'을 짝짓는다.
     #  [주의] 증액 기록의 reason은 '피라미딩1차/2차/3차'다. 이것을 청산으로 세면
     #  승률이 20% → 12%로 내려앉는다(profit 0인 매수 기록이 패로 잡힌다).
-    def _is_exit(reason):
-        return reason != "매수" and not str(reason).startswith("피라미딩")
 
     def collect_records():
         """기준선(균등) 운용을 돌려 (진입점수, 진입TQ, 진입일, 실현손익) 목록을 만든다."""
@@ -132,7 +130,7 @@ def main():
                 for code, ts in seq.items():
                     open_day = None
                     for t in ts:
-                        if not _is_exit(t["reason"]):
+                        if not is_exit(t["reason"]):
                             if open_day is None:
                                 open_day = t["date"]      # 증액은 진입일을 바꾸지 않는다
                         elif open_day is not None:

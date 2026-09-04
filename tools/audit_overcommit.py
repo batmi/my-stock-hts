@@ -40,7 +40,7 @@ from tools.audit_defensive_sector import (  # noqa: E402
     INITIAL_CAPITAL, metrics, new_scale_fn_factory,
 )
 from tools.audit_universe import dead_targets, extend_targets  # noqa: E402
-from tools.audit_common import seed_notice  # noqa: E402
+from tools.audit_common import seed_notice, windows as audit_windows  # noqa: E402
 
 ARMS = [
     ("[기준선] 4슬롯 × 0.25", 4, None),      # None = 자동(1/slots)
@@ -93,11 +93,7 @@ def main():
             picks[(sd, i)] = (rng.sample(dead_codes, min(n_dead, len(dead_codes)))
                               + rng.sample(live_codes, args.size - n_dead))
 
-    k = max(1, args.subperiods)
-    step = max(1, len(dates) // k)
-    W = [("전체", list(dates))]
-    W += [(f"구간{i + 1}", dates[i * step:(i + 1) * step if i < k - 1 else len(dates)])
-          for i in range(k)]
+    W = audit_windows(dates, args.subperiods, whole=True)
 
     for wn, wd in W:
         print(f"\n########## {wn} ({len(wd)} 거래일) ##########")

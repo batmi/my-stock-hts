@@ -41,7 +41,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tools.audit_common import seed_notice, windows as audit_windows  # noqa: E402
+from tools.audit_common import is_exit, seed_notice, windows as audit_windows  # noqa: E402
 
 import config  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
@@ -221,8 +221,6 @@ def run_gate_axis(args, dfs, status, mf, dates, slots, seeds, new_scale, tq):
     # ── 진단: 그 진입들이 실제로 얼마를 벌었나
     print("\n[2-진단] 기준선 운용에서 밴드별 실현 손익 (진입→청산 짝)")
 
-    def _is_exit(reason):
-        return reason != "매수" and not str(reason).startswith("피라미딩")
 
     recs = []
     for sd in seeds:
@@ -239,7 +237,7 @@ def run_gate_axis(args, dfs, status, mf, dates, slots, seeds, new_scale, tq):
             for code, ts in seq.items():
                 open_day = None
                 for t in ts:
-                    if not _is_exit(t["reason"]):
+                    if not is_exit(t["reason"]):
                         if open_day is None:
                             open_day = t["date"]
                     elif open_day is not None:

@@ -47,7 +47,7 @@ from tools.audit_defensive_sector import (  # noqa: E402
     INITIAL_CAPITAL, metrics, new_scale_fn_factory,
 )
 from tools.audit_universe import extend_targets  # noqa: E402
-from tools.audit_common import seed_notice  # noqa: E402
+from tools.audit_common import seed_notice, windows as audit_windows  # noqa: E402
 
 
 def main():
@@ -96,11 +96,7 @@ def main():
     status = pb.precompute_status(dfs, thr)
     new_scale = new_scale_fn_factory(dates, args.days)
 
-    k = max(1, args.subperiods)
-    step = max(1, len(dates) // k)
-    W = [("전체", list(dates))]
-    W += [(f"구간{i + 1}", dates[i * step:(i + 1) * step if i < k - 1 else len(dates)])
-          for i in range(k)]
+    W = audit_windows(dates, args.subperiods, whole=True)
 
     # 같은 시행 번호는 같은 종목 집합을 쓴다 — 44는 80의 부분집합으로 뽑아
     #  '종목이 늘어난 것' 외의 차이를 없앤다.
