@@ -163,8 +163,8 @@ def test_register_reserved_order_state(mock_insert, mock_get_price, mock_select_
 
 @patch('modules.trading.Prompt.ask')
 @patch('modules.trading.db_manager.db.get_pending_reserved_orders')
-@patch('modules.trading.db_manager.db.update_reserved_order_status')
-def test_manage_reserved_orders(mock_update, mock_get_orders, mock_ask):
+@patch('modules.trading.db_manager.db.cancel_reserved_order', return_value=True)
+def test_manage_reserved_orders(mock_cancel, mock_get_orders, mock_ask):
     """예약 주문 관리 및 삭제 처리 테스트"""
     mock_get_orders.side_effect = [
         [
@@ -186,7 +186,10 @@ def test_manage_reserved_orders(mock_update, mock_get_orders, mock_ask):
          patch('modules.trading.time.sleep'), \
          patch('modules.trading.utils.clear_screen'):
         trading.manage_reserved_orders()
-        mock_update.assert_called_once_with(1, 'CANCELED')
+        # [2026-09-04] 조건부 취소로 바뀌었다 — 목록을 뽑은 뒤 감시 스레드가 발동시켰으면
+        #  덮어쓰지 않는다(db_manager.cancel_reserved_order 주석).
+        mock_cancel.assert_called_once()
+        assert mock_cancel.call_args[0][0] == 1
         mock_tg.assert_called_once()
         assert "ID: 1" in mock_tg.call_args[0][0]
 
@@ -583,18 +586,19 @@ def test_telegram_cmd_reserves_summary(mock_get_orders):
     assert "ID: 100" in result
 
 @patch('modules.telegram_bot.db_manager.db.get_pending_reserved_orders')
-@patch('modules.telegram_bot.db_manager.db.update_reserved_order_status')
-def test_telegram_cmd_reserves_delete(mock_update, mock_get_orders):
+@patch('modules.telegram_bot.db_manager.db.cancel_reserved_order', return_value=True)
+def test_telegram_cmd_reserves_delete(mock_cancel, mock_get_orders):
     """/reserves d [ID] 명령어 - 주문 삭제 처리 확인"""
     commander = TelegramCommander()
     mock_get_orders.return_value = [{"id": 100, "order_type": "buy", "name": "삼성전자", "code": "005930"}]
     result = commander._cmd_reserves(["d", "100"])
-    mock_update.assert_called_once_with(100, 'CANCELED')
+    mock_cancel.assert_called_once()
+    assert mock_cancel.call_args[0][0] == 100
     assert "예약 취소 완료" in result
 
 @patch('modules.telegram_bot.db_manager.db.get_pending_reserved_orders')
-@patch('modules.telegram_bot.db_manager.db.update_reserved_order_status')
-def test_telegram_cmd_reserves_delete_all(mock_update, mock_get_orders):
+@patch('modules.telegram_bot.db_manager.db.cancel_reserved_order', return_value=True)
+def test_telegram_cmd_reserves_delete_all(mock_cancel, mock_get_orders):
     """/reserves d 0 명령어 - 일괄 주문 취소(All) 확인"""
     commander = TelegramCommander()
     mock_get_orders.return_value = [
@@ -602,9 +606,8 @@ def test_telegram_cmd_reserves_delete_all(mock_update, mock_get_orders):
         {"id": 2, "order_type": "sell", "name": "SK하이닉스", "code": "000660"}
     ]
     result = commander._cmd_reserves(["d", "0"])
-    assert mock_update.call_count == 2
-    mock_update.assert_any_call(1, 'CANCELED')
-    mock_update.assert_any_call(2, 'CANCELED')
+    assert mock_cancel.call_count == 2
+    assert {c[0][0] for c in mock_cancel.call_args_list} == {1, 2}
     assert "예약 취소 완료" in result
 
 def test_telegram_cmd_reserves_invalid():

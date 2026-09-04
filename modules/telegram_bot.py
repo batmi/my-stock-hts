@@ -530,6 +530,7 @@ class TelegramCommander:
         try:
             market_str = "미국" if market == "america" else "국내"
             final_msg = f"🔎 [TradingView 시장 스캔 결과]\n• 시장: {market_str}\n"
+            failed = []     # 건너뛴 프리셋 — 조용히 빠지면 '결과 없음'과 구분되지 않는다
 
             for preset_key, desc in presets:
                 # 공용 빌더로 쿼리/후처리 생성 (메뉴6 종목트렌드분석과 동일 로직)
@@ -547,7 +548,15 @@ class TelegramCommander:
                             else:
                                 logger.warning(f"TradingView Screener Timeout: {preset_key}")
                         else:
-                            raise e
+                            # [Fix 2026-09-04] 종전에는 그대로 올려보내 바깥 except 로 나갔다.
+                            #  10개 프리셋 중 하나가 실패하면 — 시장마다 없는 필드 하나면
+                            #  충분하다 — 그때까지 쌓아 둔 final_msg 가 통째로 버려지고
+                            #  사용자는 오류 문구만 받았다. 실패한 프리셋만 건너뛴다.
+                            #  (메뉴 6-2 스크리너도 같은 이유로 함께 고쳤다)
+                            logger.warning(f"Screener preset '{preset_key}' failed: {e}",
+                                           exc_info=True)
+                            failed.append(desc)
+                            break
 
                 if df is not None and not df.empty and post_fn is not None:
                     df = post_fn(df)
@@ -588,7 +597,11 @@ class TelegramCommander:
                     adx_str = f" / ADX: {adx:.1f}" if pd.notna(adx) else ""
                     
                     extra_str = ""
-                    if preset_key in ["ValueRebound", "HighDividend"]:
+                    # [Fix 2026-09-04] 종전 조건은 "ValueRebound" 였는데 그런 프리셋 키는
+                    #  없다(정식 키는 ValueTurnaround). 이름이 바뀌면서 죽은 분기라,
+                    #  PER 1~12 · ROE>15% 로 고른 '저평가 우량주'인데 정작 그 수치가
+                    #  결과에 안 붙었다(메뉴 표에는 붙는다). 정식 ID로 판정한다.
+                    if tg_to_id[preset_key] in ("value", "dividend"):
                         per = row.get('price_earnings_ttm')
                         roe = row.get('return_on_equity')
                         div = row.get('dividend_yield_recent')
@@ -602,6 +615,8 @@ class TelegramCommander:
                     
                     final_msg += f"• {name} ({ticker})\n  {close_str} ({change:+.2f}%) {rsi_str}{adx_str}{extra_str}\n\n"
                 
+            if failed:
+                final_msg += f"\n⚠️ 조회 실패로 건너뛴 조건: {', '.join(failed)}\n"
             final_msg += "\n상세 분석을 원하시면 '/analyze 종목코드'를 입력하세요."
             self._send_reply(final_msg.strip())
             
@@ -1246,9 +1261,16 @@ class TelegramCommander:
                     canceled_msgs.append(f"⚠️ 대기 중인 예약 주문(ID: {cancel_id})을 찾을 수 없습니다.")
                     continue
                     
-                db_manager.db.update_reserved_order_status(cancel_id, 'CANCELED')
-                
                 t_type = "매수" if target_order['order_type'] == 'buy' else "매도"
+                # 조건부 취소 — 목록을 뽑은 뒤 감시 스레드가 발동시켰을 수 있다.
+                #  무조건 덮으면 거래소엔 주문이 나갔는데 기록만 취소가 된다
+                #  (db_manager.cancel_reserved_order 주석).
+                if not db_manager.db.cancel_reserved_order(cancel_id, reason="사용자 수동 취소"):
+                    canceled_msgs.append(
+                        f"⚠️ {target_order['name']} ({t_type}, ID: {cancel_id})은 이미 발동/처리 중이라 "
+                        f"취소하지 못했습니다. /pending 으로 확인하세요.")
+                    continue
+
                 canceled_msgs.append(f"🗑️ [예약 취소 완료] {target_order['name']} ({t_type}, ID: {cancel_id})")
                 
             return "\n".join(canceled_msgs)

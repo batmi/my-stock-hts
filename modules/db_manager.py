@@ -2034,6 +2034,39 @@ class DBManager:
             else: cursor.execute("UPDATE reserved_orders SET status=? WHERE id=?", (status, order_id))
             conn.commit()
             
+    def cancel_reserved_order(self, order_id, reason=None):
+        """대기 중인 예약 주문 하나를 취소한다. 실제로 취소했으면 True.
+
+        [왜 조건부인가 · 2026-09-04] 사용자 취소는 '목록을 뽑아 보여주고 → 사람이 고르고
+        → 지운다'는 흐름이라 그 사이에 감시 스레드가 같은 주문을 발동시킬 수 있다.
+        무조건 status='CANCELED' 로 덮으면 **거래소에는 주문이 나갔는데 기록은 취소**가 된다.
+        그러면 감시자는 그 주문을 더 보지 않고(PENDING/PROCESSING 만 본다) 포지션이 관리
+        밖으로 떨어진다 — 손절선이 붙을 자리를 잃는다.
+        같은 사고를 권리락 일괄 취소에서 이미 겪어 그쪽은 status='PENDING' 조건을 달았다
+        (test_corporate_action: '발동이 끝난 주문의 이력까지 덮어썼다'). 사용자 취소 경로
+        두 곳(메뉴·텔레그램)만 남아 있었다.
+
+        발동이 이미 시작된 주문은 건드리지 않고 False 를 돌려준다 — 호출부가 그 사실을
+        사용자에게 알린다. 조용히 실패하면 '취소했다'고 믿은 채 주문이 살아 있다.
+        """
+        with self.lock:
+            try:
+                conn = self._get_conn()
+                cursor = conn.cursor()
+                if reason:
+                    cursor.execute(
+                        "UPDATE reserved_orders SET status='CANCELED', fail_reason=? "
+                        "WHERE id=? AND status='PENDING'", (reason, order_id))
+                else:
+                    cursor.execute(
+                        "UPDATE reserved_orders SET status='CANCELED' "
+                        "WHERE id=? AND status='PENDING'", (order_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+            except Exception as e:
+                _swallowed("cancel_reserved_order", e)
+                return False
+
     def update_reserved_order_fields(self, order_id, **fields):
         """대기 중인 예약 주문의 편집 가능한 항목만 갱신한다 (PENDING 한정).
 

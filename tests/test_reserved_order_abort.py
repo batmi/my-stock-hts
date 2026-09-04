@@ -125,8 +125,31 @@ def test_nothing_else_reads_the_processing_state():
     지금은 쓰기 1곳뿐이라 '중간 상태'로만 존재한다. 조회 대상에 넣는 변경이 들어오면
     발주 구간이 재진입 가능해지므로(= 이중 주문), 그때 이 검사가 걸려 재검토를 강제한다.
     """
+    import ast
     import os
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _doc_lines(src):
+        """독스트링이 차지하는 줄 번호. 설명문에 이 상태를 언급하는 것은 '다루는 것'이
+        아니다 — 왜 PENDING 만 취소하는지 같은 이유를 적으려면 이름을 써야 한다."""
+        out = set()
+        try:
+            tree = ast.parse(src)
+        except SyntaxError:
+            return out
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Module, ast.ClassDef,
+                                     ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            body = getattr(node, "body", None)
+            if not body:
+                continue
+            first = body[0]
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) \
+                    and isinstance(first.value.value, str):
+                out.update(range(first.lineno, (first.end_lineno or first.lineno) + 1))
+        return out
+
     hits = []
     for base in ("modules", "core", "api"):
         for dirpath, _, files in os.walk(os.path.join(root, base)):
@@ -136,8 +159,12 @@ def test_nothing_else_reads_the_processing_state():
                 if not fn.endswith(".py"):
                     continue
                 p = os.path.join(dirpath, fn)
-                for n, line in enumerate(open(p, encoding='utf-8'), 1):
+                src = open(p, encoding='utf-8').read()
+                docs = _doc_lines(src)
+                for n, line in enumerate(src.splitlines(), 1):
                     if "PROCESSING" not in line or line.strip().startswith("#"):
+                        continue
+                    if n in docs:
                         continue
                     hits.append((os.path.relpath(p, root), n, line.strip()))
 

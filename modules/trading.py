@@ -2534,7 +2534,12 @@ def _cancel_reserved_orders(orders, cancel_ids):
         target = next((o for o in orders if str(o['id']) == str(cid)), None)
         if not target:
             continue
-        db_manager.db.update_reserved_order_status(int(cid), 'CANCELED')
+        # 조건부 취소 — 그 사이 감시 스레드가 발동시켰으면 손대지 않는다(cancel_reserved_order 주석).
+        if not db_manager.db.cancel_reserved_order(int(cid), reason="사용자 수동 취소"):
+            config.console.print(
+                f"[yellow]⚠️ 예약 주문(ID: {cid})은 이미 발동/처리 중이라 취소하지 못했습니다. "
+                f"미체결 조회(9-3)에서 확인하세요.[/yellow]")
+            continue
         canceled.append(str(cid))
 
         t_type = "매수" if target['order_type'] == 'buy' else "매도"
