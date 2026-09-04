@@ -358,6 +358,25 @@ def evaluate_market_indicator(name, price, yh_rate=None):
             
     return status_desc
 
+def _yh_52w(df):
+    """일봉에서 52주 고점. 산출 불가 시 None.
+
+    [왜 직접 세지 않나] 여기서 뽑은 값이 '52주 고점대비 -x%' 문구와
+    evaluate_market_indicator 의 국면 판정('신고가 근접/초강세' ↔ '침체/약세장 진입')을
+    정하고, 그것이 "절대적인 팩트로 반영할 것"이라는 지시와 함께 AI에 들어간다.
+    종전에는 close.tail(250).max() 였다 — 창(250거래일=실측 373일)도 52주보다 넓고,
+    종가만 봐서 장중 고가를 놓쳤다. 같은 표의 나머지 지표는 벤더의 52주 고가(year_high)를
+    쓰므로 코스피·코스닥·미국채만 다른 잣대로 읽히던 셈이다. _w52_band 가 그 어긋남을
+    없애려고 만든 단일 진입점이다(365일 창·고가 기준).
+    """
+    from modules import analysis
+    try:
+        h, _ = analysis._w52_band(df)
+        return float(h) if h and h > 0 else None
+    except Exception:
+        return None
+
+
 def _get_macro_context_str():
     """시스템이 직접 실시간 핵심 매크로 지표를 수집하여 AI에게 주입할 텍스트를 생성"""
     import api
@@ -387,8 +406,7 @@ def _get_macro_context_str():
                     curr = float(df.iloc[-1]['close'])
                     prev = float(df.iloc[-2]['close']) if len(df) > 1 else curr
                     rate = ((curr - prev) / prev * 100) if prev > 0 else 0.0
-                    high_52 = float(df['close'].tail(250).max())
-                    return name, name, curr, rate, high_52
+                    return name, name, curr, rate, _yh_52w(df)
 
             # [추가] 미국채 금리는 현물(TVC:USxxY, tvDatafeed) 우선 — 현물은 아시아장에도
             #  갱신되어 선물 프록시 추정 불필요. 실패 시 5/10/30년만 yfinance(^FVX류) 폴백,
@@ -399,8 +417,7 @@ def _get_macro_context_str():
                     curr = float(df2['close'].iloc[-1])
                     prev2 = float(df2['close'].iloc[-2])
                     rate = ((curr - prev2) / prev2 * 100) if prev2 > 0 else 0.0
-                    yh2 = float(df2['close'].tail(250).max())
-                    return name, name, curr, rate, yh2
+                    return name, name, curr, rate, _yh_52w(df2)
                 if name == "미국채 2년물 금리":
                     return name, name, None, None, None
 

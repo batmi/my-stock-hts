@@ -1429,6 +1429,10 @@ def _toss_place_order(market, action, code, qty, price, ord_dvsn):
         logger.info(f"[Toss] 주문 접수: {side} {code} {qty}주 @{order_price} ({order_type}) → {odno}")
         return {'rt_cd': '0', 'msg_cd': '0000', 'msg1': '주문 접수 완료',
                 'output': {'ODNO': odno, 'KRX_FWDG_ORD_ORGNO': '', 'ORD_TMD': ''}}
+    except toss_api.TossOrderOutcomeUnknown as e:
+        # 응답이 유실됐다 — 실패가 아니라 '모름'이다. KIS 경로와 같은 예외로 올려
+        #  place_order 가 재전송 대신 조회로 대사하게 한다.
+        raise _api().OrderOutcomeUnknown(str(e.message or e)) from e
     except toss_api.TossApiError as e:
         logger.error(f"[Toss] 주문 실패: {e}")
         return {'rt_cd': '1', 'msg_cd': str(e.code or ''), 'msg1': str(e.message or e), 'output': {}}
@@ -1461,6 +1465,8 @@ def _toss_revise_cancel(market, action, org_no, code, qty, price, ord_dvsn):
         logger.info(f"[Toss] {action} 완료: 원주문={org_no} → 신규={odno}")
         return {'rt_cd': '0', 'msg_cd': '0000', 'msg1': f'{action} 완료',
                 'output': {'ODNO': odno, 'KRX_FWDG_ORD_ORGNO': ''}}
+    except toss_api.TossOrderOutcomeUnknown as e:
+        raise _api().OrderOutcomeUnknown(str(e.message or e)) from e
     except toss_api.TossApiError as e:
         logger.error(f"[Toss] {action} 실패: {e}")
         return {'rt_cd': '1', 'msg_cd': str(e.code or ''), 'msg1': str(e.message or e), 'output': {}}

@@ -96,8 +96,7 @@ def _reconcile_unknown_order(action, code, qty, reason):
     unknown = {'rt_cd': '1', 'msg_cd': 'ORDER_UNKNOWN',
                'msg1': f'주문 결과 불명(응답 유실): {reason}', 'output': {}}
     try:
-        hist = _api().get_today_history()
-        rows = (hist or {}).get('output1') or []
+        rows = _reconcile_rows()
     except Exception as e:
         logger.error(f"[ORDER_UNKNOWN] 대사 조회 실패 — 결과 불명으로 둔다: {e}")
         return unknown
@@ -143,6 +142,23 @@ def _reconcile_unknown_order(action, code, qty, reason):
     return unknown
 
 
+def _reconcile_rows():
+    """대사에 쓸 '당일 주문' 행. KIS 당일 주문체결조회는 미체결까지 담아 준다.
+
+    토스는 그렇지 않다 — 당일 체결이력이 CLOSED(체결·취소) 주문만 준다. 접수된 채
+    미체결로 남은 지정가 주문이 빠지므로, 그것만 보면 방금 낸 주문을 '미접수'로 읽고
+    다음 주기가 같은 주문을 또 낸다. 재전송을 막으려던 대사가 재전송을 부르는 셈이다.
+    미체결 목록을 합쳐 KIS와 같은 범위로 맞춘다.
+    """
+    rows = list(((_api().get_today_history() or {}).get('output1')) or [])
+    if config.session.is_toss:
+        seen = {str(r.get('odno') or '') for r in rows}
+        for r in (_api()._toss_open_orders('domestic') or []):
+            if str(r.get('odno') or '') not in seen:
+                rows.append(r)
+    return rows
+
+
 def _order_age_seconds(row, now):
     """주문 시각으로부터 흐른 초. 시각을 못 읽으면 창 밖으로 본다(보수적)."""
     tmd = str(row.get('ord_tmd') or '').strip()
@@ -186,7 +202,16 @@ def place_order(market, action, code, qty, price, ord_dvsn, exchange_code=None):
                     "msg1": "[가상투자] 해외 주문은 지원하지 않습니다", "output": {}}
         return paper_broker.place_order(action, code, qty, price)
     if config.session.is_toss:
-        return _api()._toss_place_order(market, action, code, qty, price, ord_dvsn)
+        # [Fix 2026-09-04] 토스도 응답 유실 시 재전송하지 않는다. 종전에는 브로커 계층이
+        #  POST /orders 를 타임아웃·5xx에 그대로 다시 보내(최대 3회) 같은 주문이 중복
+        #  접수될 수 있었다 — KIS 경로만 2026-08-10에 고쳐져 있었다.
+        try:
+            return _api()._toss_place_order(market, action, code, qty, price, ord_dvsn)
+        except _api().OrderOutcomeUnknown as e:
+            if market != "domestic":
+                return {'rt_cd': '1', 'msg_cd': 'ORDER_UNKNOWN',
+                        'msg1': f'해외 주문 결과 불명(응답 유실): {e}', 'output': {}}
+            return _reconcile_unknown_order(action, code, qty, str(e))
     cano, acnt = _api()._prepare_account_params(None, None)
     
     if market == "domestic":
@@ -248,7 +273,14 @@ def revise_cancel_order(market, action, org_no, code, qty, price, type_cd, ord_d
         return {"rt_cd": "1", "msg_cd": "PAPER_REJECT",
                 "msg1": "[가상투자] 즉시 체결되어 정정/취소할 주문이 없습니다", "output": {}}
     if config.session.is_toss:
-        return _api()._toss_revise_cancel(market, action, org_no, code, qty, price, ord_dvsn)
+        try:
+            return _api()._toss_revise_cancel(market, action, org_no, code, qty, price, ord_dvsn)
+        except _api().OrderOutcomeUnknown as e:
+            # 주문과 달리 애매해도 손해가 누적되지 않는다 — 다음 주기가 미체결을 다시 본다.
+            logger.warning(f"[ORDER_UNKNOWN] 정정/취소 응답 없음 — 재전송하지 않습니다. "
+                           f"다음 주기에 미체결로 다시 잡힙니다: {code} 원주문 {org_no} / {e}")
+            return {'rt_cd': '1', 'msg_cd': 'ORDER_UNKNOWN',
+                    'msg1': f'정정/취소 결과 불명(응답 유실): {e}', 'output': {}}
     cano, acnt = _api()._prepare_account_params(None, None)
     
     if market == "domestic":

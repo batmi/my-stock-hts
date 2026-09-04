@@ -1177,10 +1177,12 @@ def test_create_order_builds_body():
     config.session.toss_account_seq = 1
     captured = {}
 
-    def fake_request(method, path, group, params=None, json_body=None, account=True, retries=2):
+    def fake_request(method, path, group, params=None, json_body=None, account=True, retries=2,
+                     idempotent=True):
         captured["method"] = method
         captured["path"] = path
         captured["body"] = json_body
+        captured["idempotent"] = idempotent
         return {"orderId": "OID", "clientOrderId": None}
 
     with patch("brokers.toss_api._request", side_effect=fake_request):
@@ -1191,6 +1193,8 @@ def test_create_order_builds_body():
     assert captured["body"]["symbol"] == "005930"
     assert captured["body"]["quantity"] == "10"
     assert captured["body"]["price"] == "70000"
+    # 주문은 재전송하면 포지션이 하나 더 생긴다 — 브로커 계층에 그렇게 알려야 한다.
+    assert captured["idempotent"] is False
 
 
 # =========================================================================

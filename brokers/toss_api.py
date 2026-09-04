@@ -89,6 +89,29 @@ class TossApiError(Exception):
         super().__init__(f"[{status}] {code}: {message}")
 
 
+class TossOrderOutcomeUnknown(TossApiError):
+    """주문 요청이 토스에 닿았는지 알 수 없는 상태(응답 유실).
+
+    '실패'와 구분해야 한다. 실패는 다시 보내도 되지만 이 상태는 안 된다 — 이미 접수됐을
+    수 있고, 그러면 같은 포지션이 두 번 생겨 손절폭·변동성 한도·히트 캡이 한꺼번에
+    무의미해진다. 호출부는 재전송 대신 **주문 내역을 조회해** 확인한다(api/orders.py).
+    KIS 경로의 OrderOutcomeUnknown 과 같은 역할이며, api/toss.py 가 그것으로 옮겨 던진다.
+    """
+
+
+def _outcome_unknown(exc):
+    """응답을 못 받아 결과를 알 수 없는 예외인가(api/http.py의 같은 판정과 문구를 맞춘다).
+
+    ConnectTimeout 은 연결 자체가 안 된 것이라 요청이 나갔을 수 없다 — 다시 보내도 안전하다.
+    ReadTimeout 은 보낸 뒤 응답을 못 받은 것이므로 결과를 모른다.
+    """
+    if isinstance(exc, requests.exceptions.ConnectTimeout):
+        return False
+    return isinstance(exc, (requests.exceptions.ReadTimeout,
+                            requests.exceptions.ConnectionError,
+                            requests.exceptions.ChunkedEncodingError))
+
+
 # =========================================================================
 # 인증 (OAuth2 Client Credentials)
 # =========================================================================
@@ -201,11 +224,18 @@ def _throttle(group):
         time.sleep(min(wait, 1.0) if wait > 0 else 0.02)
 
 
-def _request(method, path, group, params=None, json_body=None, account=True, retries=2):
+def _request(method, path, group, params=None, json_body=None, account=True, retries=2,
+             idempotent=True):
     """토스 API 호출 공통 처리. 성공 시 result 페이로드를 반환한다.
 
     account=True 이면 X-Tossinvest-Account 헤더(accountSeq)를 부착한다.
     오류 시 TossApiError를 발생시킨다.
+
+    idempotent=False 는 상태를 바꾸는 요청(주문·정정·취소)이다. 조회는 몇 번 다시 보내도
+    무해하지만 이쪽은 한 번 더 나가면 포지션이 하나 더 생긴다. 그래서 **요청이 실제로
+    전송된 뒤**의 실패(ReadTimeout·전송 중 끊김·5xx)는 재시도하지 않고
+    TossOrderOutcomeUnknown 으로 올린다 — 호출부가 조회로 대사한다.
+    (연결조차 못 한 ConnectTimeout, 서버가 실행 없이 거절한 429·401 은 그대로 재시도한다.)
     """
     token = get_access_token()
     if not token:
@@ -235,6 +265,9 @@ def _request(method, path, group, params=None, json_body=None, account=True, ret
                     h["Content-Type"] = "application/json"
                 res = requests.request(method, url, headers=h, params=params, data=body, timeout=config.DEFAULT_TIMEOUT)
         except requests.exceptions.RequestException as e:
+            if not idempotent and _outcome_unknown(e):
+                raise TossOrderOutcomeUnknown("order-outcome-unknown", str(e),
+                                              status=None) from e
             last_exc = TossApiError("network-error", str(e), status=None)
             if attempt < retries:
                 time.sleep(config.RETRY_DELAY_SERVER * (attempt + 1))
@@ -291,10 +324,15 @@ def _request(method, path, group, params=None, json_body=None, account=True, ret
         except Exception:
             pass
 
-        # 5xx는 재시도
-        if res.status_code >= 500 and attempt < retries:
-            time.sleep(config.RETRY_DELAY_SERVER * (attempt + 1))
-            continue
+        # 5xx는 재시도. 다만 주문 계열은 서버가 이미 접수한 뒤 죽었을 수 있어 결과를 모른다.
+        if res.status_code >= 500:
+            if not idempotent:
+                raise TossOrderOutcomeUnknown("order-outcome-unknown",
+                                              f"HTTP {res.status_code}: {message}",
+                                              status=res.status_code, request_id=request_id)
+            if attempt < retries:
+                time.sleep(config.RETRY_DELAY_SERVER * (attempt + 1))
+                continue
 
         raise TossApiError(code, message, status=res.status_code, request_id=request_id, data=data)
 
@@ -581,7 +619,8 @@ def create_order(symbol, side, order_type="LIMIT", quantity=None, price=None,
         body["clientOrderId"] = client_order_id
     if confirm_high_value:
         body["confirmHighValueOrder"] = True
-    return _request("POST", "/api/v1/orders", group="ORDER", json_body=body)
+    return _request("POST", "/api/v1/orders", group="ORDER", json_body=body,
+                    idempotent=False)
 
 
 def modify_order(order_id, order_type="LIMIT", quantity=None, price=None, confirm_high_value=False):
@@ -593,12 +632,14 @@ def modify_order(order_id, order_type="LIMIT", quantity=None, price=None, confir
         body["price"] = str(price)
     if confirm_high_value:
         body["confirmHighValueOrder"] = True
-    return _request("POST", f"/api/v1/orders/{order_id}/modify", group="ORDER", json_body=body)
+    return _request("POST", f"/api/v1/orders/{order_id}/modify", group="ORDER", json_body=body,
+                    idempotent=False)
 
 
 def cancel_order(order_id):
     """주문 취소. 반환: {orderId}(신규 주문ID)"""
-    return _request("POST", f"/api/v1/orders/{order_id}/cancel", group="ORDER", json_body={})
+    return _request("POST", f"/api/v1/orders/{order_id}/cancel", group="ORDER", json_body={},
+                    idempotent=False)
 
 
 # =========================================================================
