@@ -1682,7 +1682,15 @@ def _run_tradingview_screener():
                             else:
                                 config.console.print(f"\n[yellow]⚠️ TradingView 서버 응답 지연 (Timeout). '{p_name}' 검색을 건너뜁니다.[/yellow]")
                         else:
-                            raise e
+                            # [Fix 2026-09-04] 종전에는 그대로 올려보내 바깥 except 로 나갔다.
+                            #  '전체 검색'(프리셋 9개)에서 한 프리셋이 실패하면 — 시장마다
+                            #  없는 필드 하나면 충분하다 — 나머지 프리셋이 통째로 취소되고
+                            #  검색 결과 연동(개별 종목 분석)까지 건너뛰었다. 실패한 프리셋만
+                            #  건너뛰고 계속한다.
+                            config.console.print(
+                                f"\n[yellow]⚠️ '{p_name}' 검색 실패 — 건너뜁니다: {e}[/yellow]")
+                            logger.warning(f"Screener preset '{pid}' failed: {e}", exc_info=True)
+                            break
 
                 if df is not None and not df.empty and post_fn is not None:
                     df = post_fn(df)

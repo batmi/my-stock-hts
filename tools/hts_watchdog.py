@@ -43,22 +43,34 @@ def main():
                     help="판정 결과만 출력하고 알림은 보내지 않는다")
     args = ap.parse_args()
 
-    result = heartbeat.evaluate()
-    data = result.get("data") or {}
-    stamp = data.get("iso", "-")
+    # 인스턴스마다 파일이 따로 있다(logs/heartbeat.<모드>.json). 한 기기에서 두 모드를
+    #  돌릴 때 파일 하나만 보면, 살아 있는 쪽 도장에 가려 죽은 쪽을 영영 못 본다.
+    paths = heartbeat.instance_paths()
+    if not paths:
+        print("[unknown] 하트비트 기록이 없습니다(아직 한 번도 기동하지 않았거나 로그가 지워짐).")
+        return 0
 
     if args.status:
-        print(f"[{result['state']}] {result['detail']}")
-        if data:
-            print(f"  마지막 기록: {stamp} · pid {data.get('pid')} · {data.get('host')} "
-                  f"· 모드 {data.get('mode')} · 자동매매 {data.get('auto_running')}")
-        return 1 if result["state"] == "dead" else 0
+        dead = 0
+        for p in paths:
+            result = heartbeat.evaluate(path=p)
+            data = result.get("data") or {}
+            print(f"[{result['state']}] {os.path.basename(p)} — {result['detail']}")
+            if data:
+                print(f"  마지막 기록: {data.get('iso', '-')} · pid {data.get('pid')} · "
+                      f"{data.get('host')} · 모드 {data.get('mode')} · "
+                      f"자동매매 {data.get('auto_running')}")
+            dead += (result["state"] == "dead")
+        return 1 if dead else 0
 
-    state, sent = heartbeat.check_and_notify()
-    # cron 로그에 남는 한 줄. 평소에는 ok 만 쌓이고, 사고 때 그 자리가 비어 있는 것
+    dead = 0
+    # cron 로그에 남는 줄. 평소에는 ok 만 쌓이고, 사고 때 그 자리가 비어 있는 것
     #  자체가 단서가 된다(감시자까지 못 떴다는 뜻이므로).
-    print(f"[{state}] {result['detail']}" + ("  → 텔레그램 알림 전송" if sent else ""))
-    return 1 if state == "dead" else 0
+    for p, state, sent, result in heartbeat.check_all():
+        print(f"[{state}] {os.path.basename(p)} — {result['detail']}"
+              + ("  → 텔레그램 알림 전송" if sent else ""))
+        dead += (state == "dead")
+    return 1 if dead else 0
 
 
 if __name__ == "__main__":

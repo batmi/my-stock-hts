@@ -47,7 +47,7 @@ class SystemScheduler:
             self.thread.join(timeout=2)
         # 도장을 찍던 스레드가 내려간다 — '앞으로 신호가 없는 건 정상'임을 남겨야
         #  밖의 감시자가 사망으로 오해하지 않는다.
-        heartbeat.stopped(reason="스케줄러 종료")
+        heartbeat.stopped(reason="스케줄러 종료", mode=self._heartbeat_context().get("mode"))
         logger.debug("[Scheduler] 스케줄러 종료 완료")
 
     def _run_loop(self):

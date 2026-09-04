@@ -1020,7 +1020,9 @@ def _install_journal_sigterm_handler():
         #  그 경우에는 마지막 도장이 그대로 남아 정상적으로 사망 알림이 나간다.)
         try:
             from modules import heartbeat
-            heartbeat.stopped(reason=f"signal {signum}")
+            from modules.scheduler import SystemScheduler as _Sched
+            heartbeat.stopped(reason=f"signal {signum}",
+                              mode=_Sched()._heartbeat_context().get("mode"))
         except Exception:
             pass
         signal.signal(signum, signal.SIG_DFL)
@@ -1316,8 +1318,12 @@ def main():
         try:
             from modules import heartbeat as _heartbeat
             from modules.scheduler import SystemScheduler as _SystemScheduler
-            if not _SystemScheduler().is_running:
-                _heartbeat.stopped(reason="하트비트 미가동(텔레그램 알림 비활성)")
+            _sched = _SystemScheduler()
+            if not _sched.is_running:
+                # 모드를 넘겨 **이 인스턴스의** 파일에만 표식을 남긴다 — 공용 파일에 쓰면
+                #  같은 기기에서 도는 다른 모드의 감시까지 함께 꺼진다.
+                _heartbeat.stopped(reason="하트비트 미가동(텔레그램 알림 비활성)",
+                                   mode=_sched._heartbeat_context().get("mode"))
         except Exception as _hb_e:
             logging.debug(f"[Heartbeat] 초기 상태 표시 실패(무시): {_hb_e}")
 

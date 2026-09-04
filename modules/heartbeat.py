@@ -48,14 +48,63 @@ DEADLINE_SLACK_SEC = 60
 
 
 def _atomic_write(path, payload):
-    """같은 디렉토리에 임시 파일로 쓰고 rename — 감시자가 반쪽짜리 JSON 을 읽지 않게."""
+    """같은 디렉토리에 임시 파일로 쓰고 rename — 감시자가 반쪽짜리 JSON 을 읽지 않게.
+
+    임시 파일 이름에 PID 를 넣는다(core/jsonio 와 같은 이유): 이름이 고정이면 두 프로세스가
+    같은 tmp 를 번갈아 쓰다가 한쪽이 상대의 반쪽 내용을 rename 으로 공표할 수 있다.
+    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = f"{path}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _slug(mode):
+    return "".join(c if c.isalnum() else "_" for c in str(mode)).strip("_").lower()
+
+
+def path_for(mode=None, base=None):
+    """이 인스턴스의 하트비트 파일 경로.
+
+    [왜 모드별인가 · 2026-09-04] 종전에는 모드를 가리지 않고 logs/heartbeat.json 하나를
+    썼다. 기기가 다르면(파이=가상투자 / 맥북=실전) 파일도 달라 문제가 없었지만, 모드 잠금은
+    **다른 모드끼리는 동시 실행을 허용**한다. 한 기기에서 실전과 토스를 함께 띄우면:
+      · 두 스케줄러가 같은 파일에 번갈아 도장을 찍는다 → 한쪽이 죽어도 다른 쪽 도장이
+        계속 갱신돼 감시자는 영원히 'ok' 다. 감시 장치가 통째로 무력해진다.
+      · 텔레그램을 끈 채 띄운 인스턴스가 시작하면서 남기는 '정상 종료' 표식(main.py)이
+        살아 있는 다른 인스턴스의 도장을 덮어, 감시자가 아예 침묵한다.
+    실측으로 둘 다 재현된다. 인스턴스마다 파일을 갈라 각각 감시하게 한다.
+
+    mode 를 모르면 종전 경로를 그대로 쓴다 — 옛 파일·기존 cron 설정과의 호환을 위해서다.
+    """
+    base = base or HEARTBEAT_PATH
+    slug = _slug(mode) if mode else ""
+    if not slug:
+        return base
+    root, ext = os.path.splitext(base)
+    return f"{root}.{slug}{ext}"
+
+
+def instance_paths(base=None):
+    """감시 대상 하트비트 파일 전부(모드별 + 옛 경로). 오래된 것부터."""
+    base = base or HEARTBEAT_PATH
+    root, ext = os.path.splitext(base)
+    import glob
+    found = set(glob.glob(f"{root}.*{ext}"))
+    found = {p for p in found if not p.endswith(".tmp")}
+    if os.path.exists(base):
+        found.add(base)
+    return sorted(found)
 
 
 def beat(interval_sec=60, running=None, mode=None, instance=None, holdings=None, path=None):
@@ -65,7 +114,7 @@ def beat(interval_sec=60, running=None, mode=None, instance=None, holdings=None,
     running/mode/instance/holdings: 알림 본문에 쓸 상황 정보. 값을 만들어 내지 않고
       호출부가 넘겨준 것만 적는다(이 모듈이 config·session 을 모르게 두기 위해서다).
     """
-    path = path or HEARTBEAT_PATH
+    path = path or path_for(mode)
     now = time.time()
     try:
         _atomic_write(path, {
@@ -85,9 +134,13 @@ def beat(interval_sec=60, running=None, mode=None, instance=None, holdings=None,
         logger.debug(f"[Heartbeat] 기록 실패(무시): {e}")
 
 
-def stopped(reason="정상 종료", path=None):
-    """의도한 종료임을 남긴다 — 감시자는 이 표식을 보면 알리지 않는다."""
-    path = path or HEARTBEAT_PATH
+def stopped(reason="정상 종료", path=None, mode=None):
+    """의도한 종료임을 남긴다 — 감시자는 이 표식을 보면 알리지 않는다.
+
+    mode 를 반드시 넘겨라. 안 넘기면 옛 공용 경로에 쓰는데, 다른 모드가 함께 떠 있으면
+    그쪽 감시까지 꺼 버린다(path_for 주석의 두 번째 사례).
+    """
+    path = path or path_for(mode)
     now = time.time()
     try:
         _atomic_write(path, {
@@ -96,6 +149,7 @@ def stopped(reason="정상 종료", path=None):
             "iso": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)),
             "pid": os.getpid(),
             "host": socket.gethostname(),
+            "mode": mode,
             "reason": reason,
         })
     except Exception as e:
@@ -189,6 +243,34 @@ def _save_alert_state(state):
         logger.debug(f"[Heartbeat] 알림 상태 기록 실패(무시): {e}")
 
 
+def _alert_key(path):
+    """'이미 알렸다'는 기억은 하트비트 파일마다 따로 둔다.
+
+    한 칸만 쓰면 실전 사망을 알린 기록이 토스 사망 알림을 '이미 알린 건'으로 만들어
+    삼켜 버린다 — 인스턴스를 갈라 놓고 기억을 공유하면 갈라 놓은 의미가 없다.
+    """
+    return os.path.basename(str(path or HEARTBEAT_PATH))
+
+
+def _get_alert(alert, path):
+    """옛 평면 구조({'notified_ts': ...})도 읽는다 — 감시자 첫 실행에서 안 깨지게."""
+    entry = alert.get(_alert_key(path))
+    if isinstance(entry, dict):
+        return entry
+    if "notified_ts" in alert:
+        return alert          # 옛 형식(단일 인스턴스 시절)
+    return {}
+
+
+def _put_alert(alert, path, entry):
+    alert = {k: v for k, v in alert.items() if k not in ("notified_ts", "notified_at", "delivered")}
+    if entry:
+        alert[_alert_key(path)] = entry
+    else:
+        alert.pop(_alert_key(path), None)
+    return alert
+
+
 def check_and_notify(now=None, path=None, notify=True):
     """감시자 본체. 죽었으면 한 번 알리고, 되살아났으면 한 번 알린다.
 
@@ -201,14 +283,16 @@ def check_and_notify(now=None, path=None, notify=True):
 
     반환: (상태 문자열, 알림 전송 여부)
     """
+    path = path or HEARTBEAT_PATH
     result = evaluate(now=now, path=path)
     state = result["state"]
     alert = _load_alert_state()
+    mine = _get_alert(alert, path)
     data = result.get("data") or {}
     sent = False
 
     if state == "dead":
-        if alert.get("notified_ts") == data.get("ts"):
+        if mine.get("notified_ts") == data.get("ts"):
             return state, False           # 이미 알린 사망 건
         if notify:
             label = data.get("instance") or "MyStock HTS"
@@ -232,11 +316,11 @@ def check_and_notify(now=None, path=None, notify=True):
                 logger.warning(f"[Heartbeat] 사망 알림 전송 실패: {err}")
         # 전송에 실패해도 기록은 남긴다 — 실패를 재시도로 덮으면 텔레그램이 살아난
         #  순간 밀린 알림이 한꺼번에 쏟아진다. 실패는 로그로 드러낸다.
-        _save_alert_state({"notified_ts": data.get("ts"), "notified_at": time.time(),
-                           "delivered": sent})
+        _save_alert_state(_put_alert(alert, path, {
+            "notified_ts": data.get("ts"), "notified_at": time.time(), "delivered": sent}))
         return state, sent
 
-    if state == "ok" and alert.get("notified_ts") and alert.get("notified_ts") != data.get("ts"):
+    if state == "ok" and mine.get("notified_ts") and mine.get("notified_ts") != data.get("ts"):
         if notify:
             label = data.get("instance") or "MyStock HTS"
             ok, err = _send_telegram(
@@ -247,10 +331,26 @@ def check_and_notify(now=None, path=None, notify=True):
             sent = ok
             if not ok:
                 logger.warning(f"[Heartbeat] 복구 알림 전송 실패: {err}")
-        _save_alert_state({})
+        _save_alert_state(_put_alert(alert, path, None))
         return state, sent
 
-    if state == "stopped":
-        _save_alert_state({})
+    if state == "stopped" and mine:
+        _save_alert_state(_put_alert(alert, path, None))
 
     return state, False
+
+
+def check_all(now=None, base=None, notify=True):
+    """떠 있던 인스턴스 전부를 각각 판정하고 필요하면 알린다.
+
+    감시자(cron)는 이쪽을 쓴다 — 파일 하나만 보면, 한 기기에서 두 모드를 돌릴 때
+    살아 있는 쪽 도장에 가려 죽은 쪽을 영영 못 본다(path_for 주석).
+
+    반환: [(경로, 상태, 전송여부, 판정)] — 하트비트 파일이 하나도 없으면 빈 리스트.
+    """
+    out = []
+    for p in instance_paths(base):
+        result = evaluate(now=now, path=p)
+        state, sent = check_and_notify(now=now, path=p, notify=notify)
+        out.append((p, state, sent, result))
+    return out
