@@ -93,18 +93,51 @@ def ensure(codes, interval="60m", n_bars=5000, force=False, log=print):
     return have, failed
 
 
-def by_day(df, session_end="15:30"):
+def bar_minutes(df):
+    """봉 길이(분). 하루 안의 시각 간격 최빈값으로 정한다 — 라벨만 보고 추측하지 않는다."""
+    import collections
+    gaps = collections.Counter()
+    prev_day, prev_min = None, None
+    for ts in df.index:
+        day, minutes = ts.date(), ts.hour * 60 + ts.minute
+        if day == prev_day and prev_min is not None and minutes > prev_min:
+            gaps[minutes - prev_min] += 1
+        prev_day, prev_min = day, minutes
+    return gaps.most_common(1)[0][0] if gaps else 60
+
+
+def by_day(df, session_end="15:30", drop_straddling=False):
     """{'YYYYMMDD': [(HHMM, open, high, low, close, volume), ...]} 로 접는다(시간 오름차순).
 
-    session_end 이후 봉은 버린다 — 지표·일봉이 전부 KRX 정규장 기준이므로
+    정규장(session_end)이 끝난 뒤의 봉은 버린다 — 지표·일봉이 전부 KRX 정규장 기준이라
     시간외 체결이 섞이면 백테스트와 입력이 갈린다(config.USE_KRX_CLOSE_AFTER_HOURS 주석).
+
+    [Fix 2026-09-04] 봉 시각은 **시작 시각**이다(실측: 하루의 첫 봉이 0900).
+     종전 조건은 `hhmm > "1530"` 이라 **15:30 에 시작하는 봉을 남겼다** — 30분봉의
+     15:30 봉은 15:30~16:00, 즉 통째로 시간외다. 실측(12종목·358일): 그 봉이 하루
+     거래량의 **8.3%**를 싣고 **3.4%의 날에 그날 고/저를 바꿨다.** 게다가 장이 닫힌
+     15:30 에 판정 시점이 하나 더 생겨, 실매매에는 없는 매매 기회가 만들어졌다.
+     이제 `hhmm >= cut` 으로 버린다.
+
+    [남는 근사 · 60분봉] 60분봉의 15:00 봉은 15:00~16:00 이라 **시간외를 안에 품고 있다**
+     (실측: 60분 15:00 봉 = 30분 15:00 봉 + 30분 15:30 봉, 12종목·358일 전부 괴리 0.00%).
+     라벨로는 걸러낼 수 없다. 실매매의 실효 매매창은 09:00~15:20 이므로
+     (auto_trade.common.is_system_market_open 이 15:20~15:30 동시호가를 건너뛴다)
+     이 봉이 주는 마지막 판정 시점은 실매매에 대응물이 없다. `drop_straddling=True` 면
+     정규장 끝을 걸치는 봉까지 버린다. 기본값은 False — 켜면 과거 장중 감사 수치와
+     비교가 끊기므로, 바꿀 때는 그 사실을 함께 공지해야 한다.
     """
     cut = session_end.replace(":", "")
+    cut_min = int(cut[:2]) * 60 + int(cut[2:])
+    span = bar_minutes(df) if drop_straddling else 0
     out = {}
     for ts, r in df.iterrows():
         hhmm = f"{ts.hour:02d}{ts.minute:02d}"
-        if hhmm > cut:
-            continue
+        start_min = ts.hour * 60 + ts.minute
+        if start_min >= cut_min:
+            continue                       # 정규장 종료 시각에 **시작하는** 봉부터 시간외다
+        if drop_straddling and start_min + span > cut_min:
+            continue                       # 종료를 걸쳐 시간외를 품는 봉
         out.setdefault(ts.strftime("%Y%m%d"), []).append(
             (hhmm, float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"]),
              float(r.get("volume", 0) or 0)))
@@ -158,9 +191,17 @@ def current_thresholds():
     }
 
 
+# 분봉을 정규장으로 자르는 규칙의 판. 규칙이 바뀌면 하루의 판정 시점 목록 자체가
+#  달라지므로, 옛 규칙으로 구운 판정 캐시는 지금 것이 아니다.
+#  v1: hhmm > "1530"  — 30분봉의 15:30 봉(통째로 시간외)이 남아 있었다.
+#  v2: 시작 시각 >= 15:30 인 봉을 버린다 (2026-09-04).
+SESSION_RULE = "v2-start-ge-cut"
+
+
 def status_meta(thresholds, lookback, bars_last):
-    """시점판정 캐시의 표식. 이 셋 중 하나라도 달라지면 그 판정은 지금 것이 아니다."""
-    return {"thresholds": thresholds, "lookback": lookback, "bars_last": str(bars_last)}
+    """시점판정 캐시의 표식. 이 중 하나라도 달라지면 그 판정은 지금 것이 아니다."""
+    return {"thresholds": thresholds, "lookback": lookback, "bars_last": str(bars_last),
+            "session_rule": SESSION_RULE}
 
 
 def bars_last_date(code, interval="60m"):
