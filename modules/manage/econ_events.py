@@ -171,12 +171,30 @@ def _nth_weekday(year, month, weekday, nth):
 
 
 def _prev_business_day(d, country):
-    """주말·휴장일이면 직전 영업일로 앞당긴다(만기는 뒤로 밀리지 않고 당겨진다)."""
+    """주말·휴장일이면 직전 영업일로 앞당긴다(만기는 뒤로 밀리지 않고 당겨진다).
+
+    [Fix 2026-09-04] 미국은 연방공휴일이 아니라 거래소(XNYS) 달력을 본다. 만기는 거래소
+     일정이고, 둘은 양방향으로 다르다 — 증시는 성금요일에 쉬고 콜럼버스데이·재향군인의
+     날에는 연다. 실측: 2015~2050 중 두 달력이 갈리는 만기일은 2021-06-18 하나뿐인데,
+     그 해 준틴스데이가 이틀 전 연방공휴일로 지정됐지만 NYSE 는 열었다 — 연방공휴일로
+     보면 만기를 6/17 로 하루 앞당겨 틀리게 적는다. 드물지만 방향이 정해져 있지 않아,
+     달력이 맞으면 앞으로도 조용히 맞는다.
+    """
     for _ in range(10):
-        if d.weekday() < 5 and not api.get_holiday_name(d.strftime("%Y%m%d"), country=country):
+        if d.weekday() < 5 and not _is_market_holiday(d, country):
             return d
         d -= timedelta(days=1)
     return d
+
+
+def _is_market_holiday(d, country):
+    """거래소 휴장일인가. 미국은 XNYS 달력, 국내는 공휴일 달력."""
+    if country == "US":
+        try:
+            return api.is_exchange_holiday(datetime(d.year, d.month, d.day), "XNYS")
+        except Exception:      # noqa: BLE001 - 달력 조회 실패는 연방공휴일로 폴백
+            logger.debug("[econ] XNYS 달력 조회 실패 — 연방공휴일로 대체")
+    return api.get_holiday_name(d.strftime("%Y%m%d"), country=country) is not None
 
 
 # (국가, 요일, 몇째 주, 표시명) — 3·6·9·12월에 적용되는 동시만기 규칙
@@ -192,9 +210,7 @@ def _option_expiry(start, end):
     해당일이 휴장일이면 만기는 직전 영업일로 앞당겨진다. 미국 6월 셋째 금요일이
     준틴스데이(6/19)와 겹치는 해가 실제로 있어 이 보정이 필요하다(2026·2027년).
 
-    주의: 미국 판정은 holidays.US(연방휴일)를 쓰는데 NYSE는 콜럼버스데이·재향군인의 날에
-    휴장하지 않는다. 둘 다 10·11월이라 분기 만기월(3·6·9·12)과 겹치지 않아 현재는
-    문제가 없지만, 월물 만기로 확장한다면 거래소 휴장일 기준으로 바꿔야 한다.
+    휴장 판정은 거래소 달력(미국 XNYS)을 쓴다 — 월물 만기로 넓혀도 그대로 맞는다.
     """
     out = []
     for year in range(start.year, end.year + 1):

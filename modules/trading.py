@@ -1824,6 +1824,36 @@ def _rsv_step_condition_value(cond_choice, order_type, state):
     return None
 
 
+def _warn_existing_reserved(code, cano, acnt, is_overseas):
+    """같은 계좌·종목에 이미 걸린 예약이 있으면 먼저 보여준다.
+
+    하나가 발동하면 나머지가 일괄 취소되므로(cancel_other_reserved_orders), 모르고 겹쳐
+    걸면 의도치 않게 기존 예약 — 대개 손절 — 이 조용히 사라진다.
+
+    [Fix 2026-09-04] 등록 마법사에만 있고 OCO 단축 경로에는 없었다. OCO 는 한 번에 두 건을
+     넣으므로 겹쳐 걸 여지가 더 크다. 조회 범위도 계좌번호(cano)만 보고 있었는데, 실제
+     일괄 취소는 (cano, acnt, code) 로 좁혀 지운다 — 안내와 실제 대상이 달랐다.
+    """
+    try:
+        existing = [o for o in db_manager.db.get_pending_reserved_orders()
+                    if o['code'] == code and o.get('cano') == cano and o.get('acnt') == acnt]
+    except Exception as e:      # noqa: BLE001 - 안내 실패로 등록 자체를 막지는 않는다
+        config.console.print(f"[dim yellow]※ 기존 예약 조회 실패({type(e).__name__}) — "
+                             f"겹친 예약이 있는지 확인하지 못했습니다.[/dim yellow]")
+        return
+    if not existing:
+        return
+    config.console.print(f"\n[bold magenta]※ 이 종목에 이미 대기 중인 예약이 {len(existing)}건 있습니다. "
+                         f"새 예약이 발동하면 아래 예약은 자동 취소됩니다.[/bold magenta]")
+    for o in existing[:5]:
+        ot = "매수" if o['order_type'] == 'buy' else "매도"
+        config.console.print(
+            f"[dim]   · ID {o['id']} {ot} {o['qty']}주 — "
+            f"{_condition_text(o['condition_type'], o.get('target_price', 0), o.get('target_time', ''), o.get('composite_json'), is_overseas=is_overseas)}[/dim]")
+    if len(existing) > 5:
+        config.console.print(f"[dim]   · … 외 {len(existing) - 5}건[/dim]")
+
+
 def _register_oco_orders(cano, acnt, acc_label):
     """보유 종목에 손절가·익절가를 한 번에 예약한다 (OCO).
 
@@ -1850,6 +1880,7 @@ def _register_oco_orders(cano, acnt, acc_label):
                          + (f" / 매입단가 {_fmt_price(buy_price, is_overseas)}" if buy_price > 0 else "")
                          + f" / 보유 {held_qty:,}주)[/dim]")
     config.console.print("[dim]※ 손절과 익절을 각각 한 건씩 등록합니다. 한쪽이 발동하면 다른 쪽은 자동 취소됩니다.[/dim]")
+    _warn_existing_reserved(code, cano, acnt, is_overseas)
 
     if current_price <= 0:
         config.console.print("[red]현재가를 조회하지 못해 OCO를 등록할 수 없습니다. "
@@ -2081,20 +2112,7 @@ def register_reserved_order():
                 price_info += f" / 매입단가: {_fmt_price(buy_price, is_overseas)}"
             config.console.print(f"\n선택 종목: [bold cyan]{name} ({code})[/bold cyan] [dim]({price_info})[/dim]")
 
-            # [추가] 같은 종목에 이미 걸린 예약이 있으면 먼저 보여준다 — 하나가 발동하면
-            #  나머지가 일괄 취소되므로, 모르고 겹쳐 걸면 의도치 않게 기존 예약이 사라진다.
-            try:
-                existing = [o for o in db_manager.db.get_pending_reserved_orders()
-                            if o['code'] == code and o.get('cano') == state['cano']]
-            except Exception:
-                existing = []
-            if existing:
-                config.console.print(f"\n[bold magenta]※ 이 종목에 이미 대기 중인 예약이 {len(existing)}건 있습니다.[/bold magenta]")
-                for o in existing[:5]:
-                    ot = "매수" if o['order_type'] == 'buy' else "매도"
-                    config.console.print(
-                        f"[dim]   · ID {o['id']} {ot} {o['qty']}주 — "
-                        f"{_condition_text(o['condition_type'], o.get('target_price', 0), o.get('target_time', ''), o.get('composite_json'), is_overseas=is_overseas)}[/dim]")
+            _warn_existing_reserved(code, state['cano'], state['acnt'], is_overseas)
 
             analysis.print_table("", [(name, code)], is_overseas=is_overseas)
             config.console.print()

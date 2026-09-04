@@ -161,8 +161,7 @@ def _fetch_candidates(target, pool, exclude_holding, seed=None):
         kept.append({"code": code, "name": name,
                      "exchange": r["Market"], "marcap": float(r["Marcap"]),
                      "industry": str(industry or "-"),
-                     "products": str(products or "-"),
-                     "rank": len(kept) + cut_dup + cut_type + cut_def + cut_hold + 1})
+                     "products": str(products or "-")})
     steps.append(("관리종목·투자주의환기", cut_admin))
     steps.append(("우선주·스팩·리츠", cut_type))
     steps.append(("방어주", cut_def))
@@ -170,8 +169,12 @@ def _fetch_candidates(target, pool, exclude_holding, seed=None):
         steps.append(("지주회사·기타 금융업", cut_hold))
 
     rng = random.Random(seed)   # seed=None → 매 실행마다 다른 조합
-    picked = _spread_pick(kept, target * 2, rng)   # 데이터 확인에서 탈락할 여유분
-    return picked, steps, defs, n0, len(kept)
+    # 데이터 확인(_verify_data)이 앞에서부터 채우다 target 개에서 멈추므로, 여유분을
+    #  단순히 뒤에 붙이면 **뒤쪽(소형주) 절반은 영영 안 뽑힌다**. 2배로 고르게 뽑은 뒤
+    #  짝수 번째를 본진, 홀수 번째를 예비로 갈라 놓는다 — 둘 다 시총 전 구간에 걸치므로
+    #  데이터 확인에서 몇 개가 탈락해도 분포가 한쪽으로 쏠리지 않는다.
+    spread = _spread_pick(kept, target * 2, rng)
+    return spread[0::2] + spread[1::2], steps, defs, n0, len(kept)
 
 
 def _enrich(c, df):
@@ -272,7 +275,7 @@ def _verify_data(cands, target, days=3650):
                 cut += 1
                 continue
             ok.append(_enrich(c, df))
-            progress.advance(task)
+            progress.advance(task)   # 탈락분은 total 에 잡히지 않으므로 여기서만 올린다
     return ok, cut
 
 

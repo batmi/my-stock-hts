@@ -4314,7 +4314,13 @@ def analyze_market_stocks(market_type):
             }
             config.console.print(f"[dim]기본 설정으로 진행합니다. (매수: {params['BUY_SCORE']}점, RSI: {params['BUY_RSI_MAX']}, 체결: {params['BUY_VOL_STRENGTH']}%, 상승: {params['RISE_SCORE']}점)[/dim]")
         
-        # 설정 백업 및 적용
+        # 설정 백업 및 적용 — 반드시 **제자리**로 넣고 제자리로 되돌린다.
+        #  config.ANALYSIS_THRESHOLDS 는 모듈 __getattr__ 이 config.settings 로 넘겨주는
+        #  같은 객체다. 여기에 대입(=)하면 config 모듈에 그 이름의 속성이 새로 생겨
+        #  settings 쪽 필드를 영구히 가린다. 그때부터 저장(_save_dynamic_config)이 읽는
+        #  config.settings 에는 **이 스크리닝이 임시로 낮춘 값이 그대로 남고**, 이후 메뉴에서
+        #  고친 값은 그림자 쪽에만 들어가 저장되지 않는다(실측: 임시 3.0 이 저장되고
+        #  메뉴에서 고친 8.0 이 사라진다).
         original_thresholds = config.ANALYSIS_THRESHOLDS.copy()
         config.ANALYSIS_THRESHOLDS["BUY_SCORE"] = params["BUY_SCORE"]
         config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"] = params["BUY_RSI_MAX"]
@@ -4392,8 +4398,9 @@ def analyze_market_stocks(market_type):
         except KeyboardInterrupt:
             config.console.print("\n[yellow]분석이 사용자에 의해 중단되었습니다.[/yellow]")
         finally:
-            # 설정 복구
-            config.ANALYSIS_THRESHOLDS = original_thresholds
+            # 설정 복구 (대입 금지 — 위 주석 참조)
+            config.ANALYSIS_THRESHOLDS.clear()
+            config.ANALYSIS_THRESHOLDS.update(original_thresholds)
 
     # 결과 테이블 출력
     if not buy_candidates:
