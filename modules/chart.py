@@ -87,7 +87,21 @@ _RENDER_LOCK = threading.RLock()
 
 
 def _serialized_render(fn):
-    """차트 렌더 진입점을 프로세스 내에서 직렬화한다."""
+    """차트 렌더 진입점을 프로세스 내에서 직렬화하고, 실패해도 캔버스를 회수한다.
+
+    [왜 finally 가 필요한가 · 2026-09-04] 두 렌더 함수 모두 _release_render_memory() 를
+    성공 경로에서만 부른다. 그런데 subplots() 와 savefig() 사이에는 지표 계산·박스권
+    탐지·추세선·저장이 다 들어 있고, 그중 어디서든 예외가 나면 Figure 가 살아남는다 —
+    pyplot 이 레지스트리에 **강한 참조**를 들고 있어 GC 로도 돌아오지 않는다.
+    실측(16x22.4in, 100DPI): 실패 한 번마다 피크 +18MB 가 그대로 누적된다. 300DPI
+    저장 중에 실패하면 캔버스 버퍼(약 146MB)째로 남는다.
+
+    같은 프로세스가 계속 살아 있는 운영 환경(자동매매·텔레그램 폴링)에서는 이 누적이
+    다음 렌더의 피크에 그대로 얹힌다 — 렌더를 직렬화해 최악 피크를 낮춘 취지가
+    실패 한 번에 무너지는 셈이다(1GB 라즈베리파이 OOM).
+
+    성공 경로는 이미 회수했으므로 여기서는 남은 Figure 가 있을 때만 손을 댄다.
+    """
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
         if not _RENDER_LOCK.acquire(blocking=False):
@@ -96,6 +110,13 @@ def _serialized_render(fn):
         try:
             return fn(*args, **kwargs)
         finally:
+            try:
+                if plt is not None and plt.get_fignums():
+                    logger.warning(f"[chart] {fn.__name__} 이 Figure 를 남긴 채 끝났다 — "
+                                   f"캔버스를 회수한다({len(plt.get_fignums())}개)")
+                    _release_render_memory()
+            except Exception as e:
+                logger.debug(f"[chart] 캔버스 회수 실패: {e}")
             _RENDER_LOCK.release()
     return wrapper
 

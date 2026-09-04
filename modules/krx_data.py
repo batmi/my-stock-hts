@@ -261,6 +261,32 @@ def _clamp_range(days):
     return start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
 
 
+def _range_windows(days):
+    """요청 기간을 서버 상한(_MAX_RANGE_DAYS) 이하 구간들로 잘라 최신순으로 돌려준다.
+
+    [왜 필요한가 · 2026-09-04 실측] KRX 는 한 번에 2년까지만 준다 — 900일을 달라고 하면
+    오류가 아니라 **0행**을 준다(금현물: 720일 477행 / 900일 0행). 그래서 상한을 넘겨
+    부르는 대신 구간을 나눠 여러 번 받는다. 주봉은 3년 창을 쓰므로 이 경로가 필요하다.
+    (구간을 나눠 받는 것 자체는 정상 동작함을 확인: 20230801~20250401 404행,
+     20250401~20260904 350행)
+
+    2년 이하면 종전과 똑같이 구간 하나다 — 일봉 경로의 호출 횟수는 변하지 않는다.
+    """
+    days = int(days)
+    end = datetime.now()
+    oldest = end - timedelta(days=days)
+    out = []
+    cur_end = end
+    while cur_end > oldest and len(out) < 6:      # 6구간(=12년) 방어
+        cur_start = max(cur_end - timedelta(days=_MAX_RANGE_DAYS), oldest)
+        out.append((cur_start.strftime("%Y%m%d"), cur_end.strftime("%Y%m%d")))
+        if cur_start <= oldest:
+            break
+        # 구간 경계가 겹치도록 하루 물린다(경계 봉 누락 방지 — 중복은 뒤에서 제거).
+        cur_end = cur_start + timedelta(days=1)
+    return out
+
+
 def _cache_ttl_sec():
     """차트 캐시와 같은 주기(기본 6시간). 과거 확정 봉은 불변이라 길게 잡아도 된다."""
     try:
@@ -352,18 +378,23 @@ def get_gold_daily(days=400, use_cache=True):
         if hit is not None:
             return hit
 
-    start, end = _clamp_range(days)
-    raw = _post(_BLD_GOLD_DAILY, isuCd=GOLD_ISU_CD, strtDd=start, endDd=end,
-                mktId="CMD", money="1", csvxls_isNo="false")
     rows = []
-    for r in raw or []:
-        d = _date8(r.get("TRD_DD"))
-        if not d:
-            continue
-        rows.append({"date": d,
-                     "open": _num(r.get("TDD_OPNPRC")), "high": _num(r.get("TDD_HGPRC")),
-                     "low": _num(r.get("TDD_LWPRC")), "close": _num(r.get("TDD_CLSPRC")),
-                     "volume": _num(r.get("ACC_TRDVOL")) or 0.0})
+    for start, end in _range_windows(days):
+        raw = _post(_BLD_GOLD_DAILY, isuCd=GOLD_ISU_CD, strtDd=start, endDd=end,
+                    mktId="CMD", money="1", csvxls_isNo="false")
+        got = 0
+        for r in raw or []:
+            d = _date8(r.get("TRD_DD"))
+            if not d:
+                continue
+            got += 1
+            rows.append({"date": d,
+                         "open": _num(r.get("TDD_OPNPRC")), "high": _num(r.get("TDD_HGPRC")),
+                         "low": _num(r.get("TDD_LWPRC")), "close": _num(r.get("TDD_CLSPRC")),
+                         "volume": _num(r.get("ACC_TRDVOL")) or 0.0})
+        if not got:
+            # 더 과거 구간이 비었다 — 상장 이전이거나 그 구간을 안 준다. 받은 만큼 쓴다.
+            break
     df = _finish(rows, "KRX")
     _cache_put(key, df)
     return df
@@ -390,15 +421,17 @@ def get_index_daily(market_type, days=400, use_cache=True):
         if hit is not None:
             return hit
 
-    start, end = _clamp_range(days)
     df = None
     try:
         from pykrx import stock
-        raw = stock.get_index_ohlcv(start, end, ticker)
-        if raw is not None and not raw.empty:
+        rows = []
+        # 금현물과 같은 이유로 구간을 나눠 받는다(_range_windows 주석 참조).
+        for start, end in _range_windows(days):
+            raw = stock.get_index_ohlcv(start, end, ticker)
+            if raw is None or raw.empty:
+                break                       # 더 과거 구간이 없다 — 받은 만큼 쓴다
             out = raw.reset_index()
             date_col = out.columns[0]
-            rows = []
             for r in out.to_dict("records"):
                 d = pd.to_datetime(r[date_col], errors="coerce")
                 if pd.isna(d):
@@ -407,7 +440,7 @@ def get_index_daily(market_type, days=400, use_cache=True):
                              "open": _num(r.get("시가")), "high": _num(r.get("고가")),
                              "low": _num(r.get("저가")), "close": _num(r.get("종가")),
                              "volume": _num(r.get("거래량")) or 0.0})
-            df = _finish(rows, "KRX")
+        df = _finish(rows, "KRX")
     except Exception as e:      # noqa: BLE001
         logger.debug(f"[KRXDATA] 지수 조회 실패({market_type}): {e}")
         df = None

@@ -523,7 +523,12 @@ def get_us_treasury_spot_data(symbol, n_bars=300):
     now = datetime.now()
     ent = _US_TREASURY_SPOT_CACHE.setdefault(symbol, {"df": None, "time": None, "fail": None})
     cached = ent["df"]
-    if cached is not None and ent["time"] and (now - ent["time"]).total_seconds() < _US_TREASURY_TTL_SEC:
+    # [2026-09-04] 캐시 적중 조건에 '무엇을 달라고 해서 받은 캐시인가'를 더한다. 종전에는
+    #  심볼만 봤으므로, 화면(300봉)이 먼저 캐시하면 주봉(3년=800봉)이 조용히 300봉을 받아
+    #  1년치 주봉이 됐다. 담긴 행 수가 아니라 **요청했던 n_bars** 로 판정한다 — 이력이 짧은
+    #  계열은 800을 달라고 해도 300행뿐이라, 행 수로 보면 영원히 캐시가 안 된다.
+    if (cached is not None and ent["time"] and ent.get("n_bars", 0) >= n_bars
+            and (now - ent["time"]).total_seconds() < _US_TREASURY_TTL_SEC):
         return cached
     if ent["fail"] and (now - ent["fail"]).total_seconds() < _US_TREASURY_NEG_TTL_SEC:
         return cached  # 음성 캐시 구간엔 만료된 성공 캐시라도 재사용(없으면 None)
@@ -585,6 +590,7 @@ def get_us_treasury_spot_data(symbol, n_bars=300):
         out.attrs['source'] = 'TVDATAFEED'
         ent["df"] = out
         ent["time"] = now
+        ent["n_bars"] = n_bars   # 이 캐시가 무엇을 달라고 해서 받은 것인지
         ent["fail"] = None
         _tv_note_success()  # 성공 → 회로차단 해제
         return out
@@ -620,7 +626,9 @@ def get_fred_data(symbol, n_bars=300):
     now = datetime.now()
     ent = _FRED_CACHE.setdefault(symbol, {"df": None, "time": None, "fail": None})
     cached = ent["df"]
-    if cached is not None and ent["time"] and (now - ent["time"]).total_seconds() < _FRED_TTL_SEC:
+    # 국채 현물 경로와 같은 이유로 '요청했던 n_bars'를 캐시 적중 조건에 넣는다(주봉 3년).
+    if (cached is not None and ent["time"] and ent.get("n_bars", 0) >= n_bars
+            and (now - ent["time"]).total_seconds() < _FRED_TTL_SEC):
         return cached
     if ent["fail"] and (now - ent["fail"]).total_seconds() < _FRED_NEG_TTL_SEC:
         return cached  # 음성 캐시 구간엔 만료된 성공 캐시라도 재사용(없으면 None)
@@ -670,6 +678,7 @@ def get_fred_data(symbol, n_bars=300):
         out.attrs['source'] = 'TVDATAFEED'
         ent["df"] = out
         ent["time"] = now
+        ent["n_bars"] = n_bars   # 이 캐시가 무엇을 달라고 해서 받은 것인지
         ent["fail"] = None
         return out
     except Exception as e:

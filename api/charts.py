@@ -312,6 +312,40 @@ def _to_chart_schema(df, start_date=None, max_rows=250):
     return d.sort_values('date', ascending=True).reset_index(drop=True).tail(max_rows)
 
 
+# 주봉이 덮어야 할 창(달력일). KIS 네이티브 주봉(_fetch_kis_weekly_domestic)과 같은 값이라
+#  같은 메뉴가 소스에 따라 다른 기간을 보여주지 않는다.
+WEEKLY_LOOKBACK_DAYS = 1100
+
+
+def _index_source_long_daily(code, kind, lookback_days=WEEKLY_LOOKBACK_DAYS):
+    """지수 전용 소스에서 **주봉용 긴 일봉**(기본 ~3년)을 받는다. 실패하면 None.
+
+    [왜 따로 받나 · 2026-09-04] 지수 소스는 네이티브 주봉이 없어 일봉을 묶는데, 그 재료가
+    화면용으로 짧게 잡혀 있었다 — KRX 금현물은 300거래일(_KRX_GOLD_PAGES x 60), 국채 현물·
+    HY OAS 는 n_bars=300. 묶으면 60주, 즉 주봉이 1년치밖에 안 나왔다(KIS 주봉은 ~157주).
+
+    긴 일봉은 화면 캐시를 거치지 않고 소스에서 곧장 받는다 — 화면 일봉 캐시는 300봉짜리라
+    거기에 얹으면 다시 짧아진다. 실패하면 호출부가 종전의 짧은 경로로 되돌아간다.
+    """
+    from modules import analysis
+    try:
+        if kind == 'krx_gold':
+            from modules import krx_data
+            return krx_data.get_gold_daily(lookback_days)
+        if kind == 'domestic':
+            from modules import krx_data
+            return krx_data.get_index_daily(code, lookback_days)
+        # tvDatafeed 계열은 봉 수로 요청한다(연 ≈ 250거래일).
+        bars = max(int(lookback_days * 250 / 365), 300)
+        if kind == 'tv_spot':
+            return analysis.get_us_treasury_spot_data(
+                config.US_TREASURY_SPOT_TICKERS[code], n_bars=bars)
+        return analysis.get_fred_data(config.FRED_INDEX_TICKERS[code], n_bars=bars)
+    except Exception as e:      # noqa: BLE001 - 긴 창 실패가 차트를 막아서는 안 된다
+        logger.debug(f"[API] 지수 주봉용 긴 일봉 실패({code}/{kind}): {e}")
+        return None
+
+
 def _index_source_chart_data(code, kind, period_type='daily'):
     """지수 전용 소스에서 차트 데이터를 조회한다(일봉 / 주봉=일봉 리샘플링).
 
@@ -322,23 +356,31 @@ def _index_source_chart_data(code, kind, period_type='daily'):
         return pd.DataFrame()
 
     from modules import analysis
-    if kind == 'domestic':
-        src = analysis.get_domestic_index_data(code)
-    elif kind == 'tv_spot':
-        src = analysis.get_us_treasury_spot_data(config.US_TREASURY_SPOT_TICKERS[code])
-    elif kind == 'krx_gold':
-        src = analysis.get_krx_gold_data(config.KRX_GOLD_TICKERS[code])
-    else:
-        src = analysis.get_fred_data(config.FRED_INDEX_TICKERS[code])
-
     if period_type == 'weekly':
-        # 지수 소스는 네이티브 주봉이 없다 → 확보된 일봉(최대 ~300봉)을 주 단위로 리샘플링한다.
-        #  (토스 개별종목 주봉과 동일한 방식. 기간은 야후 주봉 5년보다 짧다)
-        return _resample_weekly(_to_chart_schema(src, max_rows=400))
+        # 지수 소스는 네이티브 주봉이 없다 → 일봉을 주 단위로 리샘플링한다.
+        #  재료는 3년 창을 따로 받는다(_index_source_long_daily). 그게 실패하면 화면용
+        #  짧은 소스로 되돌아간다 — 짧은 주봉이 빈 차트보다 낫다.
+        long_df = _api()._index_source_long_daily(code, kind)
+        if long_df is None or getattr(long_df, 'empty', True):
+            long_df = _index_source_fetch(code, kind)
+        return _resample_weekly(_to_chart_schema(long_df, max_rows=900))
 
+    src = _index_source_fetch(code, kind)
     now = datetime.now()
     start_date = (now - timedelta(days=config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"])).strftime("%Y%m%d")
     return _to_chart_schema(src, start_date=start_date)
+
+
+def _index_source_fetch(code, kind):
+    """화면용(짧은) 지수 소스 조회 — 종전 동작 그대로."""
+    from modules import analysis
+    if kind == 'domestic':
+        return analysis.get_domestic_index_data(code)
+    if kind == 'tv_spot':
+        return analysis.get_us_treasury_spot_data(config.US_TREASURY_SPOT_TICKERS[code])
+    if kind == 'krx_gold':
+        return analysis.get_krx_gold_data(config.KRX_GOLD_TICKERS[code])
+    return analysis.get_fred_data(config.FRED_INDEX_TICKERS[code])
 
 
 def _get_weekly_chart_data(code, is_overseas):
@@ -377,9 +419,17 @@ def _get_weekly_chart_data(code, is_overseas):
         return _api()._get_cached_chart(f"{code}_W", is_overseas=True, is_index=True,
                                  fetch_func=_fetch_yf_index_weekly, realtime_overlay=False)
 
-    # 토스 개별종목: 토스 캔들은 일/분봉만 제공 → 일봉을 주 단위로 리샘플링
+    # 토스 개별종목: 토스 캔들은 일/분봉만 제공 → 일봉을 주 단위로 리샘플링.
+    #  [Fix 2026-09-04] 종전에는 **화면 일봉**(get_chart_data(...,'daily'))을 재활용했는데,
+    #   그 경로는 52주 위치·EMA120 기준으로 250봉(≈1년)에서 잘린다. 주봉이 그 자름을
+    #   그대로 물려받아 KIS(≈3년)의 1/3만 보였다. 주봉용으로 긴 일봉을 따로 받는다.
+    #   캐시 키에 '_W'를 붙여 화면 일봉 캐시와 섞이지 않게 하고, 오버레이는 끈다
+    #   (당일 현재가는 '주 마감(금)' 라벨의 주봉 캔들에 맞지 않는다 — 지수 주봉과 같은 이유).
     if config.session.is_toss:
-        return _resample_weekly(get_chart_data(code, is_overseas, 'daily'))
+        return _api()._get_cached_chart(
+            f"{code}_W", is_overseas, is_index=True,
+            fetch_func=lambda: _resample_weekly(_api()._toss_long_daily(code, is_overseas)),
+            realtime_overlay=False)
 
     if not is_overseas:
         return _fetch_kis_weekly_domestic(code)

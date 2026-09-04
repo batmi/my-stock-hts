@@ -387,6 +387,61 @@ def add_restricted_stock(code, name, memo, is_overseas=False, cano=None, acnt=No
 
         _pkg().save_restricted_stocks(data)
 
+def update_restricted_stock(code, memo, old_cano=None, old_acnt=None,
+                            new_cano=None, new_acnt=None, account_type=None):
+    """제한 한 건의 사유·적용 범위를 **덮어쓴다**. 성공하면 True.
+
+    [왜 add 로는 안 되나] add_restricted_stock 은 같은 종목을 다시 등록하면 메모를 ', ' 로
+    이어붙인다 — 여러 번 걸린 이유를 잃지 않으려는 설계다. 그래서 그 함수로는 오타 하나
+    고칠 수 없었고, 유일한 수단이 '해제 후 재등록'이었다(등록일이 오늘로 밀려, 언제부터
+    막아 둔 종목인지가 사라진다). 변경은 이어붙이지 않고 그 자리를 대체한다.
+
+    범위(글로벌 ↔ 지정계좌)를 옮길 때도 **최초 등록일을 지킨다** — 옮긴 것은 적용 범위이지
+    제한을 새로 건 것이 아니기 때문이다.
+    """
+    with _RESTRICTED_LOCK:
+        data = _pkg().load_restricted_stocks()
+        if code not in data:
+            return False
+        entry = data[code]
+        accounts = entry.setdefault("accounts", {})
+
+        def _key(cano, acnt):
+            return f"{cano}-{acnt if acnt is not None else ''}"
+
+        # 최초 등록일 — 옮기기 전 자리에서 읽는다(없으면 종목 등록일).
+        if old_cano:
+            old = accounts.get(_key(old_cano, old_acnt))
+            kept_date = (old.get("date") if isinstance(old, dict) else None) or entry.get("date")
+            old_type = old.get("type") if isinstance(old, dict) else None
+        else:
+            kept_date, old_type = entry.get("date"), None
+        kept_date = kept_date or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # 옮기기 전 자리를 비운다(같은 자리면 아래에서 그대로 덮인다).
+        if old_cano:
+            accounts.pop(_key(old_cano, old_acnt), None)
+        else:
+            entry["memo"] = ""
+
+        if new_cano:
+            accounts[_key(new_cano, new_acnt)] = {
+                "memo": memo,
+                "type": account_type or old_type or "지정계좌",
+                "date": kept_date,
+            }
+        else:
+            entry["memo"] = memo
+            entry["date"] = entry.get("date") or kept_date
+
+        entry["accounts"] = accounts
+        # 사유가 통째로 비면(빈 메모로 바꾼 경우) 해제와 같은 뜻이다.
+        if not entry.get("memo") and not accounts:
+            del data[code]
+        _pkg().save_restricted_stocks(data)
+        return True
+
+
 # [추가] 제한 종목 삭제 헬퍼 함수 (계좌 지정 시 해당 계좌 사유만 삭제)
 def remove_restricted_stock(code, cano=None, acnt=None):
     # [수정] load→수정→save 전체를 락으로 감싸 동시 등록/해제 시 lost update 방지

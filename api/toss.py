@@ -746,6 +746,34 @@ def _toss_daily_chart_with_tv_fallback(code, is_overseas):
     return df
 
 
+def _toss_long_daily(code, is_overseas, lookback_days=1100):
+    """주봉 리샘플링용 **긴** 일봉(기본 ~3년). 화면 일봉과 목적이 다르다.
+
+    [왜 따로 받나 · 2026-09-04] 토스는 주봉 API 가 없어 일봉을 주 단위로 묶는다. 그런데
+    그 재료로 화면 일봉을 그대로 쓰면 주봉도 화면 일봉의 창을 물려받는다 — 화면 일봉은
+    '52주 위치·EMA120' 기준으로 250봉(≈1년)에 맞춰 잘려 있으므로, 주봉이 52주밖에
+    안 나온다. KIS 주봉은 lookback_days=1100(≈3년)으로 받으므로 같은 창을 맞춘다.
+
+    국내는 KRX 정규장 기준(pykrx/FDR)을 그대로 쓴다 — 토스 캔들은 NXT 체결이 섞여
+    OHLC 가 흔들리고, 주봉은 고·저를 그대로 물려받는다.
+    """
+    # 거래일 환산(연 ≈ 250거래일). 최소 250봉은 확보해 지표가 비지 않게 한다.
+    bars = max(int(lookback_days * 250 / 365), 250)
+    if not is_overseas:
+        try:
+            from modules import krx_daily
+            if krx_daily.is_domestic_code(code):
+                df = krx_daily.get_daily(code, lookback_days=lookback_days)
+                if df is not None and not df.empty and len(df) >= 120:
+                    src = df.attrs.get('source', '?')
+                    df = df.reset_index(drop=True)
+                    df.attrs['source'] = f"KRX/{src}"
+                    return df
+        except Exception as e:      # noqa: BLE001 - 외부 소스 장애가 차트를 막지 않게 한다
+            logger.debug(f"[Toss] 주봉용 KRX 일봉 조회 실패({code}): {e}")
+    return _toss_chart_data(code, 'daily', is_overseas, target_bars=bars)
+
+
 # --- KRX 공식 일봉 실패 → 토스 캔들(NXT 포함) 폴백 추적 ---
 #  폴백하면 일봉 OHLC에 NXT 장전·장후 체결이 섞여 ATR이 6~15% 부풀고 ADX가 최대 9.45 어긋난다
 #  (손절폭·포지션 크기까지 영향). 조용히 넘어가면 사용자가 알 수 없으므로 화면에 경고를 띄운다.
@@ -942,12 +970,15 @@ def _toss_daily_df(candles):
     return df.sort_values('date', ascending=True).reset_index(drop=True)
 
 
-def _toss_chart_data(code, period_type='daily', is_overseas=False):
+def _toss_chart_data(code, period_type='daily', is_overseas=False, target_bars=None):
     """토스 캔들 → KIS get_chart_data 형태의 DataFrame.
     columns=['date','open','high','low','close','volume'] (date=YYYYMMDD, 오름차순).
 
     일봉은 52주 위치/EMA120 정확도를 위해 nextBefore 커서로 ~250개 이상 모은다
     (토스 캔들은 호출당 최대 200개). 분봉은 단일 호출(200개).
+
+    target_bars 는 일봉을 더 길게 받아야 하는 호출부(주봉 리샘플링)가 쓴다. 화면 일봉은
+    250봉이면 충분하지만 주봉 3년은 ~750봉이 필요하다. 기본값(None)이면 종전과 같다.
     """
     if period_type == 'hourly':
         # 토스는 1분/일봉만 제공 → 시봉 미지원
@@ -957,9 +988,13 @@ def _toss_chart_data(code, period_type='daily', is_overseas=False):
     # 분봉: KIS와 동일하게 "당일 정규장(09:00~15:30)"만 표시한다. 토스 1분봉은 NXT(대체거래소)
     # 연장시간(08:00~20:00)까지 포함하므로, 장후(NXT 20:00)에 조회해도 당일 09:00까지 닿도록
     # 하루 분량(≈720)을 커서로 모은다. (토스 count 최대 200 → 400은 [400] invalid-request)
-    target = 260 if interval == '1d' else 720
-    max_pages = 4 if interval == '1d' else 5
     per_call = 200
+    if interval == '1d':
+        target = int(target_bars) + 10 if target_bars else 260
+        # 페이지 예산은 목표 봉 수에서 나온다(콜당 200개). 종전 상수 4는 260봉 기준이었다.
+        max_pages = max(4, -(-target // per_call) + 1)
+    else:
+        target, max_pages = 720, 5
 
     candles = []
     before = None
@@ -1054,7 +1089,7 @@ def _toss_chart_data(code, period_type='daily', is_overseas=False):
             # NXT 프리마켓 상·하한가 체결이 섞인 봉을 먼저 정제한다(tail 이전 = 첫 봉도 전일 종가 확보).
             # 해외는 가격제한폭이 없어 '제한폭에 붙은 값' 판정이 성립하지 않으므로 제외.
             df = _toss_sanitize_daily_ohlc(df, code)
-        df = df.tail(250).reset_index(drop=True)
+        df = df.tail(int(target_bars) if target_bars else 250).reset_index(drop=True)
         df.attrs['source'] = 'TOSS'
         # 커서를 끝까지 밀어 확인한 경우에만 True — 호출부가 '이게 전체 이력'으로 신뢰한다
         df.attrs['exhausted'] = exhausted

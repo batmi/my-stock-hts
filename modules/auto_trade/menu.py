@@ -594,26 +594,11 @@ def _add_restricted_stock():
             return False
             
     utils.print_breadcrumb()
-    console.print("\n[cyan]어떤 계좌에 제한을 적용하시겠습니까?[/cyan]")
-    console.print("1. 전체 계좌 (Global)")
-    console.print("2. 현재 시스템 트레이딩 계좌")
-    console.print("3. 계좌 직접 입력")
-    choice = Prompt.ask("선택", choices=["1", "2", "3"], default="1")
-    
-    cano, acnt, account_type = None, None, None
-    if choice == "2":
-        if getattr(config.session, 'is_toss', False):
-            cano = config.session.cano
-            acnt = config.session.acnt_prdt_cd
-            account_type = "토스"
-        cano = getattr(config.session, 'auto_cano', config.session.cano)
-        acnt = getattr(config.session, 'auto_acnt_prdt_cd', config.session.acnt_prdt_cd)
-        account_type = "한투-자동"
-    elif choice == "3":
-        account_type = Prompt.ask("계좌종류 선택", choices=["모의", "한투-자동", "한투-수동", "토스"], default="한투-자동")
-        cano = Prompt.ask("계좌 앞 8자리")
-        acnt = Prompt.ask("계좌 뒤 2자리", default="01")
-        
+    # [Fix 2026-09-04] 종전에는 '현재 시스템 트레이딩 계좌'를 고르면 토스 분기가 바로 다음
+    #  줄에 덮여(elif 가 아니라 나란한 대입) 토스 모드에서도 한투-자동 계좌번호가 들어갔다.
+    #  변경 화면과 같은 함수를 쓰게 해 두 화면이 갈라지지 않게 한다.
+    cano, acnt, account_type = _ask_restriction_scope()
+
     utils.print_breadcrumb()
     memo = Prompt.ask("제한 사유(메모) 입력")
     
@@ -629,17 +614,16 @@ def _add_restricted_stock():
     console.print("\n[bold cyan]>> 현재 설정된 트레이딩 제한 종목 리스트입니다.[/bold cyan]")
     _pkg()._view_restricted_stocks()
 
-def _remove_restricted_stock():
-    """트레이딩 제한 종목 해제 (계좌 범위별 개별 해제)"""
-    data = _pkg().load_restricted_stocks()
-    if not data:
-        console.print("\n[yellow]삭제할 종목이 없습니다.[/yellow]")
-        return False
+def _restricted_entries(data):
+    """제한 목록을 (종목 x 계좌 범위) 단위로 평탄화한다.
 
-    # [수정] (종목 × 계좌 범위) 단위로 평탄화하여 계좌별 정밀 해제를 지원한다.
-    #        등록은 글로벌/지정계좌 스코프로 이루어지므로 해제도 같은 단위여야,
-    #        다계좌 운영 시 다른 계좌(또는 글로벌)의 제한이 함께 삭제되는 과다 삭제를 막는다.
-    entries = []  # {code, name, scope('global'|'account'), cano, acnt, type, acc_str, memo, is_overseas, date}
+    등록이 글로벌/지정계좌 스코프로 이루어지므로 해제·변경도 같은 단위여야 한다 —
+    다계좌 운영 시 다른 계좌(또는 글로벌)의 제한까지 함께 건드리는 과다 조작을 막는다.
+
+    반환: [{code, name, scope('global'|'account'), cano, acnt, type, acc_str,
+            memo, is_overseas, date}]
+    """
+    entries = []
     for code, info in data.items():
         name = info.get('name', code)
         is_overseas = info.get('is_overseas')
@@ -668,9 +652,13 @@ def _remove_restricted_stock():
                 "cano": cano, "acnt": acnt, "type": a_type, "acc_str": acc.rstrip('-'),
                 "memo": a_memo, "is_overseas": is_overseas, "date": a_date,
             })
+    return entries
 
+
+def _print_restricted_entry_table(entries, title):
+    """해제·변경이 공유하는 대상 목록 표. 시세는 종목당 1회, 종목 간 병렬로 조회한다."""
     console.print()
-    table = Table(title="트레이딩 제한 해제 대상 목록", box=box.HORIZONTALS, header_style="dim", border_style="dim")
+    table = Table(title=title, box=box.HORIZONTALS, header_style="dim", border_style="dim")
     table.add_column("No.", justify="right", style="cyan", width=4)
     table.add_column("종목명", justify="left")
     table.add_column("코드", justify="center", style="dim")
@@ -682,18 +670,117 @@ def _remove_restricted_stock():
     table.add_column("메모", justify="left")
     table.add_column("등록일", justify="center", style="dim")
 
-    # [최적화] 시세는 종목당 1회만, 종목 간에는 병렬로 조회한다.
     price_cache = _fetch_price_summaries(entries)
-
     for i, e in enumerate(entries):
         price_str, diff_str, w52_str = price_cache.get(e["code"], ("-", "-", "-"))
         table.add_row(
             str(i + 1), e["name"], e["code"], e["type"], e["acc_str"],
             price_str, diff_str, w52_str, e["memo"] or "-", e["date"],
         )
-
     console.print(table)
     console.print()
+
+
+def _ask_restriction_scope(current=None):
+    """제한을 적용할 계좌 범위를 묻는다. (cano, acnt, account_type) 또는 취소 시 None.
+
+    추가 화면과 같은 선택지를 쓴다 — 같은 것을 고르는 자리가 화면마다 다르면 안 된다.
+    current 가 있으면 '그대로 두기'를 기본값으로 준다(변경 화면 전용).
+    """
+    console.print("\n[cyan]어떤 계좌에 제한을 적용하시겠습니까?[/cyan]")
+    if current:
+        console.print(f"0. 그대로 두기 (현재: {current})")
+    console.print("1. 전체 계좌 (Global)")
+    console.print("2. 현재 시스템 트레이딩 계좌")
+    console.print("3. 계좌 직접 입력")
+    choices = (["0"] if current else []) + ["1", "2", "3"]
+    choice = Prompt.ask("선택", choices=choices, default=("0" if current else "1"))
+    if choice == "0" and current:
+        return "keep"
+    if choice == "2":
+        if getattr(config.session, 'is_toss', False):
+            return config.session.cano, config.session.acnt_prdt_cd, "토스"
+        return (getattr(config.session, 'auto_cano', config.session.cano),
+                getattr(config.session, 'auto_acnt_prdt_cd', config.session.acnt_prdt_cd),
+                "한투-자동")
+    if choice == "3":
+        account_type = Prompt.ask("계좌종류 선택",
+                                  choices=["모의", "한투-자동", "한투-수동", "토스"],
+                                  default="한투-자동")
+        return Prompt.ask("계좌 앞 8자리"), Prompt.ask("계좌 뒤 2자리", default="01"), account_type
+    # 1(전체 계좌)과, choices 를 벗어난 답은 전체 계좌로 본다 — 종전 추가 화면과 같은 기조다
+    #  (제한을 좁게 거는 쪽으로 잘못 떨어지면 막으려던 계좌가 안 막힌다).
+    return None, None, None
+
+
+def _modify_restricted_stock():
+    """트레이딩 제한 종목 변경 (사유·적용 범위)
+
+    [왜 필요한가] 종전에는 사유 한 줄을 고치려면 해제 후 다시 등록해야 했다. 그러면
+    **등록일이 오늘로 밀려** 언제부터 막아 둔 종목인지가 사라지고, 다시 등록하는 사이
+    자동매매가 그 종목을 살 수 있는 창이 열린다. 게다가 추가 경로는 메모를 이어붙이므로
+    (add_restricted_stock) 오타를 지우지도 못했다. 변경은 그 자리를 대체한다.
+    """
+    data = _pkg().load_restricted_stocks()
+    if not data:
+        console.print("\n[yellow]변경할 종목이 없습니다.[/yellow]")
+        return False
+
+    entries = _restricted_entries(data)
+    _print_restricted_entry_table(entries, "트레이딩 제한 변경 대상 목록")
+
+    utils.print_breadcrumb()
+    choice = Prompt.ask("변경할 번호 선택 [dim](이전: b, 메인: q)[/dim]")
+    if choice.lower() in ['b', 'q']:
+        return False
+    if not choice.strip().isdigit() or not (1 <= int(choice) <= len(entries)):
+        console.print("\n[red]유효한 번호가 아닙니다.[/red]")
+        return False
+
+    e = entries[int(choice) - 1]
+    console.print(f"\n[bold cyan]>> {e['name']}({e['code']}) / {e['type']} "
+                  f"{e['acc_str']} / 등록일 {e['date']}[/bold cyan]")
+
+    utils.print_breadcrumb()
+    memo = Prompt.ask("제한 사유(메모)", default=e["memo"] or "")
+    memo = memo.strip()
+    if not memo:
+        console.print("\n[red]사유를 비우면 제한이 해제됩니다 — 해제는 [4]번 메뉴를 쓰세요.[/red]")
+        return False
+
+    utils.print_breadcrumb()
+    scope = _ask_restriction_scope(current=f"{e['type']} {e['acc_str']}")
+    if scope == "keep":
+        new_cano, new_acnt, new_type = e["cano"], e["acnt"], e["type"]
+    else:
+        new_cano, new_acnt, new_type = scope
+
+    ok = _pkg().update_restricted_stock(
+        e["code"], memo,
+        old_cano=e["cano"], old_acnt=e["acnt"],
+        new_cano=new_cano, new_acnt=new_acnt, account_type=new_type)
+    if not ok:
+        console.print("\n[red]변경 실패 — 목록에서 해당 종목을 찾지 못했습니다.[/red]")
+        return False
+
+    where = f"{new_cano}-{new_acnt or ''}".rstrip("-") if new_cano else "전체 계좌"
+    context.USER_ACTION_BREADCRUMB.append(f"[변경] {e['name']}")
+    console.print(f"\n[green]'{e['name']}' 제한이 변경되었습니다 → {where} / 사유: {memo}[/green]")
+    console.print("[dim]※ 등록일은 최초 등록 시각을 유지합니다.[/dim]")
+
+    console.print("\n[bold cyan]>> 현재 설정된 트레이딩 제한 종목 리스트입니다.[/bold cyan]")
+    _pkg()._view_restricted_stocks()
+
+
+def _remove_restricted_stock():
+    """트레이딩 제한 종목 해제 (계좌 범위별 개별 해제)"""
+    data = _pkg().load_restricted_stocks()
+    if not data:
+        console.print("\n[yellow]삭제할 종목이 없습니다.[/yellow]")
+        return False
+
+    entries = _restricted_entries(data)
+    _print_restricted_entry_table(entries, "트레이딩 제한 해제 대상 목록")
 
     utils.print_breadcrumb()
     choice = Prompt.ask("해제할 번호 선택 (여러 개는 콤마로 구분) [dim](이전: b, 메인: q)[/dim]")
@@ -749,7 +836,8 @@ def manage_stock_rules():
 
 def manage_restricted_stocks_menu():
     """트레이딩 제한 종목 관리 메뉴"""
-    menu_items = [("1", "제한 종목 조회", "List"), ("2", "제한 종목 추가", "Add"), ("3", "제한 종목 해제", "Remove")]
+    menu_items = [("1", "제한 종목 조회", "List"), ("2", "제한 종목 추가", "Add"),
+                  ("3", "제한 종목 변경", "Modify"), ("4", "제한 종목 해제", "Remove")]
     choice = utils.show_menu("트레이딩 제한 종목 관리 (Restricted Stocks)", menu_items, default_choice="1")
     if choice.lower() in ['b', 'q']: return False
     
@@ -760,7 +848,9 @@ def manage_restricted_stocks_menu():
         _pkg()._view_restricted_stocks()
     elif choice == "2": 
         if _add_restricted_stock() is False: return False
-    elif choice == "3": 
+    elif choice == "3":
+        if _modify_restricted_stock() is False: return False
+    elif choice == "4": 
         if _remove_restricted_stock() is False: return False
 
 
