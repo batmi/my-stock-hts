@@ -376,6 +376,52 @@ def _append_smart_money_signal(df, code, is_overseas, lag=None):
         df['smart_money'] = False
         return df
 
+# 실매매의 52주 창 정의(analysis._w52_high_low)와 같은 값. 여기서 다시 적지 않는다.
+_W52_DAYS = 365
+_W52_MIN_BARS = 200
+
+
+def apply_w52_position(df):
+    """52주 위치(w52_pos)와 그 밴드를 **실매매와 같은 창**으로 채운다. df 를 제자리 수정.
+
+    [Fix 2026-09-04] 종전에는 `rolling(250, min_periods=1)` — 250**거래일** 창이었다.
+     실매매는 2026-07-24 에 이 정의를 버리고 **365 달력일**로 바꿨다(analysis._w52_high_low):
+     250거래일은 실측 373일치라 52주보다 8일 넓고, 그 경계 밖 극값이 밴드를 통째로
+     왜곡한다(TIGER 조선TOP10 20.2% → 11.0%). 백테스트만 옛 정의로 남아 있었다.
+
+     w52_pos 는 점수 항목이자 게이트 입력이다(MOMENTUM_W52_NEAR 80). 실측(10종목·약 450일):
+     두 정의의 차이가 **하루의 9.9%에서 1%p 를 넘고 최대 14.1%p** 다 — 그 날들은 백테스트와
+     실매매가 같은 봉에 다른 점수를 매긴다.
+
+     창이 52주를 못 채우는 구간(신규상장·워밍업 앞머리)은 실매매와 같이 보유 봉 전체로
+     폴백한다(_w52_band 의 폴백 규칙).
+    """
+    n = len(df)
+    if n == 0:
+        return df
+    dt = pd.to_datetime(df['date'].astype(str).str.replace('-', '', regex=False).str[:8],
+                        format='%Y%m%d', errors='coerce') if 'date' in df.columns else None
+    if dt is None or dt.isna().any() or not dt.is_monotonic_increasing:
+        # 날짜를 못 읽으면 창을 날짜로 자를 수 없다. 종전 동작으로 물러서되 조용히 하지 않는다.
+        logger.warning("[Backtest] 52주 창을 날짜로 자르지 못해 250봉 창으로 폴백합니다")
+        hi = df['high'].rolling(250, min_periods=1).max()
+        lo = df['low'].rolling(250, min_periods=1).min()
+    else:
+        win = f"{_W52_DAYS}D"
+        hi = df['high'].set_axis(dt).rolling(win).max().to_numpy()
+        lo = df['low'].set_axis(dt).rolling(win).min().to_numpy()
+        cnt = df['close'].set_axis(dt).rolling(win).count().to_numpy()
+        short = cnt < _W52_MIN_BARS          # 52주를 못 채운 구간 → 보유 봉 전체
+        hi = pd.Series(np.where(short, df['high'].cummax(), hi), index=df.index)
+        lo = pd.Series(np.where(short, df['low'].cummin(), lo), index=df.index)
+
+    df['roll_high_52w'] = hi
+    df['roll_low_52w'] = lo
+    span = df['roll_high_52w'] - df['roll_low_52w']
+    df['w52_pos'] = ((df['close'] - df['roll_low_52w']) / span * 100).where(span > 0).fillna(0)
+    return df
+
+
 def compute_price_indicators(df):
     """가격(OHLCV) 기반 보조지표를 일괄 계산하여 df에 채운다.
     ※ smart_money 등 가격과 무관한 사전 병합 컬럼은 건드리지 않는다.
@@ -419,10 +465,8 @@ def compute_price_indicators(df):
                        & (df['volume'] >= df['VOL_MA20'] * vol_spike_ratio)
                        & (df['close'] > df['open']))
 
-    # 52주 위치는 워밍업 구간을 포함한 전체 df 기준으로 계산
-    df['roll_high_250'] = df['high'].rolling(250, min_periods=1).max()
-    df['roll_low_250'] = df['low'].rolling(250, min_periods=1).min()
-    df['w52_pos'] = ((df['close'] - df['roll_low_250']) / (df['roll_high_250'] - df['roll_low_250']) * 100).fillna(0)
+    # 52주 위치는 워밍업 구간을 포함한 전체 df 기준으로 계산 (창 정의는 실매매와 같다)
+    apply_w52_position(df)
 
     # [추가] 가격 모멘텀(절대 모멘텀): 라이브(calculate_score 내부 df 계산)와 동일 정의로 사전계산
     mom_lb = config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK', 126)
@@ -646,10 +690,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     # [Fix] 호출부(run_backtest)에서 워밍업 구간 포함 전체 df로 w52_pos를 미리 계산해 두면 그대로 사용한다.
     #       (sim_df만으로 rolling(250)을 하면 분석 시작 시점의 52주 윈도우가 비어 w52_pos가 왜곡됨)
     if 'w52_pos' not in sim_df.columns:
-        sim_df['roll_high_250'] = sim_df['high'].rolling(250, min_periods=1).max()
-        sim_df['roll_low_250'] = sim_df['low'].rolling(250, min_periods=1).min()
-        sim_df['w52_pos'] = (sim_df['close'] - sim_df['roll_low_250']) / (sim_df['roll_high_250'] - sim_df['roll_low_250']) * 100
-        sim_df['w52_pos'] = sim_df['w52_pos'].fillna(0)
+        apply_w52_position(sim_df)      # 창 정의는 한 곳에만 둔다
 
     # [동기화] 시간청산 유예 판단용 최근 5일/10일 고점 (실매매의 상방 모멘텀 확인과 동일)
     if 'roll_high_5' not in sim_df.columns:
