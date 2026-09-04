@@ -776,16 +776,29 @@ def _request(method, path, *, json_body=None, params=None, retry_on_401=True,
 # 워커
 # ══════════════════════════════════════════════════════════════════════
 
+# 지수 백오프 상수 — 파이썬 판정식과 SQL 표현식이 **같은 값**에서 나오게 한다.
+#  종전에는 두 곳에 숫자를 각각 적어 두고 주석으로 "같은 식이어야 한다"고만 했다.
+#  선언은 시간이 지나면 거짓이 된다 — tests/test_journal_backoff.py 가 SQLite 로
+#  둘을 실제로 대조한다.
+_BACKOFF_BASE_SEC = 60
+_BACKOFF_MAX_SHIFT = 6
+_BACKOFF_CAP_SEC = 3600
+
+
 def _backoff_seconds(attempts):
     """지수 백오프 (상한 1시간). 서버가 죽어 있을 때 헛된 재시도를 줄인다."""
-    return min(60 * (2 ** min(attempts, 6)), 3600)
+    return min(_BACKOFF_BASE_SEC * (2 ** min(attempts, _BACKOFF_MAX_SHIFT)), _BACKOFF_CAP_SEC)
 
 
-# 백오프 판정을 SQL 로 내린 표현식. `_backoff_seconds` 와 같은 식이어야 한다.
+# 백오프 판정을 SQL 로 내린 표현식.
 #  (SQLite: `<<` 는 시프트, 인자 2개짜리 min() 은 스칼라 최솟값)
 #  파이썬에서 걸러내면 '아직 대기 중인 행'도 스캔 한도를 차지해, 적체가 한도를 넘는
 #  순간 뒤쪽 행이 조회조차 되지 않는다(전송 가능한데 영영 안 나감).
-_BACKOFF_SQL = "min(60 * (1 << min(attempts, 6)), 3600)"
+#  COALESCE 를 빼면 안 된다 — attempts 가 NULL 이면 식 전체가 NULL 이 되고, 그 행은
+#  두 조회 어디에도 안 잡혀 **미전송인 채로 영영 사라진다**(현재 스키마는 DEFAULT 0 이라
+#  도달 불가이지만, 조용히 유실되는 형태라 값싼 보험을 든다).
+_BACKOFF_SQL = (f"min({_BACKOFF_BASE_SEC} * (1 << min(COALESCE(attempts, 0), "
+                f"{_BACKOFF_MAX_SHIFT})), {_BACKOFF_CAP_SEC})")
 
 
 def _fetch_pending(limit=_BATCH_SIZE):
@@ -837,8 +850,15 @@ def _mark_result(results_by_id, now_str):
             for outbox_id, mark in results_by_id.items():
                 synced, remote_id, error, rejected = mark
                 if synced:
+                    # remote_id 는 **덮어쓰되 지우지는 않는다**(COALESCE). 서버가 이미
+                    #  들어간 건을 'duplicate' 로 응답하면서 id 를 생략할 수 있는데,
+                    #  그때 NULL 로 밀면 서버 기록의 주소를 잃는다. 주소를 잃으면 이후
+                    #  손익 정정이 PATCH 가 아니라 POST 로 나가고, 서버는 같은
+                    #  brokerExecutionId 를 duplicate 로 건너뛰기만 해 **정정이 조용히
+                    #  사라진다** — 로컬과 웹 매매일지의 손익이 갈린다(_send_corrections 주석).
                     cursor.execute(
-                        "UPDATE journal_outbox SET synced_at = ?, remote_id = ?, "
+                        "UPDATE journal_outbox SET synced_at = ?, "
+                        "remote_id = COALESCE(?, remote_id), "
                         "last_attempt_at = ?, last_error = NULL WHERE id = ?",
                         (now_str, remote_id, now_str, outbox_id))
                     continue
