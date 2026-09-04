@@ -173,6 +173,7 @@ class AutoTrader:
             cls._instance.cycle_secs_history = []   # 최근 값만 유지(라즈베리파이 메모리 고려)
             cls._instance.cycle_secs_peak = 0.0
             cls._instance.last_success_at = None
+            cls._instance.waiting_for_server = False   # 서버 복구 대기(의도된 멈춤)
             cls._instance.last_error_at = None
             cls._instance.last_error_message = ""
             cls._instance.initial_asset = 0
@@ -1638,6 +1639,36 @@ class AutoTrader:
             interval = getattr(config, 'SYSTEM_TRADING_INTERVAL', 60)
             self.log(f"모니터링 완료 (소요 {secs:.1f}초 · 다음 주기까지 {interval}초 대기 "
                      f"→ 청산 감시 간격 {secs + interval:.0f}초). 대기 중...")
+
+    def loop_stall_seconds(self):
+        """마지막 '정상 루프 완료' 이후 흐른 초. 감시 대상이 아니면 None.
+
+        [왜 필요한가 · 2026-09-04] 프로세스 죽음은 두 층이 본다 — 스케줄러가 스레드
+         생존을, 밖의 감시자(hts_watchdog)가 하트비트 파일을 본다. 그런데 **루프가
+         멈춘 채 스레드는 살아 있는 경우**는 둘 다 못 본다. 하트비트를 찍는 것은
+         스케줄러 스레드지 매매 스레드가 아니고, 멈춘 스레드도 is_alive() 는 참이며,
+         예외가 안 나므로 연속 에러도 0이다. 그동안 **손절·트레일링 감시가 통째로
+         멈춰 있는데 아무 소리도 나지 않는다.**
+         종전에도 이 지연은 계산됐지만 `get_status_message()` 안에만 있어, 운영자가
+         상태 화면을 열어야 보였다.
+        """
+        if not self.is_running or getattr(self, 'waiting_for_server', False):
+            return None            # 정지·의도된 대기는 정체가 아니다
+        last = getattr(self, 'last_success_at', None)
+        if not isinstance(last, datetime):
+            return None            # 첫 주기 완료 전 — 여기서 판정하지 않는다
+        return (datetime.now() - last).total_seconds()
+
+    def loop_stall_threshold(self):
+        """이 초를 넘기면 '루프가 멈췄다'로 본다.
+
+        고정값을 쓰면 안 된다 — 관심종목이 늘면 한 주기가 그만큼 길어져(_record_cycle_duration)
+        정상인데도 넘긴다. 실제 감시 간격(분석 평균 + 대기)의 5배를 쓰되 하한을 둔다.
+        """
+        _, gap = self._health_cycle_text()
+        interval = getattr(config, 'SYSTEM_TRADING_INTERVAL', 60)
+        base = gap if gap else (interval * 2)
+        return max(300.0, float(base) * 5)
 
     def _health_cycle_text(self):
         """관제용 주기 소요 시간 문구와 '실제 감시 간격(초)'을 돌려준다.
@@ -3995,8 +4026,14 @@ class AutoTrader:
 
                         api.send_telegram_message(msg)
                     
-                    self._wait_for_server_recovery()
-                    
+                    # 대기 중임을 남긴다 — 정체 감시(scheduler._check_heartbeat)가 이
+                    #  '의도된 멈춤'을 장애로 오탐하면 서버 장애 때마다 가짜 경보가 나간다.
+                    self.waiting_for_server = True
+                    try:
+                        self._wait_for_server_recovery()
+                    finally:
+                        self.waiting_for_server = False
+
                     # 복구되어 리턴되면 에러 카운트 초기화 후 루프 재개
                     self.consecutive_errors = 0
                     continue

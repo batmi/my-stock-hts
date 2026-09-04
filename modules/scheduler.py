@@ -233,6 +233,23 @@ class SystemScheduler:
             if self.trader.consecutive_errors >= max_err:
                 is_problem = True
                 msg = f"시스템 연속 에러가 한계치({max_err}회)에 도달했습니다."
+
+            # [추가 2026-09-04] **멈춘 채 살아 있는 루프**. 위 두 검사에 걸리지 않는다 —
+            #  스레드는 is_alive() 참이고, 예외가 안 나므로 연속 에러도 0이며, 하트비트를
+            #  찍는 것은 매매 스레드가 아니라 이 스케줄러 스레드다. 그동안 손절·트레일링
+            #  감시가 통째로 멈춰 있는데 어느 층도 소리를 내지 않았다.
+            #  지연 자체는 종전에도 계산됐지만 상태 화면 안에만 있어 운영자가 열어야 보였다.
+            try:
+                stall = self.trader.loop_stall_seconds()
+                limit = self.trader.loop_stall_threshold()
+            except Exception as e:      # noqa: BLE001 - 감시가 감시를 죽이지 않게
+                logger.debug(f"[하트비트] 루프 정체 점검 실패: {e}")
+                stall = None
+            if stall is not None and stall > limit:
+                is_problem = True
+                msg = (f"자동매매 루프가 {int(stall)}초째 한 주기를 끝내지 못했습니다"
+                       f"(정상 간격의 5배인 {int(limit)}초 초과). 스레드는 살아 있으나 "
+                       f"손절·트레일링 감시가 멈춰 있을 수 있습니다.")
                 
             if not hasattr(self, '_last_problem_msg'):
                 self._last_problem_msg = ""
