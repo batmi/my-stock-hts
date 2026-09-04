@@ -14,6 +14,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 import config
 import api
 from core import utils
+from modules.manage.scan import ScanFailures
 
 _REPRT_LABEL = {"11011": "사업(연간)", "11012": "반기", "11013": "1분기", "11014": "3분기"}
 
@@ -193,22 +194,29 @@ def show_financial_snapshot():
 
     candidates = _report_candidates(date.today())
     rows = []
+    failures = ScanFailures("재무")
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
                   BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%"), console=config.console, transient=True) as progress:
         task = progress.add_task("[cyan]재무 정보 조회 중...[/cyan]", total=len(codes))
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
-            futs = [ex.submit(_collect, c, n, candidates) for c, n in codes]
+            futs = {ex.submit(_collect, c, n, candidates): c for c, n in codes}
             for fut in concurrent.futures.as_completed(futs):
                 try:
                     r = fut.result()
                     if r:
                         rows.append(r)
-                except Exception:
-                    pass
+                except Exception as e:      # noqa: BLE001 - 일부라도 보여 주되 실패는 밝힌다
+                    failures.record(futs[fut], e)
                 progress.advance(task)
 
+    #  조회 실패를 '재무 정보 없음'으로 읽게 두지 않는다(modules/manage/scan.py 주석).
+    failures.announce()
+
     if not rows:
-        config.console.print("[dim]조회된 재무 정보가 없습니다.[/dim]")
+        if failures:
+            config.console.print("[dim]조회에 성공한 종목에는 표시할 재무 정보가 없습니다.[/dim]")
+        else:
+            config.console.print("[dim]조회된 재무 정보가 없습니다.[/dim]")
         return
 
     rows.sort(key=lambda r: (r["rev"][0] if r.get("rev") and r["rev"][0] else 0), reverse=True)
@@ -247,4 +255,11 @@ def show_financial_snapshot():
             debt_str,
         )
     config.console.print(table)
+    #  표에 몇 종목이 빠졌는지 밝힌다 — 보고서 미제출과 조회 실패를 합쳐 '없는 줄'로만
+    #  두면, 관심종목 44개 중 30줄만 보고도 그게 정상인지 알 수 없다.
+    missing = len(codes) - len(rows)
+    if missing > 0:
+        config.console.print(
+            f"[dim]※ 관심종목 {len(codes)}개 중 {len(rows)}개 표시 "
+            f"({missing}개는 해당 보고서 미제출이거나 조회 실패).[/dim]")
     config.console.print()

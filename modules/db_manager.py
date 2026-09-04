@@ -884,12 +884,26 @@ class DBManager:
                         config.console.print(f"[red][DB] Update Error: {e}[/red]")
                     break
     
-    def check_trade_exists(self, odno, order_status):
-        """특정 주문번호와 상태를 가진 거래 내역 존재 여부 확인"""
+    def check_trade_exists(self, odno, order_status, on_date=None):
+        """특정 주문번호와 상태를 가진 거래 내역 존재 여부 확인.
+
+        [on_date · 2026-09-04] 증권사 주문번호(odno)는 **당일 채번**이라 매일 0부터 다시
+         올라간다(사용자 실거래 기록 실측: 날짜순으로 정렬해도 번호가 19번 중 7번 작아지고,
+         하루 안에서는 단조 증가한다). 즉 odno 하나만으로는 유일하지 않다. 오늘 체결을
+         '이미 있음'으로 오판하면 **그 체결이 DB에 영영 안 남는다** — 실현손익·보유일수·
+         재진입 허들·매매일지가 전부 어긋난다.
+         'YYYY-MM-DD' 를 주면 그날 것만 본다. None(기본)은 종전대로 전체 이력을 본다 —
+         과거를 채워 넣는 경로(holdings_backfill)는 날짜를 좁히면 안 되기 때문이다.
+        """
         try:
             conn = self._get_conn()
             cursor = conn.cursor()
-            cursor.execute("SELECT count(*) FROM trades WHERE odno = ? AND order_status = ?", (odno, order_status))
+            if on_date:
+                cursor.execute(
+                    "SELECT count(*) FROM trades WHERE odno = ? AND order_status = ? "
+                    "AND substr(time, 1, 10) = ?", (odno, order_status, on_date))
+            else:
+                cursor.execute("SELECT count(*) FROM trades WHERE odno = ? AND order_status = ?", (odno, order_status))
             cnt = cursor.fetchone()[0]
             
             if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL == "DEBUG" and cnt > 0:

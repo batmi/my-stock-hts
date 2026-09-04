@@ -8,6 +8,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 import config
 from core import constants
+from core import utils
 from brokers import toss_api
 
 #  로거 이름은 분해 전(api.py)과 같은 'api' 로 둔다 — 로그 필터·레벨 설정이 이름을 보므로
@@ -160,24 +161,24 @@ def _reconcile_rows():
 
 
 def _order_age_seconds(row, now):
-    """주문 시각으로부터 흐른 초. 시각을 못 읽으면 창 밖으로 본다(보수적)."""
-    tmd = str(row.get('ord_tmd') or '').strip()
-    if len(tmd) != 6 or not tmd.isdigit():
-        return float('inf')
-    try:
-        placed = now.replace(hour=int(tmd[:2]), minute=int(tmd[2:4]),
-                             second=int(tmd[4:]), microsecond=0)
-    except ValueError:
-        return float('inf')
-    return (now - placed).total_seconds()
+    """주문 시각으로부터 흐른 초. 시각을 못 읽으면 창 밖으로 본다(보수적).
+
+    산식은 core.utils.order_age_seconds 가 단독 보유한다 — 자정을 넘겼을 때 부호가
+    뒤집히는 문제를 두 곳(여기와 engine.manage_unfilled_orders)이 각자 틀렸었다.
+    """
+    return utils.order_age_seconds(row.get('ord_tmd'), now, ord_dt=row.get('ord_dt'))
 
 
 def _odno_known_to_db(odno):
     """이 주문번호가 이미 시스템 DB에 있는가(=응답을 받아 기록된 주문인가)."""
     try:
+        from datetime import datetime as _dt
         from modules import db_manager
+        #  odno 는 당일 채번이라 날짜 없이는 유일하지 않다. 전체 이력에서 찾으면 몇 달 전
+        #  같은 번호 때문에 '아는 주문'으로 오판하고, 결과 불명 주문이 조용히 우리 것이 된다.
+        today = _dt.now().strftime('%Y-%m-%d')
         for status in ("접수", "체결", "체결(추정)", "체결/취소(추정)"):
-            if db_manager.db.check_trade_exists(odno, status):
+            if db_manager.db.check_trade_exists(odno, status, on_date=today):
                 return True
     except Exception as e:
         logger.debug(f"[ORDER_UNKNOWN] DB 조회 실패: {e}")

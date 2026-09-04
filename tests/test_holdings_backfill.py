@@ -154,7 +154,7 @@ def test_plan_skips_zero_quantity_rows(monkeypatch):
 def test_plan_counts_records_already_in_the_db(monkeypatch):
     txs = [_tx("20260728", True, 10, odno="A1")]
     monkeypatch.setattr(hb.api, 'get_period_executions', lambda *a, **k: {"005930": txs})
-    monkeypatch.setattr(hb, '_exists', lambda odno: odno == "A1")
+    monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: odno == "A1")
 
     plans = hb.plan([_holding()])
     assert plans[0]['already'] == 1, "이미 있는 기록을 신규로 세면 중복 기록된다"
@@ -163,7 +163,7 @@ def test_plan_counts_records_already_in_the_db(monkeypatch):
 def test_apply_does_not_rewrite_existing_records(monkeypatch):
     """여러 번 실행해도 중복되지 않아야 한다 — 대사 도구가 스스로 오염원이 되면 안 된다."""
     written_calls = []
-    monkeypatch.setattr(hb, '_exists', lambda odno: odno == "DUP")
+    monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: odno == "DUP")
     monkeypatch.setattr(hb.db_manager.db, 'insert_trade',
                         lambda *a, **k: written_calls.append((a, k)) or True)
 
@@ -179,7 +179,7 @@ def test_apply_pins_the_account_context(monkeypatch):
     """계좌 귀속이 어긋나면 복원 자체가 무의미하다 — 계좌를 명시 고정해야 한다."""
     from core import context
     seen = []
-    monkeypatch.setattr(hb, '_exists', lambda odno: False)
+    monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: False)
     monkeypatch.setattr(hb.db_manager.db, 'insert_trade',
                         lambda *a, **k: seen.append(
                             getattr(context.trade_context, 'use_auto_account', False)) or True)
@@ -220,7 +220,7 @@ def test_sync_restricts_external_buys_on_the_auto_account(monkeypatch):
     알면, 제 손절 기준으로 운용자의 포지션을 청산한다. 실시간 경로는 이미 막고 있는데
     기동 경로에만 이 방어가 없었다.
     """
-    monkeypatch.setattr(hb, '_exists', lambda odno: False)
+    monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: False)
     calls = _stub_sync(monkeypatch, _plan_with_buy())
 
     res = hb.sync_account(holdings=[_holding()], register_restrictions=True)
@@ -230,7 +230,7 @@ def test_sync_restricts_external_buys_on_the_auto_account(monkeypatch):
 
 def test_sync_does_not_restrict_on_the_manual_account(monkeypatch):
     """수동 계좌는 시스템이 보지도 팔지도 않으므로 제한이 필요 없다."""
-    monkeypatch.setattr(hb, '_exists', lambda odno: False)
+    monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: False)
     calls = _stub_sync(monkeypatch, _plan_with_buy())
 
     res = hb.sync_account(holdings=[_holding()], register_restrictions=False)
@@ -239,7 +239,7 @@ def test_sync_does_not_restrict_on_the_manual_account(monkeypatch):
 
 def test_sync_does_not_restrict_records_that_were_already_there(monkeypatch):
     """이미 기록돼 있던 매수는 새 외부 매수가 아니다 — 제한을 새로 걸면 안 된다."""
-    monkeypatch.setattr(hb, '_exists', lambda odno: True)
+    monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: True)
     calls = _stub_sync(monkeypatch, _plan_with_buy())
 
     res = hb.sync_account(holdings=[_holding()], register_restrictions=True)
@@ -249,7 +249,7 @@ def test_sync_does_not_restrict_records_that_were_already_there(monkeypatch):
 def test_sync_reports_partial_restorations(monkeypatch):
     plans = _plan_with_buy()
     plans[0]['missing'] = 6
-    monkeypatch.setattr(hb, '_exists', lambda odno: False)
+    monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: False)
     _stub_sync(monkeypatch, plans)
 
     res = hb.sync_account(holdings=[_holding()])
@@ -325,7 +325,7 @@ def _own_accept_row(stop_loss_rate=-9.5, type_str="매수"):
 
 def test_an_order_we_placed_is_not_external_even_without_a_fill_record(monkeypatch):
     """[핵심] 접수 기록만 남은 자기 주문 — 제한을 걸면 그 포지션의 손절이 멈춘다."""
-    monkeypatch.setattr(hb, '_exists', lambda odno: False)
+    monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: False)
     monkeypatch.setattr(hb.db_manager.db, 'get_trade_by_odno',
                         lambda odno: _own_accept_row())
     calls = _stub_sync(monkeypatch, _plan_with_buy())
@@ -337,7 +337,7 @@ def test_an_order_we_placed_is_not_external_even_without_a_fill_record(monkeypat
 
 def test_an_external_app_order_is_still_external(monkeypatch):
     """[대조군] 외부 앱(MTS/HTS) 주문도 접수 기록이 생긴다 — 그건 우리 주문이 아니다."""
-    monkeypatch.setattr(hb, '_exists', lambda odno: False)
+    monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: False)
     monkeypatch.setattr(hb.db_manager.db, 'get_trade_by_odno',
                         lambda odno: _own_accept_row(type_str="매수(외부)"))
     calls = _stub_sync(monkeypatch, _plan_with_buy())
@@ -348,7 +348,7 @@ def test_an_external_app_order_is_still_external(monkeypatch):
 
 def test_an_unknown_order_is_external(monkeypatch):
     """[대조군] 주문 기록이 아예 없으면 외부다(종전 판정과 같다)."""
-    monkeypatch.setattr(hb, '_exists', lambda odno: False)
+    monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: False)
     monkeypatch.setattr(hb.db_manager.db, 'get_trade_by_odno', lambda odno: None)
     calls = _stub_sync(monkeypatch, _plan_with_buy())
 
@@ -358,7 +358,7 @@ def test_an_unknown_order_is_external(monkeypatch):
 def test_recovered_own_fill_keeps_its_stop_loss_rate(monkeypatch):
     """복원 기록이 '(외부)'로 남으면 진입 시 손절률이 사라져 청산 기준이 폴백으로 내려간다."""
     written = []
-    monkeypatch.setattr(hb, '_exists', lambda odno: False)
+    monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: False)
     monkeypatch.setattr(hb.db_manager.db, 'get_trade_by_odno',
                         lambda odno: _own_accept_row(stop_loss_rate=-9.5))
     monkeypatch.setattr(hb.db_manager.db, 'insert_trade',
@@ -376,7 +376,7 @@ def test_recovered_own_fill_keeps_its_stop_loss_rate(monkeypatch):
 def test_recovered_external_fill_stays_labelled_external(monkeypatch):
     """[대조군] 진짜 외부 체결은 '(외부)' 딱지와 복원 사유를 그대로 유지한다."""
     written = []
-    monkeypatch.setattr(hb, '_exists', lambda odno: False)
+    monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: False)
     monkeypatch.setattr(hb.db_manager.db, 'get_trade_by_odno', lambda odno: None)
     monkeypatch.setattr(hb.db_manager.db, 'insert_trade',
                         lambda *a, **k: written.append((a, k)) or True)

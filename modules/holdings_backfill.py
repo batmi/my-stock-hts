@@ -146,11 +146,20 @@ def plan(holdings, cano=None, acnt_prdt_cd=None, months=12):
     return out
 
 
-def _exists(odno):
+def _exists(odno, on_date=None):
+    """이 체결이 이미 기록돼 있는가.
+
+    [날짜와 함께 본다 · 2026-09-05] 증권사 주문번호는 **당일 채번**이라 매일 0부터 다시
+     올라간다(core.utils.order_age_seconds·db_manager.check_trade_exists 주석 참조).
+     복원 구간은 최대 12개월이라 그 안에서 같은 번호가 여러 번 나온다 — 전체 이력에서
+     찾으면 **다른 날의 같은 번호 때문에 진짜 체결이 '이미 있음'으로 건너뛰어진다**.
+     그러면 그 종목의 평단·진입일·손절률이 복원되지 않는다.
+     on_date 는 그 체결이 실제로 저장될 날짜('YYYY-MM-DD')다.
+    """
     if not odno:
         return False
     try:
-        return bool(db_manager.db.check_trade_exists(odno, "체결"))
+        return bool(db_manager.db.check_trade_exists(odno, "체결", on_date=on_date))
     except Exception:
         return False
 
@@ -190,7 +199,8 @@ def apply(plans, cano=None, acnt_prdt_cd=None):
     with utils.AccountContext(target):
         for p in plans:
             for r in p['records']:
-                if _exists(r['odno']):
+                #  r['time'] 은 'YYYY-MM-DD HH:MM:SS' — 저장될 날짜와 같은 값이다.
+                if _exists(r['odno'], on_date=str(r.get('time') or '')[:10] or None):
                     skipped += 1
                     continue
                 # 우리가 낸 주문인데 체결 기록만 빠진 경우 — '(외부)'로 적으면 통계도

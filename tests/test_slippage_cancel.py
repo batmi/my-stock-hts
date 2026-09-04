@@ -39,7 +39,8 @@ def test_buy_slippage(mock_adjust, mock_get_price, mock_fetch_qty, mock_place, m
     expected_price = 10020 # 10000 * (1 + 0.002)
     
     # adjust_to_tick은 입력값을 그대로 정수로 반환하도록 설정
-    mock_adjust.side_effect = lambda x, is_overseas: int(round(x))
+    #  ETF·ETN 은 호가 격자가 달라 is_etf 를 함께 받는다(core.utils.get_tick_size).
+    mock_adjust.side_effect = lambda x, is_overseas, is_etf=False: int(round(x))
     mock_fetch_qty.return_value = 10 # 매수 가능 수량
     mock_place.return_value = {'rt_cd': '0', 'output': {'ODNO': '12345'}}
     
@@ -90,7 +91,8 @@ def test_sell_slippage(mock_adjust, mock_chart, mock_fetch_qty, mock_place, mock
     current_price = 10000
     expected_price = 9980 # 10000 * (1 - 0.002)
     
-    mock_adjust.side_effect = lambda x, is_overseas: int(round(x))
+    #  ETF·ETN 은 호가 격자가 달라 is_etf 를 함께 받는다(core.utils.get_tick_size).
+    mock_adjust.side_effect = lambda x, is_overseas, is_etf=False: int(round(x))
     mock_fetch_qty.return_value = 10 # 매도 가능 수량
     mock_place.return_value = {'rt_cd': '0', 'output': {'ODNO': '67890'}}
     mock_chart.return_value = None 

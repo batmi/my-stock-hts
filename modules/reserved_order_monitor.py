@@ -696,7 +696,11 @@ class ReservedOrderMonitor:
                         if curr > 0:
                             slippage = getattr(config, 'SLIPPAGE_RATE', 0.002)
                             adj_price = curr * (1 + slippage) if order['order_type'] == 'buy' else curr * (1 - slippage)
-                            curr = utils.adjust_to_tick(adj_price, is_overseas=False)
+                            #  ETF·ETN 은 호가 격자가 다르다(2,000원 이상 5원 단일).
+                            #  주권 표로 반올림하면 주문가가 최대 tick/2 만큼 어긋난다.
+                            curr = utils.adjust_to_tick(
+                                adj_price, is_overseas=False,
+                                is_etf=api.is_domestic_etf_etn(order['code'], order.get('stock_name')))
                         price_str = str(int(curr)) if curr > 0 else "0"
                     else:
                         ord_dvsn = "01"

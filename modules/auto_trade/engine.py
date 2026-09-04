@@ -1998,8 +1998,11 @@ class OrderManager:
                     self._track_open_order(code, odno)
 
                     try:
-                        ord_dt = datetime.strptime(f"{now.strftime('%Y%m%d')}{ord_time_str}", "%Y%m%d%H%M%S")
-                        elapsed = (now - ord_dt).total_seconds()
+                        #  산식은 core.utils 가 단독 보유한다 — 자정을 넘기면 '오늘 날짜 +
+                        #  HHMMSS' 가 미래가 되어 경과 초가 음수가 되고, 미체결이 영원히
+                        #  자동 취소되지 않는다(그 종목은 is_pending 이라 손절 판정에서도 빠진다).
+                        elapsed = utils.order_age_seconds(ord_time_str, now,
+                                                          ord_dt=item.get('ord_dt'))
                         
                         if elapsed >= cancel_seconds:
                             # [추가] 외부에서 들어온 주문은 시스템이 자동 취소(타임아웃)하지 않도록 보호

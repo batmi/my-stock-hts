@@ -70,6 +70,24 @@ def _recalc_realized(origin_trade, fill_price, fill_qty, is_overseas, fallback_a
         return fallback_amt, fallback_rate
 
 
+def _odno_scope_date(item, trade_time_str=None):
+    """이 체결 행이 저장될 날짜('YYYY-MM-DD').
+
+    증권사 주문번호는 **당일 채번**이라 날짜와 짝지어야 유일하다(ConclusionMonitor
+    `_purge_stale_order_keys` 주석 참조). 중복 판정은 그날 안에서만 해야 한다.
+
+    [주의] 저장 일자는 `ord_dt` 가 아니라 **실제로 쓰는 시각**을 따른다 — 체결 시각이
+     원 주문 접수 시각보다 과거로 오면(거래소 서버 시간 역전) 접수 시각으로 당겨서
+     저장하기 때문이다. 판정 일자와 저장 일자가 어긋나면 같은 체결이 두 번 적재된다.
+    """
+    if trade_time_str and len(str(trade_time_str)) >= 10:
+        return str(trade_time_str)[:10]
+    ord_dt = str((item or {}).get('ord_dt') or '')
+    if len(ord_dt) == 8 and ord_dt.isdigit():
+        return f"{ord_dt[:4]}-{ord_dt[4:6]}-{ord_dt[6:]}"
+    return datetime.now().strftime('%Y-%m-%d')
+
+
 def _pkg():
     """패키지(modules.auto_trade) 네임스페이스 접근자.
 
@@ -269,6 +287,29 @@ class ConclusionMonitor:
             self.event.wait(wait_time)
             self.event.clear()
 
+    #  체결·취소 추적 캐시에 남겨 둘 일자 수. 오늘과 어제만 있으면 된다 — 자정을 넘겨
+    #  걸쳐 있는 주문(야간 해외)까지만 덮으면 충분하고, 그 이상은 램만 먹는다.
+    ORDER_KEY_KEEP_DAYS = 2
+
+    def _purge_stale_order_keys(self, today_str):
+        """주문 추적 캐시에서 오래된 일자의 키를 버린다.
+
+        키에 날짜가 들어가면서 캐시가 날마다 새로 쌓인다. 운영기는 램 1GB 라즈베리파이라
+        (OOM 킬 이력이 있다) 무한히 늘어나게 두지 않는다. 종전 키는 날짜가 없어 늘지 않는
+        대신 **어제 번호와 충돌**했다 — 둘 다 해결한다.
+        """
+        try:
+            keep = {(datetime.strptime(today_str, '%Y%m%d') - timedelta(days=i)).strftime('%Y%m%d')
+                    for i in range(self.ORDER_KEY_KEEP_DAYS)}
+        except (TypeError, ValueError):
+            return
+        with self._lock:
+            for cache in (self.order_status, self.cancel_status):
+                stale = [k for k in cache
+                         if isinstance(k, tuple) and len(k) == 3 and k[1] not in keep]
+                for k in stale:
+                    del cache[k]
+
     def _check_conclusions(self, initial=False):
         """금일 체결 내역을 확인하고 로그에 기록 (모든 활성 계좌 대상)"""
         # [관찰 모드] 가상 주문은 증권사에 나가지 않으므로 KIS 체결내역 API로 대사할 수 없다.
@@ -389,9 +430,21 @@ class ConclusionMonitor:
                             tot_ccld_qty = ccld_qty
                             tot_cncl_qty = cncl_qty  # [추가] 취소 수량 누적치
                             
-                            order_key = f"{cano}-{odno}"
+                            # [주문번호는 날짜와 함께여야 유일하다 · 2026-09-04]
+                            #  KIS 주문번호(odno)는 **당일 채번**이라 매일 0부터 다시 올라간다
+                            #  (실거래 기록 실측: 날짜순으로 정렬해도 번호가 19번 중 7번 작아지고,
+                            #   하루 안에서는 단조 증가한다). 종전 키 `cano-odno` 는 날짜가 없어
+                            #  어제 100주 체결된 번호가 오늘 10주짜리 새 주문으로 재등장하면
+                            #  `10 > 100` 이 거짓이 되어 **오늘 체결이 통째로 누락**된다
+                            #  (DB 기록·텔레그램·수동매매 제한 등록·제한 해제까지 전부).
+                            #  캐시가 프로세스 수명 내내 커지던 것도 함께 없앤다 — 운영기는 램 1GB다.
+                            key_date = str(item.get('ord_dt') or '') or datetime.now().strftime('%Y%m%d')
+                            #  튜플 키다 — 토스 주문번호에는 '-' 가 들어 있어 문자열로 이으면
+                            #  날짜 자리를 다시 갈라낼 수 없다.
+                            order_key = (cano, key_date, odno)
+                            self._purge_stale_order_keys(key_date)
                             prev_qty = self.order_status.get(order_key, 0)
-                            
+
                             if not hasattr(self, 'cancel_status'): self.cancel_status = {}
                             prev_cncl_qty = self.cancel_status.get(order_key, 0)
                             
@@ -741,7 +794,14 @@ class ConclusionMonitor:
                                     self.order_status[order_key] = tot_ccld_qty
                                 
                                 # DB 저장
-                                if not db_manager.db.check_trade_exists(odno, "체결"):
+                                #  odno 는 당일 채번이라 날짜 없이는 유일하지 않다(위 order_key 주석).
+                                #  전체 이력에서 찾으면 몇 달 전 같은 번호 때문에 오늘 체결이
+                                #  '이미 있음'으로 판정돼 DB 에 영영 남지 않는다.
+                                #  판정 일자는 **이 행이 실제로 저장될 일자**여야 한다 —
+                                #  trade_time_str 은 위에서 시간 역전 보정을 거치므로 ord_dt 와
+                                #  다를 수 있고, 어긋나면 같은 체결이 두 번 적재된다.
+                                if not db_manager.db.check_trade_exists(
+                                        odno, "체결", on_date=_odno_scope_date(item, trade_time_str)):
                                     if config.FILE_DEBUG_LEVEL == "DEBUG":
                                         logger.debug(f"[ORDER_DEBUG] DB 저장 시도: {odno}")
                                         logger.debug(f"[AutoTrade] 신규 체결 DB 저장 시도: {odno} ({name})")
@@ -924,7 +984,9 @@ class ConclusionMonitor:
             exists_check = False
             try:
                 # 큐를 통해 순차 처리되므로 별도의 락이나 재시도 불필요
-                exists_check = db_manager.db.check_trade_exists(odno, "체결") or db_manager.db.check_trade_exists(odno, "체결(추정)")
+                today = datetime.now().strftime('%Y-%m-%d')
+                exists_check = (db_manager.db.check_trade_exists(odno, "체결", on_date=today)
+                                or db_manager.db.check_trade_exists(odno, "체결(추정)", on_date=today))
                 if config.FILE_DEBUG_LEVEL == "DEBUG":
                     logger.debug(f"[ORDER_DEBUG] 체결 내역 존재 여부: {exists_check}")
             except Exception as e:

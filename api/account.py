@@ -489,11 +489,21 @@ def get_domestic_open_orders(cano=None, acnt_prdt_cd=None):
     }
         
     res = _api().call_api(url, "domestic", "inquiry", "open_orders", params=params, tr_id=tr_id)
-        
+
     if res.get('rt_cd') == '0':
         return res.get('output', [])
-            
-    return []
+
+    # [조회 실패는 '미체결 없음'이 아니다 · 2026-09-05] 종전에는 실패도 [] 였다.
+    #  호출부는 그 구분에 기대 중복 주문을 막는다 —
+    #    · OrderManager.restore_pending_orders : None 이면 False 를 돌려 기동 직후
+    #      pending_restore_ok 를 내린다(신규 매수·피라미딩 보류).
+    #    · manage_unfilled_orders : `unfilled_list is not None` 일 때만 그 게이트를 푼다.
+    #  둘 다 None 을 기다리는데 이 함수가 절대 None 을 주지 않아, **게이트가 첫 주기에
+    #  무조건 풀렸다**. 조회가 실패하는 동안에도 시스템은 '미체결 없음'으로 믿고 신규
+    #  주문을 낸다 — 거래소에 이미 걸린 주문을 못 본 채 두 번째를 내는 자리다.
+    logger.warning(f"[미체결] 국내 미체결 조회 실패 — '없음'이 아니라 '모름'으로 돌려준다: "
+                   f"{res.get('msg_cd')} {res.get('msg1')}")
+    return None
 
 def get_overseas_open_orders(cano=None, acnt_prdt_cd=None):
     """해외주식 미체결 내역 조회"""
@@ -504,6 +514,7 @@ def get_overseas_open_orders(cano=None, acnt_prdt_cd=None):
         return _api()._toss_open_orders('overseas')
     cano, acnt_prdt_cd = _api()._prepare_account_params(cano, acnt_prdt_cd)
     all_orders = []
+    ok_any = False      # 거래소 하나라도 읽었는가 (전부 실패면 '없음'이 아니라 '모름')
     # [수정] 실전 투자 시에도 모든 거래소 조회 (NYSE, AMEX 누락 방지)
     # 단, API 호출 횟수가 늘어나므로 Rate Limit 주의 필요
     target_exchanges = ["NASD", "NYSE", "AMEX"]
@@ -519,9 +530,18 @@ def get_overseas_open_orders(cano=None, acnt_prdt_cd=None):
             
         res = _api().call_api(constants.API_URLS["OVERSEAS"]["INQUIRY"]["OPEN_ORDERS"], "overseas", "inquiry", "open_orders", params=params)
         if res.get('rt_cd') == '0':
+            ok_any = True
             orders = res.get('output', [])
             if orders:
                 for o in orders:
                     if not o.get('ovrs_excg_cd'): o['ovrs_excg_cd'] = exc
                 all_orders.extend(orders)
+        else:
+            logger.warning(f"[미체결] 해외 미체결 조회 실패({exc}): "
+                           f"{res.get('msg_cd')} {res.get('msg1')}")
+
+    #  거래소 셋 중 하나도 못 읽었으면 '없음'이 아니라 '모름'이다(국내와 같은 규약).
+    #  일부만 실패한 경우는 읽은 만큼 돌려준다 — 그쪽 거래소 주문은 실제로 확인됐다.
+    if not ok_any:
+        return None
     return all_orders

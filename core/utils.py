@@ -635,14 +635,73 @@ def inherit_account_context(fn):
     return _wrapped
 
 
-def get_tick_size(price, is_overseas=False):
-    """호가 단위(Tick Size) 반환"""
+def order_age_seconds(ord_tmd, now=None, ord_dt=None):
+    """주문 시각으로부터 흐른 초. 시각을 못 읽으면 inf(=창 밖, 보수적).
+
+    ord_tmd: 'HHMMSS'  /  ord_dt: 'YYYYMMDD'(있으면 이쪽이 정확하다)
+
+    [자정을 넘기면 부호가 뒤집힌다 · 2026-09-04] 증권사 미체결·주문내역의 `ord_tmd` 는
+     **시각만** 준다. 종전에는 두 곳이 각자 '오늘 날짜 + HHMMSS' 로 시각을 복원했는데,
+     00:0x 에 어제 23:5x 주문을 읽으면 그 시각이 **미래**가 되어 경과 초가 -86,000 초쯤이
+     된다. 부호가 뒤집힌 값이 두 곳에서 정반대의 사고를 냈다:
+
+       · engine.manage_unfilled_orders — `elapsed >= cancel_seconds` 가 거짓이 되어
+         **미체결이 영원히 자동 취소되지 않는다**(그 종목은 is_pending 이라 손절 판정에서도 빠진다).
+       · api._reconcile_unknown_order — `age > WINDOW` 가 거짓이 되어 창을 통과한다.
+         응답 유실 대사에서 **어제 주문을 이번 주문으로 이어받는다**(그 함수가 막으려던 바로 그 일).
+
+     여기서는 복원한 시각이 미래면 전날로 본다. ord_dt 를 주면 추측 자체가 필요 없다
+     (토스 어댑터는 ISO 타임스탬프에서 ord_dt 를 함께 만든다).
+    """
+    now = now or datetime.now()
+    tmd = str(ord_tmd or '').strip()
+    if len(tmd) != 6 or not tmd.isdigit():
+        return float('inf')
+
+    day = str(ord_dt or '').strip()
+    try:
+        if len(day) == 8 and day.isdigit():
+            placed = datetime.strptime(f"{day}{tmd}", "%Y%m%d%H%M%S")
+        else:
+            placed = now.replace(hour=int(tmd[:2]), minute=int(tmd[2:4]),
+                                 second=int(tmd[4:]), microsecond=0)
+            if placed > now:
+                placed -= timedelta(days=1)      # 자정을 넘겼다
+    except ValueError:
+        return float('inf')
+    return (now - placed).total_seconds()
+
+
+def get_tick_size(price, is_overseas=False, is_etf=False):
+    """호가 단위(Tick Size) 반환.
+
+    [ETF·ETN 은 격자가 다르다 · 2026-09-04] 주권은 가격대별 7단계지만 ETF·ETN 은
+     **2,000원 미만 1원 / 2,000원 이상 5원** 두 단계다. 종전에는 ETF 에도 주권 표를
+     썼고, 2,000~5,000 구간만 우연히(5원) 맞았다.
+
+     KRX 원본 종가로 실측(pykrx, ETF 11종·2024-01~2026-09·7,161일):
+       가격대            5원 배수   10원 배수
+       0~2,000             18.8%       8.6%   → 1원 격자(무작위 수준)
+       2,000~5,000        100.0%      50.8%   → 5원 격자
+       5,000~20,000       100.0%      53.3%   → 5원 격자 (코드는 10원)
+       20,000~50,000      100.0%      56.6%   → 5원 격자 (코드는 50원)
+       50,000~200,000     100.0%      57.1%   → 5원 격자 (코드는 100원)
+       200,000~           100.0%      69.2%   → 5원 격자 (코드는 500원)
+     대조군 삼성전자(주권)는 같은 기간 50·500원 배수 100%로 주권 표와 일치했다.
+
+     주권 표는 ETF 격자의 배수라 주문이 거부되지는 않는다. 대신 **주문가가 최대
+     tick/2 만큼 어긋난다**(KODEX 200 기준 50원, KODEX 삼성그룹 25원 ≈ 0.05~0.11%).
+     반올림은 양방향이라, 손절 매도 지정가가 위로 밀리면 체결이 늦어진다.
+    """
     if not isinstance(price, (int, float)):
         return 0  # 숫자가 아니면 0을 반환
 
     if is_overseas:
         return 0.01
-    
+
+    if is_etf:
+        return 1 if price < 2000 else 5
+
     if price < 2000: return 1
     if price < 5000: return 5
     if price < 20000: return 10
@@ -651,9 +710,13 @@ def get_tick_size(price, is_overseas=False):
     if price < 500000: return 500
     return 1000
 
-def adjust_to_tick(price, is_overseas=False):
-    """가격을 호가 단위에 맞춰 반올림 보정"""
-    tick = get_tick_size(price, is_overseas)
+def adjust_to_tick(price, is_overseas=False, is_etf=False):
+    """가격을 호가 단위에 맞춰 반올림 보정.
+
+    is_etf: 국내 ETF·ETN 이면 True (판정은 `api.is_domestic_etf_etn`). core 계층은
+     api 를 import 하지 않으므로 호출부가 넘긴다 — is_overseas 와 같은 규약이다.
+    """
+    tick = get_tick_size(price, is_overseas, is_etf)
     if not isinstance(price, (int, float)):
         return 0  # 숫자가 아니면 0을 반환
 

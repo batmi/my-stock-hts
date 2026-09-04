@@ -17,6 +17,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 import config
 import api
 from core import utils
+from modules.manage.scan import ScanFailures
 
 logger = logging.getLogger(__name__)
 
@@ -318,11 +319,14 @@ def _gather_watchlist():
     return kr, us
 
 
-def _collect_watchlist_events(kr, us, on_progress=None):
+def _collect_watchlist_events(kr, us, on_progress=None, failures=None):
     """관심종목 배당/실적 일정 수집 → (예정 일정, 국내 배당 행).
 
     화면 출력(show_calendar)과 텔레그램(build_telegram_message)이 같은 자료를 쓰도록
     수집만 떼어냈다. on_progress는 작업 하나가 끝날 때마다 호출된다(진행률 표시용).
+
+    failures(ScanFailures)를 주면 종목별 조회 실패를 거기에 모은다 — 배당락일을
+    '조회 실패'로 놓치면 배당락 직전 매수처럼 그날만 가능한 조치를 통째로 못 한다.
     """
     events, kr_rows = [], []
 
@@ -336,11 +340,15 @@ def _collect_watchlist_events(kr, us, on_progress=None):
             futures[ex.submit(_collect_us, code, name)] = ("us", code)
 
         for fut in concurrent.futures.as_completed(futures):
-            kind, _ = futures[fut]
+            kind, fcode = futures[fut]
             try:
                 res = fut.result()
-            except Exception:
+            except Exception as e:      # noqa: BLE001 - 일부라도 보여 주되 실패는 밝힌다
                 res = None
+                if failures is not None:
+                    failures.record(fcode, e)
+                else:
+                    logger.debug(f"[캘린더] {fcode} 조회 실패: {e}")
             if res:
                 if kind == "kr":
                     kr_rows.append(res)
@@ -401,13 +409,17 @@ def build_telegram_message(days=30):
         lines.append("  등록된 관심종목이 없습니다.")
         return "\n".join(lines)
 
-    events, _ = _collect_watchlist_events(kr, us)
+    failures = ScanFailures("캘린더")
+    events, _ = _collect_watchlist_events(kr, us, failures=failures)
     horizon = today + timedelta(days=days)
     upcoming = sorted([e for e in events if today <= e["date"] <= horizon], key=lambda e: e["date"])
 
     lines.append("▸ 예정 일정 (관심종목 배당·실적)")
     if kr and not config.DART_API_KEY:
         lines.append("  ※ DART API 키가 없어 국내 배당 정보는 조회되지 않습니다.")
+    fail_note = failures.telegram_note()
+    if fail_note:
+        lines.append(f"  {fail_note}")
     if not upcoming:
         lines.append("  표시할 예정 일정이 없습니다.")
         return "\n".join(lines)
@@ -496,10 +508,17 @@ def check_and_alert_calendar(lead_days=ALERT_LEAD_DAYS):
 
     kr, us = _gather_watchlist()
     if kr or us:
+        #  경보 경로는 화면이 없다 — 조회 실패는 로그로 드러낸다. 종목 하나가 계속
+        #  실패하면 그 종목의 배당락 알림이 영영 안 나가기 때문이다.
+        failures = ScanFailures("캘린더")
         try:
-            events, _ = _collect_watchlist_events(kr, us)
-        except Exception:
+            events, _ = _collect_watchlist_events(kr, us, failures=failures)
+        except Exception as e:      # noqa: BLE001
+            logger.warning(f"[Calendar] 관심종목 일정 수집 실패 — 이번 주기 종목 알림 없음: {e}")
             events = []
+        if failures:
+            logger.warning(f"[Calendar] {len(failures)}개 종목을 조회하지 못했습니다 "
+                           f"({', '.join(list(failures.failed)[:5])}) — 그 종목의 일정 알림은 빠집니다.")
         for e in events:
             gap = (e["date"] - today).days
             is_alert = (gap in lead_days)
@@ -568,14 +587,20 @@ def show_calendar():
     if kr and not config.DART_API_KEY:
         config.console.print("[dim yellow]※ DART API 키가 설정되지 않아 국내 배당 정보는 조회되지 않습니다. (환경변수 DART_API_KEY)[/dim yellow]\n")
 
+    failures = ScanFailures("캘린더")
     with Progress(
         SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
         BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%"), console=config.console, transient=True
     ) as progress:
         total = (len(kr) * 2 if config.DART_API_KEY else 0) + len(us)
         task = progress.add_task("[cyan]예정 일정 조회 중...[/cyan]", total=total)
-        events, kr_rows = _collect_watchlist_events(kr, us, on_progress=lambda: progress.advance(task))
+        events, kr_rows = _collect_watchlist_events(
+            kr, us, on_progress=lambda: progress.advance(task), failures=failures)
         progress.update(task, completed=total)
+
+    #  '조회 실패'를 '일정 없음'으로 읽게 두지 않는다. 배당락일을 놓치면 그날만 가능한
+    #  조치(배당락 직전 매수 등)를 통째로 못 한다.
+    failures.announce()
 
     _print_report_deadline()
     _render_upcoming(events)

@@ -547,7 +547,9 @@ def schedule_buy_restriction_cleanup(code, cano, acnt, is_overseas=False,
                 # 체결 기록이 있으면 확정이다(잔고 조회보다 정확하고 싸다).
                 if odno:
                     try:
-                        if db_manager.db.check_trade_exists(odno, "체결"):
+                        #  방금 낸 주문을 쫓는 중이다 — 오늘 것만 본다(odno 는 당일 채번).
+                        if db_manager.db.check_trade_exists(
+                                odno, "체결", on_date=datetime.now().strftime('%Y-%m-%d')):
                             return
                     except Exception:
                         pass

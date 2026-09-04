@@ -5340,7 +5340,10 @@ class AutoTrader:
                 if thresholds.get("ATR_APPLIED_SL_RATE") is not None and "손절" in reason: reason = reason.replace("손절", "ATR손절")
                 
                 raw_order_price = current_price * (1 - config.SLIPPAGE_RATE)
-                order_price = int(utils.adjust_to_tick(raw_order_price, is_overseas=False))
+                #  ETF·ETN 은 호가 격자가 다르다(2,000원 이상 5원 단일). 주권 표로
+                #  반올림하면 손절 지정가가 최대 tick/2 위로 밀려 체결이 늦어진다.
+                order_price = int(utils.adjust_to_tick(raw_order_price, is_overseas=False,
+                                                       is_etf=is_domestic_etf))
                 if order_price <= 0: order_price = int(current_price)
                 # [안전장치] 하한가에 락된 날 '현재가 - 슬리피지'는 제한폭 밖이라 주문이 거부된다.
                 #  손절이 가장 필요한 날 접수조차 되지 않으므로 제한폭 안으로 되돌린다.
@@ -5556,7 +5559,9 @@ class AutoTrader:
                 return
 
             raw_order_price = current_price * (1 + config.SLIPPAGE_RATE)
-            order_price = int(utils.adjust_to_tick(raw_order_price, is_overseas=False))
+            order_price = int(utils.adjust_to_tick(
+                raw_order_price, is_overseas=False,
+                is_etf=api.is_domestic_etf_etn(code, name)))
             if order_price <= 0:
                 order_price = int(current_price)
             # [안전장치] 상한가에 락되면 '현재가 + 슬리피지'가 제한폭을 넘어 거부된다.
@@ -6532,7 +6537,9 @@ class AutoTrader:
 
             # [수정] 슬리피지 비율 적용 및 호가 정렬 (체결 확률 증대)
             raw_order_price = current_price * (1 + config.SLIPPAGE_RATE)
-            order_price = int(utils.adjust_to_tick(raw_order_price, is_overseas=False))
+            order_price = int(utils.adjust_to_tick(
+                raw_order_price, is_overseas=False,
+                is_etf=api.is_domestic_etf_etn(cand['code'], cand.get('name'))))
             # [안전장치] 상한가에 락되면 '현재가 + 슬리피지'가 제한폭을 넘어 거부된다.
             order_price = int(self._clamp_order_price(cand['code'], order_price))
 

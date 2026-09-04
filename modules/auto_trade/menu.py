@@ -171,6 +171,70 @@ def _view_stock_rules():
             table.add_section()
     console.print(table)
 
+# [입력 검증] 개별 종목 룰의 허용 범위. (min, max, 0을 '미사용'으로 허용하는가, 안내문)
+#
+#  [왜 여기도 필요한가 · 2026-09-04] 전역 설정은 2026-07-26 감사에서 두 겹으로 막았다 —
+#   범위 검증(settings._RANGE_RULES)과 잠금(settings.BACKTESTED_HIDDEN_KEYS). 그 잠금
+#   주석에 그때 실측한 사고가 그대로 적혀 있다: "부호를 +로 잘못 넣어도 통과하던
+#   자리다(실측: +5.0 입력 수용)".
+#   그런데 **개별 종목 룰은 같은 다이얼을 전역보다 우선해 덮어쓰면서**
+#   (engine.build_sell_thresholds) 검증이 하나도 없었다. 잠근 문 옆에 잠기지 않은 문이
+#   있었던 셈이다.
+#
+#  실증(2026-09-04): 룰에 use_atr_stop=0, stop_loss=+7 을 넣으면 STOP_LOSS_RATE 가 +7.0 로
+#   들어가고, analyze_sell 이 **+4.3% 수익 포지션**을 "손절(4.3%)"로 즉시 청산한다. 즉
+#   부호 하나로 전 종목이 소폭 이익·손실에서 전량 정리되고, 매매 기록에는 손절로 남는다.
+#   use_atr_stop=1 이어도 매수 기록이 없는 포지션(HTS 직접 매수)은 같은 경로를 탄다.
+#   sell_score=99 는 점수가 늘 그 아래라 보유 전 종목을 즉시 청산한다.
+#
+#  범위는 전역 _RANGE_RULES 와 같은 폭으로 잡되, 전역에 없는 것은 '부호와 물리적 의미'만
+#  건다 — 정상적인 튜닝은 막지 않는다.
+_RULE_RANGES = {
+    "buy_score":           (3.0, 10.0, False, "매수 게이트가 사라지거나 도달 불가한 값입니다"),
+    "buy_rsi":             (55.0, 95.0, False, "55 미만은 점수 게이트와 충돌해 진입이 고갈됩니다"),
+    "buy_vol_strength":    (0.0, 300.0, True, None),
+    "buy_ask_bid_ratio":   (0.0, 10.0, True, None),
+    "sell_score":          (0.0, 10.0, True, "점수는 0~10입니다. 10을 넘기면 보유 종목이 즉시 전량 청산됩니다"),
+    #  손절은 **음수**다. 양수를 넣으면 그 수익률 아래의 포지션이 전부 '손절'로 청산된다.
+    "stop_loss":           (-50.0, 0.0, True, "손절률은 음수입니다(예: -7). 0은 미사용입니다"),
+    "take_profit":         (0.0, 500.0, True, "익절률은 양수입니다. 0은 미사용입니다"),
+    "take_profit_rsi":     (0.0, 100.0, True, "RSI는 0~100입니다. 0은 미사용입니다"),
+    "ts_activation":       (1.0, 30.0, False, "30% 초과는 트레일링 스탑을 사실상 비활성화합니다"),
+    "ts_callback":         (0.5, 50.0, False, "콜백은 양수입니다(최고가 대비 하락률)"),
+    "time_stop_days":      (0, 365, True, "0은 미사용입니다"),
+    "atr_stop_multiplier": (0.5, 10.0, True, "ATR 배수는 양수입니다. 0은 미사용입니다"),
+}
+
+
+def rule_range_error(key, value, current=None):
+    """개별 룰 입력이 허용 범위를 벗어나면 안내문, 통과하면 None.
+
+    current(기존 저장값)와 같은 값은 통과시킨다 — 옛 설정이 범위 밖이면 Enter 만 눌러도
+    거부돼 메뉴를 빠져나갈 수 없기 때문이다. 다만 화면에는 그 사실을 알린다.
+    """
+    rule = _RULE_RANGES.get(key)
+    if not rule:
+        return None
+    lo, hi, allow_zero, why = rule
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if allow_zero and v == 0:
+        return None
+    if lo <= v <= hi:
+        return None
+    if current is not None:
+        try:
+            if float(current) == v:
+                return None     # 기존 값 그대로 — 막지 않는다
+        except (TypeError, ValueError):
+            pass
+    bound = f"{lo:g} ~ {hi:g}" + (" (0=미사용)" if allow_zero else "")
+    msg = f"허용 범위를 벗어났습니다: {bound} 이어야 합니다."
+    return f"{msg} {why}" if why else msg
+
+
 def _input_and_save_rule(code, name):
     """(내부함수) 룰 입력 및 저장 공통 로직"""
     utils.print_breadcrumb()
@@ -239,9 +303,21 @@ def _input_and_save_rule(code, name):
     class QuitInput(Exception): pass
 
     def ask_val(key, desc, help_text, type_func):
-        val = Prompt.ask(f"{desc} [dim](현재: {current[key]})\n[dim]{help_text}[/dim]", default=str(current[key]))
-        if val.lower() in ['b', 'q']: raise QuitInput()
-        return type_func(val)
+        while True:
+            val = Prompt.ask(f"{desc} [dim](현재: {current[key]})\n[dim]{help_text}[/dim]", default=str(current[key]))
+            if val.lower() in ['b', 'q']: raise QuitInput()
+            try:
+                parsed = type_func(val)
+            except ValueError:
+                console.print("[red]숫자를 입력하세요.[/red]")
+                continue
+            #  범위를 벗어나면 다시 묻는다. 전역 설정과 같은 폭으로 막는다 — 개별 룰은
+            #  전역을 덮어쓰므로 여기만 열려 있으면 잠금이 무의미하다(_RULE_RANGES 주석).
+            err = rule_range_error(key, parsed, current.get(key))
+            if err:
+                console.print(f"[red]{err}[/red]")
+                continue
+            return parsed
 
     try:
         console.print("\n[bold]1. 기본 매수 타점 설정[/bold]")
@@ -292,7 +368,16 @@ def _input_and_save_rule(code, name):
             f"0을 넣으면 전역 설정(현재 {auto_pct:.0f}%)을 따라갑니다 — 슬롯 수를 바꿔도 자동으로 맞춰집니다.[/dim]",
             default=str(int(curr_ratio_pct)))
         if val.lower() in ['b', 'q']: raise QuitInput()
-        new_strategy['invest_ratio'] = max(0.0, float(val) / 100.0)
+        #  상한을 건다 — 종전에는 하한만 있어 500(=자산의 500%)이 그대로 저장됐다.
+        try:
+            ratio_pct = float(val)
+        except ValueError:
+            ratio_pct = curr_ratio_pct
+            console.print("[red]숫자를 입력하세요 — 현재값을 유지합니다.[/red]")
+        if ratio_pct < 0 or ratio_pct > 100:
+            console.print("[red]투자 비중은 0~100% 입니다 — 현재값을 유지합니다.[/red]")
+            ratio_pct = curr_ratio_pct
+        new_strategy['invest_ratio'] = max(0.0, ratio_pct / 100.0)
 
         # [경고] 이 종목만 개별 비중을 지정하면 명목합이 100%를 넘을 수 있다 (차단하지 않음)
         if new_strategy['invest_ratio'] > 0:

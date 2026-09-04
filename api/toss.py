@@ -648,6 +648,14 @@ def _toss_domestic_balance():
             'pdno': it.get('symbol', ''),
             'prdt_name': it.get('name', ''),
             'hldg_qty': str(qty),
+            #  [필수 · 2026-09-05] 매도 워커(trader._sell_worker)는 이 값으로 게이트한다 —
+            #   `qty = safe_int(item.get('ord_psbl_qty'))` 가 0이면 그 종목은
+            #   '[분석스킵] 주문 가능 수량 0' 으로 빠져 **손절·트레일링 판정이 통째로
+            #   건너뛰어진다**. 종전에는 이 키가 없어(해외 어댑터에는 있었다) 토스 모드의
+            #   국내 보유 종목이 전부 무방비였다.
+            #   보유수량을 그대로 쓴다(해외 어댑터와 같은 규약). 미체결 매도로 묶인 물량은
+            #   발주 직전 api.fetch_sellable_quantity 가 다시 확인해 줄여 준다.
+            'ord_psbl_qty': str(qty),
             'pchs_avg_pric': str(avg_pric),
             # 토스는 매입금액을 주지 않는다 → KIS 형태를 맞추려 평단×수량으로 채운다(화면 0원 방지)
             'pchs_amt': str(int(qty * avg_pric)),
@@ -1225,8 +1233,10 @@ def _toss_open_orders(market):
     try:
         res = toss_api.get_orders(status="OPEN")
     except toss_api.TossApiError as e:
-        logger.error(f"[Toss] 미체결 조회 실패: {e}")
-        return []
+        #  조회 실패는 '미체결 없음'이 아니다 — None 이어야 호출부가 중복 주문 게이트를
+        #  내린다(api/account.get_domestic_open_orders 주석 참조).
+        logger.error(f"[Toss] 미체결 조회 실패 — '없음'이 아니라 '모름'으로 돌려준다: {e}")
+        return None
 
     orders = (res or {}).get('orders', []) or []
     want_krw = (market == 'domestic')
@@ -1521,10 +1531,20 @@ def _toss_buyable_qty(code, price, currency="KRW"):
 
 
 def _toss_sellable_qty(code):
-    """토스 매도가능수량."""
+    """토스 매도가능수량. **조회 실패는 None**(=알 수 없음)이다.
+
+    [실패와 '못 판다'를 가른다 · 2026-09-05] 종전에는 실패도 0을 돌려줬다. 호출부
+     (trader._sell_worker)는 0을 '팔 수 없는 상태'로 읽어 **매도를 중단**한다 —
+     일시적 조회 실패가 손절을 거르는 결과가 된다. KIS 경로는 같은 이유로 이미
+     None 을 돌려주도록 고쳐져 있었는데(api/quotes/price.fetch_sellable_quantity 주석)
+     토스 어댑터만 그대로였다. 추세추종에서 못 파는 비용은 못 사는 비용보다 훨씬 크다.
+     None 을 받으면 호출부가 잔고 수량으로 진행하고, 정말 못 파는 상태면 증권사가 거부한다.
+    """
     try:
         sq = toss_api.get_sellable_quantity(code)
     except toss_api.TossApiError as e:
         logger.debug(f"[Toss] 매도가능수량 조회 실패({code}): {e}")
-        return 0
-    return _toss_int((sq or {}).get('sellableQuantity'))
+        return None
+    if sq is None:
+        return None
+    return _toss_int(sq.get('sellableQuantity'))

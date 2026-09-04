@@ -1146,19 +1146,28 @@ class TelegramCommander:
 
         msg = "⏳ [미체결 주문 내역]\n"
         has_any_orders = False
-        
+        failed_scopes = []      # 조회 실패한 계좌·시장 ('없음'과 구분해 밝힌다)
+
         for cano, acnt, label in accounts:
             with utils.AccountContext(cano):
+                #  None = 조회 실패다. '미체결 없음'으로 답하면 운영자가 주문이 정리된
+                #  줄 알고 다시 낸다 — 실패는 실패라고 말한다.
                 try:
                     dom_orders = api.get_domestic_open_orders(cano, acnt)
                 except Exception as e:
                     logger.error(f"국내 미체결 조회 에러: {e}")
+                    dom_orders = None
+                if dom_orders is None:
+                    failed_scopes.append(f"{label} 국내")
                     dom_orders = []
-                    
+
                 try:
                     us_orders = api.get_overseas_open_orders(cano, acnt)
                 except Exception as e:
                     logger.error(f"해외 미체결 조회 에러: {e}")
+                    us_orders = None
+                if us_orders is None:
+                    failed_scopes.append(f"{label} 해외")
                     us_orders = []
                 
                 if dom_orders or us_orders:
@@ -1207,9 +1216,13 @@ class TelegramCommander:
                         price_str = f"${ord_unpr:,.2f}" if ord_unpr > 0 else "시장가"
                         msg += f"• [해외] {sll_buy} | {name}({pdno})\n  잔량: {rmn_qty}주 | 단가: {price_str} | No.{odno}\n"
         
-        if not has_any_orders:
+        if failed_scopes:
+            #  '없습니다'보다 먼저 밝힌다 — 실패를 '없음'으로 읽으면 중복 주문이 나간다.
+            msg += (f"\n⚠️ 조회에 실패한 곳이 있습니다: {', '.join(failed_scopes)}. "
+                    f"위 목록에는 빠져 있습니다 — '주문 없음'이 아닙니다.\n")
+        elif not has_any_orders:
             msg += "\n미체결 주문이 없습니다."
-            
+
         return msg.strip()
 
     def _cmd_reserves(self, args):

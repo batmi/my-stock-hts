@@ -16,6 +16,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 import config
 import api
 from core import utils
+from modules.manage.scan import ScanFailures
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,7 @@ def _task_done(progress, task):
     return int(t.completed) if t is not None else 0
 
 
-def _gather(codes, days, min_level, progress=None, task=None, quiet=False):
+def _gather(codes, days, min_level, progress=None, task=None, quiet=False, failures=None):
     """관심종목 공시를 병렬 수집.
 
     progress/task를 받으면 그 진행바에 이어서 진행한다(호출측이 '조회 → 상세' 여러 단계를
@@ -114,6 +115,10 @@ def _gather(codes, days, min_level, progress=None, task=None, quiet=False):
     quiet=True면 진행바를 아예 만들지 않는다. 텔레그램 명령처럼 **운영자 콘솔이 아닌
     곳에서 호출**되는 경로용이다 — 진행바는 config.console에 그려지므로, 백그라운드
     스레드에서 띄우면 운용자가 보고 있던 화면 위에 남의 진행바가 끼어든다.
+
+    failures(ScanFailures)를 주면 종목별 조회 실패를 거기에 모은다. 안 주면 종전대로
+    조용히 넘어간다 — 다만 **호출부가 화면을 그리는 경로라면 반드시 줘야 한다**.
+    조회 실패를 '공시 없음'으로 읽게 두면 안 된다(modules/manage/scan.py 주석).
     """
     events = []
     if not codes:
@@ -127,8 +132,11 @@ def _gather(codes, days, min_level, progress=None, task=None, quiet=False):
             for fut in concurrent.futures.as_completed(futs):
                 try:
                     events.extend(fut.result())
-                except Exception:
-                    pass
+                except Exception as e:      # noqa: BLE001 - 일부라도 보여 주되 실패는 밝힌다
+                    if failures is not None:
+                        failures.record(futs[fut], e)
+                    else:
+                        logger.debug(f"[공시] {futs[fut]} 조회 실패: {e}")
                 if progress is not None:
                     progress.advance(task)
     return events
@@ -431,8 +439,11 @@ def _enrich_details(events, limit=_DETAIL_LIMIT, progress=None, task=None, quiet
             for fut in concurrent.futures.as_completed(futs):
                 try:
                     futs[fut]["note"] = fut.result()
-                except Exception:
+                except Exception as e:      # noqa: BLE001
+                    #  상세만 비운다 — 공시 행 자체는 제목과 함께 그대로 보이므로
+                    #  '상세' 칸이 빈 것으로 드러난다. 원인은 로그에 남긴다.
                     futs[fut]["note"] = ""
+                    logger.debug(f"[공시] 상세 추출 실패({futs[fut].get('rcept_no')}): {e}")
                 if progress is not None:
                     progress.advance(task)
 
@@ -453,19 +464,27 @@ def show_disclosures(days=14):
     # 관심/중대 공시(level>=1)만 표시하여 임원·지분 등 일상 공시 노이즈 제거
     # [진행바] 조회·상세 두 단계가 하나의 막대를 공유한다(단계마다 새 막대가 뜨지 않게).
     shown = []
+    failures = ScanFailures("공시")
     with _make_progress() as progress:
         # 상세 단계 몫(_DETAIL_LIMIT)을 total에 미리 얹어 막대가 100%까지 찼다가
         # 되감기는 일이 없게 한다. 되감기면 새 진행바가 뜬 것처럼 보인다.
         task = progress.add_task(_PROGRESS_LABEL, total=len(codes) + _DETAIL_LIMIT)
-        events = _gather(codes, days, min_level=1, progress=progress, task=task)
+        events = _gather(codes, days, min_level=1, progress=progress, task=task,
+                         failures=failures)
         if events:
             events.sort(key=lambda e: (e["level"], e["date"]), reverse=True)  # 중요도↓, 최신순
             shown = events[:40]
             _enrich_details(shown, progress=progress, task=task)
         progress.update(task, total=max(_task_done(progress, task), 1))  # 예약분 정리
 
+    #  실패는 결과보다 먼저 밝힌다 — '공시가 없습니다'를 읽고 화면을 닫기 전에 봐야 한다.
+    failures.announce()
+
     if not events:
-        config.console.print(f"[dim]최근 {days}일간 주요 공시가 없습니다. (임원·지분 등 일반 공시는 제외)[/dim]")
+        if failures:
+            config.console.print("[dim]조회에 성공한 종목에는 주요 공시가 없습니다.[/dim]")
+        else:
+            config.console.print(f"[dim]최근 {days}일간 주요 공시가 없습니다. (임원·지분 등 일반 공시는 제외)[/dim]")
         return
 
     table = Table(box=box.HORIZONTALS, header_style="dim", border_style="dim")
@@ -514,10 +533,13 @@ def build_telegram_message(days=14, min_level=1, limit=_TELEGRAM_LIMIT):
         return ("📄 [공시 모니터링]\n⚠️ DART API 키가 설정되지 않았습니다. "
                 "(환경변수 DART_API_KEY)")
 
-    events = _gather(codes, days, min_level, quiet=True)
+    failures = ScanFailures("공시")
+    events = _gather(codes, days, min_level, quiet=True, failures=failures)
+    fail_note = failures.telegram_note()
     if not events:
-        return (f"📄 [공시 모니터링] 최근 {days}일\n"
+        body = (f"📄 [공시 모니터링] 최근 {days}일\n"
                 f"주요 공시가 없습니다. (임원·지분 등 일반 공시는 제외)")
+        return f"{body}\n{fail_note}" if fail_note else body
 
     events.sort(key=lambda e: (e["level"], e["date"]), reverse=True)  # 중요도↓, 최신순
     shown = events[:limit]
@@ -554,13 +576,18 @@ def check_and_alert_disclosures(min_level=2, days=2):
 
     from modules import db_manager
     events = []
+    failed_codes = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
-        futs = [ex.submit(collect_disclosures, c, n, days, min_level) for c, n in codes]
+        futs = {ex.submit(collect_disclosures, c, n, days, min_level): c for c, n in codes}
         for fut in concurrent.futures.as_completed(futs):
             try:
                 events.extend(fut.result())
-            except Exception:
-                pass
+            except Exception as e:      # noqa: BLE001
+                #  경보 경로는 화면이 없다. 조용히 버리면 그 종목의 중대 공시가 영영
+                #  안 온다 — days 창(기본 2일) 안에서는 다음 주기가 다시 시도하므로
+                #  일시 실패는 자가 복구되지만, 계속 실패하면 로그로 드러나야 한다.
+                failed_codes.append(futs[fut])
+                logger.warning(f"[Disclosure] {futs[fut]} 공시 조회 실패(경보 누락 가능): {e}")
 
     sent = 0
     for e in sorted(events, key=lambda x: x["date"]):
@@ -590,6 +617,9 @@ def check_and_alert_disclosures(min_level=2, days=2):
             #  발송은 됐는데 표시에 실패한 경우다. 다음 주기에 한 번 더 갈 수 있지만,
             #  '못 받는 것'보다 '두 번 받는 것'이 낫다. 조용히 넘기지는 않는다.
             logger.error(f"[Disclosure] 알림 기록 실패({rcept}): {e}")
+    if failed_codes:
+        logger.warning(f"[Disclosure] 이번 주기에 {len(failed_codes)}개 종목을 조회하지 못했습니다 "
+                       f"({', '.join(failed_codes[:5])}) — 그 종목의 중대 공시는 빠져 있습니다.")
     return sent
 
 

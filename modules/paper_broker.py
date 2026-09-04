@@ -319,7 +319,7 @@ def get_deposit_balance():
             "d2_deposit": cash, "order_possible": cash, "d2_real": cash}
 
 
-def fill_price(price, action, market=False):
+def fill_price(price, action, market=False, is_etf=False):
     """가상 체결가 산출의 단일 지점. 지정가는 주문가 그대로, 시장가만 슬리피지+호가정렬.
 
     [왜 지정가에 얹지 않나] 지정가로 들어온 price는 호출부가 이미 현재가에 슬리피지를
@@ -333,12 +333,14 @@ def fill_price(price, action, market=False):
      그 지정가가 이미 현재가×(1±0.002)라 백테스트 체결가와 같은 자리다.
     [호가 정렬] 시장가 체결가는 호가 단위에 맞춘다. 종전에는 맞추지 않아 101,796·
      1,192,380처럼 **실재할 수 없는 가격**이 원장에 남았다(백테스트는 정렬한다).
+     ETF·ETN 은 격자가 다르다(2,000원 이상 5원 단일) — 주권 표로 맞추면 이번엔 반대로
+     **실재하는 호가를 실재하지 않는 값으로 옮긴다**.
     """
     price = float(price)
     if not market:
         return price
     adj = trading_cost.apply_slippage(price, action)
-    return float(utils.adjust_to_tick(adj, is_overseas=False) or adj)
+    return float(utils.adjust_to_tick(adj, is_overseas=False, is_etf=is_etf) or adj)
 
 
 def place_order(action, code, qty, price, name=None):
@@ -367,7 +369,14 @@ def place_order(action, code, qty, price, name=None):
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         odno = _new_odno(code)
 
-        price = fill_price(price, action, market=is_market)
+        #  ETF·ETN 은 호가 격자가 다르다. 판정 실패는 주권으로 본다(종전 동작).
+        try:
+            import api as _api_mod
+            _is_etf = bool(_api_mod.is_domestic_etf_etn(code, name))
+        except Exception as e:      # noqa: BLE001
+            logger.debug(f"[PAPER] ETF 판정 실패({code}): {e}")
+            _is_etf = False
+        price = fill_price(price, action, market=is_market, is_etf=_is_etf)
 
         if action.lower() == 'buy':
             amount = price * qty

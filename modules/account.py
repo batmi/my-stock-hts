@@ -166,7 +166,13 @@ def sync_today_trades():
                             
                             if odno and avg_price > 0:
                                 # [수정] 체결 내역 분리 저장 (기존 내역 업데이트 대신 신규 추가)
-                                if not db_manager.db.check_trade_exists(odno, "체결"):
+                                #  odno 는 당일 채번이라 날짜 없이는 유일하지 않다 —
+                                #  전체 이력에서 찾으면 오늘 체결이 누락된다.
+                                _scope_dt = str(item.get('ord_dt') or '')
+                                _scope = (f"{_scope_dt[:4]}-{_scope_dt[4:6]}-{_scope_dt[6:]}"
+                                          if len(_scope_dt) == 8 and _scope_dt.isdigit()
+                                          else datetime.now().strftime('%Y-%m-%d'))
+                                if not db_manager.db.check_trade_exists(odno, "체결", on_date=_scope):
                                     if config.FILE_DEBUG_LEVEL == "DEBUG":
                                         logger.debug(f"[Account] 신규 체결 DB 저장 시도: {odno}")
                                     

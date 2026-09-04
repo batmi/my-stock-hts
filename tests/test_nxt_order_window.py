@@ -78,12 +78,26 @@ TIME_ORDER = {
 }
 
 
+class _FixedNow(datetime):
+    """벽시계 고정용. TIME 예약은 '지금 몇 시인가'로 판정하므로 시각을 못 박아야 한다."""
+
+    @classmethod
+    def now(cls, tz=None):
+        return cls(2026, 9, 4, 14, 30, 0)
+
+
 def _run_time_order(monkeypatch, session_open):
-    """지정 시각(14:00)이 이미 지난 뒤 감시 주기가 한 번 도는 상황."""
+    """지정 시각(14:00)이 이미 지난 뒤 감시 주기가 한 번 도는 상황.
+
+    [벽시계 고정 · 2026-09-05] 종전에는 실제 시각을 썼다. 자정~14:00 사이에 전체 테스트를
+     돌리면 '아직 14:00 이 아니다'가 되어 이 테스트만 실패했다(코드는 정상 — 14:00 예약이
+     00:0x 에 발동하면 그게 결함이다). 시각에 기대는 테스트는 시각을 못 박는다.
+    """
     import modules.reserved_order_monitor as rom
 
     executed = []
     m = _monitor()
+    monkeypatch.setattr(rom, 'datetime', _FixedNow)
     monkeypatch.setattr(rom.db_manager.db, 'get_pending_reserved_orders',
                         lambda: [dict(TIME_ORDER)], raising=False)
     monkeypatch.setattr(rom.api, 'domestic_trading_session_open', lambda: session_open)

@@ -241,7 +241,10 @@ def _create_fill_history(db_order, reason_msg):
         # [수정] '체결' 또는 '체결(추정)' 상태가 이미 존재하는지 확인
         exists_check = False
         try:
-            exists_check = db_manager.db.check_trade_exists(odno, "체결") or db_manager.db.check_trade_exists(odno, "체결(추정)")
+            #  odno 는 당일 채번이라 날짜와 짝지어야 유일하다. 방금 낸 주문이므로 오늘로 좁힌다.
+            _today = datetime.now().strftime('%Y-%m-%d')
+            exists_check = (db_manager.db.check_trade_exists(odno, "체결", on_date=_today)
+                            or db_manager.db.check_trade_exists(odno, "체결(추정)", on_date=_today))
             if config.FILE_DEBUG_LEVEL == "DEBUG":
                 logger.debug(f"[ORDER_DEBUG] exists_check 결과: {exists_check}")
         except Exception as e:
@@ -386,6 +389,7 @@ def show_open_orders():
         accounts.append({"cano": config.session.auto_cano, "acnt": config.session.auto_acnt_prdt_cd, "label": "자동"})
 
     selectable_orders = []
+    query_failed = []      # 조회 자체가 실패한 계좌·시장 ('없음'과 구분해 밝힌다)
 
     # [수정] Progress -> status 변경
     with Progress(
@@ -428,7 +432,12 @@ def show_open_orders():
             with utils.AccountContext(cano):
                 # [A] 국내 주문
                 dom_orders = api.get_domestic_open_orders(cano, acnt)
-                
+                #  None = 조회 실패다. '미체결 없음'으로 보여 주면 운영자가 주문이 정리된
+                #  줄 알고 다시 낸다 — 화면에 실패를 밝히고 목록은 비워 둔다.
+                if dom_orders is None:
+                    query_failed.append(f"{_fmt_account(cano, acnt)} 국내")
+                    dom_orders = []
+
                 # [추가] 모의투자 API 누락 대응: DB에서 '접수' 상태 주문 조회하여 병합
 
                 for order in dom_orders:
@@ -464,6 +473,9 @@ def show_open_orders():
 
                 # [B] 해외 주문
                 us_orders = api.get_overseas_open_orders(cano, acnt)
+                if us_orders is None:
+                    query_failed.append(f"{_fmt_account(cano, acnt)} 해외")
+                    us_orders = []
                 for order in us_orders:
                     rmn_qty = order.get('nccs_qty', '0')
                     if float(rmn_qty) <= 0: continue
@@ -498,8 +510,15 @@ def show_open_orders():
                     table.add_row(str(idx), _fmt_account(cano, acnt), acc_disp, "[bold magenta]해외[/]", ord_time, _fmt_odno(order.get('odno')), display_name, sll_buy_colored, order.get('ft_ord_qty', '0'), f"${ord_unpr:,.2f}", cur_price_str, rmn_qty)
                     idx += 1
 
+    if query_failed:
+        #  실패를 먼저 밝힌다 — '미체결 없음'을 읽고 주문을 다시 내면 중복 주문이 된다.
+        config.console.print(
+            f"\n[yellow]⚠️ 미체결 조회에 실패한 곳이 있습니다: {', '.join(query_failed)}. "
+            f"아래 목록에는 그 계좌·시장이 빠져 있습니다 — '주문 없음'이 아닙니다.[/yellow]")
+
     if not selectable_orders:
-        config.console.print("\n[yellow]미체결 주문 내역이 없습니다.[/yellow]")
+        if not query_failed:
+            config.console.print("\n[yellow]미체결 주문 내역이 없습니다.[/yellow]")
         return []
 
     config.console.print(table)
@@ -788,7 +807,11 @@ def send_order(order_type):
                 #  또한 호가단위 보정이 없어 50,001원 같은 값은 거래소가 거부한다.
                 #  utils.adjust_to_tick은 예약 발동 경로만 쓰고 수동 주문 경로는 안 쓰고 있었다.
                 raw_price = float(price)
-                calc_price = int(utils.adjust_to_tick(raw_price, is_overseas=False))
+                #  ETF·ETN 은 호가 격자가 다르다(2,000원 이상 5원 단일) — 주권 표로
+                #  반올림하면 사용자가 입력한 유효한 호가를 굳이 다른 값으로 바꾼다.
+                calc_price = int(utils.adjust_to_tick(
+                    raw_price, is_overseas=False,
+                    is_etf=api.is_domestic_etf_etn(stock_code, stock_name)))
                 if calc_price != raw_price:
                     config.console.print(f"[yellow]호가단위에 맞춰 {int(raw_price):,}원 → {calc_price:,}원으로 보정했습니다.[/yellow]")
                 price = str(calc_price)
@@ -1562,11 +1585,15 @@ def _rsv_header(state):
         config.console.print(f"\n[dim]예약 등록 ▸[/dim] " + " [dim]·[/dim] ".join(parts))
 
 
-def _rsv_parse_price(raw, base_price, is_overseas, label="기준가"):
+def _rsv_parse_price(raw, base_price, is_overseas, label="기준가", code=None, name=None):
     """목표가/주문단가 입력 문자열을 숫자로 변환한다. 실패 시 None.
 
     절대가와 '기준가 대비 %' 두 형식을 함께 받는다. 국내는 호가단위로 보정한다 —
     보정하지 않으면 50,001원 같은 값이 발동 시점에 거래소에서 거부된다.
+
+    code/name 을 주면 ETF·ETN 격자(2,000원 이상 5원 단일)로 보정한다. 안 주면 주권
+    표를 쓴다 — 그러면 사용자가 입력한 **유효한 ETF 호가를 다른 값으로 옮긴다**
+    (23,070 → 23,050). 호출부가 종목을 알고 있으면 반드시 넘겨라.
     """
     txt = str(raw).strip()
     try:
@@ -1580,7 +1607,13 @@ def _rsv_parse_price(raw, base_price, is_overseas, label="기준가"):
     if val <= 0:
         return None
     if not is_overseas:
-        val = float(utils.adjust_to_tick(val, is_overseas=False))
+        is_etf = False
+        if code:
+            try:
+                is_etf = bool(api.is_domestic_etf_etn(code, name))
+            except Exception as e:      # noqa: BLE001 - 판정 실패는 주권 표로(종전 동작)
+                logger.debug(f"[예약] ETF 판정 실패({code}): {e}")
+        val = float(utils.adjust_to_tick(val, is_overseas=False, is_etf=is_etf))
     return val
 
 
@@ -1689,7 +1722,8 @@ def _rsv_step_condition_value(cond_choice, order_type, state):
         v = _rsv_ask("목표가 입력")
         if v in (_RSV_BACK, _RSV_QUIT): return v
 
-        target_price = _rsv_parse_price(v, base_price, is_overseas, base_label)
+        target_price = _rsv_parse_price(v, base_price, is_overseas, base_label,
+                                       code=state.get('code'), name=state.get('name'))
         if target_price is None:
             config.console.print("[red]목표가는 0보다 큰 숫자 또는 '+5%' 형식으로 입력하세요.[/red]")
             return None
@@ -1894,7 +1928,8 @@ def _register_oco_orders(cano, acnt, acc_label):
     v = _rsv_ask("손절가 입력")
     if v == _RSV_QUIT: return 'quit'
     if v == _RSV_BACK: return False
-    stop_price = _rsv_parse_price(v, base_price, is_overseas, base_label)
+    stop_price = _rsv_parse_price(v, base_price, is_overseas, base_label,
+                                  code=code, name=name)
     if stop_price is None:
         config.console.print("[red]손절가는 0보다 큰 숫자 또는 '-7%' 형식으로 입력하세요.[/red]")
         utils.pause()
@@ -1906,7 +1941,8 @@ def _register_oco_orders(cano, acnt, acc_label):
     v = _rsv_ask("익절가 입력")
     if v == _RSV_QUIT: return 'quit'
     if v == _RSV_BACK: return False
-    take_price = _rsv_parse_price(v, base_price, is_overseas, base_label)
+    take_price = _rsv_parse_price(v, base_price, is_overseas, base_label,
+                                  code=code, name=name)
     if take_price is None:
         config.console.print("[red]익절가는 0보다 큰 숫자 또는 '+15%' 형식으로 입력하세요.[/red]")
         utils.pause()
@@ -2216,7 +2252,8 @@ def register_reserved_order():
                 config.console.print(f"[dim] -> 발동 조건(목표가)과 동일하게 자동 설정: "
                                      f"{_fmt_price(state['order_price'], is_overseas)}[/dim]")
             else:
-                op = _rsv_parse_price(v, base_price, is_overseas, base_label)
+                op = _rsv_parse_price(v, base_price, is_overseas, base_label,
+                                      code=state.get('code'), name=state.get('name'))
                 if op is None:
                     config.console.print("[red]주문 단가는 0보다 큰 숫자 또는 '-1%' 형식으로 입력하세요.[/red]")
                     utils.pause()
@@ -2656,7 +2693,8 @@ def _edit_reserved_order(order):
         elif choice == "2" and editable_target:
             v = Prompt.ask(f"새 목표가 [dim](절대가 또는 현재가 대비 %)[/dim]",
                            default=str(int(order['target_price']) if not is_ovs else order['target_price']))
-            tp = _rsv_parse_price(v, base, is_ovs)
+            tp = _rsv_parse_price(v, base, is_ovs,
+                                  code=order.get('code'), name=order.get('stock_name'))
             if tp is None:
                 config.console.print("[red]목표가는 0보다 큰 숫자 또는 '+5%' 형식으로 입력하세요.[/red]"); continue
             warn = _rsv_immediate_trigger(ct, tp, curr)
@@ -2677,7 +2715,8 @@ def _edit_reserved_order(order):
             if v.strip() in ("0", "m", "M"):
                 op = 0.0
             else:
-                op = _rsv_parse_price(v, base, is_ovs)
+                op = _rsv_parse_price(v, base, is_ovs,
+                                      code=order.get('code'), name=order.get('stock_name'))
                 if op is None:
                     config.console.print("[red]단가는 0(시장가) 또는 0보다 큰 숫자로 입력하세요.[/red]"); continue
             if db_manager.db.update_reserved_order_fields(order['id'], order_price=op):

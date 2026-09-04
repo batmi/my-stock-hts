@@ -17,6 +17,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 import config
 import api
 from core import utils
+from modules.manage.scan import ScanFailures
 
 def _show_fake_progress(desc, count=1):
     """테이블 출력 전 짧은 시각적 분리를 위한 프로그래스바 애니메이션."""
@@ -233,15 +234,17 @@ def show_insider_trades(days=90):
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
     insiders, majors = [], []
     treasury, frees, mezz = [], [], []
+    failures = ScanFailures("수급·물량")
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
                   BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%"), console=config.console, transient=True) as progress:
         task = progress.add_task("[cyan]자기주식 취득·처분 내역 조회 중...[/cyan]", total=len(codes) * 2)
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
-            futs = {ex.submit(_collect, c, n, cutoff): "insider" for c, n in codes}
-            futs.update({ex.submit(_collect_supply, c, n, days): "supply" for c, n in codes})
+            futs = {ex.submit(_collect, c, n, cutoff): ("insider", c) for c, n in codes}
+            futs.update({ex.submit(_collect_supply, c, n, days): ("supply", c) for c, n in codes})
             for fut in concurrent.futures.as_completed(futs):
+                kind, fcode = futs[fut]
                 try:
-                    if futs[fut] == "insider":
+                    if kind == "insider":
                         ins, majs = fut.result()
                         insiders.extend(ins)
                         majors.extend(majs)
@@ -250,12 +253,19 @@ def show_insider_trades(days=90):
                         treasury.extend(tr)
                         frees.extend(fr)
                         mezz.extend(mz)
-                except Exception:
-                    pass
+                except Exception as e:      # noqa: BLE001 - 일부라도 보여 주되 실패는 밝힌다
+                    failures.record(fcode, e)
                 progress.advance(task)
 
+    #  실패를 먼저 밝힌다. '보고가 없습니다'보다 앞이어야 한다 — 뒤에 두면 그 문장을
+    #  읽고 화면을 닫는다. 오버행·자기주식은 '없다'로 읽는 순간 판단이 반대로 간다.
+    failures.announce()
+
     if not any((insiders, majors, treasury, frees, mezz)):
-        config.console.print(f"[dim]최근 {days}일간 수급·물량 관련 보고가 없습니다.[/dim]")
+        if not failures:
+            config.console.print(f"[dim]최근 {days}일간 수급·물량 관련 보고가 없습니다.[/dim]")
+        else:
+            config.console.print("[dim]조회에 성공한 종목에는 수급·물량 보고가 없습니다.[/dim]")
         return
 
     # 실제 증감(차분)·일괄 이벤트 판정은 요약/상세가 같은 기준을 쓰도록 여기서 한 번만 계산
