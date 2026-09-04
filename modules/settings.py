@@ -2458,10 +2458,19 @@ def manage_custom_settings():
                 def_val = info.get("default", "-")
                 reset_details.append(f"• {short_name}: {prev_val} ➔ {def_val}")
                 
-            config.reset_custom_settings(valid_keys_to_reset)
-            
+            done = config.reset_custom_settings(valid_keys_to_reset)
+            #  실제로 되돌린 것만 알린다 — 종전에는 반환값을 보지 않고 무조건
+            #  '성공'이라고 했다(무동작인데 성공이라 나오던 원인).
+            done_set = set(done or [])
+            failed = [k for k in valid_keys_to_reset if k not in done_set]
+            if done_set:
+                reset_details = [d for k, d in zip(valid_keys_to_reset, reset_details)
+                                 if k in done_set]
+            else:
+                reset_details = []
+
             try:
-                if getattr(config, 'ENABLE_TELEGRAM', True):
+                if reset_details and getattr(config, 'ENABLE_TELEGRAM', True):
                     from modules.telegram_bot import TelegramCommander
                     msg = "🔄 [설정 변경] 선택한 커스텀 설정이 기본값으로 초기화되었습니다."
                     if reset_details:
@@ -2469,7 +2478,10 @@ def manage_custom_settings():
                     TelegramCommander()._send_reply(msg)
             except Exception:
                 pass
-            console.print(f"\n[green]성공적으로 초기화되었습니다.[/green]")
+            if done_set:
+                console.print(f"\n[green]{len(done_set)}개 설정을 기본값으로 초기화했습니다.[/green]")
+            if failed:
+                console.print(f"[red]초기화하지 못한 설정: {', '.join(failed)}[/red]")
             utils.pause()
 
 def system_config_menu():

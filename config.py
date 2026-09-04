@@ -3970,47 +3970,101 @@ def get_custom_settings():
     return changed_items
 
 # [추가] 지정된 커스텀 설정을 초기화하고 다시 로드
+def _split_key_path(key_path):
+    """'INDICATOR_PARAMS.BOX_PERIOD' → ('INDICATOR_PARAMS', 'BOX_PERIOD'), 스칼라면 (None, 키)."""
+    if '.' in key_path:
+        parent, child = key_path.split('.', 1)
+        return parent, child
+    return None, key_path
+
+
+def _lookup_key_path(data, key_path):
+    """설정 한 벌에서 키 경로의 값을 꺼낸다. 없으면 (False, None)."""
+    parent, child = _split_key_path(key_path)
+    if parent is None:
+        return (child in data, data.get(child))
+    group = data.get(parent)
+    if not isinstance(group, dict) or child not in group:
+        return (False, None)
+    return (True, group[child])
+
+
 def reset_custom_settings(keys_to_reset):
+    """지정한 키를 클래스 기본값으로 되돌린다. 실제로 되돌린 키 목록을 돌려준다.
+
+    [프로필 모드의 되돌리기] 커스텀 목록(get_custom_settings)은 **클래스 기본값**과
+     비교해 뽑는다 — 그래서 관찰·토스 프로필에서도 기준 파일(dynamic_config.json)에서
+     물려받은 값이 '커스텀'으로 보인다. 종전에는 여기서 프로필 파일의 키만 지웠고,
+     프로필 파일이 아예 없으면 파일 없음으로 조용히 돌아갔다. 그 결과 토스 모드에서
+     초기화를 눌러도 아무 일이 없고 화면만 '성공적으로 초기화되었습니다'라고 했다
+     (2026-09-04 실사용 로그로 확인).
+
+     되돌리기는 설정 편집과 대칭이어야 한다: 프로필 모드에서 값을 바꾸면 프로필 파일에
+     차이가 적히므로, 되돌리기도 프로필 파일에 '이 모드에서는 기본값을 쓴다'를 적는다.
+     기준 파일은 건드리지 않는다 — 관찰모드에서 되돌린 값이 실전 기준을 바꾸면 안 되고,
+     그 반대도 마찬가지다. 이렇게 적힌 키는 이후 기준 파일이 바뀌어도 따라가지 않는다
+     (프로필이 그 키에서 굳는다). 그것이 사용자가 방금 요구한 동작이다.
+    """
     global settings
-    import json
-    #  지금 쓰고 있는 파일에서 지운다 — 관찰모드에서 되돌린 값이 실전 기준 파일을
-    #  건드리면 안 되고, 그 반대도 마찬가지다.
+    defaults = getattr(GlobalSettings(), 'model_dump', GlobalSettings().dict)()
     config_path = profile_config_path()
-    
-    if not os.path.exists(config_path):
-        return
 
     with _settings_lock:
         try:
-            from core import jsonio
-            data = jsonio.load_json(config_path, default=None)
-            if data is None:
+            data = _read_config_file(config_path)
+            if data is None and os.path.exists(config_path):
                 #  손상 파일은 jsonio 가 격리하고 알린다. 여기서 빈 딕셔너리로 이어가면
                 #  '되돌리기'가 설정 전체를 날리는 동작이 되므로 그만둔다.
-                return
+                return []
+            if data is None:
+                data = {}
 
+            base = {}
+            if active_profile:
+                base = _read_config_file(base_config_path()) or {}
+
+            done = []
             for key_path in keys_to_reset:
-                if '.' in key_path:
-                    parent, child = key_path.split('.', 1)
-                    if parent in data and child in data[parent]:
-                        del data[parent][child]
-                        if not data[parent]:
-                            del data[parent]
-                else:
-                    if key_path in data:
-                        del data[key_path]
+                parent, child = _split_key_path(key_path)
+                has_default, default_v = _lookup_key_path(defaults, key_path)
+                if not has_default:
+                    continue        # 클래스에 없는 키 — 되돌릴 기준이 없다
+
+                #  1) 이 프로필의 덮어쓰기를 걷어낸다.
+                if parent is None:
+                    data.pop(child, None)
+                elif isinstance(data.get(parent), dict):
+                    data[parent].pop(child, None)
+                    if not data[parent]:
+                        del data[parent]
+
+                #  2) 걷어내고도 기준 파일이 기본값과 다르면, 이 프로필에 기본값을 명시한다.
+                if active_profile:
+                    in_base, base_v = _lookup_key_path(base, key_path)
+                    if in_base and base_v != default_v:
+                        if parent is None:
+                            data[child] = default_v
+                        else:
+                            data.setdefault(parent, {})[child] = default_v
+                done.append(key_path)
+
+            if not done:
+                return []
 
             from core import jsonio
-            jsonio.save_json(config_path, data)
-            
+            if not jsonio.save_json(config_path, data):
+                return []
+
             # 초기 상태를 베이스로 새 설정 덮어씌우기
             #  (재적용까지 한 잠금 안에서 끝낸다 — 나누면 그 사이에 다른 스레드가
             #   '기본값만 적용된 중간 상태'를 읽는다. RLock 이라 중첩 획득은 안전하다.)
             settings = GlobalSettings()
             load_dynamic_config()
             setup_logging()  # 초기화된 파일 로그 레벨 즉시 적용
+            return done
         except Exception as e:
             print(f"[Config] 설정 초기화 중 오류: {e}")
+            return []
 
 # [추가] 모든 커스텀 설정 삭제 및 시스템 기본값으로 완전 초기화
 def reset_all_settings():
