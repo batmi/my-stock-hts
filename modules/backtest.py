@@ -1417,6 +1417,23 @@ def run_monte_carlo_simulation(full_df, start_idx, initial_capital, buy_score, b
             config.console.print("[red]진단 결과를 생성하지 못했습니다.[/red]")
 
 
+def annualized_return(ret_pct, bars):
+    """구간 누적 수익률(%)을 연율(거래일 252일 기준)로 환산한다.
+
+    [왜 필요한가 · 2026-09-04] Walk-Forward 의 IS 는 expanding 이라 폴드마다 300~640거래일
+     이고 OOS 는 112거래일 고정이다. 누적 수익률을 그대로 나누면 **길이 차이가 그대로
+     '성과 저하'로 찍힌다** — 하루 수익률이 IS·OOS 완전히 동일한(즉 과최적화가 전혀 없는)
+     전략이 유지율 22%로 나온다(실측). 이 도구의 결론이 그 숫자 하나이므로, 비교 전에
+     반드시 같은 단위로 맞춘다.
+    """
+    if bars <= 0:
+        return 0.0
+    growth = 1.0 + ret_pct / 100.0
+    if growth <= 0:
+        return -100.0          # 전액 손실 — 연율 환산이 정의되지 않는다
+    return (growth ** (252.0 / bars) - 1.0) * 100.0
+
+
 def run_walk_forward(full_df, start_idx, initial_capital, is_overseas, base_params,
                      name="", code="", days=1095, n_splits=4, optimize_dims=None):
     """Walk-Forward 검증 (과최적화 진단)
@@ -1567,6 +1584,7 @@ def run_walk_forward(full_df, start_idx, initial_capital, is_overseas, base_para
 
     oos_equity = 1.0       # OOS 폴드 수익률 복리 누적
     is_returns, oos_returns, oos_winrates = [], [], []
+    is_ann, oos_ann = [], []          # 길이가 다르므로 유지율은 연율로만 비교한다
 
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
                   BarColumn(), console=config.console, transient=True) as progress:
@@ -1596,6 +1614,8 @@ def run_walk_forward(full_df, start_idx, initial_capital, is_overseas, base_para
             is_returns.append(best_is_ret)
             oos_returns.append(oos_ret)
             oos_winrates.append(oos_wr)
+            is_ann.append(annualized_return(best_is_ret, oos_start - start_idx))
+            oos_ann.append(annualized_return(oos_ret, oos_end - oos_start))
             oos_equity *= (1 + oos_ret / 100.0)
 
             oc = "[red]" if oos_ret >= 0 else "[blue]"
@@ -1603,8 +1623,8 @@ def run_walk_forward(full_df, start_idx, initial_capital, is_overseas, base_para
                 f"{i+1}",
                 f"{_date_str(oos_start)}~{_date_str(oos_end-1)}",
                 best_c["desc"],
-                f"{best_is_ret:+.1f}%",
-                f"{oc}{oos_ret:+.1f}%[/]",
+                f"{best_is_ret:+.1f}%\n[dim]{oos_start - start_idx}일[/dim]",
+                f"{oc}{oos_ret:+.1f}%[/]\n[dim]{oos_end - oos_start}일[/dim]",
                 f"{oos_wr:.0f}%",
                 f"{oos_res['mdd']:.1f}%",
             )
@@ -1621,26 +1641,38 @@ def run_walk_forward(full_df, start_idx, initial_capital, is_overseas, base_para
     avg_oos_wr = sum(oos_winrates) / len(oos_winrates)
     pos_folds = sum(1 for r in oos_returns if r > 0)
 
-    # 과최적화 진단: OOS가 IS 대비 얼마나 무너지는가
-    if avg_is != 0:
-        retention = (avg_oos / avg_is) * 100 if avg_is > 0 else (0.0 if avg_oos <= 0 else 100.0)
+    # 과최적화 진단: OOS가 IS 대비 얼마나 무너지는가.
+    #  **연율로 비교한다** — IS 구간이 OOS 의 3~6배 길어, 누적 수익률끼리 나누면 과최적화가
+    #  전혀 없어도 유지율이 20%대로 찍힌다(annualized_return 참조).
+    avg_is_ann = sum(is_ann) / len(is_ann)
+    avg_oos_ann = sum(oos_ann) / len(oos_ann)
+    if avg_is_ann > 0:
+        retention = (avg_oos_ann / avg_is_ann) * 100
     else:
-        retention = 0.0
+        # IS 에서조차 수익이 안 났으면 유지율은 의미가 없다 — 비교 대상이 없다.
+        retention = None
 
     summary = Table(title=f"\nWalk-Forward 종합 ({name})", box=box.HORIZONTALS, show_header=False, border_style="dim")
     summary.add_column("항목", style="dim")
     summary.add_column("값", justify="right")
     summary.add_row("OOS 누적 수익률 (복리)", f"{'[red]' if total_oos_ret>=0 else '[blue]'}{total_oos_ret:+.2f}%[/]")
-    summary.add_row("폴드 평균 IS 수익률", f"{avg_is:+.2f}%")
-    summary.add_row("폴드 평균 OOS 수익률", f"{avg_oos:+.2f}%")
-    summary.add_row("OOS 성과 유지율 (OOS/IS)", f"{retention:.0f}%")
+    summary.add_row("폴드 평균 IS 수익률", f"{avg_is:+.2f}% [dim](연율 {avg_is_ann:+.1f}%)[/dim]")
+    summary.add_row("폴드 평균 OOS 수익률", f"{avg_oos:+.2f}% [dim](연율 {avg_oos_ann:+.1f}%)[/dim]")
+    summary.add_row("OOS 성과 유지율 (연율 기준)",
+                    f"{retention:.0f}%" if retention is not None
+                    else "[dim]IS 수익이 없어 판정 불가[/dim]")
     summary.add_row("수익 폴드 비율", f"{pos_folds}/{len(oos_returns)}")
     summary.add_row("OOS 평균 승률", f"{avg_oos_wr:.1f}%")
     config.console.print(summary)
 
     # 진단 메시지
+    #  [주의] 아래 문턱(40·70)은 연율 유지율에 대한 것이다. 종전에는 길이가 다른 누적
+    #   수익률을 나눠서 비교했고, 그 값은 과최적화가 없어도 20%대에 머물러 사실상 늘
+    #   '주의'였다 — 문턱이 닿을 수 없는 자리에 있었다.
     if avg_oos <= 0:
         verdict = "[bold blue]⚠ 과최적화 의심[/]: OOS 평균 수익이 음수입니다. IS 성과가 미래로 이어지지 않습니다."
+    elif retention is None:
+        verdict = "[dim]판정 보류[/]: IS 구간에서도 수익이 나지 않아 유지율을 잴 기준이 없습니다."
     elif retention < 40:
         verdict = "[bold yellow]주의[/]: OOS 유지율이 낮습니다(<40%). 파라미터가 과거에 과적합되었을 가능성이 있습니다."
     elif retention < 70:
@@ -1667,9 +1699,10 @@ def run_walk_forward(full_df, start_idx, initial_capital, is_overseas, base_para
         - 종목: {name} ({code})
         - 적용 파라미터: {param_info}
         - OOS 누적 수익률 (복리): {total_oos_ret:+.2f}%
-        - 폴드 평균 IS 수익률: {avg_is:+.2f}%
-        - 폴드 평균 OOS 수익률: {avg_oos:+.2f}%
-        - OOS 성과 유지율: {retention:.0f}%
+        - 폴드 평균 IS 수익률: {avg_is:+.2f}% (연율 {avg_is_ann:+.1f}%)
+        - 폴드 평균 OOS 수익률: {avg_oos:+.2f}% (연율 {avg_oos_ann:+.1f}%)
+        - OOS 성과 유지율(연율 기준): {'판정 불가' if retention is None else f'{retention:.0f}%'}
+          ※ IS 구간은 OOS 의 3~6배 길어, 누적 수익률끼리 비교하면 안 된다
         - 수익 폴드 비율: {pos_folds}/{len(oos_returns)}
         - OOS 평균 승률: {avg_oos_wr:.1f}%
         - 1차 시스템 진단: {clean_verdict}
