@@ -2569,12 +2569,19 @@ _MASTER_KOSDAQ_CODES = None
 _MASTER_KOSPI_CODES = None
 
 def _get_market_type_by_master(code):
-    """마스터 파일(KOSPI/KOSDAQ)을 참조하여 종목의 시장 구분을 정확히 반환합니다.
+    """마스터 파일(KOSPI/KOSDAQ)로 시장 구분을 판정한다. **모르면 None**이다.
 
     KOSDAQ/KOSPI 마스터 양쪽을 모두 조회한다.
       - KOSDAQ 마스터에 있으면 'KOSDAQ'
       - KOSPI 마스터에 있으면 'KOSPI'
-      - 둘 다 없으면(신규상장/누락 등) 보수적으로 'KOSPI'로 폴백
+      - 어느 쪽도 아니면 None (신규상장·상장폐지·KONEX, 또는 **마스터를 못 읽음**)
+
+    [왜 KOSPI 폴백을 없앴나 · 2026-09-04] 종전에는 모르면 'KOSPI'를 돌려줬다. 마스터
+     다운로드가 실패하면(네트워크 장애·DWS 다운) 두 집합이 모두 비고, 그러면 **모든 종목이
+     KOSPI로 판정된다**. main.py 는 기동 때 이 값으로 stock.json 의 exchange 를 덮어쓰고
+     저장하므로, 한 번의 다운로드 실패가 코스닥 보유 종목을 파일에 영구히 KOSPI 로 굳힌다.
+     시장 구분은 표시용이 아니다 — 시장 필터(80일선)와 적응형 임계값이 이 값으로 코스피
+     지수를 볼지 코스닥 지수를 볼지 고른다. 모른다는 사실이 호출부에 도달해야 한다.
     """
     global _MASTER_KOSDAQ_CODES, _MASTER_KOSPI_CODES
     if _MASTER_KOSDAQ_CODES is None:
@@ -2596,9 +2603,44 @@ def _get_market_type_by_master(code):
         return "KOSDAQ"
     if code in _MASTER_KOSPI_CODES:
         return "KOSPI"
-    # 어느 마스터에도 없으면(신규상장 등) 보수적 폴백
-    logger.debug(f"마스터 미발견 종목({code}) → KOSPI로 폴백 처리")
-    return "KOSPI"
+    if not _MASTER_KOSDAQ_CODES and not _MASTER_KOSPI_CODES:
+        logger.debug(f"마스터 미적재 — 시장 구분 판정 불가({code})")
+    else:
+        logger.debug(f"마스터 미발견 종목({code}) — 시장 구분 판정 불가")
+    return None
+
+
+def get_market_type(code):
+    """종목코드 → 'KOSPI' | 'KOSDAQ'. **판정 불가면 None** (여기가 정본이다).
+
+    두 원천을 순서대로 본다:
+      1. KIS 마스터 파일 — 오늘자 캐시가 있으면 네트워크를 타지 않는다.
+      2. KRX 상장 목록(modules.krx_daily) — 마스터가 없거나 종목이 빠졌을 때.
+
+    두 원천은 서로 독립이라 한쪽이 죽어도 판정이 이어진다. 둘 다 실패하면 None 이고,
+    호출부는 그때 **추측한 값을 저장하지 않아야 한다**. 화면·점수용으로 임시값이 필요하면
+    `get_market_type(code) or "KOSPI"` 처럼 그 자리에서만 쓴다.
+
+    [단일 소스] 종전에는 현재가 응답의 `rprs_mrkt_kor_name` 에 '코스닥'이 들었는지 보는
+     사본이 네 벌 있었다(telegram_bot 2곳·theme_analysis·manage/watchlist). 그 필드는
+     **토스 모드 응답에 아예 없어서**(api/toss.py `_toss_current_price_data`) 토스로 돌리면
+     네 곳 모두 무조건 KOSPI 로 판정했다.
+    """
+    code = str(code or '').strip()
+    if not (len(code) == 6 and code[0].isdigit() and code.isalnum()):
+        return None
+    by_master = _get_market_type_by_master(code)
+    if by_master:
+        return by_master
+    try:
+        from modules import krx_daily
+        by_krx = krx_daily.get_market(code)
+    except Exception as e:      # noqa: BLE001 - 판정 실패는 None 으로 흡수한다
+        logger.debug(f"KRX 상장목록 시장 구분 조회 실패({code}): {e}")
+        return None
+    #  KONEX 는 자동매매 대상이 아니고 대응 지수도 없다 — 판정 불가로 둔다.
+    return by_krx if by_krx in ("KOSPI", "KOSDAQ") else None
+
 
 def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False):
     """특정 종목에 대해 시스템 트레이딩 로직을 진단(시뮬레이션)합니다."""
@@ -2723,7 +2765,8 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             if std_market: break
 
         foreign_rate_str = "[dim]-[/dim]"
-        market_str = std_market if std_market else ("해외" if is_overseas else "KOSPI")
+        #  관심목록에 없으면 판정해서 쓴다 — 종전에는 국내면 무조건 'KOSPI'로 표시했다.
+        market_str = std_market or ("해외" if is_overseas else (get_market_type(code) or "-"))
         # [추가] 적응형 임계값 적용 (시장 국면 보정)
         score_adj = 0.0
         is_domestic_index = not is_overseas and code in ["KOSPI", "KOSDAQ", "KOSPI200", "KOSDAQ150", "VKOSPI", "K200FUT_F", "K200FUT_CM"]
@@ -2742,13 +2785,13 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                 if cp.get('rt_cd') == '0':
                     foreign_rate_str = f"{cp['output'].get('hts_frgn_ehrt', '-')}%"
                     
-                    # [수정] 국내 주식 현재가 API 응답에는 시장구분 필드가 없으므로 마스터 파일을 이용해 판별
-                    market_type = _get_market_type_by_master(code)
-                        
-                    # [수정] std_market이 잘못 캐시되어 있는 경우를 대비하여 실시간 API 조회값을 최우선 반영
-                    market_str = market_type
+                    #  시장 구분은 get_market_type 하나로 판정한다(마스터 → KRX 상장목록).
+                    #  판정 불가면 국면 보정을 건너뛴다 — KOSPI 로 단정해 코스닥 종목에
+                    #  코스피 국면 보정을 얹으면 매수 임계값이 조용히 틀어진다.
+                    market_type = get_market_type(code)
+                    market_str = market_type or "-"
                     
-                    if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
+                    if market_type and config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
                         regime, score_adj = get_market_regime(market_type)
                         if score_adj != 0 and not rule_applied: # [수정] 개별 룰이 없을 때만 보정 적용
                             buy_score += score_adj
@@ -3699,8 +3742,8 @@ def _diagnose_group_stock_worker(item, market_filter, restricted_stocks, rules_m
         if market_filter and cp_data:
             if cp_data.get('rt_cd') != '0': return None
             
-            # [수정] 현재가 데이터에는 시장 정보가 없으므로 마스터 파일 기반으로 필터링
-            m_type = _get_market_type_by_master(code)
+            #  시장 필터는 판정된 종목만 통과시킨다(판정 불가는 None → 아래 비교에서 탈락).
+            m_type = get_market_type(code)
             if market_filter == "KOSPI" and m_type != "KOSPI": return None
             if market_filter == "KOSDAQ" and m_type != "KOSDAQ": return None
 
@@ -5325,12 +5368,10 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                 }
             elif market_regime_adj and not is_overseas:
                 # 개별 룰이 없으면 시장 국면에 따른 보정값 적용
-                mrkt_name = str(curr_data['output'].get('rprs_mrkt_kor_name') or curr_data['output'].get('rprs_mrkt_eng_name') or '')
-                score_adj = 0.0
-                if "코스닥" in mrkt_name or "KOSDAQ" in mrkt_name.upper():
-                    score_adj = market_regime_adj.get("KOSDAQ", 0.0)
-                else:
-                    score_adj = market_regime_adj.get("KOSPI", 0.0)
+                #  판정 정본은 get_market_type — 시세 응답의 시장구분 필드를 보지 않는다
+                #  (토스 모드 응답에 없어 전 종목이 KOSPI 보정을 받았다).
+                m_type = get_market_type(code)
+                score_adj = market_regime_adj.get(m_type, 0.0) if m_type else 0.0
                 
                 if score_adj != 0:
                     thresholds = {

@@ -90,15 +90,17 @@ def test_realtime_feed_keeps_covering_held_codes(trader):
 
 
 def test_market_type_falls_back_to_the_api_when_off_watchlist(trader):
-    """시장구분은 stock.json 미스 시 API로 폴백해야 한다.
+    """시장구분은 stock.json 미스 시 판정 정본으로 폴백해야 한다.
 
     폴백이 없으면 전부 KOSPI 로 취급되어 시장별 리스크 배수가 엉뚱하게 적용된다.
+    (2026-09-04: 폴백 원천이 현재가 응답 필드 → analysis.get_market_type 으로 바뀌었다.
+     그 필드는 토스 모드 응답에 없어 폴백이 토스에서 무동작이었다.)
     """
+    from modules import analysis
     from modules.auto_trade import common
     cache = {}
     with patch.object(config.session, 'stock_data', {'stocks_kr': [], 'etfs_kr': []}), \
-         patch('modules.auto_trade.common.api.get_current_price_data',
-               return_value={'rt_cd': '0', 'output': {'rprs_mrkt_kor_name': '코스닥'}}):
+         patch.object(analysis, 'get_market_type', return_value="KOSDAQ"):
         assert common.resolve_market_type(OFF_CODE, cache) == "KOSDAQ"
 
 

@@ -339,7 +339,7 @@ def _listing_map_from_krx():
             if any(f is not None and not f.empty for f in frames):
                 break
             day -= timedelta(days=1)
-        for frame in frames:
+        for market_name, frame in zip(('KOSPI', 'KOSDAQ'), frames):
             if frame is None or frame.empty:
                 continue
             for code, row in frame.iterrows():
@@ -351,7 +351,8 @@ def _listing_map_from_krx():
                 except (TypeError, ValueError):
                     marcap = 0.0
                 result[code] = {'name': str(row.get('종목명') or '').strip(),
-                                'marcap': marcap}
+                                'marcap': marcap,
+                                'market': market_name}
     except Exception as e:      # noqa: BLE001 - 어떤 실패든 FDR 폴백으로 넘긴다
         logger.debug(f"[KRX] 공식 상장목록 조회 실패: {e}")
         return None
@@ -375,6 +376,7 @@ def _listing_map_from_fdr():
     result = {}
     has_marcap = 'Marcap' in df.columns
     has_name = 'Name' in df.columns
+    has_market = 'Market' in df.columns
     for row in df.itertuples(index=False):
         code = str(getattr(row, 'Code', '') or '').strip()
         if not is_domestic_code(code):
@@ -386,6 +388,7 @@ def _listing_map_from_fdr():
         result[code] = {
             'name': str(getattr(row, 'Name', '') or '').strip() if has_name else '',
             'marcap': marcap,
+            'market': str(getattr(row, 'Market', '') or '').strip().upper() if has_market else '',
         }
     del df
     return result or None
@@ -427,6 +430,24 @@ def get_listing_map(use_cache=True):
         _LISTING['map'] = result
         _LISTING['ts'] = now
     return result
+
+
+def get_market(code):
+    """종목코드 → 'KOSPI' | 'KOSDAQ' | 'KONEX'. 판정 불가면 None.
+
+    시장 구분은 '무엇과 비교해 매수할지'를 정한다 — 시장 필터(80일선)와 적응형 임계값이
+    이 값으로 코스피 지수를 볼지 코스닥 지수를 볼지 고른다. 그래서 모를 때 KOSPI 로
+    단정하면 코스닥 종목이 조용히 코스피 기준으로 판정된다. 여기서는 모르면 None 이다.
+    """
+    code = str(code or '').strip()
+    if not is_domestic_code(code):
+        return None
+    listing = get_listing_map()
+    if not listing:
+        return None
+    entry = listing.get(code) or {}
+    market = str(entry.get('market') or '').strip().upper()
+    return market if market in ('KOSPI', 'KOSDAQ', 'KONEX') else None
 
 
 def get_ticker_name(code):

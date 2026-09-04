@@ -1375,13 +1375,10 @@ def _analyze_stock_ui():
             
             score_adj = 0.0
             if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True) and not is_overseas:
-                market_type = "KOSPI"
-                try:
-                    cp = api.get_current_price_data(code, False)
-                    if cp.get('rt_cd') == '0' and "코스닥" in cp['output'].get('rprs_mrkt_kor_name', ''):
-                        market_type = "KOSDAQ"
-                except Exception: pass
-                _, score_adj = analysis.get_market_regime(market_type)
+                #  판정 정본은 analysis.get_market_type — 모르면 국면 보정을 건너뛴다.
+                market_type = analysis.get_market_type(code)
+                if market_type:
+                    _, score_adj = analysis.get_market_regime(market_type)
                 if not custom_rule:
                     buy_score += score_adj
 

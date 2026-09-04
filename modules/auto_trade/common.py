@@ -278,19 +278,21 @@ def resolve_market_type(code, cache=None):
                     cache[code] = m_type
                     return m_type
 
-    # 2. API 조회를 통한 Fallback (한글 '코스닥' 포함)
+    # 2. 판정 정본(analysis.get_market_type: KIS 마스터 → KRX 상장목록)
+    #    종전에는 여기서 현재가 응답의 rprs_mrkt_kor_name 을 봤는데, 그 필드는 토스 모드
+    #    응답에 없어 토스에서는 이 단계가 통째로 무동작이었다.
     try:
-        res = api.get_current_price_data(code, is_overseas=False)
-        if res and res.get('rt_cd') == '0':
-            market_name = res['output'].get('rprs_mrkt_kor_name', '')
-            if "KOSDAQ" in market_name or "코스닥" in market_name:
-                cache[code] = "KOSDAQ"
-                return "KOSDAQ"
-    except Exception:
-        pass
+        resolved = analysis.get_market_type(code)
+    except Exception:       # noqa: BLE001 - 판정 실패는 아래 폴백으로 흡수한다
+        resolved = None
+    if resolved:
+        cache[code] = resolved
+        return resolved
 
-    # 3. API 조회 실패 또는 정보 누락 시 기본값 'KOSPI'로 설정
-    cache[code] = "KOSPI"
+    # 3. 판정 불가 — 이번 호출에만 'KOSPI'로 진행하고 **캐시에는 넣지 않는다**.
+    #    넣으면 일시적 조회 실패 하나가 프로세스가 살아 있는 내내 그 종목을 코스피로
+    #    굳힌다(시장 필터·적응형 임계값이 이 값으로 볼 지수를 고른다).
+    logger.debug(f"[시장구분] 판정 불가({code}) — 이번 주기만 KOSPI로 진행(캐시 보류)")
     return "KOSPI"
 
 def load_restricted_stocks():

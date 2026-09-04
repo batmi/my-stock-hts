@@ -806,23 +806,12 @@ class TelegramCommander:
             # [추가] 시장 국면(적응형 임계값) 보정 적용
             score_adj = 0.0
             if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True) and not is_overseas:
-                # [최적화] 시장구분은 stock.json exchange 정보를 우선 사용 (trader._get_stock_market_type과 동일 기조)
-                #  — 코스닥 판별만을 위한 현재가 REST 1콜 절약. 관심목록에 없으면 API 폴백.
-                market_type = ""
-                for key in ("stocks_kr", "etfs_kr"):
-                    for item in config.session.stock_data.get(key, []):
-                        if item.get('code') == code and str(item.get('exchange', '')).upper() in ("KOSPI", "KOSDAQ"):
-                            market_type = str(item['exchange']).upper()
-                            break
-                    if market_type: break
-                if not market_type:
-                    market_type = "KOSPI"
-                    try:
-                        cp = api.get_current_price_data(code, False)
-                        if cp.get('rt_cd') == '0' and "코스닥" in cp['output'].get('rprs_mrkt_kor_name', ''):
-                            market_type = "KOSDAQ"
-                    except Exception: pass
-                _, score_adj = analysis.get_market_regime(market_type)
+                #  시장 구분 판정은 analysis.get_market_type 하나만 쓴다. 종전에는 현재가
+                #  응답의 rprs_mrkt_kor_name 을 보는 사본을 여기서 굴렸는데, 그 필드는
+                #  토스 모드 응답에 없어 코스닥 종목까지 KOSPI 국면 보정을 받았다.
+                market_type = analysis.get_market_type(code)
+                if market_type:
+                    _, score_adj = analysis.get_market_regime(market_type)
                 
             thresholds = {
                 "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"] + score_adj,
@@ -1954,16 +1943,10 @@ class TelegramCommander:
             score_adj = 0.0
             regime_msg = ""
             if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True) and not is_overseas:
-                # 시장 구분 확인
-                market_type = "KOSPI"
-                try:
-                    cp = api.get_current_price_data(code, False)
-                    if cp.get('rt_cd') == '0' and "코스닥" in cp['output'].get('rprs_mrkt_kor_name', ''):
-                        market_type = "KOSDAQ"
-                except Exception as e:
-                    logger.debug(f"Market type fetch error: {e}")
-                
-                regime, score_adj = analysis.get_market_regime(market_type)
+                #  판정 정본은 analysis.get_market_type (마스터 → KRX 상장목록).
+                #  모르면 국면 보정을 얹지 않는다 — 틀린 지수로 임계값을 흔드느니 안 흔든다.
+                market_type = analysis.get_market_type(code)
+                regime, score_adj = analysis.get_market_regime(market_type) if market_type else ("", 0.0)
                 if score_adj != 0:
                     if not custom_rule: # [수정] 개별 룰이 없을 때만 보정 적용
                         buy_score += score_adj

@@ -23,8 +23,9 @@ def test_market_type_uses_both_masters():
         with patch("modules.analysis._get_master_stock_list", side_effect=fake_master):
             assert analysis._get_market_type_by_master("247540") == "KOSDAQ"
             assert analysis._get_market_type_by_master("005930") == "KOSPI"
-            # 어느 마스터에도 없는 코드는 KOSPI로 폴백
-            assert analysis._get_market_type_by_master("999999") == "KOSPI"
+            #  어느 마스터에도 없으면 '판정 불가'다 — KOSPI 로 단정하지 않는다
+            #  (2026-09-04: 마스터 적재 실패가 전 종목을 KOSPI 로 만들던 결함).
+            assert analysis._get_market_type_by_master("999999") is None
     finally:
         _reset_master_cache()
 

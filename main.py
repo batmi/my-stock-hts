@@ -310,19 +310,35 @@ def preflight_check():
         config.console.print("")
     needs_update = False
     
+    #  [판정된 것만 쓴다 · 2026-09-04] 종전에는 _get_market_type_by_master 가 모르는 종목에
+    #   'KOSPI'를 돌려줬고, 여기서 그것을 파일에 저장했다. 마스터 다운로드가 한 번 실패하면
+    #   두 집합이 모두 비어 **모든 종목이 KOSPI로 덮여** 코스닥 보유 종목이 파일에 영구히
+    #   잘못 굳는다(시장 필터·적응형 임계값이 이 값으로 볼 지수를 고른다). 지금은 판정
+    #   불가(None)면 기존 값을 그대로 둔다.
+    unresolved = []
     for key in ["stocks_kr", "etfs_kr"]:
         for item in config.session.stock_data.get(key, []):
             code = item.get('code')
-            if code:
-                correct_exchange = analysis._get_market_type_by_master(code)
-                if "exchange" not in item or item["exchange"] != correct_exchange:
-                    item["exchange"] = correct_exchange
-                    needs_update = True
-                
+            if not code:
+                continue
+            correct_exchange = analysis.get_market_type(code)
+            if not correct_exchange:
+                if not item.get("exchange"):
+                    unresolved.append(code)
+                continue
+            if item.get("exchange") != correct_exchange:
+                item["exchange"] = correct_exchange
+                needs_update = True
+
     if needs_update:
         config.session.save_stock_config(config.session.stock_data)
         config.session.load_stock_config() # 갱신된 데이터를 메모리 캐시에 다시 로드
         config.console.print("  - 성공: 누락/오류 시장(exchange) 정보 교정 및 업데이트 완료.")
+    if unresolved:
+        config.console.print(
+            f"  - [yellow]주의: 시장 구분을 판정하지 못한 종목 {len(unresolved)}개"
+            f"({', '.join(unresolved[:5])}{' 외' if len(unresolved) > 5 else ''}). "
+            f"코스피 기준으로 판정될 수 있습니다.[/yellow]")
 
     return checks_ok
 

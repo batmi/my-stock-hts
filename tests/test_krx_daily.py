@@ -762,7 +762,7 @@ def test_공식_상장목록은_시장당_한_콜로_이름과_시총을_읽는�
     with _krx_available(), patch('pykrx.stock.get_market_sector_classifications',
                                  side_effect=lambda d, m: frames[m]) as call:
         out = krx_daily._listing_map_from_krx()
-    assert out['005930'] == {'name': '삼성전자', 'marcap': 1.5e15}
+    assert out['005930'] == {'name': '삼성전자', 'marcap': 1.5e15, 'market': 'KOSPI'}
     assert out['247540']['name'] == '에코프로비엠'
     assert call.call_count == 2, "시장당 1콜이어야 한다(종목당 1콜이면 2,700콜이 된다)"
 
@@ -797,7 +797,8 @@ def test_공식_상장목록은_시총이_망가져도_행을_살린다():
     with _krx_available(), patch('pykrx.stock.get_market_sector_classifications',
                                  return_value=frame):
         out = krx_daily._listing_map_from_krx()
-    assert out['005930'] == {'name': '삼성전자', 'marcap': 0.0}
+    #  같은 프레임을 두 시장에 다 물렸으므로 뒤에 오는 KOSDAQ 이 남는다(시장 태깅 확인용).
+    assert out['005930'] == {'name': '삼성전자', 'marcap': 0.0, 'market': 'KOSDAQ'}
 
 
 def test_공식_상장목록은_자격증명이_없으면_None():

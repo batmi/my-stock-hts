@@ -551,12 +551,19 @@ def get_current_price(mode='add'):
 
             new_item = {"name": input_name, "code": code}
             
-            if not is_overseas and res and res.get('rt_cd') == '0':
-                market_name = res['output'].get('rprs_mrkt_kor_name', '')
-                if "KOSDAQ" in market_name or "코스닥" in market_name:
-                    new_item["exchange"] = "KOSDAQ"
+            if not is_overseas:
+                #  판정 정본은 analysis.get_market_type. 종전에는 현재가 응답의
+                #  rprs_mrkt_kor_name 에 '코스닥'이 없으면 곧장 KOSPI 로 적었는데,
+                #  그 필드는 토스 모드 응답에 아예 없어 **추가하는 모든 종목이 KOSPI 로
+                #  파일에 굳었다**. 판정 불가면 exchange 를 비워 두고 넘어간다 —
+                #  추측을 파일에 적는 것보다 다음 기동의 교정에 맡기는 편이 낫다.
+                resolved = analysis.get_market_type(code)
+                if resolved:
+                    new_item["exchange"] = resolved
                 else:
-                    new_item["exchange"] = "KOSPI"
+                    config.console.print(
+                        "[yellow]시장(KOSPI/KOSDAQ) 구분을 판정하지 못했습니다 — "
+                        "다음 기동 시 자동 교정됩니다.[/yellow]")
             elif code in config.session.exchange_cache:
                 new_item["exchange"] = config.session.exchange_cache[code]
             elif is_overseas:
