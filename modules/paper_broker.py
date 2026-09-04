@@ -538,6 +538,53 @@ def daily_ledger():
     return by_date
 
 
+def equity_index(rows, live_total=None, live_seed=None):
+    """자산 곡선을 **입출금 중립** 지수로 바꾼다(첫날 = 1.0).
+
+    [왜 필요한가 · 2026-09-04] 낙폭은 총자산 곡선에서 그대로 재고 있었다. 그런데 가상
+     입출금(adjust_seed)은 현금을 계단처럼 움직이므로, **매매 성과가 조금도 나빠지지
+     않아도 출금액이 그대로 드로다운으로 찍힌다** — 1,000만 계좌에서 300만을 빼면 MDD
+     0.00% → -27.45%(실측). 반대로 입금은 고점을 올려 뒤이은 진짜 낙폭을 부풀린다.
+     실계좌 쪽은 2026-08-30에 같은 문제를 net_transfer 환산으로 정리했는데
+     (daily_asset_history), 5-8 성과 화면이 보는 paper_equity 만 남아 있었다.
+
+    스냅샷 행마다 그 시점 시드가 함께 굳어 있으므로(seed 컬럼), 전날 대비 시드 증감이
+    곧 그 사이의 입출금이다. 그만큼을 뺀 뒤 수익률을 재 이어 붙인다(시간가중수익률).
+    시드가 없는 옛 행은 입출금이 없었던 것으로 본다 — 그 시절엔 입출금 기능이 곡선에
+    반영되지 않았으므로 추정하는 것보다 낫다.
+    """
+    series = [(float(r["total"]), r.get("seed")) for r in rows]
+    if live_total is not None:
+        series.append((float(live_total), live_seed))
+    if not series:
+        return []
+
+    index = [1.0]
+    prev_total, prev_seed = series[0]
+    for total, seed in series[1:]:
+        transfer = 0.0
+        if seed is not None and prev_seed is not None:
+            transfer = float(seed) - float(prev_seed)
+        if prev_total > 0:
+            index.append(index[-1] * ((total - transfer) / prev_total))
+        else:
+            index.append(index[-1])
+        prev_total, prev_seed = total, (seed if seed is not None else prev_seed)
+    return index
+
+
+def max_drawdown(index):
+    """지수 계열의 최대 낙폭(%). 낙폭이 없으면 0.0."""
+    if not index:
+        return 0.0
+    peak, worst = index[0], 0.0
+    for v in index:
+        peak = max(peak, v)
+        if peak > 0:
+            worst = min(worst, (v - peak) / peak * 100)
+    return worst
+
+
 def get_performance():
     """누적 성과 지표. 백테스트 리포트와 같은 정의(PF·승률·MDD·연속손실)를 쓴다."""
     seed = get_seed()
@@ -552,12 +599,10 @@ def get_performance():
     # [기준] 곡선(일별 스냅샷) **뒤에 현재값을 붙여** 낙폭을 잰다. 스냅샷만 쓰면 오늘의
     #  하락은 다음 스냅샷이 찍히기 전까지 MDD에 절대 들어가지 않아, 같은 화면의 총자산은
     #  실시간인데 MDD만 어제 기준인 상태가 된다(2026-08-30 실측).
-    curve = ([e['total'] for e in get_equity_curve()] or [seed]) + [total]
-    peak, mdd = curve[0], 0.0
-    for v in curve:
-        peak = max(peak, v)
-        if peak > 0:
-            mdd = min(mdd, (v - peak) / peak * 100)
+    #  곡선은 입출금 중립 지수로 환산해서 잰다 — 출금액이 그대로 낙폭으로 찍히던 자리다
+    #  (equity_index 참조).
+    rows = get_equity_curve() or [{"total": seed, "seed": seed}]
+    mdd = max_drawdown(equity_index(rows, live_total=total, live_seed=seed))
 
     streak = best_streak = 0
     for f in sells:

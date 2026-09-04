@@ -552,15 +552,23 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 def update_chart_index(chart_dir):
     """차트 디렉토리의 png 를 읽어 index.html 갤러리를 생성한다."""
-    png_files = glob.glob(os.path.join(chart_dir, '*.png'))
-
-    # 수정 시간 기준으로 최신순 정렬
-    png_files.sort(key=os.path.getmtime, reverse=True)
+    # 수정 시간은 **한 번만** 읽고 그 결과로 정렬한다.
+    #  glob 과 getmtime 사이에 파일이 사라지면 정렬 키 계산에서 FileNotFoundError 가 나고
+    #  갤러리 생성이 통째로 중단된다 — index.html 이 옛 내용 그대로 남아 방금 그린 차트가
+    #  안 보인다. 차트를 그리는 쪽은 렌더 락으로 직렬화되지만 이 함수는 메뉴(main.py)에서도
+    #  불리므로, 다른 스레드의 렌더가 옛 몬테카를로 파일을 걷어내는 순간과 겹칠 수 있다.
+    entries = []
+    for f in glob.glob(os.path.join(chart_dir, '*.png')):
+        try:
+            entries.append((f, os.path.getmtime(f)))
+        except OSError:
+            continue          # 그 사이 지워진 파일 — 갤러리에서 빠지면 그만이다
+    entries.sort(key=lambda kv: kv[1], reverse=True)
+    png_files = [f for f, _ in entries]
 
     cards_html = ""
-    for idx, f in enumerate(png_files):
+    for idx, (f, mtime) in enumerate(entries):
         filename = os.path.basename(f)
-        mtime = os.path.getmtime(f)
         date_str = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')
 
         code, subtitle = parse_chart_filename(filename)
