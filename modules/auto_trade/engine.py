@@ -1224,11 +1224,7 @@ class DefaultStrategy:
         # [추가] 52주 위치 계산 (슈퍼 모멘텀 판정용)
         w52_pos = 0.0
         if df is not None and not df.empty:
-            recent_df = df.tail(250)
-            h52 = recent_df['high'].max()
-            l52 = recent_df['low'].min()
-            if h52 > l52:
-                w52_pos = (current_price - l52) / (h52 - l52) * 100
+            w52_pos = indicators.w52_position(df, current_price)
 
         # [추세추종] 추세 품질(회귀 모멘텀 = 연환산 기울기 × R²) — 동시 매수 후보 간 우선순위 랭킹용.
         #   매수 게이트(점수/상태)에는 관여하지 않으며, 이력 부족 시 None(랭킹 최하순위).
@@ -1386,11 +1382,7 @@ class DefaultStrategy:
 
         # 1. 기술적 지표 분석 (시간 청산 시 매수 상태 확인을 위해 우선 수행)
         if df is not None and not df.empty:
-            recent_df = df.tail(250)
-            h52 = recent_df['high'].max()
-            l52 = recent_df['low'].min()
-            if h52 > l52:
-                w52_pos = (current_price - l52) / (h52 - l52) * 100
+            w52_pos = indicators.w52_position(df, current_price)
                 
             ind = indicators.calculate_indicators(df)
             # 전일 RSI (상태 분류용) — calculate_indicators가 계산한 값 재사용 (중복 계산 제거·SSOT)

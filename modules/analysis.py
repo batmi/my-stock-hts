@@ -5025,18 +5025,9 @@ def _w52_high_low(chart_df):
     봉 수가 _W52_MIN_BARS 미만이면 신규상장이거나 차트 수신이 잘린 경우다. 이때 좁아진 밴드를
     그대로 쓰면 52주 위치가 부풀려지므로 호출부가 벤더 값으로 폴백하도록 None을 준다.
     """
-    try:
-        if chart_df is None or chart_df.empty or 'date' not in chart_df.columns:
-            return None, None
-        cutoff = (datetime.now() - timedelta(days=365)).strftime('%Y%m%d')
-        dates = chart_df['date'].astype(str).str.replace('-', '', regex=False).str[:8]
-        win = chart_df[dates >= cutoff]
-        if len(win) < _W52_MIN_BARS:
-            return None, None
-        h, l = float(win['high'].max()), float(win['low'].min())
-        return (h, l) if h > l > 0 else (None, None)
-    except Exception:
-        return None, None
+    # [SSOT 2026-09-04] 구현은 core.indicators 로 내렸다 — 매수·매도 판정과 api 계층까지
+    #  같은 창을 보게 하려면 최하위에 있어야 한다. 여기는 이름만 남긴다.
+    return indicators.w52_high_low(chart_df, now=datetime.now())
 
 
 def _w52_band(chart_df):
@@ -5054,16 +5045,7 @@ def _w52_band(chart_df):
     w52_pos를 사전계산해 인자로 넘기므로 여기에 도달하지 않는다. 도달하더라도 창이 비어
     _w52_high_low가 None을 주고 기존 tail(250) 동작으로 폴백한다.
     """
-    if chart_df is None or getattr(chart_df, 'empty', True):
-        return 0.0, 0.0
-    h, l = _w52_high_low(chart_df)
-    if h is None:
-        try:
-            recent = chart_df.tail(250)
-            h, l = float(recent['high'].max()), float(recent['low'].min())
-        except Exception:
-            return 0.0, 0.0
-    return h, l
+    return indicators.w52_band(chart_df, now=datetime.now())
 
 
 def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_stocks, rules_map, market_regime_adj, reserved_codes, m_codes, bundle):

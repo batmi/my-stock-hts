@@ -485,11 +485,7 @@ def _fetch_price_summaries(entries):
                 diff_str = f"{c_color}{rate:+.2f}% ({int(diff):+})[/]"
 
             w52_pos_val = 0.0
-            recent_df = df.tail(250)
-            h52 = recent_df['high'].max()
-            l52 = recent_df['low'].min()
-            if h52 > l52:
-                w52_pos_val = (current_price - l52) / (h52 - l52) * 100
+            w52_pos_val = indicators.w52_position(df, current_price)
 
             w_color = "[white]"
             if w52_pos_val >= 90: w_color = "[red]"

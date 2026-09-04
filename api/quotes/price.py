@@ -11,6 +11,7 @@ import pandas as pd
 import config
 from core import constants
 from core import context
+from core import indicators
 from brokers import toss_api
 
 #  로거 이름은 분해 전(api.py)과 같은 'api' 로 둔다 — 로그 필터·레벨 설정이 이름을 보므로
@@ -80,9 +81,8 @@ def get_current_price_data(code, is_overseas, include_nxt=True, cache_ttl=3.0, f
                 if curr > 0 and w52h > 0 and (w52h / curr) > 2.5:
                     df = _api().get_chart_data(code, is_overseas=False)
                     if df is not None and not df.empty:
-                        recent_df = df.tail(250)
-                        real_h52 = recent_df['high'].max()
-                        real_l52 = recent_df['low'].min()
+                        # 창 정의는 core.indicators 하나만 쓴다(화면·판정과 같은 52주).
+                        real_h52, real_l52 = indicators.w52_band(df)
                         if real_h52 > 0 and real_l52 > 0:
                             out['w52_hgpr'] = str(int(real_h52))
                             out['w52_lwpr'] = str(int(real_l52))

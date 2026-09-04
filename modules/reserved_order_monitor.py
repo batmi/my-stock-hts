@@ -407,10 +407,7 @@ class ReservedOrderMonitor:
             pass
         w52_pos = 0.0
         try:
-            recent = df.tail(250)
-            h52, l52 = recent['high'].max(), recent['low'].min()
-            if h52 > l52:
-                w52_pos = (ctx['curr_price'] - l52) / (h52 - l52) * 100
+            w52_pos = indicators.w52_position(df, ctx['curr_price'])
         except Exception:
             pass
         state, _, _ = analysis.classify_stock_state(

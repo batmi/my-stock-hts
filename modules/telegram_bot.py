@@ -799,11 +799,7 @@ class TelegramCommander:
 
             w52_pos = 0.0
             if len(df) > 0:
-                recent_df = df.tail(250)
-                h52 = recent_df['high'].max()
-                l52 = recent_df['low'].min()
-                if h52 > l52:
-                    w52_pos = (current_price - l52) / (h52 - l52) * 100
+                w52_pos = indicators.w52_position(df, current_price)
                     
             sm_flag, _ = analysis.check_smart_money_turnaround(code, is_overseas)
             
@@ -1952,11 +1948,7 @@ class TelegramCommander:
             # 52주 위치 계산 (슈퍼 모멘텀 판정용)
             w52_pos = 0.0
             if len(df) > 0:
-                recent_df = df.tail(250)
-                h52 = recent_df['high'].max()
-                l52 = recent_df['low'].min()
-                if h52 > l52:
-                    w52_pos = (current_price - l52) / (h52 - l52) * 100
+                w52_pos = indicators.w52_position(df, current_price)
 
             # [수정] 적응형 임계값 적용
             score_adj = 0.0

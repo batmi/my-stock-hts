@@ -4,6 +4,72 @@ import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 import config
 
+# ==========================================================
+# [52주 밴드] '52주'가 무엇인지 정하는 단 한 곳
+# ==========================================================
+#  250거래일(tail(250))은 실측상 373일치라 52주보다 8일 넓고, 그 경계 밖 극값이 밴드를
+#  통째로 왜곡한다 — TIGER 조선TOP10 이 20.2% → 11.0% 로 바뀐 사고(2026-07-24).
+#  그때 modules/analysis 에 _w52_band 를 만들었지만 **화면 경로만 옮겨졌고**, 매수·매도
+#  판정을 비롯한 8곳은 옛 창을 그대로 들고 있었다(2026-09-04 전수 확인). 판정이 화면과
+#  다른 52주를 보면, 화면에 보이는 근거와 실제로 내려진 결정이 갈린다.
+#  api 계층도 부를 수 있도록 최하위(core)에 둔다.
+W52_DAYS = 365
+W52_MIN_BARS = 200   # 창이 52주를 못 채우면(신규상장·차트 절단) 좁아진 밴드를 그대로 쓰지 않는다
+
+
+def w52_high_low(df, now=None):
+    """'최근 365일'(=52주) 구간의 (고가, 저가). 창을 못 채우면 (None, None).
+
+    창의 기준점은 '오늘'이다 — 과거 시점 프레임(백테스트)에는 쓰지 말 것.
+    그쪽은 backtest.apply_w52_position 이 봉마다 창을 굴린다.
+    """
+    from datetime import datetime, timedelta
+    try:
+        if df is None or getattr(df, 'empty', True) or 'date' not in df.columns:
+            return None, None
+        base = now or datetime.now()
+        cutoff = (base - timedelta(days=W52_DAYS)).strftime('%Y%m%d')
+        dates = df['date'].astype(str).str.replace('-', '', regex=False).str[:8]
+        win = df[dates >= cutoff]
+        if len(win) < W52_MIN_BARS:
+            return None, None
+        h, l = float(win['high'].max()), float(win['low'].min())
+        return (h, l) if h > l > 0 else (None, None)
+    except Exception:
+        return None, None
+
+
+def w52_band(df, now=None):
+    """52주 고/저 밴드 (h52, l52). 산출 불가 시 (0.0, 0.0).
+
+    365일 창을 못 채우는 경우(신규상장·차트 수신 절단)만 보유 봉 전체로 폴백한다.
+    """
+    if df is None or getattr(df, 'empty', True):
+        return 0.0, 0.0
+    h, l = w52_high_low(df, now=now)
+    if h is None:
+        try:
+            h, l = float(df['high'].max()), float(df['low'].min())
+        except Exception:
+            return 0.0, 0.0
+    return h, l
+
+
+def w52_position(df, price, now=None):
+    """현재가의 52주 밴드 내 위치(0~100). 산출 불가하면 0.0.
+
+    판정(점수·상태)과 화면이 **같은 값**을 보게 하는 진입점이다.
+    """
+    try:
+        p = float(price)
+    except (TypeError, ValueError):
+        return 0.0
+    h, l = w52_band(df, now=now)
+    if not (h > l):
+        return 0.0
+    return (p - l) / (h - l) * 100
+
+
 def apply_realtime_price(df, price, market_date=None):
     """차트 마지막 봉(당일 미확정 캔들)의 종가를 실시간 현재가로 덮어쓰고 고가/저가를 보정한다.
 

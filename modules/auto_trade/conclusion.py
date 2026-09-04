@@ -608,11 +608,7 @@ class ConclusionMonitor:
                                                     
                                                 w52_pos = 0.0
                                                 if len(df) > 0:
-                                                    recent_df = df.tail(250)
-                                                    h52 = recent_df['high'].max()
-                                                    l52 = recent_df['low'].min()
-                                                    if h52 > l52:
-                                                        w52_pos = (current_price - l52) / (h52 - l52) * 100
+                                                    w52_pos = indicators.w52_position(df, current_price)
 
                                                 # [수정] 상태 및 사유 조회 (thresholds 적용)
                                                 state, _, state_reason = analysis.classify_stock_state(
