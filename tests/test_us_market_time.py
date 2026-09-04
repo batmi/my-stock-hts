@@ -125,9 +125,14 @@ def _code_only(fn):
 
 @pytest.mark.parametrize("fn", [trading.send_order, trading.modify_order])
 def test_domestic_nxt_window_comes_from_the_session_helper(fn):
-    """종전 구간('0800'~'0850')은 정본(08:00~09:00)과 10분 어긋나 있었다 —
-    08:50~09:00 에 낸 시장가가 NXT 로 ord_dvsn='01' 로 나갔다(NXT 는 시장가 미지원).
-    발주와 정정 두 화면에 같은 구간이 복사돼 있었다."""
+    """같은 NXT 구간이 발주·정정 두 화면에 복사돼 있었다 — 하나만 고치면 갈라진다.
+
+    [정정 2026-09-04] 처음엔 이 구간을 domestic_session_phase()('nxt_pre' = 08:00~09:00)
+    로 모았는데, 그건 **시세 경계**라 주문에는 틀렸다. 08:50~09:00 은 NXT 가 KRX 시가
+    단일가에 맞춰 쉬는 시간이고, 그때 주문은 KRX 동시호가로 들어가 시장가가 정상
+    접수된다. 주문 구간의 정본은 api.nxt_order_window() 다.
+    """
     src = _code_only(fn)
-    assert "api.domestic_session_phase()" in src
-    assert '"0850"' not in src
+    assert "api.nxt_order_window()" in src
+    assert "domestic_session_phase" not in src
+    assert '"0850"' not in src and '"1530"' not in src

@@ -47,24 +47,6 @@ class _Recorder:
         return [s for _, s, _ in self.calls]
 
 
-class _FixedClock:
-    """`datetime.now()` 만 고정한 얇은 대역.
-
-    발주 전 경로(시세 조회)는 국내 시간외단일가 창(15:30~20:00)에서만 지난다. 벽시계를
-    그대로 쓰면 이 테스트는 **하루 중 언제 돌리느냐에 따라 다른 코드를 재게 된다** —
-    20:00 을 넘겨 돌리면 시장가(ord_dvsn='01')로 빠져 시세 조회를 아예 건너뛰고,
-    '발주 전 예외'가 발주 중 예외로 둔갑한다(실측 2026-09-03 20:37).
-    """
-    fixed = datetime(2026, 9, 3, 16, 0, 0)
-
-    @classmethod
-    def now(cls, tz=None):
-        return cls.fixed
-
-    def __getattr__(self, name):     # 나머지는 진짜 datetime 에 맡긴다
-        return getattr(datetime, name)
-
-
 def _run(monitor, rec, boom_at, msgs):
     """boom_at: 'price'(발주 전) 또는 'order'(발주 중) 에서 예외를 낸다."""
     def bad_price(*a, **k):
@@ -75,7 +57,12 @@ def _run(monitor, rec, boom_at, msgs):
     def bad_order(*a, **k):
         raise RuntimeError("주문 전송 폭발")
 
-    with patch('modules.reserved_order_monitor.datetime', _FixedClock), \
+    # NXT 주문 구간을 True 로 고정한다. 발주 전 경로(시세 조회)는 이 구간에서만 지나고,
+    #  그 밖에서는 시장가(ord_dvsn='01')로 빠져 조회를 건너뛰므로 '발주 전 예외'가 발주 중
+    #  예외로 둔갑한다 — 벽시계에 맡기면 하루 중 언제 돌리느냐에 따라 다른 코드를 잰다
+    #  (실측 2026-09-03 20:37). 종전에는 모듈의 datetime 을 갈아끼웠는데, 판정이
+    #  api.nxt_order_window() 로 옮겨지면서 그 패치는 아무것도 통제하지 못하게 됐다.
+    with patch('modules.reserved_order_monitor.api.nxt_order_window', lambda *a, **k: True), \
          patch('modules.reserved_order_monitor.db_manager.db.update_reserved_order_status', rec), \
          patch.object(ReservedOrderMonitor, '_reconcile_sell_qty', lambda s, o: (10, "")), \
          patch('modules.reserved_order_monitor.api.get_current_price', bad_price), \

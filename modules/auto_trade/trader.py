@@ -5109,8 +5109,7 @@ class AutoTrader:
             self.stuck_pending_streak.pop(code, None)
 
             # [추가] 대체거래소(NXT) 운영 시간에는 ETF 및 NXT 비거래 종목 매도 스킵
-            now_time = datetime.now().strftime("%H%M")
-            is_nxt_market = ("1530" <= now_time <= "2000") or ("0800" <= now_time <= "0850")
+            is_nxt_market = api.nxt_order_window()
             is_overseas_stock = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
             
             # [수정] ETF 판정을 관심목록뿐 아니라 종목명 휴리스틱까지 포함하도록 일원화
@@ -5831,8 +5830,7 @@ class AutoTrader:
                 return {'type': 'restricted_skip', 'name': name}
 
             # [추가] 대체거래소(NXT) 운영 시간에는 ETF 및 NXT 비거래 종목 스킵
-            now_time = datetime.now().strftime("%H%M")
-            is_nxt_market = ("1530" <= now_time <= "2000") or ("0800" <= now_time <= "0850")
+            is_nxt_market = api.nxt_order_window()
             is_overseas_stock = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
             
             if is_nxt_market and not is_overseas_stock:

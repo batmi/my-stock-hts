@@ -154,6 +154,25 @@ def domestic_trading_session_open():
         return True
 
 
+# NXT(넥스트레이드) 단독 거래시간 — **주문 구간**의 정본.
+#  프리 08:00~08:50 / 애프터 15:30~20:00. 시세 쪽 경계(_nxt_quote_phase / domestic_session_phase
+#  의 'nxt_pre' = 08:00~09:00)와 **일부러 다르다**: 08:50~09:00 은 NXT 가 KRX 시가 단일가에
+#  맞춰 쉬는 시간이라(auto_trade.common.is_single_price_break 와 같은 경계) 주문은 NXT 가 아니라
+#  KRX 동시호가로 들어간다 — 그 구간에서 시장가는 정상 접수된다.
+#  시세는 '마지막 NXT 체결가를 계속 보여줄 것인가'를 묻고, 주문은 '지금 NXT 로 나가는가'를
+#  묻는다. 두 물음의 답이 다르므로 경계도 다르다.
+NXT_ORDER_WINDOWS = (("0800", "0850"), ("1530", "2000"))
+
+
+def nxt_order_window(now=None):
+    """지금 낸 국내 주문이 NXT(대체거래소)로 나가는 구간인가.
+
+    NXT 는 시장가를 받지 않는다. True 면 호출부는 시장가를 현재가 지정가로 바꿔야 한다.
+    """
+    hm = (now or datetime.now()).strftime("%H%M")
+    return any(lo <= hm <= hi for lo, hi in NXT_ORDER_WINDOWS)
+
+
 # ==========================================================
 # [세션 표기] 화면에 뿌리는 현재가가 '어느 시장 · 어느 세션'의 값인지 알리는 라벨
 #  같은 표라도 08:30의 현재가는 NXT 프리마켓 체결가, 10:00은 KRX 정규장가, 22:00은
@@ -191,7 +210,7 @@ def us_session_phase():
        'after'   : 애프터마켓 (ET 16:00~20:00)
        'day'     : 데이마켓/주간거래 (ET 20:00~익일 04:00, KST 주간)
        'closed'  : 주말·휴장
-    구간 경계는 modules/trading.py의 주문 세션(ord_dvsn) 자동판별과 동일하다.
+    주문 세션(ord_dvsn) 자동판별이 이 함수를 쓴다 — 반대가 아니다. 여기가 정본이다.
     """
     et = _api().now_us_eastern()
     hm = et.strftime('%H%M')

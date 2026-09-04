@@ -760,11 +760,12 @@ def send_order(order_type):
         else:
             # [국내] 시장가 주문 처리
             if is_market_order:
-                # [Fix 2026-09-04] NXT 구간 판정도 api.domestic_session_phase() 로 모은다.
-                #  종전 구간("0800"~"0850")은 정본(08:00~09:00)과 10분 어긋나 있어,
-                #  08:50~09:00 에 낸 시장가 주문이 NXT 로 ord_dvsn='01'(시장가)로 나갔다.
-                #  NXT 는 시장가를 받지 않는다.
-                is_nxt_market = api.domestic_session_phase() in ('nxt_pre', 'nxt_after')
+                # [Fix 2026-09-04] NXT 주문 구간 판정을 api.nxt_order_window() 하나로 모은다.
+                #  같은 구간이 이 파일·예약 감시기·자동매매에 네 벌 복사돼 있었다.
+                #  시세 쪽 경계(domestic_session_phase 의 nxt_pre = 08:00~09:00)를 쓰면 안 된다 —
+                #  08:50~09:00 은 NXT 가 KRX 시가 단일가에 맞춰 쉬는 시간이라, 그때 주문은
+                #  KRX 동시호가로 들어가고 시장가가 정상 접수된다.
+                is_nxt_market = api.nxt_order_window()
                 
                 if curr_price == 0:
                      p = api.get_current_price(stock_code, False)
@@ -775,7 +776,7 @@ def send_order(order_type):
                     ord_dvsn = "00"
                     display_price = f"{curr_price:,}원 (NXT현재가 자동변환)"
                     price = str(int(curr_price))
-                    config.console.print(f"[yellow]안내: NXT장(08:00~09:00, 15:30~20:00)은 시장가 주문이 불가능하여 현재가({curr_price:,}원) 지정가로 자동 변환됩니다.[/yellow]")
+                    config.console.print(f"[yellow]안내: NXT장(08:00~08:50, 15:30~20:00)은 시장가 주문이 불가능하여 현재가({curr_price:,}원) 지정가로 자동 변환됩니다.[/yellow]")
                 else:
                     ord_dvsn = "01"
                     display_price = "시장가(0)"
@@ -1207,9 +1208,9 @@ def modify_order():
     req_qty = final_qty
 
     if not is_overseas:
-        # 발주 화면과 같은 판정을 쓴다(api.domestic_session_phase). 두 화면이 서로 다른
+        # 발주 화면과 같은 판정을 쓴다(api.nxt_order_window). 두 화면이 서로 다른
         #  NXT 구간을 쓰면, 낼 때는 지정가로 변환됐던 주문이 정정할 때 시장가로 나간다.
-        is_nxt_market = api.domestic_session_phase() in ('nxt_pre', 'nxt_after')
+        is_nxt_market = api.nxt_order_window()
 
         if price == "0":
             if is_nxt_market:
@@ -1218,7 +1219,7 @@ def modify_order():
                     p = api.get_current_price(pdno, is_overseas=False)
                     if p > 0: price = str(int(p))
                 except Exception: pass
-                config.console.print(f"[yellow]안내: NXT장(08:00~09:00, 15:30~20:00)은 시장가 정정이 불가능하여 현재가({price}원) 지정가로 자동 변환됩니다.[/yellow]")
+                config.console.print(f"[yellow]안내: NXT장(08:00~08:50, 15:30~20:00)은 시장가 정정이 불가능하여 현재가({price}원) 지정가로 자동 변환됩니다.[/yellow]")
             else:
                 ord_dvsn = "01"
         else:

@@ -1,23 +1,10 @@
 import time
 
 import pytest
-from datetime import datetime as _real_datetime
 from unittest.mock import patch, MagicMock
 import api
 from modules import auto_trade
 
-
-class FixedDatetime(_real_datetime):
-    """now()만 고정하고 나머지(strptime 등)는 실제 datetime 동작을 유지하는 테스트용 대역.
-
-    MagicMock으로 datetime 모듈 객체를 통째로 갈아끼우면 strftime 포맷과 무관하게
-    같은 값이 나오고 strptime도 깨지므로, 서브클래스로 now()만 고정한다.
-    """
-    _FIXED = _real_datetime(2026, 1, 2, 16, 0, 0)  # NXT 운영 시간(16:00)
-
-    @classmethod
-    def now(cls, tz=None):
-        return cls._FIXED
 
 @pytest.fixture(autouse=True)
 def clean_nxt_state():
@@ -246,12 +233,13 @@ def test_krx_routed_orders_skip_the_fallback(real_account):
     assert res['rt_cd'] == '1'
 
 
-# [Fix] patch 대상은 modules.auto_trade가 아니라 실제 코드가 사는 modules.auto_trade.trader다.
-#  (패키지 분해 후에도 옛 경로를 patch하고 있어 mock이 걸리지 않았고, 그 결과 이 테스트는
-#   실행 시각이 실제로 NXT 시간대(15:30~20:00, 08:00~08:50)일 때만 통과하는 시간의존 테스트였다.)
-@patch('modules.auto_trade.trader.datetime', FixedDatetime)
+# [Fix] 시각을 직접 고정하지 않고 판정을 고정한다. NXT 주문 구간의 정본은
+#  api.nxt_order_window() 하나이며(2026-09-04), trader 는 더 이상 datetime 을 보지 않는다.
+#  종전에는 modules.auto_trade.trader.datetime 을 패치했는데, 그 앞에는 아예 잘못된 경로를
+#  패치하고 있어 '실행 시각이 실제 NXT 시간대일 때만 통과하는' 시간의존 테스트였다.
+@patch('modules.auto_trade.api.nxt_order_window', return_value=True)
 @patch('modules.auto_trade.api.is_nxt_tradeable', return_value=False)
-def test_nxt_market_skip_logic(mock_nxt_tradeable):
+def test_nxt_market_skip_logic(mock_nxt_tradeable, mock_window):
     """NXT 장 시간대에 거래 불가 종목(ETF 등) 분석 스킵 테스트"""
     trader = auto_trade.AutoTrader()
     trader.is_running = True

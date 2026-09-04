@@ -10,6 +10,12 @@ from core import indicators
 from modules import db_manager
 import config
 
+
+def _at_common():
+    """지연 import — modules.auto_trade 는 무거워서 모듈 로드 시점에 끌어오지 않는다."""
+    from modules.auto_trade import common
+    return common
+
 logger = logging.getLogger(__name__)
 
 
@@ -220,8 +226,31 @@ class ReservedOrderMonitor:
                 )
                 continue
 
+            # [수정] 장 마감 시간대 API 자원 최적화.
+            #  종전엔 SYSTEM_TRADING_START/END_TIME(자동매매 운용시간)에 연동했으나, 그 기본값이
+            #  KRX 정규장(09:00~15:30)으로 좁아지면서 NXT 프리/애프터에 걸린 예약 주문이 발동하지
+            #  않게 된다. 예약 주문은 사용자가 직접 건 주문이므로 자동매매 운용시간과 무관하게
+            #  '국내 시장이 열려 있는 동안'(NXT 포함 08:00~20:00) 항상 감시한다.
+            #
+            # [Fix 2026-09-04] 이 게이트들이 TIME 조건에는 걸리지 않았다. TIME 은 시세를 안 보므로
+            #  자원 절약과 무관하다는 이유였는데, 판정은 `지금 >= 지정시각` 뿐이라 **지정 시각이
+            #  이미 지난 뒤 처음 도는 주기에 그대로 발동한다**. 낮 동안 프로그램이 꺼져 있다가
+            #  밤에 켜면 14:00 예약이 그 순간(예: 21:00) 발주되고, 장이 닫혀 거부되면서 FAILED 로
+            #  굳는다 — 예약 한 건이 아무것도 못 하고 소진된다. 발동은 거래 가능 시간에만 한다.
+            if not is_overseas and not api.domestic_trading_session_open():
+                continue
+
+            # [추가] 단일가(동시호가) 구간은 체결가를 예측할 수 없어 발동 스킵.
+            #  경계를 직접 들지 않고 auto_trade.common 의 정본을 부른다 — 08:50~09:00(시가)
+            #  과 15:20~15:30(종가)은 자동매매가 진입·청산을 보류하는 구간과 같아야 한다.
+            if not is_overseas and _at_common().is_single_price_break():
+                continue
+            # 해외 주식은 한국 시간 기준 주간(08:00 ~ 16:00)에 감시 생략 (서머타임 넉넉히 고려)
+            if is_overseas and ("0800" <= now_time_str_short < "1600"):
+                continue
+
             trigger, reason = False, ""
-            
+
             if condition_type == 'TIME':
                 tt = order['target_time']
                 if tt:
@@ -230,22 +259,6 @@ class ReservedOrderMonitor:
                     elif len(tt) <= 4 and now_time_str_short >= tt:
                         trigger, reason = True, f"지정 시간({tt}) 도달"
             else:
-                # [수정] 장 마감 시간대 API 자원 최적화.
-                #  종전엔 SYSTEM_TRADING_START/END_TIME(자동매매 운용시간)에 연동했으나, 그 기본값이
-                #  KRX 정규장(09:00~15:30)으로 좁아지면서 NXT 프리/애프터에 걸린 예약 주문이 발동하지
-                #  않게 된다. 예약 주문은 사용자가 직접 건 주문이므로 자동매매 운용시간과 무관하게
-                #  '국내 시장이 열려 있는 동안'(NXT 포함 08:00~20:00) 항상 감시한다.
-                if not is_overseas and not api.domestic_trading_session_open():
-                    continue
-
-                # [추가] 단일가(동시호가) 구간은 체결가를 예측할 수 없어 발동 스킵
-                #  (KRX 장 마감 동시호가는 15:20~15:30 — auto_trade.common과 경계 일치)
-                if not is_overseas and (("0850" <= now_time_str_short < "0900") or ("1520" <= now_time_str_short < "1530")):
-                    continue
-                # 해외 주식은 한국 시간 기준 주간(08:00 ~ 16:00)에 감시 생략 (서머타임 넉넉히 고려)
-                if is_overseas and ("0800" <= now_time_str_short < "1600"):
-                    continue
-
                 if code not in current_prices:
                     current_prices[code] = api.get_current_price(code, is_overseas)
                 curr_price = current_prices[code]
@@ -679,8 +692,8 @@ class ReservedOrderMonitor:
             order_price = float(order['order_price'])
             if order_price == 0:
                 if order['market'] == 'KR':
-                    now_time = datetime.now().strftime("%H%M")
-                    if ("1530" <= now_time <= "2000") or ("0800" <= now_time <= "0850"):
+                    # NXT 구간 판정은 api.nxt_order_window() 가 정본이다(시세 경계와 다르다).
+                    if api.nxt_order_window():
                         ord_dvsn = "00"
                         curr = api.get_current_price(order['code'], is_overseas=False)
                         if curr > 0:
