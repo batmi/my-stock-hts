@@ -5953,12 +5953,20 @@ class AutoTrader:
                 realtime_price = api.get_current_price(code, is_overseas=is_overseas_stock)
                 # 모든 장 종료 후에는 지표용 봉을 갱신하지 않는다(KRX 확정 종가 유지).
                 indicators.apply_realtime_price(df, api.chart_overlay_price(realtime_price, is_overseas_stock))
-            except Exception: pass
+            except Exception as e:      # noqa: BLE001 - 아래 price_is_realtime 이 결과를 들고 간다
+                logger.debug(f"[분석] 실시간 현재가 조회 예외({code}): {e}")
 
             # [주문가 보호] 지표는 KRX 확정 종가로 계산하되, 매수 주문 단가는 항상 실시간가를 쓴다.
             #  이 값이 _execute_buy_orders의 cand['price'] → 주문 지정가가 되므로, NXT 시간대에
             #  KRX 종가로 굳으면 호가에서 벗어나 체결되지 않는다.
-            current_price = float(realtime_price) if realtime_price and realtime_price > 0 else float(df.iloc[-1]['close'])
+            #  [실패를 들고 간다 · 2026-09-04] get_current_price 는 실패해도 예외가 아니라 0을
+            #   돌려준다. 종전에는 그 0이 조용히 '직전 확정 종가'로 폴백해 **주문 지정가·ATR
+            #   손절폭·포지션 수량 세 가지가 한꺼번에** 어긋난 채 주문이 나갔다(셋 다 이 값을
+            #   분모로 쓴다). 관심종목 44개 1년 실측으로 그 오차는 중앙값 2.0%·90분위 6.8%·
+            #   최대 30.0%다. 분석·점수는 어차피 확정 종가 기준이므로 그대로 두고, **주문만**
+            #   막는다(_execute_buy_orders). 판단 불가는 매수 허용이 아니다.
+            price_is_realtime = bool(realtime_price and realtime_price > 0)
+            current_price = float(realtime_price) if price_is_realtime else float(df.iloc[-1]['close'])
 
             # [추가] 상관계수 필터링
             correlation_skip_msg = None
@@ -6165,6 +6173,7 @@ class AutoTrader:
 
                 candidate_data = {
                     'code': code, 'name': name, 'price': current_price,
+                    'price_is_realtime': price_is_realtime,
                     'score': result['score'], 'rsi': result['rsi'], 'adx': result['adx'], 'cci': result['cci'], 'atr': result.get('atr', 0), 'vol_strength': result.get('vol_strength'),
                     'w52_pos': result.get('w52_pos', 0.0),  # [추세추종] 52주 위치 (우선순위 정렬용)
                     'trend_quality': result.get('trend_quality'),  # [추세추종] 추세 품질(회귀 모멘텀, 랭킹 1순위 키)
@@ -6174,7 +6183,8 @@ class AutoTrader:
                     'reentry_msg': reentry_msg
                 }
                 reentry_log = f" [{reentry_msg}]" if reentry_msg else ""
-                log_msg = f"[분석] {name}({code}): 현재가={current_price:,.0f}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}, OBV={obv_str}, SM={sm_str}, SAR={sar_str}, 체결={vol_val}{rule_msg}{vol_reject_msg}{reentry_log}"
+                stale_mark = "" if price_is_realtime else "(직전종가·실시간 조회 실패)"
+                log_msg = f"[분석] {name}({code}): 현재가={current_price:,.0f}{stale_mark}, 점수={result['score']}, 상태={result['state']}, RSI={rsi_val}, ADX={adx_val}, CCI={cci_val}, OBV={obv_str}, SM={sm_str}, SAR={sar_str}, 체결={vol_val}{rule_msg}{vol_reject_msg}{reentry_log}"
                 
                 if correlation_skip_msg:
                     log_msg += f" {correlation_skip_msg}"
@@ -6421,7 +6431,17 @@ class AutoTrader:
     def _execute_buy_orders(self, candidates, avail_cash, invest_ratio, current_holdings_count, max_holdings):
         for cand in candidates:
             if not self.is_running: break
-            
+
+            # [판단 불가는 매수 허용이 아니다] 실시간 현재가를 못 받은 후보는 주문하지 않는다.
+            #  아래에서 이 값 하나로 주문 지정가·ATR 손절폭·포지션 수량이 전부 정해진다.
+            #  직전 확정 종가로 대신하면 셋이 같은 방향으로 함께 틀어진다(1년 실측 중앙값 2.0%·
+            #  90분위 6.8%·최대 30.0%). 못 사는 종목이 생기는 건 다음 주기에 회복된다.
+            if not cand.get('price_is_realtime', True):
+                self.log(f"매수 보류: {cand.get('name', '')}({cand.get('code', '')}) - "
+                         f"실시간 현재가 조회 실패. 직전 확정 종가로는 주문가·손절폭·수량이 "
+                         f"함께 어긋나므로 진입하지 않습니다(다음 주기 재평가).")
+                continue
+
             # [수정] 최소 주문 가능 금액 하향 조정
             if avail_cash < 1000:
                 self.log(f"매수 중단: 잔여 예수금 부족 ({avail_cash:,}원)")

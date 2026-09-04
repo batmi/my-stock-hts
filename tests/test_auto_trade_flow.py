@@ -50,6 +50,9 @@ def mock_chart_df():
 @patch('time.sleep')
 @patch('api.get_investor_trend', return_value=[])
 @patch('api.get_current_price_data', return_value={'rt_cd': '0', 'output': {}})
+#  실시간 현재가가 없으면 매수는 보류된다(진입가·손절폭·수량이 함께 어긋나므로).
+#  이 테스트는 매수 집행 경로를 보는 것이라 정상 시세를 명시한다.
+@patch('api.get_current_price', return_value=10000.0)
 @patch('modules.auto_trade.analysis.get_market_regime', return_value=("Sideways", 0.0))
 @patch('modules.auto_trade.api.prefetch_multiple_current_prices')
 @patch('modules.auto_trade.load_restricted_stocks', return_value={})
@@ -60,7 +63,7 @@ def mock_chart_df():
 @patch('api.place_order')
 @patch('core.indicators.calculate_indicators')
 @patch('modules.auto_trade.db_manager.db.get_all_stock_strategies', return_value=[])
-def test_check_buy_conditions(mock_get_rules, mock_calc, mock_place, mock_qty, mock_ob, mock_vol, mock_get_chart, mock_restricted, mock_prefetch, mock_regime, mock_cp, mock_inv, mock_sleep, mock_score, mock_classify, trader, mock_chart_df):
+def test_check_buy_conditions(mock_get_rules, mock_calc, mock_place, mock_qty, mock_ob, mock_vol, mock_get_chart, mock_restricted, mock_prefetch, mock_regime, mock_price, mock_cp, mock_inv, mock_sleep, mock_score, mock_classify, trader, mock_chart_df):
     """매수 조건 점검 및 주문 실행 테스트"""
     # Setup
     trader.is_running = True
