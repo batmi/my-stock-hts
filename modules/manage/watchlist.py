@@ -190,6 +190,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
             table_d.add_column("외인률", justify="right") # [추가]
             table_d.add_column("수급(개/외/기)", justify="center") # [수정]
             
+            rows_buf = []
             for i, (idx, row) in enumerate(recent_df.iterrows()):
                 date_str = str(row['date'])
                 if len(date_str) == 8: date_str = f"{date_str[:4]}/{date_str[4:6]}/{date_str[6:]}"
@@ -202,7 +203,10 @@ def show_extended_info(code, is_overseas, basic_output=None):
                 def fmt_diff(val): return f"{int(val):+}"
                 
                 c_color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
-                diff_str = f"{c_color}{fmt_diff(diff)} ({rate:+.2f}%)[/]"
+                #  [정렬] 등락폭·등락률을 값 단위로 나눠 담고, 표에 넣기 직전 폭을 맞춘다
+                #   (utils.align_rows_column). 셀 전체 우측 정렬은 오른쪽 끝만 맞춘다.
+                diff_str = (f"{c_color}{fmt_diff(diff)}[/]{utils.CELL_PART_SEP}"
+                            f"{c_color}({rate:+.2f}%)[/]")
                 
                 ma5_val, ma20_val = row['ma5'], row['ma20']
                 ma60_val, ma120_val = row['ma60'], row['ma120']
@@ -231,20 +235,10 @@ def show_extended_info(code, is_overseas, basic_output=None):
                     if pd.isna(val): return "[dim]-[/dim]"
                     return f"[{color}]{fmt_p(val)}[/]"
 
-                # OBV 포맷팅
-                obv_val = row['OBV']
-                obv_trend = obv_val > row['OBV_MA'] if not pd.isna(row['OBV_MA']) else True
-                obv_c = "red" if obv_trend else "blue"
-                if pd.isna(obv_val):
-                    obv_disp = "[dim]-[/dim]"
-                else:
-                    abs_val = abs(obv_val)
-                    if abs_val >= 999_950_000_000: obv_str = f"{obv_val/1_000_000_000_000:,.1f}T"
-                    elif abs_val >= 999_950_000: obv_str = f"{obv_val/1_000_000_000:,.1f}B"
-                    elif abs_val >= 999_500: obv_str = f"{obv_val/1_000_000:,.1f}M"
-                    elif abs_val >= 999.5: obv_str = f"{obv_val/1_000:,.0f}K"
-                    else: obv_str = f"{obv_val:,.0f}"
-                    obv_disp = f"[{obv_c}]{obv_str}[/]"
+                #  OBV 셀은 utils 가 단일 소스다 — 종전에는 이 블록이 세 표에 복제돼 있었고
+                #  OBV 이동평균이 없을 때의 색(여기는 '상승'으로 폴백)과 결측 표기가 표마다
+                #  달랐다. 판정 불가는 white 로 통일한다.
+                obv_disp = utils.format_obv_cell(row['OBV'], row['OBV_MA'])
 
                 # [추가] 수급 데이터 포맷팅
                 inv_str = "[dim]-[/dim]"
@@ -275,14 +269,17 @@ def show_extended_info(code, is_overseas, basic_output=None):
                     
                     inv_str = f"{_fmt_i(p)} {_fmt_i(f)} {_fmt_i(o)}"
 
-                table_d.add_row(
+                rows_buf.append([
                     date_str, fmt_p(close), diff_str, fmt_p(row['open']), fmt_p(row['high']), fmt_p(row['low']),
                     fmt_ma(ma5_val, get_ma_color(ma5_val, 5)), fmt_ma(ma20_val, get_ma_color(ma20_val, 20)),
                     fmt_ma(ma60_val, get_ma_color(ma60_val, 60)), fmt_ma(ma120_val, get_ma_color(ma120_val, 120)),
                     obv_disp, foreign_rate_str, inv_str
-                )
-                
-                if (i + 1) % 5 == 0 and (i + 1) < len(recent_df):
+                ])
+
+            utils.align_rows_column(rows_buf, 2)      # 등락 컬럼
+            for i, row_data in enumerate(rows_buf):
+                table_d.add_row(*row_data)
+                if (i + 1) % 5 == 0 and (i + 1) < len(rows_buf):
                     table_d.add_section()
             config.console.print(table_d)
         else:
@@ -395,6 +392,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
             table_d.add_column("60일선", justify="right")
             table_d.add_column("120일선", justify="right")
             
+            rows_buf = []
             for i, (idx, row) in enumerate(recent_df.iterrows()):
                 date_str = str(row['date'])
                 if len(date_str) == 8: date_str = f"{date_str[:4]}/{date_str[4:6]}/{date_str[6:]}"
@@ -407,7 +405,10 @@ def show_extended_info(code, is_overseas, basic_output=None):
                 def fmt_diff(val): return f"{val:+.2f}"
                 
                 c_color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
-                diff_str = f"{c_color}{fmt_diff(diff)} ({rate:+.2f}%)[/]"
+                #  [정렬] 등락폭·등락률을 값 단위로 나눠 담고, 표에 넣기 직전 폭을 맞춘다
+                #   (utils.align_rows_column). 셀 전체 우측 정렬은 오른쪽 끝만 맞춘다.
+                diff_str = (f"{c_color}{fmt_diff(diff)}[/]{utils.CELL_PART_SEP}"
+                            f"{c_color}({rate:+.2f}%)[/]")
                 
                 ma5_val, ma20_val = row['ma5'], row['ma20']
                 ma60_val, ma120_val = row['ma60'], row['ma120']
@@ -436,28 +437,21 @@ def show_extended_info(code, is_overseas, basic_output=None):
                     if pd.isna(val): return "-"
                     return f"[{color}]{fmt_p(val)}[/]"
 
-                # OBV 포맷팅
-                obv_val = row['OBV']
-                obv_trend = obv_val > row['OBV_MA'] if not pd.isna(row['OBV_MA']) else True
-                obv_c = "red" if obv_trend else "blue"
-                if pd.isna(obv_val):
-                    obv_disp = "-"
-                else:
-                    abs_val = abs(obv_val)
-                    if abs_val >= 999_950_000_000: obv_str = f"{obv_val/1_000_000_000_000:,.1f}T"
-                    elif abs_val >= 999_950_000: obv_str = f"{obv_val/1_000_000_000:,.1f}B"
-                    elif abs_val >= 999_500: obv_str = f"{obv_val/1_000_000:,.1f}M"
-                    elif abs_val >= 999.5: obv_str = f"{obv_val/1_000:,.0f}K"
-                    else: obv_str = f"{obv_val:,.0f}"
-                    obv_disp = f"[{obv_c}]{obv_str}[/]"
+                #  OBV 셀은 utils 가 단일 소스다 — 종전에는 이 블록이 세 표에 복제돼 있었고
+                #  OBV 이동평균이 없을 때의 색(여기는 '상승'으로 폴백)과 결측 표기가 표마다
+                #  달랐다. 판정 불가는 white 로 통일한다.
+                obv_disp = utils.format_obv_cell(row['OBV'], row['OBV_MA'])
 
-                table_d.add_row(
+                rows_buf.append([
                     date_str, fmt_p(close), diff_str, fmt_p(row['open']), fmt_p(row['high']), fmt_p(row['low']), obv_disp,
                     fmt_ma(ma5_val, get_ma_color(ma5_val, 5)), fmt_ma(ma20_val, get_ma_color(ma20_val, 20)),
                     fmt_ma(ma60_val, get_ma_color(ma60_val, 60)), fmt_ma(ma120_val, get_ma_color(ma120_val, 120))
-                )
-                
-                if (i + 1) % 5 == 0 and (i + 1) < len(recent_df):
+                ])
+
+            utils.align_rows_column(rows_buf, 2)      # 등락 컬럼
+            for i, row_data in enumerate(rows_buf):
+                table_d.add_row(*row_data)
+                if (i + 1) % 5 == 0 and (i + 1) < len(rows_buf):
                     table_d.add_section()
             config.console.print(table_d)
 

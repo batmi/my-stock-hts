@@ -208,6 +208,12 @@ def test_지수_행은_정수로_표시되고_OBV는_죽는다():
 
     assert res['status'] == 'success'
     name_cell, curr_cell, change_cell, high52_cell = res['row_data'][:4]
+    #  등락 셀은 값 경계(utils.CELL_PART_SEP)로 나뉜 채 만들어지고, 표에 넣기 직전에
+    #  폭이 맞춰진다 — 화면에 찍히는 모양으로 되돌려 본다.
+    from rich.markup import render
+
+    from core import utils as _u
+    change_cell = render(change_cell.replace(_u.CELL_PART_SEP, " ")).plain
     assert GOLD in name_cell
     assert "214,950" in curr_cell             # 마지막 종가 = 200000 + 299*50
     assert "원" not in curr_cell              # 지수 표는 단위 없이 숫자만 쓴다

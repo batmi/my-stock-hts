@@ -253,11 +253,16 @@ def get_order_book(code, is_overseas=False):
                     return res
         return {'rt_cd': '9999'}
 
-def is_toss_ask_bid_window():
-    """[토스] 매도잔량비 유효 시간창(NXT 운영시간 08:00~20:00, 휴장일 제외) 여부.
+def is_strength_display_window():
+    """장중 체결 지표(체결강도·매도잔량비)를 표에 보여도 되는 시간창.
 
-    KIS 모드의 체결강도 표시 시간창과 동일. 표시 경로(테이블 헤더/셀)와
-    get_ask_bid_ratio 게이트가 공유해 '값 미제공 시 컬럼 표기 자체를 생략'을 일관 처리한다.
+    거래일 08:00~20:00 — NXT 프리마켓부터 애프터마켓까지다. 그 밖(야간·주말·휴장일)에는
+    호가가 서지 않아 값이 굳거나 0으로 내려온다. 굳은 값을 그대로 두면 '지금 이 종목의
+    체결강도'로 읽히므로, 값이 아니라 **컬럼 표기 자체를 생략**한다.
+
+    [2026-09-04] 종전에는 이 창을 토스 매도비만 지켰고(is_toss_ask_bid_window),
+     KIS 체결강도는 시간과 무관하게 늘 표기됐다 — 같은 자리의 같은 성격의 값인데
+     모드에 따라 규칙이 달랐다. 하나로 모은다.
     """
     try:
         if _api().is_holiday_today():
@@ -266,6 +271,11 @@ def is_toss_ask_bid_window():
         pass
     _now_hhmm = datetime.now().strftime("%H%M")
     return "0800" <= _now_hhmm <= "2000"
+
+
+def is_toss_ask_bid_window():
+    """[토스] 매도잔량비 유효 시간창. 정의는 is_strength_display_window 하나다."""
+    return is_strength_display_window()
 
 
 def get_ask_bid_ratio(code, is_overseas=False):

@@ -4909,10 +4909,16 @@ def _collect_table_data(item, title, is_overseas, use_investor_data, chart_df=No
                 # [최적화] 차트는 1단계에서 받았으면 재수신하지 않는다(미제공 시에만 캐시 경로로 조회).
                 fut_chart = ex.submit(api.get_chart_data, code, is_overseas, 'daily', False) if chart_df is None else None
                 fut_inv = ex.submit(api.get_investor_trend, code) if not is_overseas and use_investor_data else None
-                fut_vol = ex.submit(api.get_realtime_vol_strength, code, is_overseas, cached_ex, True, 0) if not is_overseas and not use_investor_data else None
+                #  체결강도는 표기 시간창(거래일 08:00~20:00) 밖에서는 화면에 쓰지 않는다
+                #  → 조회 자체를 생략한다(종목당 REST 1건. 라즈베리파이·TPS 절감).
+                fut_vol = (ex.submit(api.get_realtime_vol_strength, code, is_overseas, cached_ex, True, 0)
+                           if (not is_overseas and not use_investor_data
+                               and api.is_strength_display_window()) else None)
                 fut_detail = ex.submit(api.fetch_overseas_detail_price, code, cached_ex) if is_overseas else None
                 # [토스] 체결강도 대체 지표(매도잔량비)용 호가 조회
-                fut_ab = ex.submit(api.get_ask_bid_ratio, code, False) if (config.session.is_toss and not is_overseas) else None
+                fut_ab = (ex.submit(api.get_ask_bid_ratio, code, False)
+                          if (config.session.is_toss and not is_overseas
+                              and api.is_strength_display_window()) else None)
 
                 curr_data = fut_curr.result() if fut_curr is not None else preloaded_curr
                 if fut_chart is not None:
@@ -5164,6 +5170,9 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                         strength_display = f" {ab_color}[{ask_bid_ratio:.2f}][/]"
                     else:
                         strength_display = " [dim][-][/dim]"
+                elif not api.is_strength_display_window():
+                    #  헤더의 ' [강도]' 생략과 짝 — 창 밖에서는 셀도 비운다.
+                    strength_display = ""
                 elif rt_strength is not None:
                     if rt_strength >= 150: s_color = "[magenta]"
                     elif rt_strength >= 120: s_color = "[red]"
@@ -5627,13 +5636,13 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None, is_
     table.add_column("현재가", justify="right")
     col_header = "등락폭 (등락률)"
     if not is_overseas and not use_investor_data:
-        if config.session.is_toss:
-            # [수정] 토스 매도비는 NXT 운영시간(08:00~20:00)에만 표시 — 시간창 밖에는
-            #  셀 표기와 함께 헤더의 컬럼 표기도 생략 (KIS 체결강도 표시 창과 동일 동작)
-            if api.is_toss_ask_bid_window():
-                col_header += " [매도비]"
-        else:
-            col_header += " [강도]"
+        # [수정 2026-09-04] 장중 체결 지표(체결강도·매도잔량비)는 거래일 08:00~20:00
+        #  (NXT 프리~애프터)에만 표기한다. 그 밖에는 호가가 서지 않아 값이 굳거나 0으로
+        #  내려오는데, 굳은 값이 '지금의 체결강도'로 읽히므로 컬럼 표기 자체를 생략한다.
+        #  종전에는 토스 매도비만 이 창을 지키고 KIS 체결강도는 늘 표기됐다 — 같은 자리의
+        #  같은 성격의 값이 모드에 따라 다른 규칙을 따르던 것을 하나로 모은다.
+        if api.is_strength_display_window():
+            col_header += " [매도비]" if config.session.is_toss else " [강도]"
     table.add_column(col_header, justify="right")
     # [표기] "52주"는 52주 고점(가격)으로 오해되기 쉬워 "52W%"로 바꾼다 — 값은 저점~고점
     #  밴드 내 위치(%)다. 표시폭 4로 기존 헤더와 같아 컬럼/전체 폭은 변하지 않는다.
@@ -6298,25 +6307,8 @@ def _print_period_price_common(code, is_overseas, limit=20):
             if pd.isna(val): return "[dim]-[/dim]"
             return f"[{color}]{fmt_p(val)}[/]"
 
-        # OBV 포맷팅
-        obv_val = row['OBV']
-        obv_ma_val = row['OBV_MA']
-        if pd.isna(obv_val):
-            obv_disp = "[dim]-[/dim]"
-        else:
-            obv_trend = obv_val > obv_ma_val if not pd.isna(obv_ma_val) else None
-            if obv_trend is None:
-                obv_c = "white"
-            else:
-                obv_c = "red" if obv_trend else "blue"
-            
-            abs_val = abs(obv_val)
-            if abs_val >= 999_950_000_000: obv_str = f"{obv_val/1_000_000_000_000:,.1f}T"
-            elif abs_val >= 999_950_000: obv_str = f"{obv_val/1_000_000_000:,.1f}B"
-            elif abs_val >= 999_500: obv_str = f"{obv_val/1_000_000:,.1f}M"
-            elif abs_val >= 999.5: obv_str = f"{obv_val/1_000:,.0f}K"
-            else: obv_str = f"{obv_val:,.0f}"
-            obv_disp = f"[{obv_c}]{obv_str}[/]"
+        #  OBV 셀은 utils 가 단일 소스다(색 규칙 포함 — 판정 불가는 white).
+        obv_disp = utils.format_obv_cell(row['OBV'], row['OBV_MA'])
 
         # [추가] 수급 데이터 포맷팅
         inv_str = "[dim]-[/dim]"

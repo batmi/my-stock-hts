@@ -892,14 +892,21 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             diff_color = "[red]" if diff > 0 else ("[blue]" if diff < 0 else "[white]")
             
             if "미국채" in name and "선물" not in name:
-                change_str = f"{diff_color}{diff:+.3f}p ({rate:+.2f}%)[/]"
+                change_str = (f"{diff_color}{diff:+.3f}p[/]{utils.CELL_PART_SEP}"
+                              f"{diff_color}({rate:+.2f}%)[/]")
                 curr_fmt = f"{current:,.3f}%"
             elif name == KRX_GOLD_INDEX:
                 # 원/g은 20만원대 정수 호가라 소수 두 자리가 자리만 차지한다
-                change_str = f"{diff_color}{diff:+,.0f} ({rate:+.2f}%)[/]"
+                change_str = (f"{diff_color}{diff:+,.0f}[/]{utils.CELL_PART_SEP}"
+                              f"{diff_color}({rate:+.2f}%)[/]")
                 curr_fmt = f"{current:,.0f}"
             else:
-                change_str = f"{diff_color}{diff:+.2f} ({rate:+.2f}%)[/]"
+                #  [정렬] 등락폭·등락률을 값 단위로 나눠 담는다. 지수 표는 스케일이 제각각이라
+                #   (미국채 +0.031p · 금 +2,340 · 나스닥 -123.45) 셀 전체 우측 정렬로는 등락률이
+                #   세로로 안 읽힌다. 표에 넣기 직전 utils.align_rows_column 이 폭을 맞춘다
+                #   (실측 컬럼 +1칸).
+                change_str = (f"{diff_color}{diff:+.2f}[/]{utils.CELL_PART_SEP}"
+                              f"{diff_color}({rate:+.2f}%)[/]")
                 curr_fmt = f"{current:,.2f}"
                 if name == "달러환율": curr_fmt += "원"
 
@@ -1454,6 +1461,11 @@ def _show_market_indices_core(target_indices=None):
                 # 멈춘 워커를 기다리지 않는다(with 블록은 항상 join하므로 쓰지 않는다).
                 #  아직 시작하지 않은 작업은 취소하고, 진행 중인 호출은 자체 타임아웃으로 끝난다.
                 executor.shutdown(wait=False, cancel_futures=True)
+
+            #  등락 컬럼(2번)은 한 셀에 값 둘을 담는다 — 표에 넣기 전 성공 행끼리 폭을 맞춘다.
+            #  실패 행("-"·"수신 실패")은 구분자가 없어 align_cell_parts 가 손대지 않는다.
+            utils.align_rows_column([r['row_data'] for r in results_dict.values()
+                                     if r.get('status') == 'success' and r.get('row_data')], 2)
 
             for name, ticker in indices_map.items():
                 if name in SECTION_START_INDICES:

@@ -794,3 +794,37 @@ def align_rows_column(rows, index):
         if len(r) > index:
             r[index] = c
     return rows
+
+
+def format_obv_cell(obv_val, obv_ma_val):
+    """OBV 셀(축약 표기 + 추세 색). 표마다 복제돼 있던 블록의 단일 소스.
+
+    [왜 모으는가 · 2026-09-04] 같은 블록이 세 곳(기간별 시세·관심종목 국내/해외 상세)에
+     복제돼 있었고, **OBV 이동평균이 없을 때의 색이 갈렸다**.
+       · 기간별 시세  — 판정 불가 → white(모른다)
+       · 관심종목 상세 — 판정 불가 → True 로 폴백 → red(상승)
+     모르는 것을 상승으로 칠하면 화면이 없는 신호를 만들어 낸다. 'white=모름'으로 통일한다.
+     (지표 오버레이 게이트를 SSOT 로 되돌린 것과 같은 계열의 정리다.)
+    """
+    import pandas as pd
+
+    if obv_val is None or pd.isna(obv_val):
+        return "[dim]-[/dim]"
+
+    if obv_ma_val is None or pd.isna(obv_ma_val):
+        color = "white"                      # 판정 불가 — 상승도 하락도 아니다
+    else:
+        color = "red" if obv_val > obv_ma_val else "blue"
+
+    abs_val = abs(obv_val)
+    if abs_val >= 999_950_000_000:
+        text = f"{obv_val / 1_000_000_000_000:,.1f}T"
+    elif abs_val >= 999_950_000:
+        text = f"{obv_val / 1_000_000_000:,.1f}B"
+    elif abs_val >= 999_500:
+        text = f"{obv_val / 1_000_000:,.1f}M"
+    elif abs_val >= 999.5:
+        text = f"{obv_val / 1_000:,.0f}K"
+    else:
+        text = f"{obv_val:,.0f}"
+    return f"[{color}]{text}[/]"
