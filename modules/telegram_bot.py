@@ -1031,10 +1031,13 @@ class TelegramCommander:
                     logger.debug(f"Weight parse error in _cmd_rules: {e}")
                 
             sl_str = f"ATR(x{r.get('atr_stop_multiplier', 2.0)})" if r.get('use_atr_stop') else f"{r['stop_loss']}%"
+            #  [Fix 2026-09-04] 기한 폴백이 리터럴 10 이었다 — 정본은 config(현재 15)이고
+            #   룰에 값이 없으면 판정도 그리로 폴백한다. 안내가 실제 청산 기한과 달랐다.
+            from modules.auto_trade import common as _at_common
 
             msg += (f"\n• {name}({code})\n"
                     f"   매수: {r['buy_score']}점 / RSI {r.get('buy_rsi', 65.0)}↓ / 체결 {r.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0))}% / 비대칭 {r.get('buy_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0))}배↑\n"
-                    f"   청산: 익절 +{r['take_profit']}% / 과열 RSI {r.get('take_profit_rsi', 75.0)}↑ / TS +{r['ts_activation']}%(-{r['ts_callback']}%) / 기한 {r.get('time_stop_days', 10)}일\n"
+                    f"   청산: 익절 +{r['take_profit']}% / 과열 RSI {r.get('take_profit_rsi', 75.0)}↑ / TS +{r['ts_activation']}%(-{r['ts_callback']}%) / 기한 {_at_common.effective_time_stop_days(rule=r)}일\n"
                     f"   리스크: 비중 {config.format_invest_ratio(r.get('invest_ratio'))} / 손절 {sl_str}\n"
                     f"   가중치: {w_str}\n"
                     f"{memo_part}")

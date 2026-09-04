@@ -686,6 +686,30 @@ def is_single_price_break(now=None):
     current_time = (now or datetime.now()).strftime("%H%M")
     return ("0850" <= current_time < "0900") or ("1520" <= current_time < "1530")
 
+def effective_time_stop_days(code=None, rule=None):
+    """이 종목에 **실제로 적용되는** 시간청산 일수. 개별 룰이 있으면 그 값이 이긴다.
+
+    [왜 필요한가 · 2026-09-04] 청산 판정(engine.analyze_sell)은
+    `thresholds["TIME_STOP_DAYS"] = _rv('time_stop_days', 전역)` 으로 개별 룰을 존중하는데,
+    화면들은 전역 config 만 읽었다 — 룰로 기한을 바꾼 종목에서 잔고의 'D-n'과 보유일
+    경고가 실제 청산 시점과 어긋났다. 표시선은 판정과 같은 값을 읽어야 한다.
+
+    rule 을 이미 들고 있으면 넘긴다(표를 그리며 종목마다 DB 를 다시 뒤지지 않도록).
+    """
+    default = config.SELL_STRATEGY["TIME_STOP_DAYS"]
+    if rule is None and code:
+        try:
+            from modules import db_manager
+            rule = db_manager.db.get_stock_strategy(code)
+        except Exception as e:      # noqa: BLE001 - 조회 실패는 전역값으로 (판정도 그렇게 폴백한다)
+            logger.debug(f"[TimeStop] 개별 룰 조회 실패({code}): {e}")
+            rule = None
+    if not rule:
+        return default
+    val = rule.get('time_stop_days')
+    return default if val in (None, "") else int(val)
+
+
 # [추가] 주문 상태 상수 정의 (Order State Machine)
 class OrderStatus:
     IDLE = "IDLE"

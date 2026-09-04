@@ -10,8 +10,23 @@ import config
 
 @pytest.fixture
 def strategy():
-    """테스트용 전략 인스턴스 제공 픽스처"""
-    return DefaultStrategy()
+    """테스트용 전략 인스턴스 제공 픽스처.
+
+    [Fix 2026-09-04] 이 파일의 테스트들은 config.SELL_STRATEGY 를 **전역으로** 바꾼다
+    (특히 test_time_stop_disabled 는 TIME_STOP_USE 를 False 로 둔 채 끝났다). 같은
+    워커에서 뒤에 도는 테스트가 그 값을 물려받아, 코드가 아니라 실행 순서 때문에
+    실패했다. 건드린 키를 되돌린다.
+    """
+    keys = ("TIME_STOP_USE", "TIME_STOP_DAYS", "TIME_STOP_MIN_PROFIT_RATE")
+    saved = {k: config.SELL_STRATEGY.get(k) for k in keys}
+    try:
+        yield DefaultStrategy()
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                config.SELL_STRATEGY.pop(k, None)
+            else:
+                config.SELL_STRATEGY[k] = v
 
 def test_time_stop_trigger(strategy):
     """1. 시간 청산 발동: 설정된 보유 기간을 초과하고 최소 기대 수익률에 미달한 경우"""

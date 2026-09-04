@@ -180,8 +180,12 @@ def _tv_signin(user, pw):
 
 # tvdatafeed는 PyPI 미배포(git 전용)라 배포 환경(예: 라즈베리파이)에 누락될 수 있다.
 # 설치는 run.sh의 '필수 라이브러리 설치 상태 스캔' 단계가 git URL로 담당한다(여기서는 조회만).
-def _get_tvdatafeed():
+def _get_tvdatafeed(force=False):
     """tvDatafeed 인스턴스를 지연 생성해 재사용한다. 미설치/초기화 실패 시 None.
+
+    force=True 는 **의도적으로 인스턴스를 버리고 다시 만드는 복구 경로** 전용이다
+    (익명 웹소켓이 불량 상태로 굳었을 때). 그 경로는 방금 스스로 인스턴스를 None 으로
+    만들었으므로 회로차단에 막히면 복구 자체가 불가능해진다.
 
     TV_USERNAME/TV_PASSWORD(config, ~/.htsrc의 export)가 모두 있으면 로그인 모드로 생성하고,
     없으면 종전처럼 익명(nologin)으로 생성한다. 로그인 결과는 파일 로그에 남긴다
@@ -190,9 +194,20 @@ def _get_tvdatafeed():
     global _TVDATAFEED_INSTANCE, _TVDATAFEED_LOGGED_IN
     if _TVDATAFEED_INSTANCE is not None:
         return _TVDATAFEED_INSTANCE
+    #  [Fix 2026-09-04] **초기화 실패에도 회로차단을 건다.** 종전에는 생성이 실패하면
+    #   인스턴스가 None 으로 남고, 다음 호출이 곧바로 초기화를 통째로 다시 밟았다.
+    #   그 안에는 캐시 토큰이 없을 때의 실제 로그인(_tv_signin, HTTP POST)이 들어 있다.
+    #   토스 모드 지수 화면 한 번이 tvDatafeed 를 7회 부르므로(코스피200·코스닥150·
+    #   국채 4테너·HY OAS), TV 가 흔들리는 동안 로그인 시도가 화면 한 번에 7회씩 나갔다
+    #   — TradingView 는 반복 로그인에 캡차를 물린다(토큰 캐시를 7일 두는 이유와 같다).
+    #   차단 중에는 조용히 None 을 돌려주고, 호출부는 이미 그 경우를 다룬다(폴백/캐시).
+    if not force and _tv_circuit_open():
+        return None
     with _TVDATAFEED_INIT_LOCK:
         if _TVDATAFEED_INSTANCE is not None:  # 락 대기 중 다른 스레드가 생성했으면 재사용
             return _TVDATAFEED_INSTANCE
+        if not force and _tv_circuit_open():  # 락을 기다리는 사이에 차단이 걸렸을 수 있다
+            return None
         return _init_tvdatafeed()
 
 
@@ -240,6 +255,9 @@ def _init_tvdatafeed():
         logger.debug(f"[TVDATAFEED] 초기화 실패(라이브러리 미설치 가능): {e}")
         _TVDATAFEED_INSTANCE = None
         _TVDATAFEED_LOGGED_IN = False
+        #  실패를 공유 회로차단에 기록한다 — 다음 호출이 로그인부터 다시 밟지 않도록.
+        #  사용자가 화면에서 재시도(y)하면 reset_tvdatafeed_circuit 이 즉시 연다.
+        _tv_note_failure()
     return _TVDATAFEED_INSTANCE
 
 # KRX 공식 확정 봉을 '이력'으로 덮어쓸 지수 — 실시간 소스를 대체하지 않고 뼈대만 바꾼다.
@@ -542,7 +560,9 @@ def get_us_treasury_spot_data(symbol, n_bars=300):
                 global _TVDATAFEED_INSTANCE
                 with _TVDATAFEED_LOCK:
                     _TVDATAFEED_INSTANCE = None
-                tv = _get_tvdatafeed()
+                #  방금 우리가 버린 인스턴스를 되살리는 자리다 — 회로차단에 막히면
+                #  복구가 아니라 고장이 된다(force).
+                tv = _get_tvdatafeed(force=True)
                 if tv is None:
                     break
             time.sleep(0.8 * (attempt + 1))

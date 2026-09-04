@@ -260,7 +260,7 @@ def _position_open_risk(positions):
     포지션은 리스크가 0이라 되짚을 것이 없다. 엔진이 손절선을 직접 돌려주게 했다.
     """
     from modules import db_manager
-    from modules.auto_trade import engine
+    from modules.auto_trade import common, engine
     try:
         highs = db_manager.db.get_all_trailing_stops() or {}
         equity = paper_broker.get_performance()["total"]
@@ -326,7 +326,7 @@ def _print_verification_detail(perf):
 
     # 3) 포지션 상세 — 판정 로직의 현재 출력물
     from modules import db_manager
-    from modules.auto_trade import engine
+    from modules.auto_trade import common, engine
 
     highs = {}
     try:
@@ -334,7 +334,6 @@ def _print_verification_detail(perf):
     except Exception as e:
         logger.debug(f"[PAPER] 트레일링 고점 조회 실패: {e}")
 
-    time_stop_days = config.SELL_STRATEGY.get("TIME_STOP_DAYS", 15)
     use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
 
     pt = Table(title="\n보유 포지션 상세 (판정 상태)", box=box.HORIZONTALS,
@@ -395,7 +394,9 @@ def _print_verification_detail(perf):
             ts_ref = f"발동 +{ts['activation']:.1f}% (최고 +{ts['max_profit_rate']:.1f}%)"
 
         if use_time_stop and held is not None:
-            left = time_stop_days - held
+            #  기한은 그 종목에 실제로 적용되는 값이다 — 개별 룰이 바꾸면 청산 판정도
+            #  그 값을 쓴다(common.effective_time_stop_days). 전역만 보면 D-n 이 거짓말한다.
+            left = common.effective_time_stop_days(p["code"]) - held
             stop_txt = f"D-{left}" if left > 0 else "[yellow]도달[/]"
         else:
             stop_txt = "[dim]-[/dim]"

@@ -337,16 +337,21 @@ def _fmt_state_cell(res, show_auto_status=True):
         cell += "\n[yellow]수동[/]"
     return cell
 
-def _fmt_holding_days_cell(res):
+def _fmt_holding_days_cell(res, code=None):
     """보유일수 — 시간청산 임계에 도달하면 노란색으로 경고한다.
 
     매수일은 시스템 DB → 증권사 체결 내역 순으로 찾고, 둘 다 없으면 오늘 매수로 본다(0일).
+
+    [Fix 2026-09-04] 임계는 **그 종목에 실제로 적용되는 값**을 쓴다. 개별 룰이
+     time_stop_days 를 바꾸면 청산 판정(engine.analyze_sell)은 그것을 쓰는데 여기서는
+     전역값만 봐서, 룰이 걸린 종목의 경고가 실제 청산 시점과 어긋났다.
     """
     if not res:
         return "[dim]-[/dim]"
 
     days = res.get('holding_days') or 0
-    limit = config.SELL_STRATEGY["TIME_STOP_DAYS"]
+    from modules.auto_trade.common import effective_time_stop_days
+    limit = effective_time_stop_days(code or res.get('code'))
     if config.SELL_STRATEGY.get("TIME_STOP_USE", True) and limit and days >= limit:
         return f"[yellow]{days}일[/]"
     return f"{days}일"
@@ -576,7 +581,7 @@ def build_domestic_holdings_table(items, holding_analysis, marks_ctx=None, title
             f"{pchs_amt:,}원",
             f"{eval_amt:,}원",
             _fmt_profit_cell(f"{profit:+,}원", f"{rate:+.2f}%", p_color),
-            _fmt_holding_days_cell(res),
+            _fmt_holding_days_cell(res, code=code),
             _fmt_mfe_cell(res, is_overseas=False),
             _fmt_stop_cell(res, buy_price, is_overseas=False, code=code)
         )
@@ -648,7 +653,7 @@ def build_overseas_holdings_table(items, holding_analysis, marks_ctx=None, title
             f"{item_pchs:,.2f}",
             f"{item_eval:,.2f}",
             _fmt_profit_cell(f"{profit:+,.2f}", f"{rate:+.2f}%", color),
-            _fmt_holding_days_cell(res),
+            _fmt_holding_days_cell(res, code=code),
             _fmt_mfe_cell(res, is_overseas=True),
             _fmt_stop_cell(res, pchs_avg, is_overseas=True, code=code)
         )
