@@ -125,6 +125,29 @@ def calculate_daily_status(row, prev_row, thresholds=None):
     
     return raw_score, sell_check_score, can_buy_state, state, reason
 
+# [감사 재현성] 일봉을 **어느 소스에서** 받았는지 종목별로 쌓는다.
+#  수급 축과 같은 이유다(_SMART_MONEY_SOURCE 주석 참조) — 다만 이쪽이 더 근본적이다.
+#  KRX 가 레이트리밋에 걸리면 그 종목만 조용히 yfinance 로 넘어가는데, yfinance 종가는
+#  237거래일 중 2~4일이 KRX 와 어긋난다(최대 1.59%, 위 독스트링 ③). 손절·익절 트리거가
+#  종가 비교라 그 며칠이 거래를 바꾼다. 폴백은 종목당 WARNING 한 줄로 남지만 감사 CLI 는
+#  로그를 콘솔에 띄우지 않아, **표만 보면 어느 종목이 다른 데이터로 돌았는지 알 수 없다.**
+#  두 감사를 비교하기 전에 양쪽이 같은 소스였는지부터 확인할 수 있어야 한다.
+_DAILY_SOURCE = {}                # {code: 'KRX/pykrx' | 'yfinance' | '차트API' | None}
+
+
+def reset_daily_source():
+    _DAILY_SOURCE.clear()
+
+
+def daily_source_summary():
+    """{'KRX/pykrx': n, 'yfinance': n, ...} — 준비된 종목의 일봉 출처 분포."""
+    out = {}
+    for src in _DAILY_SOURCE.values():
+        key = src or "실패"
+        out[key] = out.get(key, 0) + 1
+    return out
+
+
 def get_backtest_data(code, is_overseas, days):
     """백테스트용 장기 일봉.
 
@@ -149,6 +172,7 @@ def get_backtest_data(code, is_overseas, days):
                     config.console.print(
                         f"[dim cyan][TRACE] REQ (KRX/{krx_df.attrs.get('source', '?')}) | "
                         f"{code} | {len(krx_df)}봉[/dim cyan]")
+                _DAILY_SOURCE[str(code)] = f"KRX/{krx_df.attrs.get('source', '?')}"
                 return krx_df
         except Exception as e:
             logger.debug(f"[Backtest] KRX 일봉 조회 실패({code}): {e}")
@@ -182,7 +206,8 @@ def get_backtest_data(code, is_overseas, days):
                 
                 # 날짜 포맷 통일 (YYYYMMDD 문자열)
                 df['date'] = df['date'].apply(lambda x: x.strftime('%Y%m%d') if isinstance(x, datetime) else str(x).replace('-', '')[:8])
-                
+
+                _DAILY_SOURCE[str(code)] = "yfinance"
                 return df
     except Exception as e:
         pass
@@ -190,6 +215,7 @@ def get_backtest_data(code, is_overseas, days):
     # 3. 차트 API (최종 폴백). 분석용 경로라 250봉(약 1년) 상한이 걸려 있다.
     #    요청 기간보다 짧으면 백테스트가 조용히 잘린 채 도는 것이므로 반드시 알린다.
     df = api.get_chart_data(code, is_overseas)
+    _DAILY_SOURCE[str(code)] = "차트API" if df is not None and not df.empty else None
     _warn_if_truncated(df, code, days)
     return df
 

@@ -396,6 +396,41 @@ def announce_smart_money_source(where="백테스트"):
     return dist
 
 
+def announce_daily_source(where="백테스트"):
+    """일봉을 **어느 소스로** 받았는지 알린다. 폴백이 하나라도 있으면 눈에 띄게 한다.
+
+    [왜] 국내 일봉은 KRX 공식(pykrx/FDR)이 1순위이고, 실패하면 종목 단위로 조용히
+     yfinance 로 넘어간다. yfinance 종가는 237거래일 중 2~4일이 KRX 와 어긋나며(최대
+     1.59%) 손절·익절 트리거가 종가 비교라 그 며칠이 거래를 바꾼다. 폴백은 종목당
+     WARNING 한 줄로 남지만 감사 CLI 는 로그를 콘솔에 띄우지 않아, **표만 보면 어느
+     종목이 다른 데이터로 돌았는지 알 수 없었다.**
+
+     특히 감사를 병렬로 돌리면 KRX 레이트리밋에 걸려 폴백이 무더기로 난다
+     ([[audit-parallel-data-integrity]] — 직렬 예열이 필요한 이유가 이것이다).
+     그 상태로 나온 표는 '다른 데이터 위에서 잰 것'인데 표에는 그 사실이 없었다.
+     수급 축(announce_smart_money_source)과 같은 취지·같은 문에서 알린다.
+    """
+    dist = backtest.daily_source_summary()
+    if not dist:
+        return dist
+    fallback = sum(v for k, v in dist.items() if not k.startswith("KRX"))
+    parts = " · ".join(f"{k} {v}종목" for k, v in sorted(dist.items()))
+    msg = f"[{where}] 일봉 출처: {parts}"
+    if not fallback:
+        logger.info(msg)
+        return dist
+
+    msg += (f" — KRX 공식이 아닌 종목이 {fallback}개다. 종가가 어긋나 손절·익절 판정이"
+            f" 달라질 수 있으니, 다른 실행과 비교하기 전에 이 줄을 먼저 맞춰라"
+            f"(감사를 병렬로 돌리면 KRX 레이트리밋으로 폴백이 늘어난다).")
+    logger.warning(msg)
+    try:
+        config.console.print(f"[dim yellow]※ {msg}[/dim yellow]")
+    except Exception:
+        print(msg)
+    return dist
+
+
 # 실매매에는 늘 켜져 있는데 run_portfolio 는 **인자를 줘야만** 켜지는 게이트들.
 #  주지 않으면 조용히 꺼진 채로 도는데, 감사 도구 대부분이 주지 않는다(실측: daily_loss_limit
 #  1개 / reentry_block 1개 / oversize_limit 1개 뿐). 각각 따로 측정돼 '무해'로 판정됐지만
@@ -1640,6 +1675,7 @@ def prepare_universe(targets, days, progress_cb=None, is_overseas=False):
     #  켜져 있으면 여기서 한 번 알린다(run_portfolio 안에서 부르면 주기마다 쏟아진다).
     warn_if_unmodeled()
     backtest.reset_smart_money_source()
+    backtest.reset_daily_source()
 
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
     dfs, mf_dates, failed = {}, {}, []
@@ -1663,7 +1699,10 @@ def prepare_universe(targets, days, progress_cb=None, is_overseas=False):
 
             backtest.prepare_market_filter(code, is_overseas, days)
             mf_dates[code] = set(backtest._MARKET_FILTER_STATE.get("dates") or set())
-        except Exception:
+        except Exception as e:      # noqa: BLE001 - 한 종목 실패로 유니버스 준비를 멈추지 않는다
+            # 사유를 남긴다. 종전에는 통째로 삼켜서 '왜 빠졌는지'가 어디에도 없었다 —
+            #  레이트리밋인지 상장폐지인지 지표 계산 버그인지 구분할 방법이 없었다.
+            logger.debug(f"[준비] {name}({code}) 제외: {type(e).__name__} — {e}")
             failed.append(name)
         if progress_cb:
             progress_cb(name)
@@ -1671,8 +1710,23 @@ def prepare_universe(targets, days, progress_cb=None, is_overseas=False):
     # [동적 손절 캡] 날짜별 지수 변동성 배율. 실패하면 빈 dict → 배율 1.0(고정 캡).
     backtest.prepare_vol_regime(days, is_overseas)
 
-    # 수급 축을 어느 소스로 굴렸는지 남긴다 — 감사끼리 비교할 때 이 줄이 전제다.
+    # 수급 축·일봉을 각각 어느 소스로 굴렸는지 남긴다 — 감사끼리 비교할 때 이 줄이 전제다.
     announce_smart_money_source()
+    announce_daily_source()
+
+    # [표본 축소] 요청한 종목의 상당수가 빠지면 그 실행은 **다른 유니버스를 잰 것**이다.
+    #  개수는 호출부가 찍지만(예: audit_universe.prep) 비율이 얼마나 커야 문제인지는
+    #  아무도 말해 주지 않았다. 병렬 실행 중 KRX 레이트리밋에 걸리면 여기가 통째로 준다.
+    n_req = len(targets)
+    if n_req and len(failed) / n_req >= 0.2:
+        msg = (f"[준비] 요청 {n_req}종목 중 {len(failed)}종목({len(failed) / n_req * 100:.0f}%)이 "
+               f"빠졌다 — 표본이 줄어든 상태의 결과다. 감사를 병렬로 돌리는 중이라면 "
+               f"KRX 레이트리밋일 수 있다(직렬 예열 뒤 다시 볼 것).")
+        logger.warning(msg)
+        try:
+            config.console.print(f"[dim yellow]※ {msg}[/dim yellow]")
+        except Exception:      # noqa: BLE001 - 콘솔이 없으면 로그로 족하다
+            print(msg)
 
     dates = sorted({str(d) for df in dfs.values() for d in df["date"]})
     return dfs, mf_dates, dates, failed
