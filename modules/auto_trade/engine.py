@@ -1750,21 +1750,28 @@ class OrderManager:
     #  하루 종일 락된 종목의 알림이 6시간에 12건 수준으로 줄어든다(종전 120건).
     ORDER_FAIL_ALERT_COOLDOWN = 1800.0
 
-    def _should_alert_order_fail(self, code, type_str, msg_cd):
-        """이번 주문 실패를 텔레그램으로 알릴 것인가.
+    def _alert_order_fail(self, code, type_str, msg_cd, message):
+        """이번 주문 실패를 텔레그램으로 알린다(쿨다운 적용). 보냈으면 True.
 
         억제하는 것은 **알림뿐이고 재시도가 아니다** — 제한폭이 풀리거나 예수금이 들어오면
         다음 주기에 체결돼야 하므로 주문 시도 자체는 계속한다. 로그에도 항상 남긴다.
         키에 오류코드를 넣어, 원인이 바뀌면(예: 제한폭 → 예수금 부족) 즉시 다시 알린다.
+
+        [전달 확인 뒤에 찍는다 · 2026-09-04] 종전에는 판정과 발송이 나뉘어 있어
+         (`_should_alert_order_fail` → `send_telegram_message`) 쿨다운이 **보내기 전에**
+         찍혔다. 비동기 전송은 실패해도 예외가 없으므로, 끊긴 동안의 주문 실패는 알림 없이
+         30분간 억제됐다. 보내고 나서 찍는다.
         """
         key = (str(code), str(type_str), str(msg_cd))
         now = time.time()
         with self._lock:
-            last = self.order_fail_alerted.get(key, 0.0)
-            if now - last < self.ORDER_FAIL_ALERT_COOLDOWN:
+            if now < self.order_fail_alerted.get(key, 0.0):
                 return False
-            self.order_fail_alerted[key] = now
-        return True
+        delivered = _pkg().alert_delivered(message)
+        with self._lock:
+            self.order_fail_alerted[key] = now + (self.ORDER_FAIL_ALERT_COOLDOWN
+                                                  if delivered else _pkg().ALERT_RETRY_SEC)
+        return delivered
 
     def send_order(self, code, qty, type_str, name=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, price=0, rule=None, stop_loss_rate=0.0, buy_price=0.0):
         """주문 전송 및 상태 등록"""
@@ -1877,8 +1884,7 @@ class OrderManager:
                 t_type = "매수" if type_str == 'buy' else "매도"
                 fail_msg = f"🚫 [{t_type} 실패] {stock_display}\n수량: {qty}주 / 단가: {price_log}\n원인: {err_msg} (Code: {msg_cd})"
                 # [안전장치] 같은 종목·같은 원인의 반복 실패는 알림을 억제한다. 로그는 항상 남긴다.
-                if self._should_alert_order_fail(code, type_str, msg_cd):
-                    api.send_telegram_message(fail_msg)
+                self._alert_order_fail(code, type_str, msg_cd, fail_msg)
 
                 if res_json.get('rt_cd') == '9999' or msg_cd in ['OPSQ2000', 'EGW00201']:
                     raise Exception(f"주문 시스템 치명적 오류: {err_msg}")

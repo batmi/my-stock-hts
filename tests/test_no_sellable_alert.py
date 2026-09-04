@@ -134,7 +134,7 @@ def test_alert_message_says_sell_failed_not_excluded(trader):
     """문구 검증 — 이 경우는 '제외'가 아니라 '시도했는데 실패'다."""
     t = trader
     item = _holding()[0]
-    with patch('modules.auto_trade.api.send_telegram_message') as tg:
+    with patch('modules.auto_trade.alert_delivered', return_value=True) as tg:
         t._alert_unmanaged_stop(CODE, NAME, item, UNMANAGED_NO_SELLABLE, None)
     body = str(tg.call_args)
     assert "매도 실패" in body
@@ -144,7 +144,7 @@ def test_alert_message_says_sell_failed_not_excluded(trader):
 def test_excluded_reason_keeps_original_wording(trader):
     """대조군 — 기존 사유(트레이딩 제한 등)의 문구는 그대로여야 한다."""
     from modules.auto_trade.engine import UNMANAGED_RESTRICTED
-    with patch('modules.auto_trade.api.send_telegram_message') as tg:
+    with patch('modules.auto_trade.alert_delivered', return_value=True) as tg:
         trader._alert_unmanaged_stop(CODE, NAME, _holding()[0], UNMANAGED_RESTRICTED, None)
     body = str(tg.call_args)
     assert "자동매도 제외 종목" in body and "제외되어" in body

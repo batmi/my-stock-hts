@@ -130,43 +130,46 @@ def test_sell_path_sends_order_inside_price_band(trader):
 @pytest.fixture
 def om(trader):
     trader.order_manager.order_fail_alerted = {}
+    #  알림은 전달을 확인한 뒤에 쿨다운을 찍는다(common.alert_delivered). 테스트 환경은
+    #  토큰이 비어 있어 '텔레그램 미구성 = 전달 성공'으로 흘러 종전과 같은 쿨다운이 된다.
     return trader.order_manager
 
 
 def test_same_failure_alerts_only_once(om):
-    assert om._should_alert_order_fail(CODE, 'sell', '40310000') is True
+    assert om._alert_order_fail(CODE, 'sell', '40310000', 'msg') is True
     for _ in range(5):
-        assert om._should_alert_order_fail(CODE, 'sell', '40310000') is False, (
+        assert om._alert_order_fail(CODE, 'sell', '40310000', 'msg') is False, (
             "하한가 락 하루면 3분마다 같은 실패가 반복돼 알림이 100건 넘게 쌓인다")
 
 
 def test_different_cause_alerts_immediately(om):
-    om._should_alert_order_fail(CODE, 'sell', '40310000')      # 제한폭 초과
-    assert om._should_alert_order_fail(CODE, 'sell', '40240000') is True, (
+    om._alert_order_fail(CODE, 'sell', '40310000', 'msg')      # 제한폭 초과
+    assert om._alert_order_fail(CODE, 'sell', '40240000', 'msg') is True, (
         "원인이 바뀌면 새로 생긴 문제다 — 쿨다운을 기다리면 안 된다")
 
 
 def test_different_stock_alerts_immediately(om):
-    om._should_alert_order_fail(CODE, 'sell', '40310000')
-    assert om._should_alert_order_fail("000660", 'sell', '40310000') is True
+    om._alert_order_fail(CODE, 'sell', '40310000', 'msg')
+    assert om._alert_order_fail("000660", 'sell', '40310000', 'msg') is True
 
 
 def test_buy_and_sell_are_tracked_separately(om):
-    om._should_alert_order_fail(CODE, 'sell', '40310000')
-    assert om._should_alert_order_fail(CODE, 'buy', '40310000') is True
+    om._alert_order_fail(CODE, 'sell', '40310000', 'msg')
+    assert om._alert_order_fail(CODE, 'buy', '40310000', 'msg') is True
 
 
 def test_cooldown_expires(om):
-    om._should_alert_order_fail(CODE, 'sell', '40310000')
+    om._alert_order_fail(CODE, 'sell', '40310000', 'msg')
     key = (CODE, 'sell', '40310000')
-    om.order_fail_alerted[key] = time.time() - om.ORDER_FAIL_ALERT_COOLDOWN - 1
-    assert om._should_alert_order_fail(CODE, 'sell', '40310000') is True
+    #  값의 의미가 '보낸 시각' → '다음 알림 가능 시각'으로 바뀌었다(전달 확인 뒤 기록).
+    om.order_fail_alerted[key] = time.time() - 1
+    assert om._alert_order_fail(CODE, 'sell', '40310000', 'msg') is True
 
 
 def test_successful_order_resets_suppression(om, trader):
     """접수에 성공한 뒤 다시 실패하면 '새로 생긴 문제'다. 즉시 알려야 한다."""
-    om._should_alert_order_fail(CODE, 'sell', '40310000')
-    assert om._should_alert_order_fail(CODE, 'sell', '40310000') is False
+    om._alert_order_fail(CODE, 'sell', '40310000', 'msg')
+    assert om._alert_order_fail(CODE, 'sell', '40310000', 'msg') is False
 
     ok = {'rt_cd': '0', 'output': {'ODNO': '0001'}}
     with patch('modules.auto_trade.api.place_order', return_value=ok), \
@@ -179,14 +182,15 @@ def test_successful_order_resets_suppression(om, trader):
          patch('time.sleep'):
         om.send_order(CODE, 1, 'sell', name="삼성전자", price=100_000)
 
-    assert om._should_alert_order_fail(CODE, 'sell', '40310000') is True
+    assert om._alert_order_fail(CODE, 'sell', '40310000', 'msg') is True
 
 
 def test_rejected_order_still_retries_next_cycle(om):
     """[중요] 억제는 알림에만 걸린다 — 종목이 pending에 묶여 재시도가 막히면 안 된다."""
     fail = {'rt_cd': '1', 'msg_cd': '40310000', 'msg1': '주문가격이 가격제한폭을 벗어났습니다'}
+    #  발송은 alert_delivered 를 거친다 — 전달을 확인한 뒤에 쿨다운을 찍기 때문이다.
     with patch('modules.auto_trade.api.place_order', return_value=fail), \
-         patch('modules.auto_trade.api.send_telegram_message') as tg:
+         patch('modules.auto_trade.alert_delivered', return_value=True) as tg:
         for _ in range(3):
             om.send_order(CODE, 1, 'sell', name="삼성전자", price=69_900)
 

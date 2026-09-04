@@ -4842,11 +4842,14 @@ class AutoTrader:
                 self.unmanaged_stop_notified.pop(code, None)
                 return
 
+            #  [전달 확인 뒤에 찍는다] 스로틀 값은 '보낸 시각'이 아니라 **다음 알림 가능
+            #   시각**이다. 종전에는 보내기 전에 찍었는데, send_telegram_message 는 기본이
+            #   비동기라 실패해도 예외가 없어 네트워크가 끊긴 채로 '보냈다'가 굳었다. 이
+            #   경보는 위 독스트링대로 '시스템이 손절해 주지 않는 포지션의 마지막 안전망'
+            #   이라, 한 번 놓치면 손절선 아래에서 24시간 침묵한다.
             now = time.time()
-            last = self.unmanaged_stop_notified.get(code, 0)
-            if now - last < 86400:
+            if now < self.unmanaged_stop_notified.get(code, 0):
                 return
-            self.unmanaged_stop_notified[code] = now
 
             qty = api.safe_int(item.get('hldg_qty', 0))
             eval_amt = api.safe_int(item.get('evlu_amt', 0))
@@ -4863,13 +4866,18 @@ class AutoTrader:
 
             self.log(f"⚠️ [손절선 이탈 경보] {name}({code}): 수익률 {profit_rate:.2f}% ≤ 손절 기준 {sl_rate:.2f}% "
                      f"— {kind}이라 시스템이 청산하지 못합니다.")
-            api.send_telegram_message(
+            delivered = _pkg().alert_delivered(
                 f"⚠️ [손절선 이탈 — {title}]\n\n"
                 f"종목: {name}({code})\n"
                 f"수익률: {profit_rate:.2f}% (손절 기준: {sl_rate:.2f}%)\n"
                 f"보유: {qty:,}주 / 평가금 {eval_amt:,}원 / 평가손익 {loss_amt:,}원\n\n"
                 f"사유: {cause}\n"
                 f"직접 청산 여부를 판단해 주세요. (동일 종목 재알림은 24시간 후)")
+            #  전달되면 24시간, 실패하면 짧게 — 침묵도 도배도 아닌 쪽으로 재시도한다.
+            self.unmanaged_stop_notified[code] = now + (86400 if delivered else _pkg().ALERT_RETRY_SEC)
+            if not delivered:
+                self.log(f"[손절선 이탈 경보] {name}({code}) 전송 실패 — "
+                         f"{int(_pkg().ALERT_RETRY_SEC)}초 뒤 다시 시도합니다.")
         except Exception as e:
             logger.debug(f"[손절선 이탈 경보] {code} 처리 실패: {e}")
 
@@ -4971,13 +4979,15 @@ class AutoTrader:
         try:
             if self.after_hours_sell_notified.get(code) == reason:
                 return
-            self.after_hours_sell_notified[code] = reason
 
             profit_rate = float(item.get('evlu_pfls_rt') or 0.0)
             eval_amt = api.safe_int(item.get('evlu_amt', 0))
             pfls_amt = api.safe_int(item.get('evlu_pfls_amt', 0))
 
-            api.send_telegram_message(
+            #  전달을 확인한 뒤에 '보냈음'을 기록한다(위 손절선 경보와 같은 이유).
+            #  실패하면 기록하지 않아 다음 주기에 다시 시도한다 — 마감 후 갭 전에
+            #  운영자가 판단할 기회를 주는 것이 이 알림의 목적이다.
+            delivered = _pkg().alert_delivered(
                 f"🔔 [장마감 후 매도 신호]\n\n"
                 f"종목: {name}({code})\n"
                 f"사유: {reason}\n"
@@ -4987,6 +4997,8 @@ class AutoTrader:
                 f"장이 마감되어 주문은 전송되지 않았습니다.\n"
                 f"다음 개장 시 그 시점 가격으로 다시 판정합니다 — 신호가 유지되면 "
                 f"자동 청산되고, 사라지면 보유를 유지합니다.")
+            if delivered:
+                self.after_hours_sell_notified[code] = reason
         except Exception as e:
             logger.debug(f"[장마감 매도 신호 알림] {code} 처리 실패: {e}")
 
@@ -6796,11 +6808,13 @@ class AutoTrader:
             return
         if self.market_status_notified.get(market_name, False):
             return
-        api.send_telegram_message(
-            f"⚠️ [판단 보류] {market_name} 지수 데이터를 확인할 수 없습니다.\n"
-            f"시장 방향을 알 수 없으므로 해당 시장 종목의 신규 매수를 보류합니다.\n"
-            f"(보유 종목의 손절·트레일링 스탑 감시는 계속됩니다)")
-        self.market_status_notified[market_name] = True
+        #  전달을 확인한 뒤에 래치를 건다. 종전에는 전송 여부와 무관하게 걸려, 실패하면
+        #  '신규 매수 보류' 상태를 운영자가 끝까지 모른 채 지나갔다(래치는 회복 때만 풀린다).
+        if _pkg().alert_delivered(
+                f"⚠️ [판단 보류] {market_name} 지수 데이터를 확인할 수 없습니다.\n"
+                f"시장 방향을 알 수 없으므로 해당 시장 종목의 신규 매수를 보류합니다.\n"
+                f"(보유 종목의 손절·트레일링 스탑 감시는 계속됩니다)"):
+            self.market_status_notified[market_name] = True
 
     @staticmethod
     def _whipsaw_risk_scale(whipsaw, params=None):

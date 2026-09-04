@@ -167,7 +167,7 @@ def _holding(profit_rate):
 def test_unmanaged_stop_alert_fires_below_stop(trader):
     """손절선 이탈 시 텔레그램 경보를 보낸다."""
     config.SELL_STRATEGY["STOP_LOSS_RATE"] = -7.0
-    with patch('modules.auto_trade.api.send_telegram_message') as mock_tg:
+    with patch('modules.auto_trade.alert_delivered', return_value=True) as mock_tg:
         trader._alert_unmanaged_stop('069500', 'KODEX 200', _holding(-10.0), 'ETF 자동매매 제외 설정')
         mock_tg.assert_called_once()
         body = mock_tg.call_args[0][0]
@@ -178,7 +178,7 @@ def test_unmanaged_stop_alert_fires_below_stop(trader):
 def test_unmanaged_stop_alert_silent_above_stop(trader):
     """손절선 위에서는 경보하지 않는다."""
     config.SELL_STRATEGY["STOP_LOSS_RATE"] = -7.0
-    with patch('modules.auto_trade.api.send_telegram_message') as mock_tg:
+    with patch('modules.auto_trade.alert_delivered', return_value=True) as mock_tg:
         trader._alert_unmanaged_stop('069500', 'KODEX 200', _holding(-3.0), 'ETF 자동매매 제외 설정')
         mock_tg.assert_not_called()
 
@@ -186,7 +186,7 @@ def test_unmanaged_stop_alert_silent_above_stop(trader):
 def test_unmanaged_stop_alert_throttled_24h(trader):
     """같은 종목의 반복 경보는 24시간 스로틀된다."""
     config.SELL_STRATEGY["STOP_LOSS_RATE"] = -7.0
-    with patch('modules.auto_trade.api.send_telegram_message') as mock_tg:
+    with patch('modules.auto_trade.alert_delivered', return_value=True) as mock_tg:
         trader._alert_unmanaged_stop('069500', 'KODEX 200', _holding(-10.0), 'ETF')
         trader._alert_unmanaged_stop('069500', 'KODEX 200', _holding(-12.0), 'ETF')
         assert mock_tg.call_count == 1
@@ -195,7 +195,7 @@ def test_unmanaged_stop_alert_throttled_24h(trader):
 def test_unmanaged_stop_alert_rearms_after_recovery(trader):
     """손절선 위로 회복하면 스로틀이 풀려 재이탈 시 다시 알린다."""
     config.SELL_STRATEGY["STOP_LOSS_RATE"] = -7.0
-    with patch('modules.auto_trade.api.send_telegram_message') as mock_tg:
+    with patch('modules.auto_trade.alert_delivered', return_value=True) as mock_tg:
         trader._alert_unmanaged_stop('069500', 'KODEX 200', _holding(-10.0), 'ETF')
         trader._alert_unmanaged_stop('069500', 'KODEX 200', _holding(-2.0), 'ETF')   # 회복
         trader._alert_unmanaged_stop('069500', 'KODEX 200', _holding(-11.0), 'ETF')  # 재이탈
@@ -212,7 +212,7 @@ def test_unmanaged_stop_uses_recorded_stop_loss_rate(trader):
     trades = [{'qty': 10, 'stop_loss_rate': -12.0}]  # ATR 손절 -12%
 
     with patch.dict(config.SELL_STRATEGY, {"STOP_LOSS_RATE": -7.0, "USE_ATR_STOP": True}), \
-         patch('modules.auto_trade.api.send_telegram_message') as mock_tg:
+         patch('modules.auto_trade.alert_delivered', return_value=True) as mock_tg:
         # -10%는 전역 기준(-7%)은 넘었지만 실제 손절선(-12%)은 아직 이탈 전 → 경보 없음
         trader._alert_unmanaged_stop('069500', 'KODEX 200', _holding(-10.0), 'ETF', trades)
         mock_tg.assert_not_called()

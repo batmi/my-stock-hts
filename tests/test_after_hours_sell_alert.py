@@ -47,7 +47,7 @@ def _cycle(trader, is_market_open=False, reason='ATR손절', holdings=_DEFAULT):
     holdings = _holding() if holdings is _DEFAULT else holdings
     df = pd.DataFrame({'close': [NOW], 'high': [NOW], 'low': [NOW],
                        'open': [NOW], 'volume': [1000]})
-    with patch('modules.auto_trade.api.send_telegram_message') as mock_tg, \
+    with patch('modules.auto_trade.alert_delivered', return_value=True) as mock_tg, \
          patch('modules.auto_trade.load_restricted_stocks', return_value={}), \
          patch('modules.auto_trade.api.fetch_sellable_quantity', return_value=10), \
          patch('modules.auto_trade.api.get_chart_data', return_value=df), \
