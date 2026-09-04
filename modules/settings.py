@@ -96,65 +96,29 @@ def qualified_var_name(name):
 
 
 def _save_dynamic_config():
-    """현재 메모리 상의 설정을 파일로 저장 (영구 반영)"""
+    """현재 메모리 상의 설정을 파일로 저장 (영구 반영)
+
+    [왜 손으로 나열하지 않는가 · 2026-09-04] 종전에는 저장할 키를 여기에 50개 적어 두었다.
+    읽는 쪽(config._apply_config_data)은 파일에 있는 키를 가리지 않고 전부 적용하므로,
+    한쪽만 늘어나면 **설정이 조용히 사라진다**:
+      · 메뉴에서 바꿀 수 있는데 목록에 없던 키 — SYSTEM_INCLUDE_ETF, USE_WEBSOCKET.
+        바꾸고 '저장되었습니다'를 본 뒤 재시작하면 되돌아가 있었다.
+      · 목록에 없는 키를 dynamic_config.json 에 직접 적어 둔 경우 — 저장은 파일을 통째로
+        덮으므로, 그 뒤 메뉴에서 아무 설정이나 한 번 저장하면 손으로 적은 값이 지워진다.
+        (MARKET_HALT_VI_INTERVAL·MAX_POSITION_OVERSHOOT 등 코드 다이얼 10개가 그 상태였다)
+    GlobalSettings 필드가 곧 '저장 가능한 설정'의 정의다(자격증명은 이 모델에 없다 —
+    API 키류는 ~/.htsrc 환경변수로만 들어온다). 그 정의 하나만 보게 해 목록이 갈라지는
+    자리를 없앤다. 새 설정을 추가할 때 여기를 고칠 일도 사라진다.
+    """
     try:
         check_and_update_active_preset()
     except Exception:
         pass
 
-    data = {
-        "ACTIVE_PRESET": getattr(config.settings, 'ACTIVE_PRESET', 'default'),
-        "ANALYSIS_THRESHOLDS": config.ANALYSIS_THRESHOLDS,
-        "SELL_STRATEGY": config.SELL_STRATEGY,
-        "INDICATOR_PARAMS": config.INDICATOR_PARAMS,
-        "SCORING_WEIGHTS": config.SCORING_WEIGHTS,
-        "MARKET_REGIME_PARAMS": config.MARKET_REGIME_PARAMS,
-        "RISK_SCALING_PARAMS": config.RISK_SCALING_PARAMS,
-        "SYSTEM_INVEST_PER_STOCK": config.settings.SYSTEM_INVEST_PER_STOCK,
-        "SYSTEM_MAX_HOLDINGS": config.settings.SYSTEM_MAX_HOLDINGS,
-        "SYSTEM_TRADING_INTERVAL": getattr(config.settings, 'SYSTEM_TRADING_INTERVAL', 60),
-        "SYSTEM_DAILY_LOSS_LIMIT": getattr(config.settings, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0),
-        "USE_MARKET_FILTER": getattr(config.settings, 'USE_MARKET_FILTER', True),
-        "USE_RS_FILTER": getattr(config.settings, 'USE_RS_FILTER', False),
-        "RS_FILTER_LOOKBACK": getattr(config.settings, 'RS_FILTER_LOOKBACK', 0),
-        "MARKET_FILTER_MA": getattr(config.settings, 'MARKET_FILTER_MA', 80),
-        "MARKET_FILTER_BAND": getattr(config.settings, 'MARKET_FILTER_BAND', 1.0),
-        "CONCLUSION_CHECK_INTERVAL": getattr(config.settings, 'CONCLUSION_CHECK_INTERVAL', 5),
-        "CONCLUSION_CHECK_IDLE_INTERVAL": getattr(config.settings, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300),
-        "CONCLUSION_CHECK_ACTIVE_DURATION": getattr(config.settings, 'CONCLUSION_CHECK_ACTIVE_DURATION', 60),
-        "UNFILLED_ORDER_CANCEL_SECONDS": getattr(config.settings, 'UNFILLED_ORDER_CANCEL_SECONDS', 120),
-        "CHART_CACHE_TTL_MINUTES": getattr(config.settings, 'CHART_CACHE_TTL_MINUTES', 360),
-        "USE_KRX_CLOSE_AFTER_HOURS": getattr(config.settings, 'USE_KRX_CLOSE_AFTER_HOURS', True),
-        "JOURNAL_SYNC_USE": getattr(config.settings, 'JOURNAL_SYNC_USE', False),
-        "ENABLE_TELEGRAM": getattr(config.settings, 'ENABLE_TELEGRAM', True),
-        "TELEGRAM_INSTANCE_NAME": getattr(config.settings, 'TELEGRAM_INSTANCE_NAME', "HTS"),
-        "TELEGRAM_POLLING_TIMEOUT": getattr(config.settings, 'TELEGRAM_POLLING_TIMEOUT', 10),
-        "AUTO_MORNING_BRIEFING_USE": getattr(config.settings, 'AUTO_MORNING_BRIEFING_USE', False),
-        "AUTO_MORNING_BRIEFING_TIME": getattr(config.settings, 'AUTO_MORNING_BRIEFING_TIME', "0830"),
-        "AUTO_DISCLOSURE_ALERT_USE": getattr(config.settings, 'AUTO_DISCLOSURE_ALERT_USE', True),
-        "AUTO_CALENDAR_ALERT_USE": getattr(config.settings, 'AUTO_CALENDAR_ALERT_USE', True),
-        "AUTO_CALENDAR_ALERT_TIME": getattr(config.settings, 'AUTO_CALENDAR_ALERT_TIME', "0820"),
-        "MARKET_HALT_ALERT_USE": getattr(config.settings, 'MARKET_HALT_ALERT_USE', True),
-        "MARKET_HALT_VI_USE": getattr(config.settings, 'MARKET_HALT_VI_USE', False),
-        "SCREEN_DEBUG_LEVEL": getattr(config.settings, 'SCREEN_DEBUG_LEVEL', "ERROR"),
-        "CLEAR_SCREEN_ON_MENU": getattr(config.settings, 'CLEAR_SCREEN_ON_MENU', False),
-        "FILE_DEBUG_LEVEL": getattr(config.settings, 'FILE_DEBUG_LEVEL', "WARNING"),
-        "SYSTEM_MAX_CONSECUTIVE_ERRORS": getattr(config.settings, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5),
-        "SYSTEM_TRADING_START_TIME": getattr(config.settings, 'SYSTEM_TRADING_START_TIME', "0900"),
-        "SYSTEM_ENTRY_OPEN_DELAY_USE": getattr(config.settings, 'SYSTEM_ENTRY_OPEN_DELAY_USE', True),
-        "SYSTEM_ENTRY_OPEN_DELAY_MINUTES": getattr(config.settings, 'SYSTEM_ENTRY_OPEN_DELAY_MINUTES', 30),
-        "SYSTEM_TRADING_END_TIME": getattr(config.settings, 'SYSTEM_TRADING_END_TIME', "1530"),
-        "SYSTEM_RISK_PER_TRADE": getattr(config.settings, 'SYSTEM_RISK_PER_TRADE', 4.0),
-        "SYSTEM_MAX_PORTFOLIO_RISK": getattr(config.settings, 'SYSTEM_MAX_PORTFOLIO_RISK', 10.0),
-        "USE_VOLATILITY_TARGETING": getattr(config.settings, 'USE_VOLATILITY_TARGETING', True),
-        "TARGET_VOLATILITY": getattr(config.settings, 'TARGET_VOLATILITY', 0.20),
-        "VOLATILITY_SCALING_MAX": getattr(config.settings, 'VOLATILITY_SCALING_MAX', 2.0),
-        "VOLATILITY_SCALING_MIN": getattr(config.settings, 'VOLATILITY_SCALING_MIN', 0.4),
-        "SLIPPAGE_RATE": getattr(config.settings, 'SLIPPAGE_RATE', 0.002),
-        "USE_CORRELATION_FILTER": getattr(config.settings, 'USE_CORRELATION_FILTER', True),
-        "CORRELATION_THRESHOLD": getattr(config.settings, 'CORRELATION_THRESHOLD', 0.7)
-    }
-    
+    # 그룹 딕셔너리(ANALYSIS_THRESHOLDS 등)는 config 모듈 변수와 **같은 객체**라
+    #  메뉴에서 제자리 수정한 값이 그대로 담긴다.
+    data = getattr(config.settings, 'model_dump', config.settings.dict)()
+
     # [모드별 프로필] 실전이면 기준 파일에 전부 쓰고, 실전이 아닌 모드(모의·토스·관찰)면
     #  기준과 다른 값만 그 모드의 파일에 쓴다. 관찰모드에서 검증하려고 끈 안전장치가
     #  실전 기동에 따라붙던 경로를 여기서 끊는다. 어느 파일에 무엇을 쓸지는 config 가
@@ -1802,14 +1766,15 @@ def check_and_update_active_preset():
             matched_preset = p_name
             break
             
-    if getattr(config.settings, 'ACTIVE_PRESET', 'default') != matched_preset:
-        config.settings.ACTIVE_PRESET = matched_preset
-        path = os.path.join(config.JSON_DIR, "dynamic_config.json")
-        data = jsonio.load_json(path)
-        if data is not None:
-            data['ACTIVE_PRESET'] = matched_preset
-            jsonio.save_json(path, data)
-            
+    # [Fix 2026-09-04] 메모리만 갱신한다 — 파일에 직접 쓰지 않는다.
+    #  종전에는 여기서 json/dynamic_config.json(=실전 기준 파일)을 **모드와 무관하게**
+    #  열어 다시 썼다. 이 함수는 기동 때마다(main.py 프리셋 이모티콘 동기화) 그리고 설정
+    #  저장 첫머리에 불리므로, 토스·관찰·모의 모드로 띄우기만 해도 실전 설정 파일이
+    #  다시 쓰였다 — 모드별 프로필로 갈라 둔 취지가 이 한 줄로 새고 있었다.
+    #  ACTIVE_PRESET 은 현재 값들에서 매번 다시 계산되는 파생값(표시용 캐시)이라 여기서
+    #  영속시킬 이유가 없고, 저장이 필요하면 _save_dynamic_config 가 프로필에 맞는
+    #  파일로 내보낸다(config.save_dynamic_config 가 그 판단의 단일 지점이다).
+    config.settings.ACTIVE_PRESET = matched_preset
     return matched_preset
 
 # [PRESET_RETIRED] 시장 국면별 전략 프리셋(강세/약세/횡보)은 2026-07-20 백테스트 검증 결과
@@ -2074,8 +2039,14 @@ def reset_to_default(interactive=True):
         pass
         
     if interactive:
-        config_path = os.path.join(config.JSON_DIR, "dynamic_config.json")
+        # [Fix 2026-09-04] 실제로 지운 파일을 말한다. reset_all_settings 는 **현재 프로필**
+        #  파일만 지우는데(관찰모드에서 눌러도 실전 설정은 남는다) 안내는 늘 실전 파일
+        #  이름을 찍고 있었다 — 지우는 조작에서 대상이 다르게 보이면 안 된다.
+        config_path = config.profile_config_path()
         console.print(f"[dim]설정 파일 삭제 및 기본값 복원 완료: {config_path}[/dim]")
+        if config.active_profile:
+            console.print(f"[dim]이 모드({config.active_profile}) 설정만 초기화했습니다 — "
+                          f"실전 설정(dynamic_config.json)은 그대로입니다.[/dim]")
         console.print("\n[bold green]모든 설정이 기본값으로 초기화되었습니다.[/bold green]")
         return True
     else:
