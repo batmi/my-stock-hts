@@ -172,7 +172,12 @@ def test_collect_table_data_uses_preloaded_curr():
     chart_df = _mk_chart_df()
     preloaded = {'rt_cd': '0', 'output': {'stck_prpr': '70000', 'stck_sdpr': '69500', '_src': 'multi'}}
 
+    # [2026-09-04] 체결강도 수집은 NXT/KRX 장중에만 돈다(api.is_strength_display_window).
+    #  고정하지 않으면 이 테스트는 **돌리는 시각에 따라** 결과가 달라진다
+    #  (실측 20:54 에 rt_strength=None 으로 실패). 여기서 재려는 것은 시계가 아니라
+    #  'preloaded_curr 가 있으면 종목별 REST 를 생략하는가'다.
     with patch('modules.analysis.api.get_current_price_data') as mock_cp, \
+         patch('modules.analysis.api.is_strength_display_window', return_value=True), \
          patch('modules.analysis.api.get_realtime_vol_strength', return_value=120.0):
         bundle = analysis._collect_table_data(
             ('삼성전자', '005930'), '국내 주식 기술적 분석', False, False,
@@ -182,6 +187,23 @@ def test_collect_table_data_uses_preloaded_curr():
     mock_cp.assert_not_called()
     assert bundle['curr_data'] is preloaded
     assert bundle['rt_strength'] == 120.0
+
+
+def test_strength_is_not_fetched_outside_the_display_window():
+    """장이 닫히면 체결강도는 모으지도, 보여주지도 않는다(컬럼 자체가 사라진다)."""
+    chart_df = _mk_chart_df()
+    preloaded = {'rt_cd': '0', 'output': {'stck_prpr': '70000', 'stck_sdpr': '69500'}}
+
+    with patch('modules.analysis.api.get_current_price_data'), \
+         patch('modules.analysis.api.is_strength_display_window', return_value=False), \
+         patch('modules.analysis.api.get_realtime_vol_strength', return_value=120.0) as mock_vs:
+        bundle = analysis._collect_table_data(
+            ('삼성전자', '005930'), '국내 주식 기술적 분석', False, False,
+            chart_df=chart_df, preloaded_curr=preloaded
+        )
+
+    mock_vs.assert_not_called(), "장 밖인데 체결강도를 조회했다"
+    assert bundle['rt_strength'] is None
 
 
 def test_collect_table_data_fallback_without_preloaded():

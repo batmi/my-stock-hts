@@ -701,43 +701,42 @@ def send_order(order_type):
         ord_dvsn_name = "정규장"
 
         if is_overseas:
-            # [추가] 미국 서머타임(DST) 및 현재 시장 시간 자동 판별
-            now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-            year = now_utc.year
-            
-            # 매년 3월 두 번째 일요일 07:00 UTC (02:00 EST) 서머타임 시작
-            march_first = datetime(year, 3, 1)
-            march_second_sunday = march_first + timedelta(days=(6 - march_first.weekday()) % 7 + 7)
-            dst_start_utc = march_second_sunday.replace(hour=7, minute=0, second=0)
-            
-            # 매년 11월 첫 번째 일요일 06:00 UTC (02:00 EDT) 서머타임 종료
-            nov_first = datetime(year, 11, 1)
-            nov_first_sunday = nov_first + timedelta(days=(6 - nov_first.weekday()) % 7)
-            dst_end_utc = nov_first_sunday.replace(hour=6, minute=0, second=0)
-            
-            is_dst = dst_start_utc <= now_utc < dst_end_utc
-            now_et = now_utc - timedelta(hours=4 if is_dst else 5)
-            time_et = now_et.time()
-            
-            time_0400 = datetime.strptime("04:00", "%H:%M").time()
-            time_0930 = datetime.strptime("09:30", "%H:%M").time()
-            time_1600 = datetime.strptime("16:00", "%H:%M").time()
-            time_2000 = datetime.strptime("20:00", "%H:%M").time()
-            
-            if time_0400 <= time_et < time_0930:
-                ord_dvsn = "32"
-                ord_dvsn_name = "프리마켓"
-            elif time_0930 <= time_et < time_1600:
-                ord_dvsn = "00"
-                ord_dvsn_name = "정규장"
-            elif time_1600 <= time_et <= time_2000:
-                ord_dvsn = "34"
-                ord_dvsn_name = "애프터마켓"
-            else:
-                ord_dvsn = "31"
-                ord_dvsn_name = "데이마켓(주간거래)"
-                
-            config.console.print(f"\n[cyan]◆ 미국 시장 시간 자동 판별: {ord_dvsn_name} [dim](현지시각: {now_et.strftime('%H:%M')}, 서머타임 {'적용' if is_dst else '미적용'})[/dim][/cyan]")
+            # [Fix 2026-09-04] 세션 판별을 api.us_session_phase() 하나로 모은다.
+            #  종전에는 여기서 UTC→ET 서머타임 계산과 구간 판정을 직접 했다. api 쪽
+            #  us_session_phase / now_us_eastern 의 주석이 "trading.py 의 주문 세션
+            #  판별과 동일 규칙"이라고 적고 있었지만 실제로는 별개 구현이었고,
+            #  결정적으로 **휴장일을 보지 않았다**(api 는 XNYS 달력을 본다).
+            #  실측: 2026-11-26 추수감사절 ET 10:00 → 여기서는 '정규장'(ord_dvsn=00),
+            #        2026-09-05 토요일 KST 낮 → '데이마켓'. 둘 다 api 는 '휴장'이다.
+            #  잘못된 세션 코드로 나간 주문은 거부되는데, 화면은 '정규장 접수'라고
+            #  말하므로 왜 안 됐는지를 사람이 알 수 없다.
+            phase = api.us_session_phase()
+            _PHASE_ORD = {
+                'pre':     ("32", "프리마켓"),
+                'regular': ("00", "정규장"),
+                'after':   ("34", "애프터마켓"),
+                'day':     ("31", "데이마켓(주간거래)"),
+            }
+            now_et = api.now_us_eastern()
+            if phase == 'closed':
+                config.console.print(
+                    f"\n[bold yellow]⚠️ 미국 시장 휴장/폐장 구간입니다 "
+                    f"[dim](현지시각 {now_et.strftime('%m-%d %H:%M')} ET)[/dim][/bold yellow]")
+                config.console.print(
+                    "[dim]주문을 보내면 증권사가 거부할 가능성이 높습니다.[/dim]")
+                utils.print_breadcrumb()
+                if Prompt.ask("그래도 주문을 진행하시겠습니까?",
+                              choices=["y", "n"], default="n") != "y":
+                    config.console.print("[yellow]주문이 취소되었습니다.[/yellow]")
+                    return False
+                # 사용자가 진행을 택했다 — 시간대만으로 가장 가까운 세션을 고른다.
+                hm = now_et.strftime('%H%M')
+                phase = ('pre' if "0400" <= hm < "0930" else
+                         'regular' if "0930" <= hm < "1600" else
+                         'after' if "1600" <= hm <= "2000" else 'day')
+            ord_dvsn, ord_dvsn_name = _PHASE_ORD[phase]
+
+            config.console.print(f"\n[cyan]◆ 미국 시장 시간 자동 판별: {ord_dvsn_name} [dim](현지시각: {now_et.strftime('%H:%M')} ET)[/dim][/cyan]")
 
             # [해외] 시장가(0) 입력 시 현재가 기준 지정가로 변환
             if is_market_order:
@@ -761,8 +760,11 @@ def send_order(order_type):
         else:
             # [국내] 시장가 주문 처리
             if is_market_order:
-                now_time = datetime.now().strftime("%H%M")
-                is_nxt_market = ("1530" <= now_time <= "2000") or ("0800" <= now_time <= "0850")
+                # [Fix 2026-09-04] NXT 구간 판정도 api.domestic_session_phase() 로 모은다.
+                #  종전 구간("0800"~"0850")은 정본(08:00~09:00)과 10분 어긋나 있어,
+                #  08:50~09:00 에 낸 시장가 주문이 NXT 로 ord_dvsn='01'(시장가)로 나갔다.
+                #  NXT 는 시장가를 받지 않는다.
+                is_nxt_market = api.domestic_session_phase() in ('nxt_pre', 'nxt_after')
                 
                 if curr_price == 0:
                      p = api.get_current_price(stock_code, False)
@@ -773,7 +775,7 @@ def send_order(order_type):
                     ord_dvsn = "00"
                     display_price = f"{curr_price:,}원 (NXT현재가 자동변환)"
                     price = str(int(curr_price))
-                    config.console.print(f"[yellow]안내: NXT장(08:00~08:50, 15:30~20:00)은 시장가 주문이 불가능하여 현재가({curr_price:,}원) 지정가로 자동 변환됩니다.[/yellow]")
+                    config.console.print(f"[yellow]안내: NXT장(08:00~09:00, 15:30~20:00)은 시장가 주문이 불가능하여 현재가({curr_price:,}원) 지정가로 자동 변환됩니다.[/yellow]")
                 else:
                     ord_dvsn = "01"
                     display_price = "시장가(0)"
@@ -1205,10 +1207,10 @@ def modify_order():
     req_qty = final_qty
 
     if not is_overseas:
-        from datetime import datetime
-        now_time = datetime.now().strftime("%H%M")
-        is_nxt_market = ("1530" <= now_time <= "2000") or ("0800" <= now_time <= "0850")
-        
+        # 발주 화면과 같은 판정을 쓴다(api.domestic_session_phase). 두 화면이 서로 다른
+        #  NXT 구간을 쓰면, 낼 때는 지정가로 변환됐던 주문이 정정할 때 시장가로 나간다.
+        is_nxt_market = api.domestic_session_phase() in ('nxt_pre', 'nxt_after')
+
         if price == "0":
             if is_nxt_market:
                 ord_dvsn = "00"
@@ -1216,7 +1218,7 @@ def modify_order():
                     p = api.get_current_price(pdno, is_overseas=False)
                     if p > 0: price = str(int(p))
                 except Exception: pass
-                config.console.print(f"[yellow]안내: NXT장(08:00~08:50, 15:30~20:00)은 시장가 정정이 불가능하여 현재가({price}원) 지정가로 자동 변환됩니다.[/yellow]")
+                config.console.print(f"[yellow]안내: NXT장(08:00~09:00, 15:30~20:00)은 시장가 정정이 불가능하여 현재가({price}원) 지정가로 자동 변환됩니다.[/yellow]")
             else:
                 ord_dvsn = "01"
         else:
