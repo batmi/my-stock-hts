@@ -2028,7 +2028,9 @@ class OrderManager:
                                 api.send_telegram_message(f"🗑 [{type_label}] {name} {qty}주\n사유: 미체결 시간 초과 ({int(elapsed)}초)")
                                 
                                 # [추가] DB에 취소 이력 남기기 (CANCELED 알림 중복 방지)
-                                cancel_odno = res.get('output', {}).get('ODNO') or res.get('output', {}).get('KRX_FWDG_ORD_ORGNO') or f"CANCEL_{odno}"
+                                # 지점 코드 폴백 제거(주문번호가 아니다). 취소 이력 행의
+                                #  키는 없으면 합성값으로 남긴다 — 합성이라는 게 보인다.
+                                cancel_odno = str((res.get('output') or {}).get('ODNO') or '').strip() or f"CANCEL_{odno}"
                                 db_manager.db.insert_trade(f"{t_type}취소(자동)", code, name, qty, 0, cancel_odno, org_odno=odno, reason=f"미체결 시간 초과 (자동 취소)", order_status="취소")
                                 self.cancel_failures.pop(str(odno), None)
                             else:

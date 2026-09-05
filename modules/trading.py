@@ -948,7 +948,13 @@ def send_order(order_type):
                 result = api.place_order(market_api_param, order_type, stock_code, qty, price, ord_dvsn, exchange_code=excd)
             
             if result['rt_cd'] == '0':
-                odno = result.get('output', {}).get('ODNO') or result.get('output', {}).get('KRX_FWDG_ORD_ORGNO')
+                # [Fix 2026-09-05] 종전엔 ODNO 가 비면 KRX_FWDG_ORD_ORGNO 로 대신했다.
+                #  그 값은 **한국거래소 전송 주문 조직번호(지점 코드)** 라 주문번호가 아니고,
+                #  같은 지점의 모든 주문이 같은 값을 갖는다. trades.odno 는 체결 대사의
+                #  유일 키라(get_trade_by_odno) 그 값이 들어가면 다른 주문의 접수 행을
+                #  물어 온다 — 손절률·점수·사유가 남의 것으로 상속된다.
+                #  api.place_order 가 rt_cd='0' 이면 ODNO 를 보장한다(주문번호 불변식).
+                odno = str((result.get('output') or {}).get('ODNO') or '').strip()
                 
                 # [수정] Race Condition 방지를 위해 DB 저장부터 최우선으로 실행
                 profit_amt = 0
@@ -1276,9 +1282,10 @@ def modify_order():
                 res_json = api.revise_cancel_order(market, api_action, org_odno, pdno, req_qty, price, rvse_cncl_dvsn_cd, ord_dvsn, exchange_code=target_excd)
             
             if res_json['rt_cd'] == '0':
-                odno = res_json.get('output', {}).get('ODNO') or res_json.get('output', {}).get('KRX_FWDG_ORD_ORGNO')
-                if not odno and 'output' in res_json and 'ODNO' in res_json['output']:
-                    odno = res_json['output']['ODNO']
+                # [Fix 2026-09-05] 지점 코드(KRX_FWDG_ORD_ORGNO) 폴백 제거 — 위 신규
+                #  주문과 같은 이유다. 아래 두 줄짜리 재확인도 같은 값을 다시 읽는
+                #  무동작이었다. api.revise_cancel_order 가 주문번호를 보장한다.
+                odno = str((res_json.get('output') or {}).get('ODNO') or '').strip()
                 
                 # [수정] DB 저장을 가장 최우선으로 실행하여 Race Condition 원천 차단
                 org_trade = db_manager.db.get_trade_by_odno(org_odno)

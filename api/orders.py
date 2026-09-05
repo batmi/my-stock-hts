@@ -292,6 +292,25 @@ def _place_order_impl(market, action, code, qty, price, ord_dvsn, exchange_code=
                     'msg1': f'해외 주문 결과 불명(응답 유실): {e}', 'output': {}}
         return _reconcile_unknown_order(action, code, qty, str(e))
 
+def _require_odno_rc(res, action, code, org_no):
+    """정정·취소도 '주문번호 없는 성공'을 성공으로 보지 않는다.
+
+    정정은 **새 주문번호를 채번**한다. 그 번호가 없으면 우리는 정정된 주문을 가리킬
+    수단이 없다 — 체결 대사(get_trade_by_odno)도 미체결 자동 취소도 odno 로 찾는다.
+    다만 주문과 달리 재전송 위험이 없으므로 대사까지 가지 않고 실패로 돌린다:
+    취소가 안 됐으면 다음 주기가 미체결을 다시 보고 다시 건다(아래 유실 처리와 같은 정책).
+    """
+    if not isinstance(res, dict) or res.get('rt_cd') != '0':
+        return res
+    out = res.get('output') or {}
+    if str(out.get('ODNO') or '').strip():
+        return res
+    logger.error(f"[ORDER_UNKNOWN] 정정/취소 응답에 주문번호(ODNO)가 없습니다 — "
+                 f"성공으로 보지 않습니다: {code} {action} 원주문 {org_no} / 응답={res}")
+    return {'rt_cd': '1', 'msg_cd': 'ORDER_UNKNOWN',
+            'msg1': '정정/취소 결과 불명(응답에 주문번호 없음)', 'output': {}}
+
+
 def revise_cancel_order(market, action, org_no, code, qty, price, type_cd, ord_dvsn, exchange_code=None):
     """
     정정/취소 통합 함수
@@ -324,7 +343,9 @@ def revise_cancel_order(market, action, org_no, code, qty, price, type_cd, ord_d
         data["EXCG_ID_DVSN_CD"] = "SOR" if _api().is_nxt_tradeable(code) else "KRX"
         # 주문과 같은 이유로 거부될 수 있다. 취소가 막히면 미체결이 계속 자리를 차지한다.
         if data["EXCG_ID_DVSN_CD"] == "SOR":
-            return _order_with_exchange_fallback(url_path, market, category, action, data, code=code)
+            return _require_odno_rc(
+                _order_with_exchange_fallback(url_path, market, category, action, data, code=code),
+                action, code, org_no)
     else: # overseas
         # [Fix] 해외 주문 정정/취소 시 거래소 코드 보정
         trade_excd = exchange_code
@@ -341,7 +362,9 @@ def revise_cancel_order(market, action, org_no, code, qty, price, type_cd, ord_d
     #  결과가 애매해도 손해가 누적되지 않는다 — 취소가 안 됐으면 다음 주기가 미체결을
     #  다시 보고 취소를 건다. 여기서는 실패로 돌려 그 흐름에 맡긴다.
     try:
-        return _api().call_api(url_path, market, category, action, data=data, method="POST")
+        return _require_odno_rc(
+            _api().call_api(url_path, market, category, action, data=data, method="POST"),
+            action, code, org_no)
     except _api().OrderOutcomeUnknown as e:
         logger.warning(f"[ORDER_UNKNOWN] 정정/취소 응답 없음 — 재전송하지 않습니다. "
                        f"다음 주기에 미체결로 다시 잡힙니다: {code} 원주문 {org_no} / {e}")

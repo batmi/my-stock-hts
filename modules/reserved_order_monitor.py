@@ -742,7 +742,10 @@ class ReservedOrderMonitor:
             return
 
         if res.get('rt_cd') == '0':
-            odno = res.get('output', {}).get('ODNO') or res.get('output', {}).get('KRX_FWDG_ORD_ORGNO')
+            # [Fix 2026-09-05] 지점 코드 폴백 제거. 이 값은 update_reserved_order_status
+            #  와 register_manual_order 의 추적 키로도 쓰여, 틀리면 예약 주문의 체결을
+            #  영영 못 잡는다. place_order 가 rt_cd='0' 이면 ODNO 를 보장한다.
+            odno = str((res.get('output') or {}).get('ODNO') or '').strip()
             db_manager.db.update_reserved_order_status(order['id'], 'TRIGGERED', odno)
             display_price = "시장가" if order_price == 0 else (f"{int(order_price):,}원" if order['market'] == 'KR' else f"${order_price:,.2f}")
             api.send_telegram_message(f"🔔 [예약 {'매수' if order['order_type']=='buy' else '매도'} 실행]\n"

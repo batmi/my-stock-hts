@@ -99,3 +99,74 @@ def test_조회_요청은_종전대로_None(monkeypatch):
     monkeypatch.setattr(toss_api, "_throttle", lambda g: None)
     monkeypatch.setattr(toss_api.requests, "get", lambda *a, **k: _Res())
     assert toss_api._request("GET", "/prices", "quote", account=False) is None
+
+
+# ---------------------------------------------------------------------------
+# 주문번호 자리에 '지점 코드'가 들어가던 길 (2026-09-05)
+#
+# KIS 주문 응답의 KRX_FWDG_ORD_ORGNO 는 한국거래소 전송 주문 **조직(지점) 번호**다.
+# 주문번호가 아니고, 같은 지점의 모든 주문이 같은 값을 갖는다. 호출부들이
+# `output.ODNO or output.KRX_FWDG_ORD_ORGNO` 로 폴백하고 있었다.
+#
+# trades.odno 는 체결 대사의 유일 키다(db.get_trade_by_odno 는 그 값으로 접수 행을
+# 찾아 손절률·점수·사유·실현손익을 체결 행에 상속한다). 지점 코드가 들어가면
+#   · 그 주문의 접수 행을 못 찾거나(손절률 0.0 으로 리셋), 더 나쁘게는
+#   · 같은 값을 가진 **다른 종목의 접수 행**을 물어 온다(ORDER BY id DESC LIMIT 1).
+import ast
+import os
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_ODNO_SITES = ("modules/trading.py", "modules/reserved_order_monitor.py",
+               "modules/auto_trade/engine.py", "api/orders.py")
+
+
+def test_지점코드를_주문번호_폴백으로_쓰지_않는다():
+    bad = []
+    for rel in _ODNO_SITES:
+        path = os.path.join(_ROOT, rel)
+        for i, line in enumerate(open(path, encoding="utf-8"), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            if "KRX_FWDG_ORD_ORGNO" not in line:
+                continue
+            # 요청 본문에 빈 값으로 넣거나, 응답 형태를 흉내 내는 것은 정상이다.
+            if '"KRX_FWDG_ORD_ORGNO": ""' in line or "'KRX_FWDG_ORD_ORGNO': ''" in line:
+                continue
+            bad.append(f"{rel}:{i} {line.strip()}")
+    assert not bad, (
+        "KRX_FWDG_ORD_ORGNO 를 주문번호처럼 쓰고 있다 — 그것은 지점 코드다.\n  "
+        + "\n  ".join(bad))
+
+
+def test_정정_취소_응답도_주문번호를_요구한다():
+    """정정은 새 주문번호를 채번한다 — 없으면 성공으로 보지 않는다."""
+    from api import orders as orders_mod
+
+    ok = {'rt_cd': '0', 'output': {'ODNO': '0000123456'}}
+    assert orders_mod._require_odno_rc(ok, 'modify', '005930', '111') is ok
+
+    for res in ({'rt_cd': '0', 'output': {'ODNO': ''}},
+                {'rt_cd': '0', 'output': {}},
+                {'rt_cd': '0', 'output': {'ODNO': '   ', 'KRX_FWDG_ORD_ORGNO': '00950'}}):
+        got = orders_mod._require_odno_rc(res, 'cancel', '005930', '111')
+        assert got['rt_cd'] == '1', f"주문번호 없는 성공이 통과했다: {res}"
+        assert got['msg_cd'] == 'ORDER_UNKNOWN'
+        # 대사 경로로 가지 않는다(재전송 위험이 없고, 다음 주기가 미체결을 다시 본다).
+        assert not (got.get('output') or {}).get('ODNO')
+
+    # 실패 응답은 손대지 않는다.
+    fail = {'rt_cd': '1', 'msg1': '거부', 'output': {}}
+    assert orders_mod._require_odno_rc(fail, 'cancel', '005930', '111') is fail
+
+
+def test_불변식이_정정_취소_경로에_실제로_걸려_있다():
+    """헬퍼만 있고 아무도 안 부르는 상태를 막는다."""
+    src = open(os.path.join(_ROOT, "api/orders.py"), encoding="utf-8").read()
+    tree = ast.parse(src)
+    fn = next(n for n in tree.body
+              if isinstance(n, ast.FunctionDef) and n.name == "revise_cancel_order")
+    calls = [n for n in ast.walk(fn)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+             and n.func.id == "_require_odno_rc"]
+    assert len(calls) >= 2, (
+        f"revise_cancel_order 의 KIS 반환 경로 일부가 불변식을 지나지 않는다({len(calls)}곳)")
