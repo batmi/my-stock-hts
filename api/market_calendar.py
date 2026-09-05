@@ -150,8 +150,11 @@ def is_us_holiday_on(date_str):
         return _remember_holiday(cache_key, True, confirmed=True)
 
     # [추가] 토스 모드일 경우 토스 API의 market-calendar 이용
-    if config.session.is_toss and date_str == datetime.now().strftime("%Y%m%d"):
+    is_today = date_str == datetime.now().strftime("%Y%m%d")
+    asked_authority = True     # 물어볼 권위가 없었으면(=라이브러리가 정본) 확정으로 본다
+    if config.session.is_toss and is_today:
         from brokers import toss_api
+        asked_authority = False
         try:
             today_formatted = datetime.now().strftime("%Y-%m-%d")
             res = toss_api.get_market_calendar("US", today_formatted)
@@ -159,21 +162,22 @@ def is_us_holiday_on(date_str):
                 today_info = res['today']
                 has_market = any(k in today_info and today_info[k] is not None for k in ['dayMarket', 'preMarket', 'regularMarket', 'afterMarket'])
                 is_holiday = not has_market
-                _HOLIDAY_CACHE[cache_key] = is_holiday
-                return is_holiday
+                return _remember_holiday(cache_key, is_holiday, confirmed=True)
         except Exception as e:
             logger.debug(f"Toss US market-calendar error: {e}")
-            pass
 
     # [삭제 2026-08-22] KIS 해외 휴장일 TR(overseas-stock/.../chk-holiday, CTCA0904R)은
     #  실전 서버에서 404다(존재하지 않는 엔드포인트). 호출해봐야 항상 None을 돌려주면서
     #  화면에 HTTP 404 경고만 찍었다 → holidays 라이브러리 판정으로 일원화한다.
     #  달력은 연방공휴일이 아니라 NYSE(XNYS)를 쓴다 — 증시는 성금요일에 쉬고 콜럼버스데이·
     #  재향군인의 날에는 열어서, 연방공휴일로 보면 양방향으로 틀렸다.
+    #  [Fix 2026-09-05] 라이브러리 답을 **무조건 굳히던** 자리. 한국 쪽은 2026-09-05에
+    #   고쳤는데 미국 쪽만 남아 있었다. 토스 모드에서는 market-calendar 가 정본이고
+    #   라이브러리는 대타다 — 조회가 실패한 답을 굳히면 기동 직후 한 번 실패한 판정이
+    #   그 날 내내 다시 물어지지 않는다(라이브러리는 임시휴장을 모른다).
+    #   물어볼 권위가 없는 모드(KIS 해외 TR 은 404라 라이브러리가 정본)에서는 확정이다.
     is_holiday = is_exchange_holiday(datetime.strptime(date_str, "%Y%m%d"), "XNYS")
-    _HOLIDAY_CACHE[cache_key] = is_holiday
-
-    return is_holiday
+    return _remember_holiday(cache_key, is_holiday, confirmed=asked_authority)
 
 def is_us_holiday_today():
     """오늘(한국 날짜)이 주말 또는 미국 공휴일(휴장일)인지 확인합니다.

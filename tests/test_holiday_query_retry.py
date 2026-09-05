@@ -116,6 +116,93 @@ def test_거래일_캐시가_잠정값을_확정으로_승격시키지_않는다
 
 
 # --------------------------------------------------------------------------
+# ①-2 미국 쪽에도 같은 규칙이 걸려 있다 (2026-09-05)
+#
+#  한국 쪽만 고치고 is_us_holiday_on 은 `_HOLIDAY_CACHE[...] = ...` 직접 대입으로
+#  남아 있었다. 토스 모드에서는 market-calendar 가 정본이고 라이브러리는 대타다 —
+#  대타 답을 굳히면 기동 직후 한 번 실패한 판정이 그 날 내내 다시 물어지지 않는다.
+# --------------------------------------------------------------------------
+US_WEEKDAY = "20260908"       # 화요일, NYSE 휴장일 아님
+
+
+@pytest.fixture
+def frozen_weekday(monkeypatch):
+    """'오늘'을 평일로 고정한다.
+
+    이 절의 판정은 `date_str == 오늘` 일 때만 토스 달력을 묻는다. 벽시계에 맡기면
+    주말에 통째로 건너뛰어, 토·일 이틀은 아무도 안 보는 테스트가 된다.
+    """
+    from datetime import datetime as _real
+
+    class _Fixed(_real):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 9, 8, 10, 0, 0)      # 화요일
+
+    monkeypatch.setattr(mc, "datetime", _Fixed)
+    return US_WEEKDAY
+
+
+def test_토스모드_미국_달력_실패는_굳지_않는다(monkeypatch, frozen_weekday):
+    monkeypatch.setattr(config.session, "is_toss", True, raising=False)
+    today = frozen_weekday
+    with patch("brokers.toss_api.get_market_calendar", side_effect=RuntimeError("net")):
+        api.is_us_holiday_on(today)
+    assert f"US_{today}" not in mc._HOLIDAY_CACHE, "실패한 답이 확정 캐시에 굳었다"
+    assert api.holiday_answer_provisional(today, country="US") is True
+
+
+def test_토스모드_미국_달력_성공은_확정이다(monkeypatch, frozen_weekday):
+    monkeypatch.setattr(config.session, "is_toss", True, raising=False)
+    today = frozen_weekday
+    # 먼저 실패시켜 잠정값을 만들어 둔다 — 성공이 그것을 지워야 한다.
+    with patch("brokers.toss_api.get_market_calendar", side_effect=RuntimeError("net")):
+        api.is_us_holiday_on(today)
+    assert api.holiday_answer_provisional(today, country="US") is True
+
+    # 재조회 시각을 앞당긴다(잠정 답은 HOLIDAY_RETRY_SEC 동안 그대로 쓰인다).
+    val, _ = mc._HOLIDAY_PROVISIONAL[f"US_{today}"]
+    mc._HOLIDAY_PROVISIONAL[f"US_{today}"] = (val, 0.0)
+
+    with patch("brokers.toss_api.get_market_calendar",
+               return_value={"today": {"regularMarket": {"open": "09:30"}}}):
+        assert api.is_us_holiday_on(today) is False
+    assert f"US_{today}" in mc._HOLIDAY_CACHE
+    assert api.holiday_answer_provisional(today, country="US") is False, (
+        "확정 답이 들어왔는데 잠정 항목이 남아 재조회가 계속 열려 있다")
+
+
+def test_토스가_아니면_라이브러리가_정본이라_확정이다(kis_mode):
+    """KIS 해외 휴장일 TR 은 404다(2026-08-22) — 물어볼 권위가 없다."""
+    assert api.is_us_holiday_on(US_WEEKDAY) is False
+    assert f"US_{US_WEEKDAY}" in mc._HOLIDAY_CACHE
+    assert api.holiday_answer_provisional(US_WEEKDAY, country="US") is False
+
+
+def test_확정_캐시에_직접_손대는_곳이_없다():
+    """`_HOLIDAY_CACHE[...] = ...` 를 우회로로 쓰면 잠정/확정 구분이 조용히 무너진다."""
+    import ast
+    import os
+    src = open(mc.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
+    tree = ast.parse(src)
+    owner = next(n for n in tree.body
+                 if isinstance(n, ast.FunctionDef) and n.name == "_remember_holiday")
+    owner_lines = set(range(owner.lineno, (owner.end_lineno or owner.lineno) + 1))
+    bad = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AugAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        for t in targets:
+            if (isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name)
+                    and t.value.id == "_HOLIDAY_CACHE" and node.lineno not in owner_lines):
+                bad.append(node.lineno)
+    assert not bad, (
+        "_remember_holiday 밖에서 확정 캐시에 직접 쓴다 — 잠정 답이 굳는다: "
+        + ", ".join(f"{os.path.basename(mc.__file__)}:{ln}" for ln in bad))
+
+
+# --------------------------------------------------------------------------
 # ② 연말 폐장일은 정의가 하나다
 # --------------------------------------------------------------------------
 def test_연말_폐장일_정의가_하나다():

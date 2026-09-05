@@ -371,6 +371,33 @@ def resolve_index_source(name, code):
 #  (양쪽에 따로 하드코딩되어 국채 2년물 신설 시 텔레그램만 누락됐던 문제 재발 방지)
 SECTION_START_INDICES = ["나스닥 선물", "Japan - 닛케이", "SOX (반도체)", "달러인덱스", "미국채 2년물 금리", "금", "비트코인"]
 
+def _fast_info_pair(fi):
+    """fast_info → (현재값, 전일값). 못 읽으면 (None, None).
+
+    [Fix 2026-09-05] 종전에는 `float(fi.get('regular_market_previous_close', current))` 였다.
+     키가 **있는데 값이 None** 이면 기본값이 쓰이지 않아 float(None) 이 TypeError 를 내고,
+     바깥 except 가 그것을 삼켜 **멀쩡히 받아 온 현재값까지 통째로 버렸다**(수신 실패로 표시).
+     last_price 가 NaN 인 경우도 truthy 라 그대로 통과했다. 지수 화면 워커
+     (_process_index_worker)는 `is not None and not isnan` 으로 이미 걸러 왔다 — 같은 규칙을
+     쓴다고 적어 둔 두 곳이 갈라져 있었다.
+    """
+    if not fi:
+        return None, None
+    last = fi.get('last_price')
+    try:
+        if last is None or math.isnan(float(last)):
+            return None, None
+        current = float(last)
+    except (TypeError, ValueError):
+        return None, None
+    prev_raw = fi.get('regular_market_previous_close')
+    try:
+        prev = current if prev_raw is None or math.isnan(float(prev_raw)) else float(prev_raw)
+    except (TypeError, ValueError):
+        prev = current
+    return current, prev
+
+
 def fetch_index_quote(name, code):
     """단일 지수의 경량 시세 (표시명, 현재값, 전일값)을 반환한다. 실패 시 (name, None, None).
 
@@ -410,9 +437,9 @@ def fetch_index_quote(name, code):
                 prev = float(tdf['close'].iloc[-2])
             elif name != "미국채 2년물 금리":
                 fi = api.get_yf_fast_info(code)
-                if fi and fi.get('last_price'):
-                    current = float(fi['last_price'])
-                    prev = float(fi.get('regular_market_previous_close', current))
+                cur_v, prev_v = _fast_info_pair(fi)
+                if cur_v is not None:
+                    current, prev = cur_v, prev_v
                     fut_mapping = {
                         "미국채 5년물 금리": {"ticker": "ZF=F", "duration": 4.5},
                         "미국채 10년물 금리": {"ticker": "ZN=F", "duration": 7.5},
@@ -434,9 +461,9 @@ def fetch_index_quote(name, code):
         else:
             try:
                 fi = api.get_yf_fast_info(code)
-                if fi and fi.get('last_price'):
-                    current = float(fi['last_price'])
-                    prev = float(fi.get('regular_market_previous_close', current))
+                cur_v, prev_v = _fast_info_pair(fi)
+                if cur_v is not None:
+                    current, prev = cur_v, prev_v
             except Exception:
                 pass
             if current is None:
@@ -677,7 +704,15 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                     "미국채 10년물 금리": {"ticker": "ZN=F", "duration": 7.5},
                     "미국채 30년물 금리": {"ticker": "ZB=F", "duration": 16.0}
                 }
-                if name in fut_mapping:
+                # [Fix 2026-09-05] `and use_fast_info` 가 빠져 있었다. 기준 금리(^FVX/^TNX/^TYX)
+                #  조회가 실패하면 current 는 0.0 인데, 선물만 받아지면 est_yield = 0 - f_rate/듀레이션
+                #  이라는 없는 값을 계산하고 is_proxy_yield 를 세웠다. 숫자는 아래
+                #  `if not use_fast_info` 블록이 일봉으로 덮어써 사라지지만 **깃발은 남는다** —
+                #  프록시를 적용하지 않은 행에 '(F)' 가 붙고, 지표의 마지막 봉 실시간 패치가
+                #  통째로 건너뛰어진다(line: `not is_proxy_yield`).
+                #  같은 규칙을 쓴다고 적어 둔 fetch_index_quote 는 이 조건을 `if fi and last_price`
+                #  중첩으로 이미 지키고 있었다 — 두 곳이 갈라져 있었다.
+                if name in fut_mapping and use_fast_info:
                     fut_info = fut_mapping[name]
                     try:
                         fut_fi = api.get_yf_fast_info(fut_info["ticker"])
