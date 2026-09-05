@@ -130,7 +130,10 @@ def test_reserved_order_monitor_score_params(mock_sm, mock_chart, mock_price, mo
     mock_chart.return_value = pd.DataFrame({'close': [10000]*20, 'high': [10000]*20, 'low': [10000]*20, 'open': [10000]*20, 'volume': [1000]*20})
     
     with patch('modules.reserved_order_monitor.analysis.calculate_score') as mock_calc_score, \
-         patch('modules.reserved_order_monitor.indicators.calculate_indicators', return_value={'rsi': 50}), \
+         patch('modules.reserved_order_monitor.indicators.calculate_indicators',
+               #  ema_60·psar 가 없으면 상태가 '데이터 부족'('-')이라 점수 조건 자체가
+               #  평가되지 않는다(2026-09-06: 못 잰 것을 점수로 읽지 않는다).
+               return_value={'rsi': 50, 'ema_60': 9000.0, 'psar': 9000.0}), \
          patch('modules.reserved_order_monitor.datetime') as mock_dt, \
          patch('modules.reserved_order_monitor.api.domestic_trading_session_open', return_value=True):
         mock_calc_score.return_value = (8.0, [])

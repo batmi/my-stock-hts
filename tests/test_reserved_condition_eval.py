@@ -239,3 +239,44 @@ def test_composite_with_an_unknown_sub_condition_does_not_fire(monitor):
 def test_composite_without_usable_conditions_does_not_fire(monitor, raw):
     ok, _ = monitor._eval_composite({'composite_json': raw, 'code': '005930'}, _ctx())
     assert ok is False
+
+
+# ───────────────────────── 점수 조건: 모름은 낮은 점수가 아니다 (2026-09-06) ─────────────────────────
+#  `analysis.calculate_score` 는 지표가 하나도 없어도 **숫자**를 돌려준다
+#  (실측: 전부 None → 1.5점). 그 1.5 는 '약한 종목'과 구별되지 않는다.
+#  SCORE_DOWN 예약의 발동은 곧 실매도 주문이므로, 못 잰 것을 '점수 하락'으로 읽으면
+#  차트가 짧은 신규 상장주나 마지막 봉이 결측인 프레임에서 조용한 오청산이 난다.
+
+def test_지표가_없으면_점수가_숫자여도_발동하지_않는다(monitor):
+    ctx = _ctx()
+    with patch('modules.reserved_order_monitor.analysis.check_smart_money_turnaround',
+               return_value=(False, "")), \
+         patch('modules.reserved_order_monitor.analysis.calculate_score',
+               return_value=(1.5, {})), \
+         patch('modules.reserved_order_monitor.analysis.classify_stock_state',
+               return_value=("-", "[dim]", "데이터 부족")):
+        assert _ev(monitor, 'SCORE_DOWN', 4.0, ctx) is False, (
+            "판정이 성립하지 않았는데 예약 매도가 발동했다")
+        assert _ev(monitor, 'SCORE_UP', 1.0, ctx) is False
+
+
+def test_판정이_되면_점수_조건은_종전대로_동작한다(monitor):
+    """대조군 — 게이트가 정상 경로를 갉아먹지 않아야 한다."""
+    ctx = _ctx()
+    with patch('modules.reserved_order_monitor.analysis.check_smart_money_turnaround',
+               return_value=(False, "")), \
+         patch('modules.reserved_order_monitor.analysis.calculate_score',
+               return_value=(1.5, {})), \
+         patch('modules.reserved_order_monitor.analysis.classify_stock_state',
+               return_value=("주의", "", "")):
+        assert _ev(monitor, 'SCORE_DOWN', 4.0, ctx) is True
+
+
+def test_진짜_지표로도_결측_프레임은_발동하지_않는다(monitor):
+    """목 없이 — calculate_indicators 가 결측 마지막 봉에 값을 지어내지 않는지까지 함께 본다."""
+    df = _df()
+    df.loc[df.index[-1], ['open', 'high', 'low', 'close']] = np.nan
+    ctx = _ctx(df=df)
+    with patch('modules.reserved_order_monitor.analysis.check_smart_money_turnaround',
+               return_value=(False, "")):
+        assert _ev(monitor, 'SCORE_DOWN', 4.0, ctx) is False

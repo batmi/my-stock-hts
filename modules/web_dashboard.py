@@ -613,9 +613,37 @@ def update_chart_index(chart_dir):
 
     html_content = HTML_TEMPLATE.replace('<!-- INJECT_CARDS -->', cards_html)
 
-    index_path = os.path.join(chart_dir, 'index.html')
-    with open(index_path, 'w', encoding='utf-8') as fp:
-        fp.write(html_content)
+    _write_index_atomic(os.path.join(chart_dir, 'index.html'), html_content)
+
+
+def _write_index_atomic(index_path, html_content):
+    """index.html 을 통째로 갈아끼운다 — 반쯤 쓰인 갤러리를 남기지 않는다.
+
+    [왜 · 2026-09-05] 종전에는 `open(...,'w')` 로 곧바로 썼다. 그것은 **먼저 잘라내고**
+     30KB 를 흘려보내는 동작이라, 그 사이에 두 가지가 깨진다.
+     ① 동시 호출 — 이 함수는 렌더 락 안(chart.create_analysis_chart)에서도 불리고
+        락 **밖**(main.py 메뉴)에서도 불린다. 두 스레드가 겹치면 서로의 출력이 섞인다.
+     ② 중간에 죽음 — 1GB 라즈베리파이에서 300DPI 렌더가 OOM Killer 를 부른 전례가
+        이 저장소에 실측으로 적혀 있다(chart._release_render_memory 주석). 그 순간이
+        쓰기 중이면 잘린 HTML 이 **다음 렌더까지** 남는다. 갤러리는 그때 하얗게 뜬다.
+    같은 디렉터리에 임시 파일로 쓰고 os.replace 로 바꾼다(같은 파일시스템 = 원자적).
+    실패해도 갤러리 한 장 못 만든 것뿐이므로 예외를 올리지 않고 경고만 남긴다 —
+    이 함수를 부르는 쪽은 '차트를 다 그린 뒤'라 여기서 예외가 오르면 차트 생성이
+    실패한 것처럼 보인다.
+    """
+    tmp = f"{index_path}.tmp"
+    try:
+        with open(tmp, 'w', encoding='utf-8') as fp:
+            fp.write(html_content)
+            fp.flush()
+            os.fsync(fp.fileno())
+        os.replace(tmp, index_path)
+    except OSError as e:
+        logger.warning(f"[webchart] 갤러리 인덱스 저장 실패({index_path}): {e}")
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":

@@ -128,3 +128,47 @@ def test_box_kept_when_price_is_near():
 
     assert box is not None
     assert box['low'] <= prices[-1] * 1.05
+
+
+# ==========================================================
+# [마지막 봉이 결측이면 값을 지어내지 않는다] (2026-09-05)
+# ==========================================================
+#  calculate_indicators 의 가드는 전부 `len(df) >= N` — 봉의 **개수**만 센다.
+#  마지막 봉의 OHLC 가 결측이면 개수는 통과하는데 값이 극단으로 튄다.
+#  yfinance 프레임은 결측 행을 그대로 흘려보낸다(api.charts._fetch_yf_index_daily 에
+#  dropna 가 없다). '최신 종가를 결측으로 주는 일이 잦다'는 것은 trader.py 시장 필터
+#  주석에 이미 실측으로 적혀 있다.
+
+def _ramp(n=200):
+    close = pd.Series(np.linspace(10000.0, 12000.0, n))
+    return pd.DataFrame({
+        'date': [f"2026{(i % 12) + 1:02d}{(i % 28) + 1:02d}" for i in range(n)],
+        'open': close, 'high': close * 1.01, 'low': close * 0.99,
+        'close': close, 'volume': 1000.0,
+    })
+
+
+def test_마지막_봉_결측은_극단값이_아니라_모름이다():
+    df = _ramp()
+    ok = indicators.calculate_indicators(df)
+    assert ok['rsi'] is not None and ok['adx'] is not None      # 전제 확인
+
+    bad = df.copy()
+    bad.loc[bad.index[-1], ['open', 'high', 'low', 'close']] = np.nan
+    out = indicators.calculate_indicators(bad)
+
+    # 종전에는 RSI 100.0 · ADX 100.0 이 나왔다 — '모름'이 아니라 최강 추세·극단 과매수라는 단정이다.
+    for key in ('rsi', 'adx', 'plus_di', 'minus_di', 'cci', 'ema_20', 'ema_60', 'ema_120', 'macd'):
+        assert out[key] is None, f"{key} 가 결측 봉에서 값을 지어냈다: {out[key]}"
+    assert out['atr'] == 0, "ATR 이 살아 있으면 변동성 타겟팅이 결측 위에서 돈다"
+    assert out['obv_trend'] is False
+
+
+def test_중간_봉_결측은_종전대로_계산한다():
+    """이동평균은 중간 결측을 건너뛴다 — 마지막 봉만 문제였다(과잉 차단 금지)."""
+    df = _ramp()
+    mid = df.copy()
+    mid.loc[mid.index[-30], ['high', 'low', 'close']] = np.nan
+    out = indicators.calculate_indicators(mid)
+    assert out['rsi'] is not None
+    assert out['atr'] > 0

@@ -64,3 +64,52 @@ def test_macro_lines_use_it_for_domestic_indices():
     src = inspect.getsource(theme_analysis._get_macro_context_str)
     assert "_yh_52w(" in src
     assert "tail(250).max()" not in src, "52주 고점을 다시 직접 세고 있다"
+
+
+# ==========================================================
+# [모름] 못 구한 지표를 없애거나 0%로 채우지 않는다 (2026-09-05)
+# ==========================================================
+#  이 표는 "이 수치들과 현재 상태를 절대적인 팩트로 반영할 것"이라는 지시와 함께
+#  들어가고, 그 산출물(장전 브리핑)은 텔레그램으로 그대로 나간다.
+#  · 조회 실패 → 종전에는 **줄째로 사라져** AI 에게 '특별할 것 없는 지표'로 읽혔다
+#  · 전일 종가 모름 → 종전에는 '전일대비 +0.00%'(변동 없음)로 단정됐다
+
+from unittest.mock import patch
+
+
+def _run_macro(fast_info):
+    with patch("modules.analysis.get_domestic_index_data", return_value=None), \
+         patch("modules.analysis.get_us_treasury_spot_data", return_value=None), \
+         patch("api.get_yf_fast_info", side_effect=fast_info):
+        return theme_analysis._get_macro_context_str()
+
+
+def test_못_구한_지표는_이름을_대고_빠진다():
+    def fi(ticker):
+        return {'last_price': 100.0, 'regular_market_previous_close': 99.0,
+                'year_high': 110.0} if ticker == "^VIX" else None
+
+    out = _run_macro(fi)
+    assert "[조회 실패]" in out, "못 구한 지표가 줄째로 사라졌다 — AI 는 그것을 모른다"
+    assert "비트코인" in out.split("[조회 실패]")[1]
+    assert "'변화 없음'이 아니라 '모름'" in out
+
+
+def test_전일_종가를_모르면_0퍼센트로_단정하지_않는다():
+    def fi(ticker):
+        # 전일 종가가 없는 응답(벤더가 자주 비운다)
+        return {'last_price': 20.0, 'regular_market_previous_close': None, 'year_high': 80.0}
+
+    out = _run_macro(fi)
+    assert "전일대비 모름" in out
+    assert "+0.00%" not in out, "모르는 등락을 '변동 없음'으로 단정했다"
+
+
+def test_아는_지표는_종전대로_등락률을_적는다():
+    """모름 처리가 정상 경로를 갉아먹지 않아야 한다."""
+    def fi(ticker):
+        return {'last_price': 110.0, 'regular_market_previous_close': 100.0, 'year_high': 120.0}
+
+    out = _run_macro(fi)
+    assert "전일대비 +10.00%" in out
+    assert "전일대비 모름" not in out

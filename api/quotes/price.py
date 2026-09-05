@@ -362,6 +362,13 @@ def get_investor_trend(code, market_div="J"):
      **판단이 뒤집힌다**(과거를 최신으로 읽고 턴어라운드 방향이 거꾸로 선다).
      KIS 응답은 최신이 먼저라 여태 성립했지만, 그것은 어느 계층에도 적혀 있지 않았고
      토스 어댑터는 응답 순서를 그대로 흘려보냈다(2026-09-04 감사). 경계에서 맞춘다.
+
+    [반환 계약 2 · 2026-09-05] **조회 실패는 `None`, '수급 미제공'은 `[]`** 이다.
+     종전에는 둘 다 `[]` 였고, 더 나쁘게는 그 `[]` 를 5분 마이크로 캐시에 굳혔다.
+     소비자 쪽(analysis.check_smart_money_turnaround)은 그 빈 값을 'ETF·미제공 종목'으로
+     읽고 **1시간짜리 부정 캐시**에 다시 굳힌다 — 토스/KIS 가 한 번 흔들리면 그 종목의
+     스마트머니가 한 시간 동안 False 로 고정되고, 그 사이 재조회는 0회다(실측).
+     실패는 캐시하지 않는다.
     """
     cache_key = f"inv_{code}_{market_div}"
     cached = _api()._get_micro_cache(cache_key, ttl=300.0) # [수정] 수급 정보는 장중 잠정치가 천천히 갱신되는 일단위 집계라 5분 캐시로 REST/TPS 절감
@@ -372,7 +379,12 @@ def get_investor_trend(code, market_div="J"):
         from brokers import toss_api
         try:
             toss_res = toss_api.get_investor_trend(code, count=30)
-            records = toss_res.get('records', [])
+            #  `toss_api.get_investor_trend` 는 요청 실패를 `or {}` 로 감춘다 — 빈 응답은
+            #  '수급이 없다'가 아니라 '못 물어봤다'이므로 캐시하지 않고 모름으로 올린다.
+            if not toss_res:
+                logger.debug(f"[Toss] get_investor_trend 응답 없음({code}) — 실패로 본다")
+                return None
+            records = toss_res.get('records') or []
             kis_output = []
             for r in records:
                 date_str = r.get('date', '').replace('-', '')
@@ -394,10 +406,10 @@ def get_investor_trend(code, market_div="J"):
             return kis_output
         except Exception as e:
             logger.debug(f"[Toss] get_investor_trend 에러: {e}")
-            return []
-            
+            return None
+
     if config.session.is_toss:
-        return []
+        return []          # 해외/업종 — 토스가 주지 않는다('없음'이 맞다)
 
     # [수정] 업종(지수)인 경우 별도 TR_ID(FHPTJ04040000) 및 URL 사용
     action = "investor"
@@ -451,8 +463,11 @@ def get_investor_trend(code, market_div="J"):
         
         _api()._set_micro_cache(cache_key, output)
         return output
-            
-    return []
+
+    #  rt_cd != '0' — 조회가 실패한 것이지 '수급이 없는' 것이 아니다. 굳히지 않는다.
+    logger.debug(f"[API] get_investor_trend 실패({code}): "
+                 f"rt_cd={data.get('rt_cd')} msg={data.get('msg1')}")
+    return None
 
 def get_daily_foreign_rate(code):
     """주식 일자별 시세 (최근 30일, 외인소진율 포함) 조회"""
@@ -472,7 +487,10 @@ def get_daily_foreign_rate(code):
                     # Toss: 소수비율(0.5089) -> KIS: 백분율 문자열("50.89")
                     rate_pct = str(float(holding_rate) * 100)
                 else:
-                    rate_pct = "0"
+                    # [모름 · 2026-09-05] 종전에는 "0" 이었다 — 그러면 표에 **외국인
+                    #  소진율 0.00%** 로 찍힌다(단정). 소비자(analysis 표)는 이미
+                    #  빈 값을 '-' 로 그리는 길을 갖고 있는데 그 길이 한 번도 안 열렸다.
+                    rate_pct = ""
                     
                 item = {
                     'stck_bsop_date': date_str,

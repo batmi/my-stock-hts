@@ -386,8 +386,10 @@ def test_monitor_trigger_ema_rsi_score(mock_execute, mock_calc, mock_chart, mock
     
     mock_get_price.side_effect = lambda code, is_ovs: {"005930": 85000.0, "000660": 150000.0, "035420": 200000.0}.get(code, 0.0)
     mock_chart.return_value = pd.DataFrame({'close': [100.0, 200.0]})
-    mock_calc.return_value = {'ema_60': 80000.0, 'rsi': 25.0}
-    
+    #  psar 까지 준다 — 없으면 상태가 '데이터 부족'('-')이라 점수 조건이 발동하지 않는다
+    #  (2026-09-06: '모름'을 낮은/높은 점수로 읽지 않는다).
+    mock_calc.return_value = {'ema_60': 80000.0, 'rsi': 25.0, 'psar': 80000.0}
+
     with patch('modules.analysis.calculate_score', return_value=(8.0, {})):
         with patch('modules.reserved_order_monitor.datetime') as mock_dt:
             mock_dt.now.return_value.strftime.side_effect = lambda fmt: "1200" if fmt == "%H%M" else "20240101"
@@ -555,8 +557,13 @@ def test_monitor_trigger_down_conditions(mock_execute, mock_calc, mock_chart, mo
     # SCORE_DOWN: score가 4.0 이하여야 함
     mock_get_price.side_effect = lambda code, is_ovs: {"005930": 79000.0, "000660": 150000.0, "035420": 200000.0}.get(code, 0.0)
     mock_chart.return_value = pd.DataFrame({'close': [100.0, 200.0]})
-    mock_calc.return_value = {'ema_20': 80000.0, 'rsi': 75.0}
-    
+    #  [2026-09-06] ema_60·psar 를 함께 준다. 이 둘이 없으면 classify_stock_state 가
+    #   '데이터 부족'(상태 '-')을 돌려주고, 점수 조건은 그때 발동하지 않는다
+    #   (calculate_score 는 지표가 없어도 숫자를 돌려주므로 '모름'과 '약함'이 섞인다).
+    #   종전 하네스는 그 구멍에 기대어 SCORE_DOWN 발동을 확인하고 있었다.
+    mock_calc.return_value = {'ema_20': 80000.0, 'rsi': 75.0,
+                              'ema_60': 90000.0, 'psar': 90000.0}
+
     with patch('modules.analysis.calculate_score', return_value=(3.5, {})):
         with patch('modules.reserved_order_monitor.datetime') as mock_dt:
             mock_dt.now.return_value.strftime.side_effect = lambda fmt: "1200" if fmt == "%H%M" else "20240101"

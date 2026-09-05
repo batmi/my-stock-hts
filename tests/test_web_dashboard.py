@@ -328,3 +328,47 @@ def test_chart_dpi_is_configurable_and_defaults_to_300():
     from modules import chart
     assert inspect.signature(chart.generate_visual_chart).parameters['dpi'].default is None
     assert int(config.CHART_DPI) == 300, "기본값은 종전과 같아야 한다(조용히 화질을 낮추지 않는다)"
+
+
+# ==========================================================
+# [원자성] 갤러리 인덱스는 반쯤 쓰인 채 남지 않는다 (2026-09-05)
+# ==========================================================
+def test_인덱스는_임시파일_교체로_쓴다(tmp_path, monkeypatch):
+    """쓰는 도중 죽어도 옛 index.html 이 그대로 남아야 한다.
+
+    `open(...,'w')` 는 **먼저 잘라내고** 쓴다. 라즈베리파이에서 300DPI 렌더가
+    OOM Killer 를 부른 전례가 이 저장소에 실측으로 적혀 있는데, 그 순간이 쓰기
+    중이면 잘린 HTML 이 다음 렌더까지 남아 갤러리가 하얗게 뜬다.
+    """
+    index = tmp_path / "index.html"
+    index.write_text("<!-- 옛 갤러리 -->", encoding="utf-8")
+
+    real_replace = os.replace
+
+    def die_before_replace(src, dst):
+        raise KeyboardInterrupt("쓰기 도중 프로세스가 죽었다")
+
+    monkeypatch.setattr(wd.os, "replace", die_before_replace)
+    with pytest.raises(KeyboardInterrupt):
+        wd.update_chart_index(str(tmp_path))
+
+    assert index.read_text(encoding="utf-8") == "<!-- 옛 갤러리 -->", (
+        "교체 전에 죽었는데 원본이 이미 잘려 있다 — 잘라쓰기(truncate)를 하고 있다")
+
+    monkeypatch.setattr(wd.os, "replace", real_replace)
+    wd.update_chart_index(str(tmp_path))
+    assert "<!DOCTYPE html>" in index.read_text(encoding="utf-8")
+    assert not (tmp_path / "index.html.tmp").exists(), "임시 파일이 남았다"
+
+
+def test_인덱스_저장_실패는_차트_생성을_망치지_않는다(tmp_path, monkeypatch, caplog):
+    """이 함수는 '차트를 다 그린 뒤'에 불린다 — 여기서 예외가 오르면 차트가 실패한 것처럼 보인다."""
+    def boom(src, dst):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(wd.os, "replace", boom)
+    with caplog.at_level("WARNING", logger=wd.__name__):
+        wd.update_chart_index(str(tmp_path))          # 예외가 오르면 실패
+    assert any("인덱스 저장 실패" in r.message for r in caplog.records), (
+        "조용히 삼키면 갤러리가 왜 안 바뀌는지 아무 데도 안 남는다")
+    assert not (tmp_path / "index.html.tmp").exists(), "실패한 임시 파일을 치우지 않았다"

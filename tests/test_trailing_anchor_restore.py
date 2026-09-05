@@ -342,7 +342,16 @@ def etf_trader():
     db_manager.db.delete_trailing_stop(CODE)
 
 
-def _run_etf_cycle(trader, df, clock=None):
+def _run_etf_cycle(trader, df, clock=None, nxt=False):
+    """ETF 보유 1주기.
+
+    [벽시계를 끊는다 · 2026-09-05] `api.nxt_order_window()` 는 **자기 datetime** 을 쓴다 —
+     아래 `_MidSession`/`_NxtSession` 이 갈아끼우는 `trader.datetime` 이 아니다. 그래서
+     종전에는 스위트를 15:30~20:00(또는 08:00~08:50)에 돌리면 ETF 테스트가 통째로 NXT
+     분기를 탔고, `_NxtSession` 을 쓰는 테스트는 반대로 그 시간대 **밖에서는 NXT 분기를
+     한 번도 밟지 않은 채 통과**했다(두 분기 모두 앵커를 복원하므로 단언은 성립한다).
+     즉 그 테스트는 낮에는 스스로 무의미해진다. 분기를 인자로 못박는다.
+    """
     holdings = [{'pdno': CODE, 'prdt_name': NAME, 'hldg_qty': '229', 'ord_psbl_qty': '229',
                  'pchs_avg_pric': str(BUY_PRICE), 'pchs_amt': str(int(BUY_PRICE * 229)),
                  'prpr': str(NOW_PRICE), 'evlu_amt': str(int(NOW_PRICE * 229)),
@@ -355,6 +364,7 @@ def _run_etf_cycle(trader, df, clock=None):
          patch('modules.auto_trade.api.send_telegram_message'), \
          patch('modules.auto_trade.load_restricted_stocks', return_value={}), \
          patch('modules.auto_trade.api.is_domestic_etf_etn', return_value=True), \
+         patch('modules.auto_trade.api.nxt_order_window', return_value=nxt), \
          patch.object(config, 'SYSTEM_INCLUDE_ETF', False), \
          patch('modules.auto_trade.api.fetch_sellable_quantity', return_value=229), \
          patch('modules.auto_trade.api.get_chart_data', return_value=df) as chart, \
@@ -380,14 +390,28 @@ def test_ETF는_매도판정에서_빠지되_앵커는_복원된다(etf_trader):
 
 
 def test_ETF_앵커_복원은_주기마다_차트를_다시_집지_않는다(etf_trader):
-    """라즈베리파이 보호 — 앵커는 일봉 고가라 주기(수십 초)마다 볼 이유가 없다."""
+    """라즈베리파이 보호 — 앵커는 일봉 고가라 주기(수십 초)마다 볼 이유가 없다.
+
+    [플래키 진단 · 2026-09-06] 이 테스트는 전체 스위트에서 드물게(실측 약 25회 중 3회)
+     실패하는데 단독·반복 실행으로는 재현되지 않았다. 어느 단언이 어떤 상태에서 깨지는지
+     기록이 남지 않아 추적이 막혔으므로, 실패 메시지가 스스로 원인을 말하게 한다:
+       · 스로틀 dict 가 첫 주기에 찍혔는가(= _restore_trailing_anchor 에 닿았는가)
+       · 두 번째 주기의 차트 호출이 **어디서** 났는가(인자로 경로가 갈린다)
+     첫 단언이 깨지면 1주기가 앵커 복원 전에 빠져나간 것이고, 둘째가 깨지면 ETF 분기가
+     아닌 일반 매도 경로(trader 의 df 조회)로 흘러간 것이다.
+    """
     db_manager.db.update_highest_price(CODE, PLANTED)
 
     _, first = _run_etf_cycle(etf_trader, _bars())
+    throttle_after_first = dict(getattr(etf_trader, '_anchor_restore_at', {}))
     _, chart = _run_etf_cycle(etf_trader, _bars())
 
-    assert first.called, "첫 주기부터 차트를 집지 않았다 — 하네스 전제가 깨졌다"
-    assert not chart.called, "두 번째 주기에도 차트를 조회했다 — 스로틀이 걸리지 않았다"
+    assert first.called, (
+        "첫 주기부터 차트를 집지 않았다 — 하네스 전제가 깨졌다. "
+        f"스로틀={throttle_after_first} (비어 있으면 앵커 복원에 닿기 전에 빠져나갔다)")
+    assert not chart.called, (
+        "두 번째 주기에도 차트를 조회했다 — 스로틀이 걸리지 않았다. "
+        f"스로틀={throttle_after_first} 호출={chart.call_args_list}")
 
 
 
@@ -400,11 +424,29 @@ class _NxtSession(datetime):
 
 def test_NXT_시간대의_ETF도_앵커는_복원된다(etf_trader):
     """NXT 분기(15:30~20:00·08:00~08:50)는 ETF 제외 분기보다 **먼저** 걸린다. 거기서 그냥
-    돌아서면 장 마감 후에만 봇을 켜는 운용에서 앵커가 영영 복원되지 않는다."""
+    돌아서면 장 마감 후에만 봇을 켜는 운용에서 앵커가 영영 복원되지 않는다.
+
+    [2026-09-05] `nxt=True` 를 명시한다. 종전에는 `_NxtSession` 만 갈아끼웠는데 그 시계는
+     `api.nxt_order_window` 에 닿지 않아, 낮에 돌리면 이 테스트가 NXT 분기를 밟지 못한
+     채로 통과했다 — 지키려던 회귀를 지키지 않는 상태로 오래 서 있었다.
+    """
     db_manager.db.update_highest_price(CODE, PLANTED)
 
-    mock_analyze, chart = _run_etf_cycle(etf_trader, _bars(), clock=_NxtSession)
+    mock_analyze, chart = _run_etf_cycle(etf_trader, _bars(), clock=_NxtSession, nxt=True)
 
     assert not mock_analyze.called, "NXT 시간대에 ETF가 매도 판정을 탔다"
     assert chart.called, "차트를 집지 않았다 — NXT 분기에 닿기 전에 빠졌다(하네스 전제 붕괴)"
     assert db_manager.db.get_highest_price(CODE) == pytest.approx(PEAK_HIGH)
+
+
+def test_그_분기가_실제로_NXT_분기인지_못박는다():
+    """`nxt=True` 하네스가 진짜 NXT 분기를 태우는지 — 안 그러면 위 테스트는 ETF 분기의 사본이다."""
+    import inspect
+    from modules.auto_trade import trader as _t
+
+    src = inspect.getsource(_t.AutoTrader._check_sell_conditions)
+    i_nxt = src.index("is_nxt_market = api.nxt_order_window()")
+    i_etf = src.index("if is_domestic_etf and not getattr(config, 'SYSTEM_INCLUDE_ETF'")
+    assert i_nxt < i_etf, "NXT 분기가 ETF 제외 분기보다 먼저 걸린다는 전제가 깨졌다"
+    assert "api.nxt_order_window()" in src, (
+        "분기 조건이 바뀌었다 — 하네스의 nxt 인자가 더는 그 분기를 고르지 못한다")

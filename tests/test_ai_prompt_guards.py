@@ -155,15 +155,50 @@ def test_verify_flags_small_cap():
 
 
 def test_verify_skips_when_listing_unavailable():
-    """조회 실패를 '없는 종목'으로 오판하면 안 된다 — 원문 그대로 반환."""
+    """조회 실패를 '없는 종목'으로 오판하면 안 된다 — 표기는 손대지 않는다."""
     with _patch_listing(None):
         text = "• 없는종목(999999) - 추천"
-        assert theme_analysis.verify_stock_codes(text) == text
+        out = theme_analysis.verify_stock_codes(text)
+    assert out.startswith(text)
+    assert "미상장" not in out, "조회 실패를 '미상장'으로 오판했다"
 
 
 def test_verify_survives_listing_exception():
     with patch("modules.krx_daily.get_listing_map", side_effect=RuntimeError("net")):
         text = "• 삼성전자(005930) - 반도체"
+        out = theme_analysis.verify_stock_codes(text)
+    assert out.startswith(text)
+    assert "⚠️실제" not in out
+
+
+@pytest.mark.parametrize("failure", ["none", "exception"])
+def test_검증을_못_했다는_사실이_리포트에_남는다(failure):
+    """[2026-09-05] 검증이 '돌지 않았다'와 '통과했다'가 화면에서 같아 보이면 안 된다.
+
+    이 함수의 존재 이유가 지어낸 종목코드를 믿지 않게 하는 것인데, 그 방어가 꺼진 것을
+    운용자가 알 방법이 없었다 — 장전 브리핑은 이 텍스트 그대로 텔레그램으로 나간다.
+    """
+    text = "• 삼성전자(005930) - 반도체"
+    if failure == "none":
+        ctx = _patch_listing(None)
+    else:
+        ctx = patch("modules.krx_daily.get_listing_map", side_effect=RuntimeError("net"))
+    with ctx:
+        out = theme_analysis.verify_stock_codes(text)
+
+    assert "검증을 하지 못했습니다" in out, (
+        "검증이 꺼진 리포트가 통과한 리포트와 똑같이 보인다")
+
+    # 대조: 정상 조회에서는 이 문구가 절대 붙지 않는다.
+    with _patch_listing(_LISTING):
+        clean = theme_analysis.verify_stock_codes(text)
+    assert "검증을 하지 못했습니다" not in clean
+
+
+def test_종목_표기가_없으면_검증_실패도_알리지_않는다():
+    """종목코드가 하나도 없는 글에는 대조할 것이 없다 — 겁줄 이유가 없다."""
+    with _patch_listing(None):
+        text = "코스피는 (2026년) 기준 상승했다"
         assert theme_analysis.verify_stock_codes(text) == text
 
 

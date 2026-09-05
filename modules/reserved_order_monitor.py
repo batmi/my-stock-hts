@@ -498,6 +498,17 @@ class ReservedOrderMonitor:
                 ctx['_state'] = self._compute_state(ctx)
             return ctx['_state'] == value
         if ctype in ('SCORE_UP', 'SCORE_DOWN'):
+            #  [모름은 낮은 점수가 아니다 · 2026-09-06] calculate_score 는 지표가 하나도
+            #   없어도 **숫자**를 돌려준다(실측: 전부 None → 1.5점). 그 1.5 는 '약한 종목'과
+            #   구별되지 않아, SCORE_DOWN 예약이 그대로 **실매도 주문**을 낸다. 차트가 짧은
+            #   신규 상장주나 마지막 봉이 결측인 프레임에서 실제로 일어난다.
+            #   판정 가능 여부는 classify_stock_state 가 이미 단독으로 안다("데이터 부족" →
+            #   상태 '-'). 그 하나를 그대로 쓴다 — 여기에 조건을 복제하면 조용히 갈라진다.
+            if '_state' not in ctx:
+                ctx['_state'] = self._compute_state(ctx)
+            if ctx['_state'] == "-":
+                logger.debug(f"[Reserve] {ctx.get('code')} 점수 조건 보류 — 판정 입력 부족")
+                return False
             if '_score' not in ctx:
                 ctx['_score'] = self._compute_score(ctx)
             s = ctx['_score']

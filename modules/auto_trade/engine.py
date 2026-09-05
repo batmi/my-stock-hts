@@ -1104,9 +1104,26 @@ def analyze_holdings(entries, max_workers=None, restricted_codes=None, account=N
             is_overseas = bool(entry.get('is_overseas'))
             buy_price = float(entry.get('buy_price') or 0)
             current_price = float(entry.get('current_price') or 0)
-            profit_rate = float(entry.get('profit_rate') or 0)
             if buy_price <= 0 or current_price <= 0:
                 return code, None
+
+            #  [0% 는 '모름'이 아니다 · 2026-09-06] 종전에는
+            #   `float(entry.get('profit_rate') or 0)` 이었다. 증권사 어댑터는 일부 필드를
+            #   0/누락으로 준다(holding_profit_rate 독스트링·[[toss-balance-sell-gate]]).
+            #   그러면 0% 가 손절선(음수)보다 위라 **손절 이탈 판정이 '아직 괜찮다'로
+            #   뒤집힌다** — 실측: 평단 70,000·현재가 60,000(-14.3%)이 0.0% 로 들어갔다.
+            #   이 경로는 화면(메뉴 9-2)뿐 아니라 예약 HOLDING_EXIT 를 거쳐 **실매도 주문**
+            #   까지 간다. 위 가드를 통과했으므로 평단·현재가는 둘 다 양수다 — 없으면
+            #   추측하지 말고 그 둘로 정확히 구한다.
+            raw_rate = entry.get('profit_rate')
+            try:
+                profit_rate = float(raw_rate)
+            except (TypeError, ValueError):
+                profit_rate = None
+            if profit_rate is None:
+                profit_rate = (current_price - buy_price) / buy_price * 100.0
+                logger.debug(f"[보유분석] {code} 수익률 미제공 — 평단·현재가로 복원: "
+                             f"{profit_rate:.2f}%")
 
             rule = rules_map.get(code)
             score_adj = 0.0
@@ -1532,9 +1549,29 @@ class DefaultStrategy:
             #   스코어는 단기 신호(5>20 EMA, MACD 히스토그램, SAR 등) 비중이 커서 정배열 유지 중의
             #   통상적 눌림목에서도 기준 미만으로 떨어질 수 있음 → 주청산(샹들리에 TS)의 fat-tail
             #   추종을 점수 매도가 조기에 잘라내는 것을 방지. ('매도' 상태는 자체 조건이 이미 엄격하므로 즉시 발동)
+            #  [판정이 성립했을 때만 판다 · 2026-09-06]
+            #   위 `if df is not None and not df.empty` 는 **그릇**만 본다. 프레임이 있어도
+            #   내용이 못 쓸 수 있다 — 마지막 봉이 결측이거나(yfinance 가 최신 종가를 자주
+            #   비운다) 상장 초기라 60일선이 아직 없거나. 그때 calculate_score 는 '모름'이
+            #   아니라 **숫자**를 돌려주고(실측: 지표 전무 → 1.0~1.5점), ema_60 이 None 이라
+            #   structure_broken 도 True 가 되어 **점수매도가 전량 청산을 낸다**.
+            #   실측 사유 문자열이 그 상태를 그대로 적는다:
+            #     "추세이탈(-/점수하락+60일선이탈) [점수:1.0, RSI:-, ADX:-, CCI:-]"
+            #   — 아무것도 못 쟀다고 적으면서 판다.
+            #
+            #   [백테스트에는 이 팔이 없다] backtest 의 같은 식은 `row.get('EMA60')` 인데
+            #   그쪽 EMA60 은 `ewm(adjust=False)` 라 0번 봉부터 값이 있고 결측이면 NaN 이다
+            #   (None 이 아니다). 즉 `is None` 팔은 백테스트에서 죽은 코드고, **실매매에만
+            #   있는 이 경로는 한 번도 측정된 적이 없다**. 점수하락의 60일선 조건은
+            #   주청산(샹들리에 TS)의 버팀목이라 제거 시 수익이 1/3 이 되는 자리인데,
+            #   '모름'을 '이탈'로 읽는 것은 가장 모르는 순간에 그 버팀목을 빼는 것이다.
+            #
+            #   판정 가능 여부는 classify_stock_state 가 단독으로 안다(입력이 없으면 '-').
+            #   그 하나를 그대로 쓴다 — 조건을 복제하면 조용히 갈라진다.
+            judged = state not in ("", "-")
             ema60_val = ind.get('ema_60') if ind else None
             structure_broken = ema60_val is None or current_price < ema60_val
-            if not reason and (state == "매도" or (score < sell_score_limit and structure_broken)):
+            if not reason and (state == "매도" or (judged and score < sell_score_limit and structure_broken)):
                 rsi_val = f"{ind.get('rsi'):.1f}" if ind.get('rsi') is not None else "-"
                 adx_val = f"{ind.get('adx'):.1f}" if ind.get('adx') is not None else "-"
                 cci_val = f"{ind.get('cci'):.1f}" if ind.get('cci') is not None else "-"
@@ -2582,7 +2619,14 @@ class RiskManager:
 
         scale = 1.0
         vol_based_amt = 0
-        if getattr(config, 'USE_VOLATILITY_TARGETING', True) and atr and current_price and current_price > 0:
+        vol_targeting_on = getattr(config, 'USE_VOLATILITY_TARGETING', True)
+        #  [조용히 꺼지지 않게 한다 · 2026-09-06] 위 독스트링의 실측대로 **3)변동성 층이
+        #   상시 구속**한다(2)리스크 층의 상한은 항상 그보다 크다). 그래서 ATR 을 못 구하면
+        #   이 층이 통째로 빠지고 배분액이 곧바로 2)까지 올라간다 — 변동성을 모르는 종목을
+        #   더 크게 사는 방향이다. 설정으로 끄면 settings 가 요란하게 경고하는 안전장치인데
+        #   (USE_VOLATILITY_TARGETING: "MDD -20%→-30%"), 값이 없어 꺼지면 아무도 몰랐다.
+        vol_input_bad = vol_targeting_on and not (atr and current_price and current_price > 0)
+        if vol_targeting_on and atr and current_price and current_price > 0:
             daily_vol = atr / current_price
             annual_vol = daily_vol * math.sqrt(252)
 
@@ -2612,6 +2656,8 @@ class RiskManager:
             log_msg += f" | 리스크캡:{risk_based_amt:,}원(손절{abs(stop_loss_rate):.1f}%)"
         if vol_based_amt > 0:
             log_msg += f" | 변동성캡:{vol_based_amt:,}원(x{scale:.2f})"
+        elif vol_input_bad:
+            log_msg += f" | 변동성캡:미적용(ATR={atr} 현재가={current_price} — 상시 구속층이 빠졌다)"
         log_msg += f" -> 최종:{invest_amt:,}원"
 
         self.trader.log(log_msg)

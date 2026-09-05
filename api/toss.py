@@ -1351,6 +1351,16 @@ def _toss_period_entry_dates(codes, qty_map=None, months=12):
 
     KIS의 get_period_entry_dates와 같은 역할(수량 흐름 재생). 토스는 기간(from/to)
     조회를 한 번에 받으므로 3개월씩 끊을 필요가 없다.
+
+    [조회 실패는 올린다 · 2026-09-05] 종전에는 `(res or {})` 로 None 을 삼켜, 요청이
+     실패하면 **'이 기간에 주문이 없다'와 똑같이 빈 dict** 를 돌려줬다. 호출부
+     (api.account.get_period_entry_dates)는 그 답을 15분 마이크로 캐시에 굳히므로,
+     토스가 잠깐 흔들리면 그 종목들의 보유일수가 15분 동안 **0일**로 남는다 — 시간청산
+     (15일)의 시계가 그만큼 밀리고, 그 사이 재조회는 0회다(실측).
+     KIS 경로는 같은 결함을 2026-09-05 에 `ok` 플래그로 고쳤다(_fetch_period_executions).
+     토스는 호출부가 예외를 이미 잡아 캐시하지 않고 빠지므로, 여기서는 올리면 된다.
+     페이지 상한(20p=2000건)에 걸린 것도 '다 읽었다'가 아니므로 같이 올린다 —
+     반쪽 이력으로 수량 흐름을 재생하면 엉뚱한 날짜가 나온다.
     """
     wanted = set(codes)
     rows = {c: [] for c in wanted}
@@ -1358,6 +1368,7 @@ def _toss_period_entry_dates(codes, qty_map=None, months=12):
     today = datetime.now()
     start = today - timedelta(days=int(months * 30.5))
     cursor = None
+    exhausted = False
 
     for _ in range(20):  # 최대 20페이지(=2000건) 방어
         kwargs = {"status": "CLOSED", "limit": 100,
@@ -1367,6 +1378,10 @@ def _toss_period_entry_dates(codes, qty_map=None, months=12):
             kwargs["cursor"] = cursor
 
         res = toss_api.get_orders(**kwargs)
+        if not isinstance(res, dict):
+            raise RuntimeError(
+                f"토스 주문 이력을 조회하지 못했습니다(status=CLOSED, from={kwargs['from_date']}) "
+                f"— '주문이 없다'가 아닙니다")
         for o in ((res or {}).get('orders') or []):
             side = str(o.get('side') or '').upper()
             if side not in ('BUY', 'SELL'):
@@ -1384,10 +1399,15 @@ def _toss_period_entry_dates(codes, qty_map=None, months=12):
                 rows[code].append((date, side == 'BUY', qty))
 
         if not (res or {}).get('hasNext'):
+            exhausted = True
             break
         cursor = (res or {}).get('nextCursor')
         if not cursor:
+            exhausted = True
             break
+    if not exhausted:
+        raise RuntimeError("토스 주문 이력이 페이지 상한(2000건)에서 끊겼습니다 "
+                           "— 반쪽 이력으로 진입일을 재생하지 않습니다")
 
     window_start = start.strftime("%Y%m%d")
     found = {}

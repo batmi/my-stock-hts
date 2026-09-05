@@ -417,6 +417,52 @@ def test_toss_period_entry_dates_replays_quantity_flow():
     assert "cursor" not in calls[0] and calls[1]["cursor"] == "c2"
 
 
+# ==========================================================
+# [모름 vs 없음] 토스 주문 이력 조회 실패를 15분 굳히지 않는다 (2026-09-05)
+# ==========================================================
+#  KIS 경로는 _fetch_period_executions 의 ok 플래그로 같은 결함을 막았다. 토스 경로는
+#  `(res or {})` 로 None 을 삼켜 '이 기간에 주문이 없다'와 구별되지 않았고, 호출부가
+#  그 빈 답을 15분 마이크로 캐시에 굳혔다 — 보유일수가 0일로 남아 시간청산(15일)의
+#  시계가 그만큼 밀린다.
+
+def test_토스_주문이력_조회_실패는_주문_없음이_아니다():
+    import api
+
+    with patch("api.toss_api.get_orders", return_value=None):
+        with pytest.raises(RuntimeError, match="조회하지 못했습니다"):
+            api._toss_period_entry_dates(["005930"], qty_map={"005930": 5})
+
+
+def test_페이지_상한에서_끊긴_이력으로_진입일을_재생하지_않는다():
+    """반쪽 이력으로 수량 흐름을 재생하면 엉뚱한 날짜가 나온다."""
+    import api
+
+    page = {"orders": [{"symbol": "005930", "side": "BUY",
+                        "execution": {"filledQuantity": 1, "filledAt": "2026-03-10T09:31:00"}}],
+            "hasNext": True, "nextCursor": "next"}
+    with patch("api.toss_api.get_orders", return_value=page):
+        with pytest.raises(RuntimeError, match="페이지 상한"):
+            api._toss_period_entry_dates(["005930"], qty_map={"005930": 5})
+
+
+def test_실패한_토스_진입일은_캐시에_굳지_않는다():
+    """복구된 뒤 **다음 호출에서 곧바로** 다시 물어봐야 한다(실측: 종전 0회)."""
+    import api
+
+    codes, qty = ["068270"], {"068270": 10}
+    with patch.object(config.session, "is_toss", True, create=True):
+        with patch("api.toss_api.get_orders", return_value=None) as m:
+            assert api.get_period_entry_dates(codes, qty_map=qty) == {}
+            assert m.call_count == 1
+
+        good = {"orders": [{"symbol": "068270", "side": "BUY",
+                            "execution": {"filledQuantity": 10, "filledAt": "2026-08-01T09:00:00"}}],
+                "hasNext": False}
+        with patch("api.toss_api.get_orders", return_value=good) as m:
+            assert api.get_period_entry_dates(codes, qty_map=qty) == {"068270": "20260801"}
+            assert m.call_count == 1, "실패가 15분 캐시에 굳어 복구를 못 봤다"
+
+
 def test_analyze_holdings_uses_broker_history_for_hts_positions(_no_db):
     """DB에 없는 종목만 골라 체결 내역을 조회하고, 그 날짜로 보유일수를 채운다."""
     from datetime import datetime, timedelta
@@ -1193,3 +1239,64 @@ def test_run_holding_analysis_normalizes_overseas_price():
     entry = captured["entries"][0]
     assert entry["is_overseas"] is True
     assert entry["current_price"] == pytest.approx(210.0)   # (10*200 + 100) / 10
+
+
+# ==========================================================
+# [0% 는 '모름'이 아니다] 수익률 누락이 손절을 뒤집지 않는다 (2026-09-06)
+# ==========================================================
+#  engine.holding_profit_rate 의 독스트링이 이미 적어 둔 함정인데, 보유분석 경로
+#  (run_holding_analysis → analyze_holdings)는 여전히 `float(... or 0)` 였다.
+#  0% 는 손절선(음수)보다 위라 손절 이탈 판정이 '아직 괜찮다'로 뒤집힌다.
+#  이 결과는 화면(메뉴 9-2)뿐 아니라 예약 HOLDING_EXIT 를 거쳐 **실매도 주문**까지 간다.
+
+def _capture_profit_rate(items, overseas=None):
+    seen = {}
+
+    def _fake_sell(code, name, df, current_price, buy_price, profit_rate, **k):
+        seen[code] = profit_rate
+        return {'action': 'hold', 'reason': ''}
+
+    with patch('modules.auto_trade.DefaultStrategy.analyze_sell', side_effect=_fake_sell), \
+         patch('api.get_chart_data', return_value=None), \
+         patch('modules.db_manager.db.get_all_stock_strategies', return_value=[]), \
+         patch('modules.db_manager.db.get_latest_buy_trades', return_value={}), \
+         patch('modules.db_manager.db.get_buy_trades_for_current_holdings', return_value={}), \
+         patch('modules.db_manager.db.get_all_trailing_stops', return_value={}), \
+         patch('modules.db_manager.db.get_all_half_tp', return_value=set()), \
+         patch('modules.db_manager.db.get_position_entry_info', return_value={}), \
+         patch('api.get_period_entry_dates', return_value={}):
+        account.run_holding_analysis(items, overseas or [])
+    return seen
+
+
+@pytest.mark.parametrize("raw", ["", None, "-", "abc"])
+def test_수익률_누락은_평단과_현재가로_복원한다(raw):
+    item = {'pdno': '005930', 'prdt_name': '삼성전자', 'hldg_qty': '10',
+            'pchs_avg_pric': '70000', 'prpr': '60000', 'evlu_pfls_rt': raw}
+    seen = _capture_profit_rate([item])
+    assert seen['005930'] == pytest.approx(-14.2857, rel=1e-3), (
+        f"수익률 누락({raw!r})이 {seen.get('005930')}% 로 들어갔다 — "
+        "0% 는 손절선 위라 손절이 '아직 괜찮다'로 뒤집힌다")
+
+
+def test_증권사가_준_수익률은_그대로_쓴다():
+    """대조군 — 복원이 정상 값을 덮어쓰면 안 된다(제비용·환율로 미세하게 다를 수 있다)."""
+    item = {'pdno': '005930', 'prdt_name': '삼성전자', 'hldg_qty': '10',
+            'pchs_avg_pric': '70000', 'prpr': '60000', 'evlu_pfls_rt': '-14.99'}
+    seen = _capture_profit_rate([item])
+    assert seen['005930'] == pytest.approx(-14.99)
+
+
+def test_진짜_0퍼센트는_0퍼센트다():
+    item = {'pdno': '005930', 'prdt_name': '삼성전자', 'hldg_qty': '10',
+            'pchs_avg_pric': '70000', 'prpr': '70000', 'evlu_pfls_rt': '0'}
+    seen = _capture_profit_rate([item])
+    assert seen['005930'] == pytest.approx(0.0)
+
+
+def test_해외_보유분도_같은_규칙을_따른다():
+    ovs = {'ovrs_pdno': 'AAPL', 'ovrs_item_name': 'Apple', 'ovrs_cblc_qty': '10',
+           'pchs_avg_pric': '200', 'ovrs_now_pric': '160', 'evlu_pfls_rt': ''}
+    seen = _capture_profit_rate([], [ovs])
+    assert seen['AAPL'] == pytest.approx(-20.0), (
+        f"해외 수익률 누락이 {seen.get('AAPL')}% 로 들어갔다")

@@ -304,6 +304,15 @@ def get_market_filter_blocked(close, ma_period=None, band_pct=None, release_on_b
     밴드 0%면 종전과 같은 단순 이탈 판정이 된다. SMA 워밍업 구간은 미차단(판단 유보가 아니라
     '필터 없음'과 동일 — 판단 불가 처리는 호출부의 데이터 부족 검사가 담당한다).
 
+    [결측은 해제가 아니다 · 2026-09-05] 종전에는 SMA 가 NaN 인 봉을 `continue` 로 건너뛰어
+      `blocked[i]` 가 초기값 False 로 남았다. 즉 **차단 중이던 상태가 결측 하나로 풀렸다.**
+      SMA 는 창 안에 NaN 이 하나만 있어도 그 뒤 ma_period 봉이 통째로 NaN 이므로, 40봉 전
+      결측 하나가 오늘의 차단을 해제한다(실측). 지수 최후 폴백(yfinance)이 최신 종가를
+      결측으로 주는 일이 잦다는 것은 이 저장소에 이미 적혀 있다(trader.py 시장 필터 주석).
+      워밍업 뒤의 결측 구간에서는 **직전 상태를 유지**한다 — 모르는 동안 문을 열지 않는다.
+      다만 그것만으로는 '차단으로 넘어갔어야 할 전환'을 놓치는 경우를 못 막으므로,
+      마지막 봉의 판정이 성립하는지는 `market_filter_ready` 로 호출부가 함께 본다.
+
     상태는 가격 이력만의 함수라 매 호출 전체 시계열에서 재계산해도 결과가 같다.
     → 재기동/캐시 만료로 상태가 유실되지 않고, 실매매(trader)와 백테스트가 같은 값을 본다.
 
@@ -338,9 +347,13 @@ def get_market_filter_blocked(close, ma_period=None, band_pct=None, release_on_b
 
     blocked = np.zeros(len(close), dtype=bool)
     state = False
+    warmed = False
     for i in range(len(close)):
         if np.isnan(ma.iat[i]):
+            #  워밍업 전이면 '필터 없음'(False), 뒤라면 직전 상태를 유지한다.
+            blocked[i] = state if warmed else False
             continue
+        warmed = True
         if close.iat[i] < lower.iat[i]:
             state = True
         elif close.iat[i] > upper.iat[i]:
@@ -354,6 +367,29 @@ def get_market_filter_blocked(close, ma_period=None, band_pct=None, release_on_b
             blocked &= regime != "Bear"
 
     return pd.Series(blocked, index=range(len(close)))
+
+
+def market_filter_ready(close, ma_period=None):
+    """마지막 봉에서 시장 필터 판정이 **성립하는가**.
+
+    `get_market_filter_blocked` 는 bool 만 돌려주므로 '차단 아님'과 '판정 불가'가
+    같은 False 로 보인다. 신규 매수 게이트는 그 둘을 반드시 갈라야 한다 —
+    모르면 보류(fail-closed)가 이 시스템의 규칙이다.
+
+    길이만 세는 것으로는 부족하다. SMA 창 안에 결측이 하나만 있어도 그 시점 SMA 는
+    NaN 이라, `len(df) >= ma_period` 를 통과하고도 판정은 성립하지 않는다.
+    """
+    if ma_period is None:
+        ma_period = getattr(config, 'MARKET_FILTER_MA', 80)
+    try:
+        s = pd.Series(close, dtype='float64').reset_index(drop=True)
+    except (TypeError, ValueError):
+        return False
+    n = int(ma_period)
+    if len(s) < n or n <= 0:
+        return False
+    return bool(s.iloc[-n:].notna().all())
+
 
 def vol_regime_ratio(close, window=None, ref_min=None):
     """[변동성 국면] 지수 실현변동성의 '장기 대비 배율' 시계열 (float Series).
@@ -563,6 +599,21 @@ EMA20_SLOPE_LOOKBACK = 5
 def calculate_indicators(df):
     indicators = {'ema_5': None, 'ema_20': None, 'ema_60': None, 'ema_120': None, 'rsi': None, 'obv': 0, 'cci': None, 'adx': None, 'plus_di': None, 'minus_di': None, 'atr': 0, 'psar': None, 'obv_trend': False, 'macd': None, 'macd_signal': None, 'macd_hist': None}
     if df is None or df.empty: return indicators
+
+    # [마지막 봉이 결측이면 아무 값도 지어내지 않는다 · 2026-09-05]
+    #  아래 가드는 전부 `len(df) >= N`, 즉 **봉의 개수**만 센다. 마지막 봉의 OHLC 가
+    #  결측이면 개수는 통과하는데 값이 극단으로 튄다 — 실측(200봉, 마지막 봉 결측):
+    #  RSI 100.0 · ADX 100.0 · CCI NaN 이 나온다. 100 은 '모름'이 아니라 **최강 추세·
+    #  극단 과매수**라는 단정이고, 그대로 점수·상태 판정에 들어간다.
+    #  yfinance 프레임은 결측 행을 그대로 흘려보낸다(api.charts._fetch_yf_index_daily 에
+    #  dropna 가 없고, 최신 종가를 결측으로 주는 일이 잦다는 것은 trader.py 시장 필터
+    #  주석에 적혀 있다). 모르면 None 이다 — 호출부는 봉이 모자랄 때와 같은 길로 간다.
+    try:
+        last = df.iloc[-1]
+        if any(pd.isna(last.get(c)) for c in ('high', 'low', 'close') if c in df.columns):
+            return indicators
+    except Exception:
+        return indicators
 
     if len(df) >= 5: indicators['ema_5'] = df['close'].ewm(span=5, adjust=False).mean().iloc[-1]
     if len(df) >= 20:

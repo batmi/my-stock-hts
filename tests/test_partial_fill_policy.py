@@ -277,3 +277,44 @@ def test_cancel_success_clears_failure_counter(mock_tg, trader):
         om.manage_unfilled_orders()
 
     assert ODNO not in om.cancel_failures
+
+
+# ---------------------------------------------------------------------------
+# ③ 매수/매도 구분을 못 하면 조용히 넘어가지 않는가 (2026-09-05)
+# ---------------------------------------------------------------------------
+#  _cancel_pending_buy_on_stop_loss 는 미체결 주문의 side 를 **DB 조회로만** 안다
+#  (pending_orders 는 상태만 들고 side 를 모른다). 그 조회가 깨지면 매수 주문이
+#  취소 대상에서 빠져, 손절 중인 종목에 매수가 그대로 열려 있게 된다.
+#  종전에는 `except Exception: pass` 라 그 사실이 어디에도 남지 않았다.
+
+@patch('modules.auto_trade.api.send_telegram_message')
+@patch('modules.auto_trade.api.revise_cancel_order')
+def test_주문_종류를_모르면_알리고_취소하지_않는다(mock_cancel, mock_tg, trader):
+    trader.order_manager.pending_orders = {CODE: {ODNO: OrderStatus.ORDER_SENT}}
+    logged = []
+    with patch.object(trader, 'log', side_effect=lambda m, *a, **k: logged.append(m)), \
+         patch('modules.auto_trade.db_manager.db.get_trade_by_odno',
+               side_effect=RuntimeError("database is locked")):
+        trader._cancel_pending_buy_on_stop_loss(CODE, NAME, _holding()[0])
+
+    #  매도를 잘못 취소하면 청산 자체가 무산되므로 강행하지 않는다.
+    mock_cancel.assert_not_called()
+    assert any("확인하지 못해" in m for m in logged), (
+        "손절 보호가 동작하지 않은 사실이 어디에도 남지 않는다")
+    assert any(str(ODNO) in m for m in logged), "어느 주문인지 말해야 손으로 확인할 수 있다"
+
+
+@patch('modules.auto_trade.api.send_telegram_message')
+@patch('modules.auto_trade.api.revise_cancel_order',
+       return_value={'rt_cd': '0', 'output': {'ODNO': '9'}})
+def test_매수로_확인되면_종전대로_취소한다(mock_cancel, mock_tg, trader):
+    """대조군 — 조회가 되면 보호는 그대로 동작한다."""
+    trader.order_manager.pending_orders = {CODE: {ODNO: OrderStatus.ORDER_SENT}}
+    logged = []
+    with patch.object(trader, 'log', side_effect=lambda m, *a, **k: logged.append(m)), \
+         patch('modules.auto_trade.db_manager.db.get_trade_by_odno',
+               return_value={'type': '매수'}):
+        trader._cancel_pending_buy_on_stop_loss(CODE, NAME, _holding()[0])
+
+    mock_cancel.assert_called_once()
+    assert not any("확인하지 못해" in m for m in logged)

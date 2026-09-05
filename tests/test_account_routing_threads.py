@@ -468,3 +468,82 @@ def test_조용한_else가_되돌아오지_않는다():
         assert any("_warn_unroutable_cano" in ast.dump(b) for b in branches), (
             f"{rel}:{fname} 의 계좌 분기가 다시 조용해졌다 — "
             "모르는 계좌가 '수동 계좌'로 둔갑한다")
+
+
+# ==========================================================
+# [잔고·자산 화면도 같은 규칙을 따른다] (2026-09-06)
+# ==========================================================
+#  cano 를 인자로 넘겨도 **앱키·토큰·TPS 버킷**은 thread_local 이 고른다.
+#  modules/account.py 는 그 사실을 알고 있었다 — get_asset_status_data 의 3번(예수금)만
+#  AccountContext 로 감싸 두고 1·2번(금일 손익·잔고)은 맨몸이었고, sync_today_trades 는
+#  use_auto_account 를 **저장하고 되돌리기만 할 뿐 한 번도 바꾸지 않았다**
+#  (남아 있던 finally 복원 코드가 그 흔적이다).
+#  실측: 자동 계좌(22222222)의 당일 체결을 실전 앱키(MAIN_KEY)로 조회하고 있었다.
+
+def _key_now():
+    """지금 이 스레드의 요청이 실릴 앱키."""
+    with patch('api.get_current_token', return_value='t'):
+        return utils.get_common_headers("TR")['appKey']
+
+
+def _record_calls(seen, name, ret):
+    def _f(cano=None, acnt=None, *a, **k):
+        seen.setdefault(name, []).append((cano, _key_now()))
+        return ret
+    return _f
+
+
+def _assert_routed(seen):
+    assert seen, "조회가 한 번도 일어나지 않았다 — 하네스 전제가 깨졌다"
+    for name, rows in sorted(seen.items()):
+        for cano, key in rows:
+            want = 'AUTO_KEY' if cano == AUTO_CANO else 'MAIN_KEY'
+            assert key == want, (
+                f"{name}: 계좌 {cano} 를 {key} 로 조회했다 — 그 앱키에는 권한이 없다")
+
+
+def test_자산_현황이_계좌마다_제_앱키로_조회한다(separated_accounts):
+    from modules import account as account_mod
+
+    seen = {}
+    with patch('api.get_domestic_balance', side_effect=_record_calls(seen, 'dom', ([], [{}]))), \
+         patch('api.get_overseas_balance', side_effect=_record_calls(seen, 'ovs', [])), \
+         patch('api.get_today_profit_summary', side_effect=_record_calls(seen, 'profit', {'rt_cd': '1'})), \
+         patch('api.get_today_history', side_effect=_record_calls(seen, 'hist', {'rt_cd': '1'})), \
+         patch('api.get_deposit_balance', side_effect=_record_calls(seen, 'dep', None)):
+        for cano in (MAIN_CANO, AUTO_CANO):
+            account_mod.get_asset_status_data(cano, '01')
+
+    _assert_routed(seen)
+    assert set(seen) == {'dom', 'ovs', 'profit', 'hist', 'dep'}, (
+        f"조회 종류가 바뀌었다 — 검사기가 낡았다: {sorted(seen)}")
+
+
+def test_당일_체결_동기화가_계좌마다_제_앱키로_조회한다(separated_accounts):
+    from modules import account as account_mod
+
+    seen = {}
+    with patch('api.get_today_history', side_effect=_record_calls(seen, 'hist', {'rt_cd': '0', 'output1': []})), \
+         patch('api.get_overseas_today_history', side_effect=_record_calls(seen, 'ovs', {'rt_cd': '0', 'output': []})), \
+         patch('config.console.print'):
+        account_mod.sync_today_trades()
+
+    _assert_routed(seen)
+    canos = {c for rows in seen.values() for c, _ in rows}
+    assert canos == {MAIN_CANO, AUTO_CANO}, f"두 계좌를 모두 돌지 않았다: {canos}"
+
+
+def test_잔고_화면도_같은_규칙을_따른다(separated_accounts):
+    """메뉴 9-2 — 화면이 다른 계좌의 잔고를 보여주면 안 된다."""
+    from modules import account as account_mod
+
+    seen = {}
+    with patch('api.get_domestic_balance', side_effect=_record_calls(seen, 'dom', (None, None))), \
+         patch('api.get_overseas_balance', side_effect=_record_calls(seen, 'ovs', [])), \
+         patch('modules.db_manager.db.get_pending_reserved_orders', return_value=[]), \
+         patch('modules.db_manager.db.get_all_stock_strategies', return_value=[]), \
+         patch('modules.auto_trade.get_restricted_stocks', return_value={}), \
+         patch('config.console.print'):
+        account_mod._display_balance_details(AUTO_CANO, '01')
+
+    _assert_routed(seen)

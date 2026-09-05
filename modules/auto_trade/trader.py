@@ -1529,7 +1529,7 @@ class AutoTrader:
                         filter_status = "허용" if is_healthy else "보류"
                     else:
                         ma_period = getattr(config, 'MARKET_FILTER_MA', 80)
-                        if len(df) >= ma_period:
+                        if indicators.market_filter_ready(df['close'], ma_period):
                             is_healthy = not bool(indicators.get_market_filter_blocked(
                                 df['close'], ma_period,
                                 getattr(config, 'MARKET_FILTER_BAND', 1.0)).iloc[-1])
@@ -4442,8 +4442,11 @@ class AutoTrader:
                                                                 principal=int(current_principal)):
                                     self.log("[기준선] 기준 원금 저장 실패 — 재기동 시 "
                                              "오프라인 입출금 감지가 꺼집니다")
-                            except Exception:
-                                pass
+                            except Exception as _e:
+                                #  저장이 예외로 깨진 경우까지 조용히 넘기면, 위에서
+                                #  bool 을 검사하는 뜻이 사라진다(같은 결과·같은 침묵).
+                                self.log(f"[기준선] 기준 원금 저장 실패({_e}) — 재기동 시 "
+                                         f"오프라인 입출금 감지가 꺼집니다")
                             # [날짜를 넘는 대조점] 파일(daily_state)은 날짜가 바뀌면 비워지므로
                             #  오프라인 입출금을 되찾을 수 없다. 자산 이력 행에 함께 남긴다.
                             #  자산이 0(시세 결손 의심)인 날은 남기지 않는다 — 그런 행은
@@ -4647,7 +4650,14 @@ class AutoTrader:
         거둔다(청산 중인 종목에 추가로 담는 것을 막는 쪽이 항상 옳다).
         """
         try:
-            profit_rate = float(item.get('evlu_pfls_rt') or 0.0)
+            #  [0% 는 '모름'이 아니다 · 2026-09-06] 종전에는 `float(... or 0.0)` 이었다.
+            #   0% 는 손절선(음수)보다 위라 이 보호가 통째로 건너뛰어진다 — 손절 중인
+            #   종목에 미체결 매수가 열린 채 남는다. 판정은 holding_profit_rate 하나가
+            #   갖는다(평단·현재가로 복원하고, 그것도 안 되면 모른다고 답한다).
+            profit_rate = _pkg().holding_profit_rate(item)
+            if profit_rate is None:
+                logger.warning(f"[손절 보호] {code} 수익률을 구할 수 없어 판정을 보류한다")
+                return
             sl_rate = self._effective_stop_loss_rate(buy_trades, rule=rule)
             if sl_rate is None or profit_rate > sl_rate:
                 return
@@ -4658,16 +4668,30 @@ class AutoTrader:
                 return
 
             buy_odnos = []
+            unknown_odnos = []
             for odno in odnos:
                 t_type = ""
                 try:
                     tr = db_manager.db.get_trade_by_odno(odno)
                     t_type = str((tr or {}).get('type', ''))
-                except Exception:
-                    pass
+                except Exception as e:
+                    #  [모름은 말한다 · 2026-09-05] 매수/매도는 여기서만 갈린다
+                    #  (pending_orders 는 상태만 들고 side 를 모른다). 조회가 깨지면
+                    #  이 주문은 매수여도 취소 대상에서 빠지고, 손절 중인 종목에 매수가
+                    #  그대로 열려 있게 된다. 취소를 강행하지는 않는다 — 매도를 잘못
+                    #  취소하면 청산 자체가 무산된다 — 대신 **조용히 넘어가지 않는다**.
+                    logger.warning(f"[손절 보호] {code} 주문 {odno} 종류 조회 실패: {e}")
+                    unknown_odnos.append(odno)
+                    continue
                 is_sell = "매도" in t_type or "sell" in t_type.lower()
                 if not is_sell and ("매수" in t_type or "buy" in t_type.lower()):
                     buy_odnos.append(odno)
+
+            if unknown_odnos:
+                self.log(f"[손절 보호] {name}({code}) 미체결 주문 {len(unknown_odnos)}건의 "
+                         f"매수/매도 구분을 확인하지 못해 취소하지 않았습니다 "
+                         f"(No.{', '.join(str(o) for o in unknown_odnos)}) — "
+                         f"손절 중인 종목에 매수가 열려 있을 수 있습니다")
 
             for odno in buy_odnos:
                 # qty=0 은 '잔량 전부 취소'(QTY_ALL_ORD_YN=Y) — 잔량을 몰라도 안전하다.
@@ -5034,7 +5058,11 @@ class AutoTrader:
             if self.after_hours_sell_notified.get(code) == reason:
                 return
 
-            profit_rate = float(item.get('evlu_pfls_rt') or 0.0)
+            profit_rate = _pkg().holding_profit_rate(item)
+            if profit_rate is None:
+                #  알림 본문에 0.0% 를 적으면 갭 전 판단을 그르친다. 모르면 적지 않는다.
+                logger.warning(f"[마감후 신호] {code} 수익률을 구할 수 없어 알림을 보류한다")
+                return
             eval_amt = api.safe_int(item.get('evlu_amt', 0))
             pfls_amt = api.safe_int(item.get('evlu_pfls_amt', 0))
 
@@ -5251,9 +5279,17 @@ class AutoTrader:
                 return
 
             qty = api.safe_int(item.get('ord_psbl_qty'))
-            profit_rate = float(item['evlu_pfls_rt'])
+            #  [던지지 말고 복원한다 · 2026-09-06] 종전에는 `float(item['evlu_pfls_rt'])`
+            #   라, 증권사가 이 필드를 비우면 ValueError 로 **그 종목의 매도 판정이 통째로
+            #   건너뛰어졌다**(손절·트레일링이 그 주기에 돌지 않는다). 필요한 값은 바로
+            #   아래 두 줄에 있다 — holding_profit_rate 가 그 둘로 정확히 복원한다.
+            profit_rate = _pkg().holding_profit_rate(item)
             current_price = float(item['prpr'])
             buy_price = float(item['pchs_avg_pric'])
+            if profit_rate is None:
+                self.log(f"[매도 보류] {name}({code}) 수익률을 구할 수 없습니다 "
+                         f"(평가손익률·평단·현재가 모두 미확보) — 이번 주기 판정을 건너뜁니다")
+                return
             
             time.sleep(safe_delay)
             
@@ -6798,7 +6834,10 @@ class AutoTrader:
                 # [수정] analysis 모듈의 공통 함수 사용 (Fallback 포함)
                 df = analysis.get_domestic_index_data(market_name)
 
-                if df is None or df.empty or len(df) < ma_period:
+                #  길이만 세면 모자란다 — SMA 창 안의 결측 하나로 판정이 성립하지 않는데
+                #  len 검사는 통과한다(indicators.market_filter_ready 주석).
+                if (df is None or df.empty or len(df) < ma_period
+                        or not indicators.market_filter_ready(df['close'], ma_period)):
                     self.log(f"{market_name} 지수 데이터 부족/조회 실패 → 시장 방향 판단 불가로 신규 매수를 보류합니다. (매도·손절은 정상 동작)")
                     self.market_index_status[market_name] = {"is_healthy": False, "unknown": True, "current": 0,
                                                              "source": analysis.index_source(df)}

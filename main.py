@@ -733,7 +733,8 @@ def show_help():
                 for m_type in ["KOSPI", "KOSDAQ"]:
                     try:
                         df = analysis.get_domestic_index_data(m_type)
-                        if df is not None and not df.empty and len(df) >= ma_period_filter:
+                        if (df is not None and not df.empty
+                                and indicators.market_filter_ready(df['close'], ma_period_filter)):
                             # 실매매와 같은 판정 함수(밴드 히스테리시스 포함)
                             filter_info[m_type] = not bool(indicators.get_market_filter_blocked(
                                 df['close'], ma_period_filter, band_filter).iloc[-1])

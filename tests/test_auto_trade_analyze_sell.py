@@ -380,3 +380,87 @@ def test_analyze_buy_uses_same_w52_for_state_and_score(mock_ind, mock_cls, mock_
     assert w52_score is not None, \
         "calculate_score에 w52_pos가 전달되지 않았다 — _w52_band(365일) 폴백으로 갈라진다"
     assert w52_score == pytest.approx(w52_state)
+
+
+# ==========================================================
+# [판정이 성립했을 때만 판다] (2026-09-06)
+# ==========================================================
+#  `if df is not None and not df.empty:` 는 **그릇**만 본다. 프레임이 있어도 내용이 못
+#  쓸 수 있다 — 마지막 봉이 결측이거나(yfinance 가 최신 종가를 자주 비운다) 상장 초기라
+#  60일선이 아직 없거나. 그때 calculate_score 는 '모름'이 아니라 숫자를 돌려주고
+#  (실측: 지표 전무 → 1.0점), ema_60 이 None 이라 structure_broken 도 True 가 되어
+#  점수매도가 **전량 청산**을 낸다.
+#
+#  백테스트에는 이 팔이 없다 — 그쪽 EMA60 은 ewm(adjust=False) 라 결측이면 NaN 이고
+#  None 이 아니다. 즉 `is None` 팔은 실매매에만 있고 한 번도 측정된 적이 없다.
+
+@patch('modules.auto_trade.analysis.check_smart_money_turnaround', return_value=(False, ""))
+@patch('modules.auto_trade.analysis.calculate_score')
+@patch('modules.auto_trade.analysis.classify_stock_state')
+@patch('modules.auto_trade.indicators.calculate_indicators')
+def test_판정_불가면_점수매도를_하지_않는다(mock_ind, mock_cls, mock_score, mock_sm, strategy, df_up):
+    """상태 '-'(데이터 부족)는 '약한 종목'이 아니다."""
+    mock_ind.return_value = {}                    # 지표를 하나도 못 구했다
+    mock_cls.return_value = ("-", "[dim]", "데이터 부족")
+    mock_score.return_value = (1.0, [])           # 그래도 숫자는 나온다
+
+    res = strategy.analyze_sell(
+        "005930", "삼성전자", df_up, current_price=10000, buy_price=10000, profit_rate=0.0,
+        thresholds={"TAKE_PROFIT_RATE": 50.0, "STOP_LOSS_RATE": -20.0, "SELL_SCORE": 3.0},
+    )
+    assert res['action'] != 'sell', (
+        f"아무것도 못 쟀는데 팔았다: {res.get('reason')}")
+
+
+@patch('modules.auto_trade.analysis.check_smart_money_turnaround', return_value=(False, ""))
+@patch('modules.auto_trade.analysis.calculate_score')
+@patch('modules.auto_trade.analysis.classify_stock_state')
+@patch('modules.auto_trade.indicators.calculate_indicators')
+def test_판정_불가여도_매도_상태는_그대로_판다(mock_ind, mock_cls, mock_score, mock_sm, strategy, df_up):
+    """'매도' 상태는 자체 조건이 엄격하다 — 그 길까지 막으면 청산이 늦는다."""
+    mock_ind.return_value = _ind()
+    mock_cls.return_value = ("매도", "", "추세붕괴")
+    mock_score.return_value = (9.0, [])           # 점수는 높아도 상태가 매도면 판다
+
+    res = strategy.analyze_sell(
+        "005930", "삼성전자", df_up, current_price=10000, buy_price=10000, profit_rate=0.0,
+        thresholds={"TAKE_PROFIT_RATE": 50.0, "STOP_LOSS_RATE": -20.0, "SELL_SCORE": 3.0},
+    )
+    assert res['action'] == 'sell'
+
+
+def test_마지막_봉이_결측인_프레임은_실제로_팔지_않는다(strategy):
+    """목 없이 진짜 경로로 — 실측으로 'sell' 이 나오던 자리다.
+
+    종전 사유 문자열: "추세이탈(-/점수하락+60일선이탈) [점수:1.0, RSI:-, ADX:-, CCI:-]"
+    아무것도 못 쟀다고 적으면서 팔았다.
+    """
+    n = 200
+    close = pd.Series(np.linspace(69000.0, 70000.0, n))
+    df = pd.DataFrame({
+        'date': [f"2026{(i % 12) + 1:02d}{(i % 28) + 1:02d}" for i in range(n)],
+        'open': close, 'high': close * 1.01, 'low': close * 0.99,
+        'close': close, 'volume': 1000.0,
+    })
+    df.loc[df.index[-1], ['open', 'high', 'low', 'close']] = np.nan
+
+    res = strategy.analyze_sell(
+        "005930", "삼성전자", df, current_price=70000.0, buy_price=69000.0,
+        profit_rate=1.45, holding_days=3, highest_price=70500.0)
+    assert res['action'] != 'sell', f"결측 프레임으로 청산했다: {res.get('reason')}"
+
+
+def test_그_팔이_백테스트에는_없다는_사실을_못박는다():
+    """실매매에만 있는 경로가 다시 생기면 알아야 한다 — 백테스트가 못 재는 매도는 위험하다."""
+    import inspect
+    from modules import backtest
+
+    src = inspect.getsource(backtest)
+    assert "df['EMA60'] = df['close'].ewm(span=60, adjust=False).mean()" in src, (
+        "백테스트 EMA60 산출이 바뀌었다 — 결측이 None 으로 오면 이 축의 전제가 달라진다")
+
+    n = 5
+    frame = pd.DataFrame({'close': np.linspace(1.0, 2.0, n)})
+    frame['EMA60'] = frame['close'].ewm(span=60, adjust=False).mean()
+    assert frame.iloc[0].get('EMA60') is not None, (
+        "백테스트의 EMA60 은 0번 봉부터 값이 있다 — `is None` 팔은 그쪽에서 죽은 코드다")

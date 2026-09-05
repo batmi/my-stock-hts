@@ -958,8 +958,11 @@ def test_vol_strength_na_but_foreign_rate_supported_for_toss():
     assert len(res) == 2
     assert res[0]['stck_bsop_date'] == '20260818'
     assert float(res[0]['hts_frgn_ehrt']) == pytest.approx(50.89)
-    # 값이 없는 날을 버리면 날짜 축이 어긋난다 — "0"으로 채워 자리를 지킨다.
-    assert res[1]['hts_frgn_ehrt'] == "0"
+    # 값이 없는 날을 버리면 날짜 축이 어긋난다 — 행은 남기되 값은 비운다.
+    #  [2026-09-05] 종전에는 "0" 이었다. 그러면 표에 **외국인 소진율 0.00%** 로 찍혀
+    #  '모름'이 '없음'으로 단정된다. 소비자(analysis 표)는 빈 값을 '-' 로 그린다.
+    assert res[1]['hts_frgn_ehrt'] == ""
+    assert res[1]['stck_bsop_date'] == '20260817'      # 자리는 그대로 지킨다
 
 
 def test_print_table_worker_toss_enriches_change_and_52w():
@@ -2372,3 +2375,39 @@ def test_toss_investor_trend_puts_dateless_rows_last(monkeypatch):
     out = api.get_investor_trend("005930")
     assert out[0]["stck_bsop_date"] == "20260903"
     assert out[-1]["prsn_ntby_qty"] == "99"
+
+
+def test_토스_수급_요청_실패는_빈_수급이_아니다():
+    """`_request` 가 None 이면 어댑터가 `or {}` 로 감춘다 — 그 빈 응답을 굳히면 안 된다.
+
+    [2026-09-05 실측] 종전에는 `[]` 를 5분 마이크로 캐시에 넣어, 토스가 곧바로
+    복구돼도 그 종목 수급이 5분간 비어 보였다(재조회 0회). 위층
+    analysis.check_smart_money_turnaround 가 그 빈 값을 다시 **1시간** 굳힌다.
+    """
+    import api
+    from unittest.mock import patch as _patch
+
+    config.session.is_toss = True
+    try:
+        with _patch("brokers.toss_api._request", return_value=None) as m:
+            assert api.get_investor_trend("005933") is None
+            assert m.call_count == 1
+
+        good = {'records': [{'date': '2026-09-04',
+                             'foreigner': {'netBuyVolume': 100},
+                             'institution': {'netBuyVolume': 100},
+                             'individual': {'netBuyVolume': -200}}]}
+        with _patch("brokers.toss_api._request", return_value=good) as m:
+            out = api.get_investor_trend("005933")
+            assert m.call_count == 1, "실패가 마이크로 캐시에 굳어 복구를 못 봤다"
+            assert out[0]['frgn_ntby_qty'] == '100'
+
+        # 권위 있는 '없음'(응답은 왔는데 records 가 비었다)은 종전대로 캐시한다.
+        with _patch("brokers.toss_api._request", return_value={'records': []}) as m:
+            assert api.get_investor_trend("005934") == []
+            assert m.call_count == 1
+        with _patch("brokers.toss_api._request", return_value={'records': []}) as m:
+            assert api.get_investor_trend("005934") == []
+            assert m.call_count == 0, "'없음'까지 매번 다시 물으면 TPS 절감이 무너진다"
+    finally:
+        config.session.is_toss = False

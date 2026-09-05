@@ -585,3 +585,65 @@ def test_detail_reports_the_stop_line_per_position(monkeypatch):
     assert total == pytest.approx(10 * 500)
     assert detail['000009'] == (pytest.approx(9500.0), pytest.approx(5000.0))
     assert rm.compute_portfolio_heat([], {}, detail=True) == (0.0, {})
+
+
+# ==========================================================
+# [상시 구속층이 조용히 빠지지 않게 한다] (2026-09-06)
+# ==========================================================
+#  allocate_budget 독스트링의 실측: "이 층(2-리스크)은 최종액을 결정하지 않는다 —
+#  관심종목 50종목 전부에서 3)변동성이 구속하고 2)의 상한은 항상 그보다 크다."
+#  그러므로 ATR 을 못 구하면 실제로 구속하던 층이 통째로 빠지고 배분액이 2)까지 올라간다
+#  — 변동성을 모르는 종목을 **더 크게** 사는 방향이다(실측 624,941원 → 1,000,000원, +60%).
+#  설정으로 끄면 settings 가 요란하게 경고하는 안전장치인데
+#  (USE_VOLATILITY_TARGETING: "MDD -20%→-30%"), 값이 없어 꺼지면 로그 한 줄도 없었다.
+
+class _RecordingTrader(MockTrader):
+    def __init__(self):
+        super().__init__()
+        self.lines = []
+
+    def log(self, msg):
+        self.lines.append(msg)
+
+
+@pytest.fixture
+def recording_rm():
+    """이 파일의 다른 테스트가 config 를 전역으로 바꾸므로 필요한 값만 직접 못박는다."""
+    saved = (config.TARGET_VOLATILITY, config.VOLATILITY_SCALING_MAX,
+             config.VOLATILITY_SCALING_MIN, config.USE_VOLATILITY_TARGETING)
+    config.TARGET_VOLATILITY = 0.25
+    config.VOLATILITY_SCALING_MAX = 2.0
+    config.VOLATILITY_SCALING_MIN = 0.4
+    config.USE_VOLATILITY_TARGETING = True
+    trader = _RecordingTrader()
+    yield RiskManager(trader), trader
+    (config.TARGET_VOLATILITY, config.VOLATILITY_SCALING_MAX,
+     config.VOLATILITY_SCALING_MIN, config.USE_VOLATILITY_TARGETING) = saved
+
+
+_KW = dict(avail_cash=10_000_000, invest_ratio=0.1, stop_loss_rate=-7.0, current_price=10000)
+
+
+def test_ATR을_못_구하면_배분액이_실제로_올라간다(recording_rm):
+    """전제 확인 — 이 차이가 없으면 아래 경고는 의미가 없다."""
+    rm, _ = recording_rm
+    with_atr = rm.allocate_budget(atr=252, **_KW)
+    without = rm.allocate_budget(atr=None, **_KW)
+    assert without > with_atr, (
+        f"ATR 유무로 배분액이 같다 — 변동성 층이 구속하지 않는 설정이다 "
+        f"({with_atr:,} vs {without:,})")
+
+
+def test_변동성캡_미적용을_로그에_남긴다(recording_rm):
+    rm, trader = recording_rm
+    rm.allocate_budget(atr=None, **_KW)
+    text = "\n".join(trader.lines)
+    assert "변동성캡:미적용" in text, (
+        f"구속하던 층이 빠졌는데 로그에 아무 흔적이 없다: {text}")
+
+
+def test_정상_적용은_종전대로_찍힌다(recording_rm):
+    rm, trader = recording_rm
+    rm.allocate_budget(atr=252, **_KW)
+    text = "\n".join(trader.lines)
+    assert "변동성캡:" in text and "미적용" not in text

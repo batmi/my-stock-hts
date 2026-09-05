@@ -454,7 +454,10 @@ def _get_macro_context_str():
                         logger.debug(f"Macro context treasury future fallback error: {e}")
                 
                 if price is not None and not math.isnan(price):
-                    rate = ((price - prev) / prev * 100) if (prev and prev > 0) else 0.0
+                    # [모름 · 2026-09-05] 전일 종가를 모를 때 0.0 을 쓰면 프롬프트에
+                    #  '전일대비 +0.00%' 로 나가고, 이 표는 AI 에게 **절대적인 팩트**로
+                    #  주입된다. VIX 가 '변동 없음'으로 읽히는 식의 오도다. 모르면 비운다.
+                    rate = ((price - prev) / prev * 100) if (prev and prev > 0) else None
                     return name, display_name, price, rate, yh
         except Exception as e:
             logger.debug(f"Macro context fetch_ticker error for {name}: {e}")
@@ -484,8 +487,19 @@ def _get_macro_context_str():
                 
             status_desc = evaluate_market_indicator(name, price, yh_rate)
             status_str = f" -> [현재 상태: {status_desc}]" if status_desc else ""
-                
-            context_lines.append(f" - {display_name}: {val_str} (전일대비 {rate:+.2f}%{yh_str}){status_str}")
+
+            rate_str = f"전일대비 {rate:+.2f}%" if rate is not None else "전일대비 모름"
+            context_lines.append(f" - {display_name}: {val_str} ({rate_str}{yh_str}){status_str}")
+
+    # [빠진 것을 말한다 · 2026-09-05] 조회에 실패한 지표는 종전에 **줄째로 사라졌다**.
+    #  이 표는 '절대적인 팩트'라는 머리말과 함께 주입되므로, 빠진 줄은 AI 에게
+    #  '그 지표가 특별할 것 없다'로 읽힌다(장전 브리핑은 그대로 텔레그램으로 나간다).
+    #  없는 것과 못 구한 것을 갈라 적어 준다.
+    missing = [name for name, _ in core_tickers if name not in results]
+    if missing:
+        context_lines.append(
+            f" - [조회 실패] {', '.join(missing)} — 값을 구하지 못했다. "
+            f"이 지표들은 '변화 없음'이 아니라 '모름'이므로 추론에 쓰지 말 것.")
 
     return "\n".join(context_lines) + "\n"
 
@@ -873,6 +887,16 @@ _TICKER_MENTION_RE = re.compile(r'([0-9A-Za-z가-힣&·\.\+\-\s]{0,24}?)\(\s*(\d
 _CURATION_MIN_MARCAP = 100_000_000_000
 
 
+#  검증이 '돌지 않았다'와 '돌았는데 이상이 없다'는 화면에서 반드시 달라야 한다.
+#  아래 시스템 검증 블록과 같은 모양을 써서 눈에 띄게 한다.
+_VERIFY_SKIPPED_NOTE = (
+    "\n\n" + "\u2500" * 30 +
+    "\n⚠️ 시스템 검증을 하지 못했습니다 (KRX 상장목록 조회 실패)"
+    "\n• 위 종목코드·종목명은 **대조되지 않은** AI 표기 그대로입니다."
+    "\n• 관심종목 편입 전에 코드와 이름을 직접 확인하세요."
+)
+
+
 def _normalize_stock_name(name):
     """종목명 비교용 정규화 — 공백·기호를 제거하고 소문자로 통일."""
     return re.sub(r'[^0-9a-z가-힣]', '', str(name or '').lower())
@@ -884,7 +908,13 @@ def verify_stock_codes(text, min_marcap=_CURATION_MIN_MARCAP):
     - 상장목록에 없는 코드   → '(코드 ⚠️미상장 코드)'
     - 종목명이 다른 코드     → '(코드 ⚠️실제: 실제종목명)'
     - 시총이 기준 미만       → '(코드 ⚠️시총 XXX억)'
-    조회 실패 시에는 원문을 그대로 돌려준다.
+
+    [조회 실패 · 2026-09-05] 상장목록을 못 얻으면 **표기는 손대지 않는다** — 실패를
+     '미상장'으로 오판하면 멀쩡한 종목에 경고가 붙는다. 다만 종전에는 원문을 **그대로**
+     돌려줘, 검증이 돌지 않은 리포트와 검증을 통과한 리포트가 화면에서 **똑같이 보였다**.
+     이 함수의 존재 이유가 '지어낸 종목코드를 믿지 않게 하는 것'인데, 그 방어가 꺼진 것을
+     운용자가 알 방법이 없었다(장전 브리핑은 텔레그램으로 그대로 나간다).
+     그래서 표기는 그대로 두되 **검증하지 못했다는 사실을 덧붙인다**.
     """
     if not text or not isinstance(text, str):
         return text
@@ -897,12 +927,12 @@ def verify_stock_codes(text, min_marcap=_CURATION_MIN_MARCAP):
         from modules import krx_daily
         listing = krx_daily.get_listing_map()
     except Exception as e:      # noqa: BLE001 - 검증 실패가 리포트를 막아서는 안 된다
-        logger.debug(f"[AI검증] 상장목록 조회 실패: {e}")
-        return text
+        logger.warning(f"[AI검증] 상장목록 조회 실패 — 종목코드 검증을 하지 못했습니다: {e}")
+        return text + _VERIFY_SKIPPED_NOTE
 
     if not listing:
-        logger.debug("[AI검증] 상장목록을 얻지 못해 종목코드 검증을 건너뜁니다.")
-        return text
+        logger.warning("[AI검증] 상장목록을 얻지 못해 종목코드 검증을 하지 못했습니다.")
+        return text + _VERIFY_SKIPPED_NOTE
 
     bad_codes, bad_names, small_caps = [], [], []
 
@@ -1663,10 +1693,11 @@ def _run_tradingview_screener():
                 # [단일 관리 지점] 프리셋 쿼리/후처리는 build_screener_query()에서 생성 (telegram봇과 공유)
                 query, post_fn = build_screener_query(market, pid)
 
-                count, df = 0, None
+                count, df, query_ok = 0, None, False
                 for attempt in range(3):
                     try:
                         count, df = query.get_scanner_data()
+                        query_ok = True
                         break
                     except Exception as e:
                         if "timed out" in str(e).lower() or "timeout" in str(e).lower():
@@ -1689,6 +1720,7 @@ def _run_tradingview_screener():
                     df = post_fn(df)
 
                 table = None
+                dropped_names = []          # 이름을 못 구해 제외한 종목(아래에서 밝힌다)
                 if df is not None and not df.empty:
                     progress.update(task, description=f"[cyan]{label} 결과 정리 중...[/cyan]",
                                     total=len(df), completed=0)
@@ -1755,9 +1787,14 @@ def _run_tradingview_screener():
                                 except Exception as e:
                                     logger.debug(f"Screener domestic name fallback error: {e}")
                                     
-                            # [추가] 네이버와 한국투자증권 API 양쪽 모두에서 정상적인 한글명을 가져오지 못해 
-                            # 여전히 코드가 이름으로 남아있다면, 상장폐지/만기된 종목이므로 결과에서 제외합니다.
+                            # 네이버·한국투자증권 양쪽에서 한글명을 못 얻어 여전히 코드가 이름으로
+                            #  남아 있으면 상장폐지·만기 종목일 **가능성**이 높아 결과에서 뺀다.
+                            #  [단정하지 않는다 · 2026-09-05] 그 두 조회가 함께 실패하는 일도
+                            #  있다(네이버 차단·토큰 만료). 그러면 국내 결과가 **통째로** 사라지는데
+                            #  화면에는 '조건에 맞는 종목이 없습니다'만 뜨고 이유가 어디에도 없었다.
+                            #  빼는 동작은 그대로 두되, 몇 종목을 왜 뺐는지 말한다.
                             if kor_name == ticker:
+                                dropped_names.append(ticker)
                                 continue
                                 
                             if kor_name: name = kor_name
@@ -1851,10 +1888,20 @@ def _run_tradingview_screener():
             if pid in preset_desc:
                 config.console.print(f"   [dim]: {preset_desc[pid]}[/dim]")
 
-            if table is None:
+            if not query_ok:
+                #  조회가 실패한 것을 '해당 없음'으로 적으면, 화면만 보고는 시장이 조용한
+                #  것인지 우리가 못 물어본 것인지 구별할 수 없다.
+                config.console.print("[red]검색하지 못했습니다 — '조건에 맞는 종목이 없다'가 아닙니다.[/red]")
+            elif table is None or table.row_count == 0:
                 config.console.print("[yellow]조건에 맞는 종목이 없습니다.[/yellow]")
             else:
                 config.console.print(table)
+
+            if dropped_names:
+                config.console.print(
+                    f"[dim]   · 종목명을 얻지 못해 {len(dropped_names)}종목을 제외했습니다"
+                    f"({', '.join(dropped_names[:5])}{' 외' if len(dropped_names) > 5 else ''}) — "
+                    f"상장폐지일 수도, 이름 조회가 실패한 것일 수도 있습니다.[/dim]")
 
 
         # 개별 종목 상세 분석 연동

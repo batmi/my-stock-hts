@@ -1074,7 +1074,13 @@ def check_smart_money_turnaround(code, is_overseas=False):
 
     try:
         inv_list = api.get_investor_trend(code)
-        if not inv_list or len(inv_list) < 3:
+        if inv_list is None:
+            # [모름 · 2026-09-05] 조회 실패다. '수급 없음'으로 굳히면 1시간 동안
+            #  재조회조차 하지 않아(실측: 복구 뒤 호출 0회) 그 종목의 스마트머니가
+            #  통째로 꺼진 채 남는다. 아래 '없음' 캐시와 반드시 갈라야 한다.
+            logger.debug(f"[SmartMoney] 수급 조회 실패({code}) — 캐시하지 않는다")
+            return False, ""
+        if len(inv_list) < 3:
             # [최적화] '수급 데이터 없음'(ETF·미제공 종목)도 부정 결과로 캐시해
             #  API 마이크로캐시(5분) 만료마다 반복되던 무의미한 재조회를 차단 (예외는 일시 장애일 수 있어 미캐시)
             _SMART_MONEY_CACHE.set(code, (False, ""))

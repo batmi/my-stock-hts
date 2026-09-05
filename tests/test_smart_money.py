@@ -310,3 +310,69 @@ def test_a_run_with_krx_does_not_nag():
 
     assert dist == {"KRX": 1}
     assert not mock_print.called, "정상 상태에서 콘솔을 어지럽히지 않는다"
+
+
+# ==========================================================
+# [모름 vs 없음] 조회 실패를 1시간짜리 부정 캐시에 굳히지 않는다 (2026-09-05)
+# ==========================================================
+#  스마트머니 캐시는 TTL 1시간이다. 그 캐시에 '실패'가 들어가면 API 가 곧바로
+#  복구돼도 그 종목은 한 시간 동안 재조회조차 되지 않는다(실측: 호출 0회).
+#  스마트머니는 STRENGTH 항목(`if obv_trend or smart_money`)과 상태 판정에 쓰이므로,
+#  꺼진 채 굳으면 그 종목의 점수가 조용히 낮아진다.
+
+@patch('api.get_investor_trend')
+def test_수급_조회_실패는_캐시하지_않는다(mock_api):
+    """실패 뒤 복구되면 **다음 호출에서 곧바로** 다시 물어봐야 한다."""
+    mock_api.return_value = None                      # 조회 실패 = 모름
+    assert analysis.check_smart_money_turnaround("005930") == (False, "")
+
+    mock_api.reset_mock()
+    mock_api.return_value = [{'frgn_ntby_qty': '100', 'orgn_ntby_qty': '100'}] * 5
+    flag, reason = analysis.check_smart_money_turnaround("005930")
+    assert mock_api.call_count == 1, (
+        "실패가 캐시에 굳었다 — 복구된 뒤에도 한 시간 동안 재조회가 없다")
+    assert (flag, reason) == (True, "쌍끌이 매수")
+
+
+@patch('api.get_investor_trend')
+def test_진짜_수급_없음은_종전대로_굳힌다(mock_api):
+    """ETF·미제공 종목까지 5분마다 다시 묻게 만들면 안 된다(그게 이 캐시의 목적)."""
+    mock_api.return_value = []                        # 권위 있는 '없음'
+    assert analysis.check_smart_money_turnaround("069500") == (False, "")
+
+    mock_api.reset_mock()
+    mock_api.return_value = [{'frgn_ntby_qty': '100', 'orgn_ntby_qty': '100'}] * 5
+    assert analysis.check_smart_money_turnaround("069500") == (False, "")
+    assert mock_api.call_count == 0, "'없음' 캐시가 사라지면 REST/TPS 절감이 무너진다"
+
+
+def test_api_층이_실패를_None_으로_올린다():
+    """소비자가 갈라 볼 수 있으려면 경계에서 모양이 달라야 한다."""
+    import api
+    from unittest.mock import patch as _patch
+
+    fail = {'rt_cd': '1', 'msg_cd': 'EGW00201', 'msg1': '초당 거래건수를 초과하였습니다.'}
+    with _patch('api.call_api', return_value=fail):
+        assert api.get_investor_trend("005930") is None
+
+    ok_empty = {'rt_cd': '0', 'output': []}
+    with _patch('api.call_api', return_value=ok_empty):
+        assert api.get_investor_trend("005931") == [], "권위 있는 '없음'은 빈 리스트다"
+
+
+def test_실패한_수급은_마이크로캐시에도_안_남는다():
+    """5분 캐시에 굳으면 그 사이 재시도가 통째로 사라진다."""
+    import api
+    from unittest.mock import patch as _patch
+
+    code = "005932"
+    fail = {'rt_cd': '1', 'msg1': 'timeout'}
+    with _patch('api.call_api', return_value=fail) as m:
+        assert api.get_investor_trend(code) is None
+        assert m.call_count == 1
+
+    good = {'rt_cd': '0', 'output': [{'stck_bsop_date': '20260904',
+                                      'frgn_ntby_qty': '1', 'orgn_ntby_qty': '1'}]}
+    with _patch('api.call_api', return_value=good) as m:
+        assert api.get_investor_trend(code) == good['output']
+        assert m.call_count == 1, "실패가 5분 마이크로캐시에 굳어 재조회가 막혔다"

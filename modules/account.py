@@ -144,8 +144,17 @@ def sync_today_trades():
                 acnt = acc['acnt']
                 
                 try:
-                    data = api.get_today_history(cano, acnt)
-                    ovrs_data = api.get_overseas_today_history(cano, acnt)
+                    #  [계좌 라우팅 · 2026-09-06] cano 를 인자로 넘겨도 **앱키·토큰·TPS 버킷**은
+                    #   thread_local(use_auto_account)이 고른다([[account-context-in-threads]]).
+                    #   종전에는 그 값을 위에서 저장하고 finally 에서 되돌리기만 할 뿐 **한 번도
+                    #   바꾸지 않았다** — 남아 있는 복원 코드가 그 흔적이다. 그래서 자동매매
+                    #   계좌의 당일 체결을 실전 앱키로 조회했고(실측), 권한이 없으니 KIS 가
+                    #   거절하거나 빈 목록을 준다. 거절이면 위 except 가 알리지만, 빈 목록이면
+                    #   '오늘 체결 0건'으로 조용히 지나간다 — 그 체결에 평단·진입일·손절 기준이
+                    #   붙을 근거가 통째로 사라진다.
+                    with utils.AccountContext(cano):
+                        data = api.get_today_history(cano, acnt)
+                        ovrs_data = api.get_overseas_today_history(cano, acnt)
                     
                     all_trades = []
                     if data.get('rt_cd') == '0':
@@ -292,6 +301,13 @@ def run_holding_analysis(domestic_items, overseas_items, restricted_codes=None, 
 
     반환: {code: analyze_sell 결과} — 실패한 종목은 키가 없다.
     """
+    #  [0% 는 '모름'이 아니다 · 2026-09-06] 종전에는 `float(... or 0)` 이었다.
+    #   증권사 어댑터는 일부 필드를 0/누락으로 준다 — 그러면 0% 가 손절선(음수)보다 위라
+    #   **손절 이탈 판정이 '아직 괜찮다'로 뒤집힌다**(실측: -14.3% 포지션이 0.0% 로 들어갔다).
+    #   이 결과는 화면(메뉴 9-2)뿐 아니라 예약 HOLDING_EXIT 를 거쳐 실매도까지 간다.
+    #   판정은 engine.holding_profit_rate 하나가 갖는다 — 모르면 None 을 올리고,
+    #   analyze_holdings 가 평단·현재가로 정확히 복원한다.
+    from modules.auto_trade import engine as _engine
     entries = []
     for item in domestic_items:
         try:
@@ -303,7 +319,7 @@ def run_holding_analysis(domestic_items, overseas_items, restricted_codes=None, 
             'name': item.get('prdt_name', ''),
             'buy_price': float(item.get('pchs_avg_pric') or 0),
             'current_price': float(item.get('prpr') or 0),
-            'profit_rate': float(item.get('evlu_pfls_rt') or 0),
+            'profit_rate': _engine.holding_profit_rate(item),
             'is_overseas': False,
             # 진입일 복원(증권사 체결 재생)에서 '조회 구간보다 오래된 포지션' 판별에 쓴다.
             'qty': qty if qty and qty > 0 else None,
@@ -322,7 +338,9 @@ def run_holding_analysis(domestic_items, overseas_items, restricted_codes=None, 
             'name': item.get('ovrs_item_name', ''),
             'buy_price': pchs_avg,
             'current_price': cur_price,
-            'profit_rate': float(item.get('evlu_pfls_rt') or 0),
+            #  해외 항목에는 'prpr' 이 없어 holding_profit_rate 의 복원 경로가 닿지 않는다
+            #  — 위에서 이미 역산한 cur_price 가 있으므로 analyze_holdings 쪽에 맡긴다.
+            'profit_rate': _engine.holding_profit_rate(item),
             'is_overseas': True,
         })
 
@@ -1160,7 +1178,10 @@ def _display_balance_details(cano, acnt_prdt_cd):
     ) as progress:
         task = progress.add_task("[cyan]국내 잔고 조회 중...[/cyan]", total=None)
         # [수정] api.get_domestic_balance 직접 호출
-        raw_holdings, raw_summary = api.get_domestic_balance(cano, acnt_prdt_cd)
+        #  [계좌 라우팅] 앱키·토큰·TPS 버킷은 thread_local 이 고른다 — cano 인자로는
+        #   바뀌지 않는다([[account-context-in-threads]]).
+        with utils.AccountContext(cano):
+            raw_holdings, raw_summary = api.get_domestic_balance(cano, acnt_prdt_cd)
 
         if raw_holdings is None:
             config.console.print("[red]잔고 조회 실패 (API 오류)[/red]")
@@ -1172,7 +1193,8 @@ def _display_balance_details(cano, acnt_prdt_cd):
 
         progress.update(task, description="[cyan]해외 잔고 조회 중...[/cyan]")
         # [수정] api.get_overseas_balance 직접 호출
-        all_overseas_holdings = api.get_overseas_balance(cano, acnt_prdt_cd) or []
+        with utils.AccountContext(cano):
+            all_overseas_holdings = api.get_overseas_balance(cano, acnt_prdt_cd) or []
         ovrs_output = [item for item in all_overseas_holdings
                        if float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0)) > 0]
 
@@ -1285,7 +1307,11 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
     if progress: progress.update(task, description="[cyan]금일 매매 손익 조회 중...[/cyan]")
     try:
         # [원복] 항상 현재 날짜 기준 조회 (새벽 로직 제거)
-        profit_data = fetch_today_profit_summary(cano, acnt_prdt_cd)
+        #  [계좌 라우팅] cano 인자만으로는 앱키·토큰·TPS 버킷이 바뀌지 않는다.
+        #   같은 함수의 예수금 조회(3번)에는 이미 걸려 있었는데 1·2번에는 없었다.
+        with utils.AccountContext(cano):
+            profit_data = fetch_today_profit_summary(cano, acnt_prdt_cd)
+            backup_data = fetch_today_history(cano, acnt_prdt_cd)
         summary_data['buy_today'] = profit_data['buy_amt']
         summary_data['sell_today'] = profit_data['sell_amt']
         summary_data['total_cost'] = profit_data['total_cost']
@@ -1293,7 +1319,7 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
 
         # [수정] 기간별 손익 API가 매매금액을 0으로 반환하는 경우가 많으므로
         # 체결 내역(fetch_today_history)을 조회하여 값이 더 크다면(누락된 경우) 덮어쓰기 수행
-        backup_data = fetch_today_history(cano, acnt_prdt_cd)
+        #  (조회는 위 AccountContext 안에서 이미 끝냈다)
         if backup_data['buy_total'] > summary_data['buy_today']:
             summary_data['buy_today'] = backup_data['buy_total']
         if backup_data['sell_total'] > summary_data['sell_today']:
@@ -1346,7 +1372,8 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
     if progress: progress.update(task, description="[cyan]국내 주식 잔고 및 평가금 조회 중...[/cyan]")
     try:
         # api.get_domestic_balance 사용 (내부에서 OPSQ2001 처리)
-        output1, output2 = api.get_domestic_balance(cano, acnt_prdt_cd)
+        with utils.AccountContext(cano):
+            output1, output2 = api.get_domestic_balance(cano, acnt_prdt_cd)
 
         if output1 is not None:
             # [수정] 보유 중인 종목만 필터링
@@ -1394,7 +1421,8 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
     # [추가] 해외 주식 잔고 합산 (원화 환산)
     if progress: progress.update(task, description="[cyan]해외 주식 잔고 및 환산액 계산 중...[/cyan]")
     try:
-        ovrs_holdings = fetch_overseas_balance(cano, acnt_prdt_cd)
+        with utils.AccountContext(cano):
+            ovrs_holdings = fetch_overseas_balance(cano, acnt_prdt_cd)
         ovrs_buy_usd = 0.0
         ovrs_eval_usd = 0.0
         ovrs_pl_usd = 0.0

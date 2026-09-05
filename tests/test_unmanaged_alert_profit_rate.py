@@ -49,3 +49,64 @@ def test_alert_holds_throttle_when_rate_is_unknown():
     head = src.split("holding_profit_rate")[1][:400]
     assert "return" in head and "unmanaged_stop_notified.pop" not in head, \
         "판정 불가 경로에서 스로틀을 건드린다"
+
+
+# ==========================================================
+# [같은 규칙이 매도 경로 전체에 걸려 있는가] (2026-09-06)
+# ==========================================================
+#  holding_profit_rate 는 '미관리 경보' 하나를 위해 만들어졌는데, 같은 함정
+#  (`float(item.get('evlu_pfls_rt') or 0.0)`)이 매도 경로에 세 곳 더 남아 있었다.
+#   · 손절 보호(_cancel_pending_buy_on_stop_loss) — 0% > 손절선 → 보호가 통째로 건너뜀
+#   · 마감 후 매도 신호 알림 — 알림 본문에 0.0% 를 적어 갭 전 판단을 그르침
+#   · 매도 판정 본체 — `float(item['evlu_pfls_rt'])` 라 빈 값이면 ValueError 로
+#     **그 종목의 손절·트레일링이 그 주기에 아예 돌지 않았다**
+
+DECISION_FNS = (
+    "_alert_unmanaged_stop",              # 시스템이 안 파는 포지션의 마지막 안전망
+    "_cancel_pending_buy_on_stop_loss",   # 손절 중인 종목의 미체결 매수 취소
+    "_alert_after_hours_sell",            # 마감 후 매도 신호 알림(갭 전 판단 근거)
+    "_check_sell_conditions",             # 매도 판정 본체
+)
+
+
+def _fn_source(name):
+    import ast
+    import inspect
+
+    from modules.auto_trade import trader as _trader
+
+    tree = ast.parse(inspect.getsource(_trader))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"{name} 을 찾지 못했다 — 검사기가 낡았다")
+
+
+def test_판정_경로가_수익률을_직접_읽지_않는다():
+    """한 곳만 되돌아가도 그 종목의 청산이 조용히 멈춘다.
+
+    (표를 그리는 자리들은 대상이 아니다 — 그쪽은 값이 없으면 그 줄이 깨질 뿐
+     판정을 바꾸지 않는다.)
+    """
+    import ast
+
+    bad = []
+    for name in DECISION_FNS:
+        for node in ast.walk(_fn_source(name)):
+            if isinstance(node, ast.Call) and ast.unparse(node).startswith("float("):
+                if "evlu_pfls_rt" in ast.unparse(node):
+                    bad.append((name, node.lineno, ast.unparse(node)))
+
+    assert not bad, (
+        "판정 경로가 수익률을 float() 로 직접 읽는다 — 빈 값이면 0% 로 둔갑하거나"
+        f" 예외로 판정이 통째로 건너뛰어진다: {bad}")
+
+
+def test_판정_함수가_실제로_배선돼_있다():
+    """반대 방향 — 위 검사가 '아무도 수익률을 안 읽는다'로도 통과하면 안 된다."""
+    import ast
+
+    for name in DECISION_FNS:
+        src = ast.unparse(_fn_source(name))
+        assert "holding_profit_rate(item)" in src, (
+            f"{name} 이 holding_profit_rate 를 쓰지 않는다")

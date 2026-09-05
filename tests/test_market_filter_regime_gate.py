@@ -80,3 +80,68 @@ def test_regime_series_is_causal():
     full = indicators.get_regime_series(close)['regime']
     for cut in (120, 300, 480):
         assert indicators.get_regime_series(close.iloc[:cut])['regime'][-1] == full[cut - 1]
+
+
+# ==========================================================
+# [결측은 해제가 아니다] 신규 매수 게이트는 모르면 보류다 (2026-09-05)
+# ==========================================================
+#  SMA 는 창 안에 NaN 이 하나만 있어도 그 뒤 ma_period 봉이 통째로 NaN 이다.
+#  종전 구현은 그 봉들을 `continue` 로 건너뛰어 blocked 를 초기값 False 로 남겼고,
+#  호출부의 데이터 검사는 `len(df) >= ma_period` 뿐이라 그대로 통과했다.
+#  지수 최후 폴백(yfinance)이 최신 종가를 결측으로 주는 일이 잦다는 것은
+#  trader.py 시장 필터 주석에 이미 적혀 있다 — 가상의 사고가 아니다.
+
+def _falling(n_flat=200, n_down=60):
+    """80일선 아래로 깊게 내려온 하락장 = 신규 매수 차단이 맞는 상황."""
+    return pd.Series([3000.0] * n_flat + list(np.linspace(3000, 2400, n_down)))
+
+
+def test_차단_중_결측이_문을_열지_않는다():
+    base = _falling()
+    assert indicators.get_market_filter_blocked(base, 80, 1.0).iloc[-1], "전제 확인"
+
+    for where, label in [(-1, "마지막 봉"), (-40, "40봉 전")]:
+        s = base.copy()
+        s.iloc[where] = np.nan
+        assert indicators.get_market_filter_blocked(s, 80, 1.0).iloc[-1], (
+            f"{label} 결측 하나로 시장 필터가 풀렸다 — 하락장에서 신규 매수가 열린다")
+
+
+def test_워밍업_구간은_종전대로_필터_없음이다():
+    """결측 유지 규칙이 '아직 SMA 가 없는 초반'까지 차단으로 바꾸면 안 된다."""
+    s = pd.Series(np.linspace(3000, 2400, 100))
+    blocked = indicators.get_market_filter_blocked(s, 80, 1.0)
+    assert not blocked.iloc[:79].any(), "워밍업 구간은 '필터 없음'이다"
+
+
+def test_판정_가능_여부를_길이가_아니라_결측으로_센다():
+    base = _falling()
+    assert indicators.market_filter_ready(base, 80)
+
+    s = base.copy()
+    s.iloc[-40] = np.nan
+    assert len(s) >= 80, "길이 검사는 통과한다 — 그래서 길이만으로는 부족하다"
+    assert not indicators.market_filter_ready(s, 80)
+
+    assert not indicators.market_filter_ready(pd.Series([1.0] * 10), 80)
+    assert not indicators.market_filter_ready(None, 80)
+
+
+def test_게이트_호출부가_그_검사를_실제로_쓴다():
+    """헬퍼만 만들고 안 쓰면 소용없다 — 배선을 못박는다."""
+    import ast
+    import inspect
+    from modules.auto_trade import trader as _trader
+
+    for mod in (_trader, __import__("main")):
+        src = inspect.getsource(mod)
+        tree = ast.parse(src)
+        calls = [n for n in ast.walk(tree)
+                 if isinstance(n, ast.Call)
+                 and ast.unparse(n.func).endswith("get_market_filter_blocked")]
+        ready = [n for n in ast.walk(tree)
+                 if isinstance(n, ast.Call)
+                 and ast.unparse(n.func).endswith("market_filter_ready")]
+        assert len(ready) >= len(calls), (
+            f"{mod.__name__}: 시장 필터를 읽는 자리 {len(calls)}곳 중 "
+            f"판정 가능 검사는 {len(ready)}곳뿐이다")
