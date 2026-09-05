@@ -74,6 +74,11 @@ class SessionManager:
         # 토큰 관리 (API 모듈에서 사용)
         self.real_access_token = ""
         self.auto_access_token = ""
+        #  [2026-09-05] 메모리 토큰의 만료 시각. 종전에는 문자열만 들고 있어
+        #   get_valid_token 의 메모리 경로가 **만료를 보지 않고** 그대로 돌려줬다.
+        #   24시간 구동되는 파이에서는 반드시 도달한다(토큰 수명 24시간).
+        self.real_token_expired = ""
+        self.auto_token_expired = ""
 
         self.stock_data = {}
         self.exchange_cache = {}
@@ -417,24 +422,59 @@ class SessionManager:
         return False
 
     def get_valid_token(self, key, force_disk_reload=False):
-        """메모리 또는 파일 캐시에서 유효한 토큰을 반환"""
+        """메모리 또는 파일 캐시에서 **유효한** 토큰을 반환. 없으면 None.
+
+        [만료를 보게 한다 · 2026-09-05] 종전 메모리 경로는 문자열이 비어 있지 않으면
+         그대로 돌려줬다. 파일 경로는 _check_token_validity 로 만료와 앱키 지문을 모두
+         보는데, 메모리 경로만 아무것도 안 봤다 — 함수 이름과 독스트링('유효한')이
+         구현과 어긋나 있었다.
+
+         한 번 메모리에 담긴 토큰은 프로세스가 사는 동안 영원히 유효로 읽힌다. KIS 토큰
+         수명은 24시간이고 운영은 라즈베리파이 24시간 구동이라 **반드시 도달한다**.
+         그때 만료 감지는 오직 사후적이다 — API 가 EGW00123 을 돌려주면 그제야
+         TOKEN_EXPIRED 플래그가 서고 예외가 난다(api/http). 즉 만료 경계에서 나가던
+         호출이 먼저 한 번 실패하고, 하필 그것이 손절 주문이면 그 주문이 실패한다.
+         메모리에서도 만료를 보면 그 창이 사라진다(만료 1분 전에 미리 재발급).
+        """
         # 1. 메모리 확인 (force_disk_reload가 아닐 때만)
         if not force_disk_reload:
-            if key == "REAL" and self.real_access_token: return self.real_access_token
-            if key == "AUTO" and self.auto_access_token: return self.auto_access_token
+            token = self.real_access_token if key == "REAL" else (
+                self.auto_access_token if key == "AUTO" else "")
+            if token:
+                expired_str = (self.real_token_expired if key == "REAL"
+                               else self.auto_token_expired)
+                if self._memory_token_alive(expired_str):
+                    return token
+                #  만료됐다 — 파일 캐시(다른 프로세스가 갱신했을 수 있다)로 내려간다.
+                self._update_memory_token(key, "", "")
 
         # 2. 파일 캐시 확인
         cache = self._load_token_cache()
         token_info = cache.get(key)
         if self._check_token_validity(token_info, key):
             token = token_info['access_token']
-            self._update_memory_token(key, token)
+            self._update_memory_token(key, token, token_info.get('token_expired'))
             return token
         return None
 
+    @staticmethod
+    def _memory_token_alive(expired_str):
+        """메모리 토큰이 아직 유효한가. 만료 시각을 모르면 **모른다 = 유효하지 않다**.
+
+        파일 경로와 같은 1분 여유를 둔다 — 지금 유효해도 요청이 나가는 사이에 넘어가면
+        같은 실패다.
+        """
+        if not expired_str:
+            return False
+        try:
+            expired_dt = datetime.strptime(str(expired_str), "%Y-%m-%d %H:%M:%S")
+        except (TypeError, ValueError):
+            return False
+        return datetime.now() < (expired_dt - timedelta(minutes=1))
+
     def set_token(self, key, token, expired):
         """토큰을 메모리와 파일에 저장"""
-        self._update_memory_token(key, token)
+        self._update_memory_token(key, token, expired)
         
         cache = self._load_token_cache()
         cache[key] = {
@@ -469,6 +509,16 @@ class SessionManager:
         except Exception: pass
         return False
 
-    def _update_memory_token(self, key, token):
-        if key == "REAL": self.real_access_token = token
-        elif key == "AUTO": self.auto_access_token = token
+    def _update_memory_token(self, key, token, expired=None):
+        """메모리 토큰과 **그 만료 시각**을 함께 둔다.
+
+        만료를 같이 두지 않으면 get_valid_token 의 메모리 경로가 만료를 볼 수 없다.
+        expired 를 모르면 빈 값으로 둔다 — 그러면 '모름 = 유효하지 않음'이 되어
+        다음 조회가 파일 캐시로 내려간다(느려질 뿐 틀리지 않는다).
+        """
+        if key == "REAL":
+            self.real_access_token = token
+            self.real_token_expired = expired or ""
+        elif key == "AUTO":
+            self.auto_access_token = token
+            self.auto_token_expired = expired or ""

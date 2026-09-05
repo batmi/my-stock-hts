@@ -134,3 +134,66 @@ def test_expired_token_is_still_rejected(store):
     store.set_token("REAL", "tok-real", _expiry(hours=-1))
     store.real_access_token = ""
     assert store.get_valid_token("REAL", force_disk_reload=True) is None
+
+
+# ─────────────────────────────────────────────
+# 3. 메모리 경로도 만료를 본다 (2026-09-05)
+#
+# get_valid_token 은 파일 캐시를 _check_token_validity 로 꼼꼼히 검사하면서, **메모리
+# 경로만 아무것도 안 봤다**:
+#     if key == "REAL" and self.real_access_token: return self.real_access_token
+#
+# 한 번 메모리에 담긴 토큰은 프로세스가 사는 동안 영원히 '유효'다. KIS 토큰 수명은
+# 24시간이고 운영은 라즈베리파이 24시간 구동이라 **반드시 도달한다**. 그때 만료 감지는
+# 오직 사후적이다 — API 가 EGW00123 을 돌려줘야 TOKEN_EXPIRED 가 서고 예외가 난다.
+# 즉 만료 경계에서 나가던 호출이 먼저 한 번 실패하고, 하필 그것이 손절 주문이면
+# 그 주문이 실패한다.
+def test_메모리에_담긴_만료_토큰을_돌려주지_않는다(store):
+    store.set_token("REAL", "OLD-TOKEN", _expiry(hours=-1))
+    assert store.real_access_token == "OLD-TOKEN", "하네스 전제: 메모리에 남아 있어야 한다"
+    assert store.get_valid_token("REAL") is None, (
+        "만료된 메모리 토큰을 유효한 것으로 돌려줬다")
+
+
+def test_만료가_임박해도_돌려주지_않는다(store):
+    """파일 경로와 같은 1분 여유 — 요청이 나가는 사이에 넘어가면 같은 실패다."""
+    from datetime import datetime, timedelta
+    soon = (datetime.now() + timedelta(seconds=30)).strftime("%Y-%m-%d %H:%M:%S")
+    store.set_token("REAL", "ALMOST", soon)
+    assert store.get_valid_token("REAL") is None
+
+
+def test_유효한_메모리_토큰은_그대로_쓴다(store):
+    """대조군 — 매번 파일을 읽으면 느려진다(이 경로가 존재하는 이유)."""
+    store.set_token("REAL", "GOOD", _expiry(hours=+12))
+    assert store.get_valid_token("REAL") == "GOOD"
+
+
+def test_만료된_메모리_토큰은_파일_캐시로_내려간다(store):
+    """다른 프로세스가 이미 갱신해 뒀을 수 있다 — 재발급 전에 파일을 본다."""
+    store.set_token("REAL", "OLD", _expiry(hours=-1))
+    # 다른 프로세스가 같은 슬롯을 갱신한 상황을 만든다.
+    cache = _raw(store)
+    cache["REAL"]["access_token"] = "FRESH"
+    cache["REAL"]["token_expired"] = _expiry(hours=+12)
+    with open(config.TOKEN_CACHE_FILE, "w", encoding="utf-8") as f:
+        json.dump(cache, f)
+
+    assert store.get_valid_token("REAL") == "FRESH"
+    assert store.real_access_token == "FRESH", "메모리도 새 토큰으로 갱신돼야 한다"
+
+
+def test_만료_시각을_모르면_유효하지_않다(store):
+    """구버전 캐시·부분 초기화 — 모르는 것을 '유효'로 읽지 않는다."""
+    store.set_token("REAL", "NO-EXPIRY", _expiry(hours=+12))
+    store.real_token_expired = ""          # 만료 시각만 잃은 상태
+    # 파일 캐시가 받쳐 주므로 결과적으로는 같은 토큰이 나오지만, 메모리 경로로 통과하진 않는다.
+    assert store._memory_token_alive("") is False
+    assert store._memory_token_alive("이건 날짜가 아니다") is False
+
+
+def test_자동_슬롯도_같은_규칙이다(store):
+    store.set_token("AUTO", "AUTO-OLD", _expiry(hours=-1))
+    assert store.get_valid_token("AUTO") is None
+    store.set_token("AUTO", "AUTO-GOOD", _expiry(hours=+12))
+    assert store.get_valid_token("AUTO") == "AUTO-GOOD"
