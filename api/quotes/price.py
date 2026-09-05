@@ -12,6 +12,7 @@ import config
 from core import constants
 from core import context
 from core import indicators
+from core import utils
 from brokers import toss_api
 
 #  로거 이름은 분해 전(api.py)과 같은 'api' 로 둔다 — 로그 필터·레벨 설정이 이름을 보므로
@@ -915,5 +916,11 @@ def _prepare_account_params(cano, acnt_prdt_cd):
         context.trade_context.use_auto_account = True
     elif cano == config.session.cano:
         context.trade_context.use_auto_account = False
-        
+    else:
+        #  [2026-09-05] 호출부가 계좌를 **알고 지정했는데** 우리가 라우팅하지 못하는
+        #   경우다. 종전에는 조용히 끝나 CANO 파라미터만 그 계좌를 가리키고 앱키·토큰은
+        #   현재 스레드 기본값으로 나갔다 — 계좌와 앱키가 어긋난 요청이 된다.
+        #   동작은 그대로 두되(예외를 올리면 조회 경로가 통째로 죽는다) 보이게 한다.
+        utils._warn_unroutable_cano("_prepare_account_params", cano)
+
     return cano, acnt_prdt_cd

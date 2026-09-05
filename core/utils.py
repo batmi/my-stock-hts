@@ -571,6 +571,36 @@ def select_target_stock():
             return item['code'], item['name'], is_overseas
     return None, None, None
 
+#  라우팅할 수 없는 계좌를 계좌당 한 번만 경고하기 위한 표시(로그 폭주 방지).
+_UNROUTABLE_CANO_WARNED = set()
+
+
+def _warn_unroutable_cano(where, cano):
+    """어느 계좌인지 **모르는데** 조용히 넘어가는 것을 막는다.
+
+    [왜 · 2026-09-05] cano 를 넘겼다는 것은 호출부가 계좌를 **알고 지정했다**는 뜻이다.
+     그 값이 수동·자동 어느 쪽과도 안 맞으면 우리는 라우팅할 수 없는데, 종전에는
+     if/elif 가 조용히 끝나 **그 스레드에 마침 있던 값**을 그대로 썼다. 새로 띄운 데몬
+     스레드에서는 그것이 미설정(=수동)이라, 결과적으로 **모르는 계좌 = 수동 계좌**가 된다.
+     use_auto_account 가 고르는 것은 앱키·토큰·TPS 버킷이므로(get_common_headers ·
+     api.auth.get_current_token · api.http._real_bucket_key) 예약 주문·제한 해제 같은
+     계좌 귀속 작업이 남의 앱키로 나간다.
+
+     동작은 바꾸지 않는다(여기서 예외를 올리면 호출부의 재시도 루프가 통째로 무너진다).
+     대신 **보이게** 한다 — 계좌 변경·옛 DB 행처럼 원인이 밖에 있는 상황이라 운영자가
+     알아야 고칠 수 있다. 계좌번호는 뒤 4자리만 남긴다.
+    """
+    tail = str(cano)[-4:] if cano else "?"
+    key = (where, tail)
+    if key in _UNROUTABLE_CANO_WARNED:
+        return
+    _UNROUTABLE_CANO_WARNED.add(key)
+    logger.warning(
+        f"[ACCOUNT] {where}: 지정된 계좌(...{tail})가 수동·자동 어느 쪽과도 맞지 않습니다 — "
+        f"앱키·토큰을 전환하지 못한 채 진행합니다(현재 스레드의 기본값 사용). "
+        f"계좌 설정이 바뀌었거나 옛 기록의 계좌번호일 수 있습니다.")
+
+
 class AccountContext:
     """
     특정 계좌(cano)에 맞춰 trade_context.use_auto_account를 설정하고,
@@ -587,6 +617,8 @@ class AccountContext:
                 context.trade_context.use_auto_account = True
             elif self.cano == config.session.cano:
                 context.trade_context.use_auto_account = False
+            else:
+                _warn_unroutable_cano("AccountContext", self.cano)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):

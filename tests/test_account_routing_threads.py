@@ -364,3 +364,107 @@ def test_해외도_같은_규칙이다(separated_accounts):
         assert auto_trade.current_holding_qty(
             'AAPL', config.session.auto_cano,
             config.session.auto_acnt_prdt_cd, True) == 5
+
+
+# ---------------------------------------------------------------------------
+# 라우팅할 수 없는 계좌 (2026-09-05)
+#
+# AccountContext 와 _prepare_account_params 는 둘 다 이렇게 생겼었다:
+#     if cano == auto_cano:  use_auto = True
+#     elif cano == cano:     use_auto = False
+#     # else: 아무것도 안 한다
+#
+# cano 를 넘겼다는 것은 호출부가 계좌를 **알고 지정했다**는 뜻이다. 그 값이 어느 쪽과도
+# 안 맞으면 우리는 라우팅할 수 없는데, 조용한 else 는 **그 스레드에 마침 있던 값**을 쓴다.
+# 새로 띄운 데몬 스레드에서 그것은 미설정(=수동)이다 — 즉 **모르는 계좌 = 수동 계좌**가 된다.
+# use_auto_account 가 고르는 것은 앱키·토큰·TPS 버킷이므로, 예약 주문·제한 해제처럼 계좌에
+# 매인 작업이 남의 앱키로 나간다. 계좌 설정 변경·옛 DB 행이면 실제로 일어난다.
+#
+# 동작은 그대로 둔다(예외를 올리면 호출부의 재시도 루프가 무너진다) — 대신 보이게 한다.
+@pytest.fixture
+def clean_cano_warnings():
+    from core import utils as core_utils
+    core_utils._UNROUTABLE_CANO_WARNED.clear()
+    yield core_utils
+    core_utils._UNROUTABLE_CANO_WARNED.clear()
+
+
+def test_모르는_계좌는_조용히_넘어가지_않는다(separated_accounts, clean_cano_warnings, caplog):
+    from core import utils as core_utils
+
+    with caplog.at_level("WARNING", logger=core_utils.__name__):
+        with core_utils.AccountContext("99998888"):
+            pass
+    joined = caplog.text
+    assert "[ACCOUNT]" in joined, "라우팅 못 한 계좌가 흔적 없이 지나갔다"
+    assert "8888" in joined, "어느 계좌인지 알 수 없으면 고칠 수 없다"
+    assert "99998888" not in joined, "계좌번호 전체가 로그에 남았다(뒤 4자리만)"
+
+
+def test_모르는_계좌여도_예외를_올리지_않는다(separated_accounts, clean_cano_warnings):
+    """호출부(제한 정리 추적 등)의 재시도 루프를 무너뜨리지 않는다."""
+    from core import utils as core_utils
+
+    prev = getattr(context.trade_context, "use_auto_account", False)
+    context.trade_context.use_auto_account = True
+    try:
+        with core_utils.AccountContext("99998888"):
+            # 라우팅하지 못했으므로 현재 스레드 값이 유지된다(동작 불변).
+            assert getattr(context.trade_context, "use_auto_account", False) is True
+    finally:
+        context.trade_context.use_auto_account = prev
+
+
+def test_아는_계좌는_경고하지_않는다(separated_accounts, clean_cano_warnings, caplog):
+    from core import utils as core_utils
+
+    with caplog.at_level("WARNING", logger=core_utils.__name__):
+        with core_utils.AccountContext(config.session.auto_cano):
+            pass
+        with core_utils.AccountContext(config.session.cano):
+            pass
+        with core_utils.AccountContext(None):      # 지정 안 함 = 주변 값을 쓰겠다는 뜻
+            pass
+    assert "[ACCOUNT]" not in caplog.text, f"정상 경로에서 경고가 났다: {caplog.text}"
+
+
+def test_같은_계좌는_한_번만_경고한다(separated_accounts, clean_cano_warnings, caplog):
+    """루프 안에서 불리는 자리라 매번 찍으면 로그가 묻힌다."""
+    from core import utils as core_utils
+
+    with caplog.at_level("WARNING", logger=core_utils.__name__):
+        for _ in range(5):
+            with core_utils.AccountContext("99998888"):
+                pass
+    assert caplog.text.count("[ACCOUNT]") == 1
+
+
+def test_계좌_파라미터_준비도_같은_규칙이다(separated_accounts, clean_cano_warnings, caplog):
+    """_prepare_account_params 는 CANO 파라미터와 앱키가 어긋난 요청을 만들 수 있다."""
+    from core import utils as core_utils
+
+    with caplog.at_level("WARNING", logger=core_utils.__name__):
+        cano, acnt = api._prepare_account_params("99998888", "01")
+    assert (cano, acnt) == ("99998888", "01"), "반환값은 그대로여야 한다(동작 불변)"
+    assert "_prepare_account_params" in caplog.text
+
+
+def test_조용한_else가_되돌아오지_않는다():
+    """구문으로도 못박는다 — 이 형태는 두 곳에 있었고 둘 다 조용했다."""
+    import ast
+    import os
+
+    from core import utils as core_utils
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for rel, fname in (("core/utils.py", "__enter__"),
+                       ("api/quotes/price.py", "_prepare_account_params")):
+        tree = ast.parse(open(os.path.join(root, rel), encoding="utf-8").read())
+        fn = next(n for n in ast.walk(tree)
+                  if isinstance(n, ast.FunctionDef) and n.name == fname)
+        branches = [n for n in ast.walk(fn)
+                    if isinstance(n, ast.If) and "use_auto_account" in ast.dump(n)]
+        assert branches, f"{rel}:{fname} 의 계좌 분기를 찾지 못했다 — 검사기가 낡았다"
+        assert any("_warn_unroutable_cano" in ast.dump(b) for b in branches), (
+            f"{rel}:{fname} 의 계좌 분기가 다시 조용해졌다 — "
+            "모르는 계좌가 '수동 계좌'로 둔갑한다")
