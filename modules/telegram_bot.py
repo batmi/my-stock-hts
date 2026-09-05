@@ -39,64 +39,80 @@ def _status_button_emojis():
 class TelegramCommander:
     """텔레그램 명령어를 수신하고 처리하는 클래스"""
     _instance = None
+    _instance_lock = threading.RLock()
 
+    #  [동시성 2026-09-05] 싱글톤 생성을 락으로 감싼다. 종전 `if cls._instance is None:` 는
+    #   검사와 대입 사이가 열려 있었고, 더 나쁜 것은 **인스턴스를 먼저 대입하고 속성을 그 뒤에
+    #   채운다**는 점이었다 — 두 번째 스레드는 그 사이에 들어와 '있다'고 보고 반쯤 만들어진
+    #   객체를 그대로 가져간다. 초기화 도중에 파일 I/O(로거 생성)·DB 접근이 있어 GIL 이 실제로
+    #   놓이므로 이론상의 경합이 아니다(실측: 8스레드 중 7개가 미완성 객체를 받는다).
+    #   기동 순서상 열려 있다 — main 이 텔레그램 봇 스레드를 먼저 띄우고(telegram_cmd.start())
+    #   스케줄러·트레이더는 그 뒤에 처음 만든다. 봇 스레드의 명령 처리는 이 생성자를 부른다.
     def __new__(cls, *args, **kwargs):
-        if cls._instance is None:
-            cls._instance = super(TelegramCommander, cls).__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
+        with cls._instance_lock:
+            if cls._instance is None:
+                cls._instance = super(TelegramCommander, cls).__new__(cls)
+                cls._instance._initialized = False
+            return cls._instance
 
     def __init__(self):
-        if self._initialized: return
-        self._initialized = True
-        self.bot_token = config.TELEGRAM_BOT_TOKEN
-        self.is_running = False
-        self.thread = None
-        self.last_update_id = 0
-        self.trader = AutoTrader() # 싱글톤 인스턴스 참조
-        self._trade_cache = {}
-        self._trade_cache_lock = threading.Lock()
-        self.session = requests.Session() # 커넥션 풀링(소켓 누수 방지)
+        #  [동시성 2026-09-05] __init__ **전체**를 락 안에 둔다. __new__ 만 잠그면
+        #   그것이 인스턴스를 돌려준 뒤 __init__ 이 끝나기 전에 다른 스레드가 들어와,
+        #   `_initialized` 만 보고 **아직 채워지지 않은 객체**를 완성품으로 가져간다
+        #   (실측: SystemScheduler.trader 가 없는 객체를 받는다). 가드만 잠가서는
+        #   한 겹 아래로 같은 구멍이 내려갈 뿐이다.
+        with self._instance_lock:
+            if self._initialized:
+                return
+            self._initialized = True
+            self.bot_token = config.TELEGRAM_BOT_TOKEN
+            self.is_running = False
+            self.thread = None
+            self.last_update_id = 0
+            self.trader = AutoTrader() # 싱글톤 인스턴스 참조
+            self._trade_cache = {}
+            self._trade_cache_lock = threading.Lock()
+            self.session = requests.Session() # 커넥션 풀링(소켓 누수 방지)
         
-        # [리팩토링] 명령어 핸들러 매핑
-        self.command_handlers = {
-            "/status": self._cmd_status,
-            "/health": self._cmd_health,
-            "/start": self._cmd_start,
-            "/stop": self._cmd_stop,
-            "/restart": self._cmd_restart,
-            "/help": self._cmd_help,
-            "/report": self._cmd_report,
-            "/market": self._cmd_market,
-            "/signal": self._cmd_signal,
-            "/analyze": self._cmd_analyze, # [추가] AI 심층 진단
-            "/ask": self._cmd_ask,
-            "/chart": self._cmd_chart,
-            "/stocks": self._cmd_stocks,
-            "/config": self._cmd_config,
-            "/history": self._cmd_history,
-            "/log": self._cmd_log,
-            # [PRESET_RETIRED] /preset 제거 — 전략 프리셋 폐지 (settings.py PRESET_RETIRED 주석 참조)
-            "/balance": self._cmd_balance,
-            "/holdings": self._cmd_holdings,
-            "/position": self._cmd_position,
-            "/closing": self._cmd_closing, # [추가] AI 장 마감 종합 브리핑
-            "/curate": self._cmd_curate, # [추가] AI 종목 큐레이션
-            "/scan": self._cmd_scan, # [추가] 트레이딩뷰 스크리너
-            "/news": self._cmd_news, # [추가] AI 최신 뉴스 검색
-            "/memo": self._cmd_memo, # [추가] 종목 메모 관리
-            "/rules": self._cmd_rules,
-            "/profit": self._cmd_profit,
-            "/restrict": self._cmd_restricted,
-            "/pending": self._cmd_pending,           # [추가] 미체결 조회
-            "/reserves": self._cmd_reserves,         # [추가] 예약 주문 현황 및 취소
-            "/addrestrict": self._cmd_addrestrict,   # [추가] 제한 종목 추가
-            "/delrestrict": self._cmd_delrestrict,   # [추가] 제한 종목 해제
-            "/briefing": self._cmd_briefing,         # [추가] 온디맨드 시황 브리핑
-            "/stats": self._cmd_stats,               # [추가] 종목별 성과 분석
-            "/calendar": self._cmd_calendar,         # [추가] 투자 캘린더(경제 이벤트·배당/실적)
-            "/disclosure": self._cmd_disclosure       # [추가] 관심종목 공시 모니터링 (메뉴 6-6)
-        }
+            # [리팩토링] 명령어 핸들러 매핑
+            self.command_handlers = {
+                "/status": self._cmd_status,
+                "/health": self._cmd_health,
+                "/start": self._cmd_start,
+                "/stop": self._cmd_stop,
+                "/restart": self._cmd_restart,
+                "/help": self._cmd_help,
+                "/report": self._cmd_report,
+                "/market": self._cmd_market,
+                "/signal": self._cmd_signal,
+                "/analyze": self._cmd_analyze, # [추가] AI 심층 진단
+                "/ask": self._cmd_ask,
+                "/chart": self._cmd_chart,
+                "/stocks": self._cmd_stocks,
+                "/config": self._cmd_config,
+                "/history": self._cmd_history,
+                "/log": self._cmd_log,
+                # [PRESET_RETIRED] /preset 제거 — 전략 프리셋 폐지 (settings.py PRESET_RETIRED 주석 참조)
+                "/balance": self._cmd_balance,
+                "/holdings": self._cmd_holdings,
+                "/position": self._cmd_position,
+                "/closing": self._cmd_closing, # [추가] AI 장 마감 종합 브리핑
+                "/curate": self._cmd_curate, # [추가] AI 종목 큐레이션
+                "/scan": self._cmd_scan, # [추가] 트레이딩뷰 스크리너
+                "/news": self._cmd_news, # [추가] AI 최신 뉴스 검색
+                "/memo": self._cmd_memo, # [추가] 종목 메모 관리
+                "/rules": self._cmd_rules,
+                "/profit": self._cmd_profit,
+                "/restrict": self._cmd_restricted,
+                "/pending": self._cmd_pending,           # [추가] 미체결 조회
+                "/reserves": self._cmd_reserves,         # [추가] 예약 주문 현황 및 취소
+                "/addrestrict": self._cmd_addrestrict,   # [추가] 제한 종목 추가
+                "/delrestrict": self._cmd_delrestrict,   # [추가] 제한 종목 해제
+                "/briefing": self._cmd_briefing,         # [추가] 온디맨드 시황 브리핑
+                "/stats": self._cmd_stats,               # [추가] 종목별 성과 분석
+                "/calendar": self._cmd_calendar,         # [추가] 투자 캘린더(경제 이벤트·배당/실적)
+                "/disclosure": self._cmd_disclosure       # [추가] 관심종목 공시 모니터링 (메뉴 6-6)
+            }
 
     def start(self):
         if not self.bot_token: return

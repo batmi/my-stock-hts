@@ -1715,27 +1715,42 @@ class JournalSyncWorker:
     """대기열을 주기적으로 비우고 봇 상태를 보고하는 단일 백그라운드 스레드."""
 
     _instance = None
+    _instance_lock = threading.RLock()
 
+    #  [동시성 2026-09-05] 싱글톤 생성을 락으로 감싼다. 종전 `if cls._instance is None:` 는
+    #   검사와 대입 사이가 열려 있었고, 더 나쁜 것은 **인스턴스를 먼저 대입하고 속성을 그 뒤에
+    #   채운다**는 점이었다 — 두 번째 스레드는 그 사이에 들어와 '있다'고 보고 반쯤 만들어진
+    #   객체를 그대로 가져간다. 초기화 도중에 파일 I/O(로거 생성)·DB 접근이 있어 GIL 이 실제로
+    #   놓이므로 이론상의 경합이 아니다(실측: 8스레드 중 7개가 미완성 객체를 받는다).
+    #   기동 순서상 열려 있다 — main 이 텔레그램 봇 스레드를 먼저 띄우고(telegram_cmd.start())
+    #   스케줄러·트레이더는 그 뒤에 처음 만든다. 봇 스레드의 명령 처리는 이 생성자를 부른다.
     def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
+        with cls._instance_lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+                cls._instance._initialized = False
+            return cls._instance
 
     def __init__(self):
-        if self._initialized:
-            return
-        self._initialized = True
-        self.is_running = False
-        self.thread = None
-        self._wake = threading.Event()
-        self._last_ping = 0.0
-        self._last_flush = 0.0
-        self._force_flush = False
-        # 첫 백필은 기동 직후가 아니라 조금 뒤에 돈다 — 로그인·유니버스(stock.json)
-        # 적재가 끝나야 해외 종목의 거래소를 제대로 붙일 수 있다.
-        self._next_backfill = 0.0
-        self._next_purge = 0.0
+        #  [동시성 2026-09-05] __init__ **전체**를 락 안에 둔다. __new__ 만 잠그면
+        #   그것이 인스턴스를 돌려준 뒤 __init__ 이 끝나기 전에 다른 스레드가 들어와,
+        #   `_initialized` 만 보고 **아직 채워지지 않은 객체**를 완성품으로 가져간다
+        #   (실측: SystemScheduler.trader 가 없는 객체를 받는다). 가드만 잠가서는
+        #   한 겹 아래로 같은 구멍이 내려갈 뿐이다.
+        with self._instance_lock:
+            if self._initialized:
+                return
+            self._initialized = True
+            self.is_running = False
+            self.thread = None
+            self._wake = threading.Event()
+            self._last_ping = 0.0
+            self._last_flush = 0.0
+            self._force_flush = False
+            # 첫 백필은 기동 직후가 아니라 조금 뒤에 돈다 — 로그인·유니버스(stock.json)
+            # 적재가 끝나야 해외 종목의 거래소를 제대로 붙일 수 있다.
+            self._next_backfill = 0.0
+            self._next_purge = 0.0
 
     def start(self):
         if self.is_running:

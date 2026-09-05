@@ -28,20 +28,29 @@ def _pkg_engine():
 class ReservedOrderMonitor:
     """백그라운드 예약 주문(Stop, Limit, Breakout, Time) 감시 스레드"""
     _instance = None
+    _instance_lock = threading.RLock()
     
+    #  [동시성 2026-09-05] 싱글톤 생성을 락으로 감싼다. 종전 `if cls._instance is None:` 는
+    #   검사와 대입 사이가 열려 있었고, 더 나쁜 것은 **인스턴스를 먼저 대입하고 속성을 그 뒤에
+    #   채운다**는 점이었다 — 두 번째 스레드는 그 사이에 들어와 '있다'고 보고 반쯤 만들어진
+    #   객체를 그대로 가져간다. 초기화 도중에 파일 I/O(로거 생성)·DB 접근이 있어 GIL 이 실제로
+    #   놓이므로 이론상의 경합이 아니다(실측: 8스레드 중 7개가 미완성 객체를 받는다).
+    #   기동 순서상 열려 있다 — main 이 텔레그램 봇 스레드를 먼저 띄우고(telegram_cmd.start())
+    #   스케줄러·트레이더는 그 뒤에 처음 만든다. 봇 스레드의 명령 처리는 이 생성자를 부른다.
     def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super(ReservedOrderMonitor, cls).__new__(cls)
-            cls._instance.is_running = False
-            cls._instance.monitor_thread = None
-            cls._instance.chart_cache = {} # {code: {'df': df, 'time': timestamp}}
-            # [보유분석 캐시] {(cano, acnt): {'res': {code: analyze_sell 결과}, 'time': ts}}
-            #  보유분석 1회는 잔고 조회 + DB 다중 조회 + 종목별 차트다. 10초 주기로 그대로
-            #  돌리면 감시기 혼자 API와 CPU를 잡아먹는다(운영기는 라즈베리파이).
-            cls._instance.holding_cache = {}
-            # [권리 조정 감시] 종목별 마지막 점검 시각 {code: timestamp}
-            cls._instance.corp_checked_at = {}
-        return cls._instance
+        with cls._instance_lock:
+            if cls._instance is None:
+                cls._instance = super(ReservedOrderMonitor, cls).__new__(cls)
+                cls._instance.is_running = False
+                cls._instance.monitor_thread = None
+                cls._instance.chart_cache = {} # {code: {'df': df, 'time': timestamp}}
+                # [보유분석 캐시] {(cano, acnt): {'res': {code: analyze_sell 결과}, 'time': ts}}
+                #  보유분석 1회는 잔고 조회 + DB 다중 조회 + 종목별 차트다. 10초 주기로 그대로
+                #  돌리면 감시기 혼자 API와 CPU를 잡아먹는다(운영기는 라즈베리파이).
+                cls._instance.holding_cache = {}
+                # [권리 조정 감시] 종목별 마지막 점검 시각 {code: timestamp}
+                cls._instance.corp_checked_at = {}
+            return cls._instance
 
     # 감시 주기(초). 스윙 투자에 맞춘 값이며, 운영기가 라즈베리파이라 더 조이지 않는다.
     #  [SSOT] 기동 로그가 이 값을 읽는다 — 종전에는 로그만 "3초"로 남아 실제 주기(10초)와

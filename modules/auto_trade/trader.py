@@ -150,101 +150,110 @@ def index_source_note(stat):
 
 class AutoTrader:
     _instance = None
+    _instance_lock = threading.RLock()
     
+    #  [동시성 2026-09-05] 싱글톤 생성을 락으로 감싼다. 종전 `if cls._instance is None:` 는
+    #   검사와 대입 사이가 열려 있었고, 더 나쁜 것은 **인스턴스를 먼저 대입하고 속성을 그 뒤에
+    #   채운다**는 점이었다 — 두 번째 스레드는 그 사이에 들어와 '있다'고 보고 반쯤 만들어진
+    #   객체를 그대로 가져간다. 초기화 도중에 파일 I/O(로거 생성)·DB 접근이 있어 GIL 이 실제로
+    #   놓이므로 이론상의 경합이 아니다(실측: 8스레드 중 7개가 미완성 객체를 받는다).
+    #   기동 순서상 열려 있다 — main 이 텔레그램 봇 스레드를 먼저 띄우고(telegram_cmd.start())
+    #   스케줄러·트레이더는 그 뒤에 처음 만든다. 봇 스레드의 명령 처리는 이 생성자를 부른다.
     def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super(AutoTrader, cls).__new__(cls)
-            cls._instance._lock = threading.RLock() # [추가] 스레드 동기화 락
-            cls._instance.is_running = False
-            cls._instance.thread = None
-            cls._instance.logs = []
-            cls._instance.trade_history = []
-            cls._instance.trade_records = []
-            cls._instance.start_time = None
-            cls._instance.consecutive_errors = 0
-            # [안전장치] 직전 주기의 보유 종목 수. 잔고가 갑자기 0건이 되면
-            #  한 주기 재확인 후에만 수용한다 (_run_loop 참조).
-            cls._instance.last_holdings_count = 0
-            # 운영 관제용 수명주기 정보. /health는 외부 API를 추가 호출하지 않고
-            # 이 값을 읽어 현재 루프의 생존성·최근 장애를 보여준다.
-            cls._instance.last_cycle_at = None
-            # [계측] 주기 소요 시간(초). 실제 청산 감시 간격 = 이 값 + SYSTEM_TRADING_INTERVAL
-            cls._instance.last_cycle_secs = None
-            cls._instance.cycle_secs_history = []   # 최근 값만 유지(라즈베리파이 메모리 고려)
-            cls._instance.cycle_secs_peak = 0.0
-            cls._instance.last_success_at = None
-            cls._instance.waiting_for_server = False   # 서버 복구 대기(의도된 멈춤)
-            cls._instance.last_error_at = None
-            cls._instance.last_error_message = ""
-            cls._instance.initial_asset = 0
-            cls._instance.baseline_principal = 0   # [추가] 입금 자동감지용 기준 원금(현금+매입원가-실현손익). initial_asset(총자산)과 별개.
-            cls._instance.was_market_open = None
-            cls._instance.trailing_stop_cache = {} # [추가] 트레일링 스탑 메모리 캐시 (DB 부하 감소용)
-            cls._instance.market_status_notified = {} # [수정] 시장 상태 알림 플래그 (시장별 관리)
-            cls._instance.market_index_status = {}    # [추가] 지수 상태 캐시
-            cls._instance.stock_market_map = {}       # [추가] 종목별 시장 구분 캐시
-            # [이동] 분석된 종목 상태 캐시는 context._STOCK_STATE로 옮겼다 (수동 조회와 공용).
-            #  읽기는 stock_state_cache 프로퍼티가 그대로 제공한다.
-            cls._instance.skipped_by_market_filter_count = {"KOSPI": 0, "KOSDAQ": 0} # [추가] 시장 필터링 보류 종목 수
-            cls._instance.current_total_asset = 0     # [리스크 스케일링] 최근 조회된 현재 평가자산 (히트 캡 기준자산·드로다운 계산용)
-            cls._instance.risk_scale = 1.0            # [리스크 스케일링] 계좌 단위 배수 = 열위 시장 기준 (히트 캡용, 1.0=축소 없음)
-            cls._instance.risk_scale_reason = ""      # [리스크 스케일링] 현재 배수의 사유 (로그 표시용)
-            cls._instance.risk_scale_by_market = {}   # [리스크 스케일링] 시장별 배수 {KOSPI: x, KOSDAQ: y} — 종목 사이징용
-            cls._instance.risk_scale_reason_by_market = {}
-            cls._instance.strategy = DefaultStrategy() # [추가] 전략 인스턴스
-            cls._instance.last_log_date = datetime.now().date() # [추가] 로그 파일 날짜 추적용
-            cls._instance.initial_holdings = None # [추가] 초기 조회 잔고 캐시
-            cls._instance.initial_summary = None  # [추가] 초기 조회 요약 캐시
-            cls._instance.file_logger = config.get_autotrade_logger() # [추가] 파일 로거 초기화
-            cls._instance.restricted_notified = {} # [추가] 거래 제한 알림 스로틀링 (종목별 타임스탬프)
-            cls._instance.order_manager = OrderManager(cls._instance) # [추가] 주문 매니저
-            cls._instance.risk_manager = RiskManager(cls._instance)   # [추가] 리스크 매니저
-            cls._instance.half_tp_cache = set()       # [추가] 반익절 실행 여부 추적 캐시
-            cls._instance.portfolio_heat_amt = 0.0    # [추가] 포트폴리오 히트(총 오픈 리스크, 원) 주기별 스냅샷
-            cls._instance.portfolio_heat_unknown = False  # 산출 실패 여부 — '0(없음)'과 '못 셈'을 가른다
-            # 보유 종목별 '직전 주기 매도 판정이 실제로 쓴' 손절률·ATR — 오픈 리스크
-            #  산출이 역산 근사 대신 이 실측값을 쓴다(engine.compute_portfolio_heat live_map).
-            cls._instance.holding_risk_cache = {}
-            cls._instance.last_emergency_alert_time = 0 # [추가] 긴급 알림 쿨타임용 타임스탬프
-            cls._instance.last_wait_alert_time = 0    # [추가] 대기 모드 진입 알림 쿨타임 (진입/복구 반복 시 스팸 방지)
-            cls._instance._wait_alert_sent = False    # [추가] 진입 알림 발송 여부 (복구 알림과 짝 맞춤)
-            # [안전장치] 방어 모드 — 신규 매수(피라미딩 포함)만 중단하고 매도·손절 감시는 계속 돌린다.
-            #  일일 손실 한도 초과 시 시스템 전체를 정지하던 기존 동작은, 정작 손절이 가장 필요한
-            #  순간에 청산 엔진을 꺼버려 보유 포지션이 손절선 아래로 방치되는 문제가 있었다.
-            cls._instance.buy_halted = False          # 방어 모드 활성 여부
-            cls._instance.buy_halt_reason = ""        # 방어 모드 사유 (상태 표시용)
-            cls._instance.buy_halt_date = None        # 방어 모드 발동 일자 (날짜 변경 시 자동 해제)
-            cls._instance.buy_halt_kind = None        # 발동 원인 종류('daily_loss' 등) — 정정 시 재평가용
-            cls._instance.net_transfer_today = 0      # 오늘 누적 순입출금(파생값) — effective_baseline 보정용
-            cls._instance.unmanaged_stop_notified = {} # [안전장치] 자동매도 제외 포지션의 손절선 이탈 경보 스로틀 {code: ts}
-            # [안전장치] '매도 결정했는데 매도가능수량 0'이 연속 몇 주기 관측됐는가 {code: 횟수}.
-            #  미체결 취소 직후의 일시적 0과, 거래정지처럼 지속되는 상태를 구분하기 위한 값이다.
-            cls._instance.no_sellable_streak = {}
-            # 대기 주문에 묶여 매도 판정에서 빠진 연속 주기 수 {code: n}
-            cls._instance.stuck_pending_streak = {}
-            # 매도 판정 밖에서 앵커만 되짚는 경로(ETF)의 종목별 스로틀 {code: ts}
-            cls._instance._anchor_restore_at = {}
-            # [관측성] 장 마감 후 감지된 매도 신호의 알림 스로틀 {code: 사유}.
-            #  마감 뒤에는 주문을 낼 수 없어 로그 한 줄만 남았다 — 청산이 하루 밀리는데
-            #  운영자가 그 사실을 모른다. 장이 열리면 비워서 다음 마감 때 다시 알린다.
-            cls._instance.after_hours_sell_notified = {}
-            # 마감 후 청산 신호 스캔을 수행한 날짜(YYYYMMDD). 거래일당 1회로 묶는다.
-            cls._instance.after_hours_scan_date = None
-            # [관찰 모드] 마감 스냅샷을 찍은 날짜(YYYYMMDD). 거래일당 1회.
-            cls._instance.paper_closing_snapshot_date = None
-            # [안전장치] 거래소 미체결 현황을 파악했는가. initialize()의 재기동 복구가
-            #  성공하면 True. False인 동안은 신규 매수를 보류한다(중복 주문 방지).
-            cls._instance.pending_restore_ok = True
-            # [안전장치] 계좌 단위 자동매매 배타 잠금(같은 계좌 이중 실행 방지). start에서 획득.
-            cls._instance.instance_lock = None
-            # [안전장치] 계좌 차단기(일일 손실 한도) 마지막 정상 수행 시각·연속 실패 횟수.
-            #  차단기가 안 도는 것을 아무도 모르는 상태가 가장 나쁘다.
-            cls._instance.circuit_breaker_ran_at = 0.0
-            cls._instance.circuit_breaker_fails = 0
-            # [안전장치] 서버는 정상인데 루프가 터진 횟수. 킬스위치가 '서버 장애 대기'로
-            #  오판해 매도 감시까지 멈추는 것을 막은 횟수이기도 하다.
-            cls._instance.code_error_streaks = 0
-            cls._instance._code_error_alerted_at = 0.0
+        with cls._instance_lock:
+            if cls._instance is None:
+                cls._instance = super(AutoTrader, cls).__new__(cls)
+                cls._instance._lock = threading.RLock() # [추가] 스레드 동기화 락
+                cls._instance.is_running = False
+                cls._instance.thread = None
+                cls._instance.logs = []
+                cls._instance.trade_history = []
+                cls._instance.trade_records = []
+                cls._instance.start_time = None
+                cls._instance.consecutive_errors = 0
+                # [안전장치] 직전 주기의 보유 종목 수. 잔고가 갑자기 0건이 되면
+                #  한 주기 재확인 후에만 수용한다 (_run_loop 참조).
+                cls._instance.last_holdings_count = 0
+                # 운영 관제용 수명주기 정보. /health는 외부 API를 추가 호출하지 않고
+                # 이 값을 읽어 현재 루프의 생존성·최근 장애를 보여준다.
+                cls._instance.last_cycle_at = None
+                # [계측] 주기 소요 시간(초). 실제 청산 감시 간격 = 이 값 + SYSTEM_TRADING_INTERVAL
+                cls._instance.last_cycle_secs = None
+                cls._instance.cycle_secs_history = []   # 최근 값만 유지(라즈베리파이 메모리 고려)
+                cls._instance.cycle_secs_peak = 0.0
+                cls._instance.last_success_at = None
+                cls._instance.waiting_for_server = False   # 서버 복구 대기(의도된 멈춤)
+                cls._instance.last_error_at = None
+                cls._instance.last_error_message = ""
+                cls._instance.initial_asset = 0
+                cls._instance.baseline_principal = 0   # [추가] 입금 자동감지용 기준 원금(현금+매입원가-실현손익). initial_asset(총자산)과 별개.
+                cls._instance.was_market_open = None
+                cls._instance.trailing_stop_cache = {} # [추가] 트레일링 스탑 메모리 캐시 (DB 부하 감소용)
+                cls._instance.market_status_notified = {} # [수정] 시장 상태 알림 플래그 (시장별 관리)
+                cls._instance.market_index_status = {}    # [추가] 지수 상태 캐시
+                cls._instance.stock_market_map = {}       # [추가] 종목별 시장 구분 캐시
+                # [이동] 분석된 종목 상태 캐시는 context._STOCK_STATE로 옮겼다 (수동 조회와 공용).
+                #  읽기는 stock_state_cache 프로퍼티가 그대로 제공한다.
+                cls._instance.skipped_by_market_filter_count = {"KOSPI": 0, "KOSDAQ": 0} # [추가] 시장 필터링 보류 종목 수
+                cls._instance.current_total_asset = 0     # [리스크 스케일링] 최근 조회된 현재 평가자산 (히트 캡 기준자산·드로다운 계산용)
+                cls._instance.risk_scale = 1.0            # [리스크 스케일링] 계좌 단위 배수 = 열위 시장 기준 (히트 캡용, 1.0=축소 없음)
+                cls._instance.risk_scale_reason = ""      # [리스크 스케일링] 현재 배수의 사유 (로그 표시용)
+                cls._instance.risk_scale_by_market = {}   # [리스크 스케일링] 시장별 배수 {KOSPI: x, KOSDAQ: y} — 종목 사이징용
+                cls._instance.risk_scale_reason_by_market = {}
+                cls._instance.strategy = DefaultStrategy() # [추가] 전략 인스턴스
+                cls._instance.last_log_date = datetime.now().date() # [추가] 로그 파일 날짜 추적용
+                cls._instance.initial_holdings = None # [추가] 초기 조회 잔고 캐시
+                cls._instance.initial_summary = None  # [추가] 초기 조회 요약 캐시
+                cls._instance.file_logger = config.get_autotrade_logger() # [추가] 파일 로거 초기화
+                cls._instance.restricted_notified = {} # [추가] 거래 제한 알림 스로틀링 (종목별 타임스탬프)
+                cls._instance.order_manager = OrderManager(cls._instance) # [추가] 주문 매니저
+                cls._instance.risk_manager = RiskManager(cls._instance)   # [추가] 리스크 매니저
+                cls._instance.half_tp_cache = set()       # [추가] 반익절 실행 여부 추적 캐시
+                cls._instance.portfolio_heat_amt = 0.0    # [추가] 포트폴리오 히트(총 오픈 리스크, 원) 주기별 스냅샷
+                cls._instance.portfolio_heat_unknown = False  # 산출 실패 여부 — '0(없음)'과 '못 셈'을 가른다
+                # 보유 종목별 '직전 주기 매도 판정이 실제로 쓴' 손절률·ATR — 오픈 리스크
+                #  산출이 역산 근사 대신 이 실측값을 쓴다(engine.compute_portfolio_heat live_map).
+                cls._instance.holding_risk_cache = {}
+                cls._instance.last_emergency_alert_time = 0 # [추가] 긴급 알림 쿨타임용 타임스탬프
+                cls._instance.last_wait_alert_time = 0    # [추가] 대기 모드 진입 알림 쿨타임 (진입/복구 반복 시 스팸 방지)
+                cls._instance._wait_alert_sent = False    # [추가] 진입 알림 발송 여부 (복구 알림과 짝 맞춤)
+                # [안전장치] 방어 모드 — 신규 매수(피라미딩 포함)만 중단하고 매도·손절 감시는 계속 돌린다.
+                #  일일 손실 한도 초과 시 시스템 전체를 정지하던 기존 동작은, 정작 손절이 가장 필요한
+                #  순간에 청산 엔진을 꺼버려 보유 포지션이 손절선 아래로 방치되는 문제가 있었다.
+                cls._instance.buy_halted = False          # 방어 모드 활성 여부
+                cls._instance.buy_halt_reason = ""        # 방어 모드 사유 (상태 표시용)
+                cls._instance.buy_halt_date = None        # 방어 모드 발동 일자 (날짜 변경 시 자동 해제)
+                cls._instance.buy_halt_kind = None        # 발동 원인 종류('daily_loss' 등) — 정정 시 재평가용
+                cls._instance.net_transfer_today = 0      # 오늘 누적 순입출금(파생값) — effective_baseline 보정용
+                cls._instance.unmanaged_stop_notified = {} # [안전장치] 자동매도 제외 포지션의 손절선 이탈 경보 스로틀 {code: ts}
+                # [안전장치] '매도 결정했는데 매도가능수량 0'이 연속 몇 주기 관측됐는가 {code: 횟수}.
+                #  미체결 취소 직후의 일시적 0과, 거래정지처럼 지속되는 상태를 구분하기 위한 값이다.
+                cls._instance.no_sellable_streak = {}
+                # 대기 주문에 묶여 매도 판정에서 빠진 연속 주기 수 {code: n}
+                cls._instance.stuck_pending_streak = {}
+                # 매도 판정 밖에서 앵커만 되짚는 경로(ETF)의 종목별 스로틀 {code: ts}
+                cls._instance._anchor_restore_at = {}
+                # [관측성] 장 마감 후 감지된 매도 신호의 알림 스로틀 {code: 사유}.
+                #  마감 뒤에는 주문을 낼 수 없어 로그 한 줄만 남았다 — 청산이 하루 밀리는데
+                #  운영자가 그 사실을 모른다. 장이 열리면 비워서 다음 마감 때 다시 알린다.
+                cls._instance.after_hours_sell_notified = {}
+                # 마감 후 청산 신호 스캔을 수행한 날짜(YYYYMMDD). 거래일당 1회로 묶는다.
+                cls._instance.after_hours_scan_date = None
+                # [관찰 모드] 마감 스냅샷을 찍은 날짜(YYYYMMDD). 거래일당 1회.
+                cls._instance.paper_closing_snapshot_date = None
+                # [안전장치] 거래소 미체결 현황을 파악했는가. initialize()의 재기동 복구가
+                #  성공하면 True. False인 동안은 신규 매수를 보류한다(중복 주문 방지).
+                cls._instance.pending_restore_ok = True
+                # [안전장치] 계좌 단위 자동매매 배타 잠금(같은 계좌 이중 실행 방지). start에서 획득.
+                cls._instance.instance_lock = None
+                # [안전장치] 계좌 차단기(일일 손실 한도) 마지막 정상 수행 시각·연속 실패 횟수.
+                #  차단기가 안 도는 것을 아무도 모르는 상태가 가장 나쁘다.
+                cls._instance.circuit_breaker_ran_at = 0.0
+                cls._instance.circuit_breaker_fails = 0
+                # [안전장치] 서버는 정상인데 루프가 터진 횟수. 킬스위치가 '서버 장애 대기'로
+                #  오판해 매도 감시까지 멈추는 것을 막은 횟수이기도 하다.
+                cls._instance.code_error_streaks = 0
+                cls._instance._code_error_alerted_at = 0.0
 
             cls._instance.initialized = False # [추가] 초기화 상태 플래그
             cls._instance.last_session_phase = None # [추가] 시장 세션 상태 변경 추적용

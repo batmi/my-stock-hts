@@ -101,34 +101,43 @@ def _pkg():
 
 class ConclusionMonitor:
     _instance = None
+    _instance_lock = threading.RLock()
     
+    #  [동시성 2026-09-05] 싱글톤 생성을 락으로 감싼다. 종전 `if cls._instance is None:` 는
+    #   검사와 대입 사이가 열려 있었고, 더 나쁜 것은 **인스턴스를 먼저 대입하고 속성을 그 뒤에
+    #   채운다**는 점이었다 — 두 번째 스레드는 그 사이에 들어와 '있다'고 보고 반쯤 만들어진
+    #   객체를 그대로 가져간다. 초기화 도중에 파일 I/O(로거 생성)·DB 접근이 있어 GIL 이 실제로
+    #   놓이므로 이론상의 경합이 아니다(실측: 8스레드 중 7개가 미완성 객체를 받는다).
+    #   기동 순서상 열려 있다 — main 이 텔레그램 봇 스레드를 먼저 띄우고(telegram_cmd.start())
+    #   스케줄러·트레이더는 그 뒤에 처음 만든다. 봇 스레드의 명령 처리는 이 생성자를 부른다.
     def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super(ConclusionMonitor, cls).__new__(cls)
-            cls._instance._lock = threading.RLock() # [추가] 스레드 동기화 락
-            cls._instance.is_running = False
-            cls._instance.thread = None
-            cls._instance.order_status = {} # 주문별 체결 수량 추적 {계좌-주문번호: qty}
-            cls._instance.cancel_status = {} # [추가] 주문별 취소 수량 추적 {계좌-주문번호: qty}
-            cls._instance.processed_sim_fills = set() # [추가] 모의투자 중복 알림 방지 캐시
-            cls._instance.paper_backfill_done = False # [추가] 가상투자 당일 원장 1회 복구 여부
+        with cls._instance_lock:
+            if cls._instance is None:
+                cls._instance = super(ConclusionMonitor, cls).__new__(cls)
+                cls._instance._lock = threading.RLock() # [추가] 스레드 동기화 락
+                cls._instance.is_running = False
+                cls._instance.thread = None
+                cls._instance.order_status = {} # 주문별 체결 수량 추적 {계좌-주문번호: qty}
+                cls._instance.cancel_status = {} # [추가] 주문별 취소 수량 추적 {계좌-주문번호: qty}
+                cls._instance.processed_sim_fills = set() # [추가] 모의투자 중복 알림 방지 캐시
+                cls._instance.paper_backfill_done = False # [추가] 가상투자 당일 원장 1회 복구 여부
             
-            # [수정] 적응형 폴링 설정 로드
-            cls._instance.active_interval = getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5)
-            cls._instance.idle_interval = getattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300)
-            cls._instance.active_duration = getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 60)
-            cls._instance.active_until = 0 # 집중 감시 유지 만료 시간
+                # [수정] 적응형 폴링 설정 로드
+                cls._instance.active_interval = getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5)
+                cls._instance.idle_interval = getattr(config, 'CONCLUSION_CHECK_IDLE_INTERVAL', 300)
+                cls._instance.active_duration = getattr(config, 'CONCLUSION_CHECK_ACTIVE_DURATION', 60)
+                cls._instance.active_until = 0 # 집중 감시 유지 만료 시간
             
-            cls._instance.event = threading.Event() # 즉시 실행 트리거용
-            # [추가] 종료 신호. 감시 루프 밖에서 띄우는 보조 스레드(제한 해제 확인 등)가
-            #  sleep 대신 이 이벤트를 기다리게 해서, stop() 한 번으로 같이 끝나게 한다.
-            #  daemon 스레드는 프로세스가 죽을 때까지 살아 있어서, 종료 후에도 잔고를
-            #  조회하고 제한 목록을 건드릴 수 있다(테스트에서는 다음 테스트의 patch 구간을
-            #  침범해 간헐 실패를 만들었다).
-            cls._instance.shutdown = threading.Event()
-            cls._instance.initialized = False # [추가] 초기화 여부
-            cls._instance.consecutive_errors = 0 # [추가] 연속 에러 카운트 (Kill Switch용)
-        return cls._instance
+                cls._instance.event = threading.Event() # 즉시 실행 트리거용
+                # [추가] 종료 신호. 감시 루프 밖에서 띄우는 보조 스레드(제한 해제 확인 등)가
+                #  sleep 대신 이 이벤트를 기다리게 해서, stop() 한 번으로 같이 끝나게 한다.
+                #  daemon 스레드는 프로세스가 죽을 때까지 살아 있어서, 종료 후에도 잔고를
+                #  조회하고 제한 목록을 건드릴 수 있다(테스트에서는 다음 테스트의 patch 구간을
+                #  침범해 간헐 실패를 만들었다).
+                cls._instance.shutdown = threading.Event()
+                cls._instance.initialized = False # [추가] 초기화 여부
+                cls._instance.consecutive_errors = 0 # [추가] 연속 에러 카운트 (Kill Switch용)
+            return cls._instance
 
     def start(self):
         if self.is_running: return
