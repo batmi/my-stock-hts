@@ -37,6 +37,12 @@ EXEMPT = {
     # 계좌 파라미터를 '고르는' 헬퍼일 뿐 스스로 호출하지 않는다. 관찰 모드에서는
     # 이 함수가 고른 값이 실제 요청으로 나가기 전에 각 함수의 가드가 먼저 막는다.
     "_prepare_account_params",
+    #  [2026-09-05] place_order 의 실제 브로커 경로. 공개 함수 place_order 가 **가장 바깥**
+    #  에서 _paper_active 가드를 통과시킨 뒤에만 불린다(private, 호출부는 그 한 곳뿐).
+    #  가드를 여기에도 복사하면 사본이 둘이 되어 한쪽만 고쳐지는 길이 열린다 —
+    #  이 저장소가 반복해서 밟은 형태다. 대신 아래 test_place_order_guard_is_outermost 가
+    #  '공개 함수 최상단'이라는 위치 자체를 못박는다.
+    "_place_order_impl",
 }
 
 
@@ -94,3 +100,49 @@ def test_guard_is_at_function_top(fname):
                                          and isinstance(s.value, ast.Constant))]
     assert body and "_paper_active" in ast.dump(body[0]), \
         f"{fname}: 관찰 모드 가드가 첫 문장이 아니다"
+
+
+def test_place_order_guard_is_outermost():
+    """관찰 모드 가드는 place_order 의 **첫 분기**여야 한다.
+
+    [왜 위치까지 보나 · 2026-09-05] 주문 응답의 불변식 검사(_require_odno)를 붙이면서
+     place_order 를 얇은 래퍼로 바꿨는데, 그때 가드가 내부 구현으로 내려갔다. 그러면
+     가상투자에서도 결과 불명 대사 경로(_reconcile_unknown_order)가 열리는데 그쪽은
+     **실계좌 당일 주문내역을 조회한다.** 가드는 반드시 바깥이어야 한다.
+    """
+    import inspect
+
+    import api
+
+    fn = ast.parse(inspect.getsource(api.place_order)).body[0]
+    stmts = [n for n in fn.body
+             if not (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant))]
+    assert stmts, "place_order 본문이 비었다"
+    first = stmts[0]
+    assert isinstance(first, ast.If) and "_paper_active" in ast.dump(first.test), (
+        "관찰 모드 가드가 place_order 의 첫 분기가 아니다 — 그 앞에 실계좌 경로가 열린다:\n"
+        + ast.unparse(first)[:200])
+
+
+def test_place_order_never_reports_success_without_an_order_number():
+    """rt_cd='0' 인데 ODNO 가 비면 '성공'으로 내보내지 않는다.
+
+    추적 키가 '' 가 되면 체결 대사도 미체결 자동 취소도 그 주문을 못 찾고, 그 종목은
+    is_pending 인 채로 매도 워커에서 빠져 손절·트레일링이 멈춘다.
+    """
+    from unittest.mock import patch
+
+    import api
+    import config
+
+    with patch.object(api, "_paper_active", return_value=False), \
+         patch.object(config.session, "is_toss", False), \
+         patch.object(api, "_place_order_impl",
+                      return_value={"rt_cd": "0", "msg1": "ok", "output": {"ODNO": ""}}), \
+         patch.object(api, "_reconcile_unknown_order",
+                      return_value={"rt_cd": "1", "msg_cd": "ORDER_UNKNOWN",
+                                    "msg1": "대사함", "output": {}}) as rec:
+        res = api.place_order("domestic", "buy", "005930", 1, 70000, "00")
+
+    assert rec.called, "주문번호 없는 성공이 그대로 통과했다"
+    assert res["msg_cd"] == "ORDER_UNKNOWN"

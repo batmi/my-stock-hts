@@ -402,12 +402,20 @@ class AutoTrader:
                     return "caches", (ts_cache, half_cache, ok)
 
 
+                #  [계좌 컨텍스트 · 2026-09-05] use_auto_account 는 threading.local 이라
+                #   AccountContext 안에서 제출해도 워커 스레드에는 상속되지 않는다. 풀리면
+                #   그 요청은 **수동 앱키·수동 토큰**으로 나가고(core.utils.get_common_headers,
+                #   api.auth.get_current_token) TPS 도 수동 버킷에서 깎인다
+                #   (api.http._real_bucket_key). 자동 계좌 잔고를 수동 키로 묻는 꼴이다.
+                #   매도·후보 풀은 이미 감싸져 있었는데 기동 초기화 풀만 빠져 있었다.
+                _init_task = utils.inherit_account_context
                 with concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="at_init") as executor:
                     # [수정] 모의투자는 잔고 summary에 예수금이 포함되어 있어 별도 예수금 API 호출이 불필요.
                     # 초기화 시 중복 잔고조회(get_domestic_balance)+예수금조회가 2-TPS 경합으로 재시도
                     # 폭주를 일으켜 메모리가 폭증하던 문제를 제거한다. (실전만 별도 예수금 조회 수행)
-                    futures = [executor.submit(_fetch_balance), executor.submit(_load_db_caches)]
-                    futures.append(executor.submit(_fetch_deposit))
+                    futures = [executor.submit(_init_task(_fetch_balance)),
+                               executor.submit(_init_task(_load_db_caches))]
+                    futures.append(executor.submit(_init_task(_fetch_deposit)))
                     for future in concurrent.futures.as_completed(futures):
                         key, value = future.result()
                         results[key] = value
@@ -2314,10 +2322,15 @@ class AutoTrader:
                         except Exception: pass
 
                 summary = []
+                #  [계좌 컨텍스트] at_init 과 같은 이유로 제출 스레드에서 감싼다.
+                #   시세만 보는 작업(_fetch_regimes·_update_indices)도 함께 감싼다 —
+                #   앱키가 갈리면 TPS 버킷도 갈려, 자동 계좌 몫으로 잡아야 할 호출이
+                #   수동 버킷을 깎는다(그쪽이 좁아 주문 경로가 먼저 막힌다).
+                _st_task = utils.inherit_account_context
                 with concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="at_status") as executor:
-                    fut_asset = executor.submit(_fetch_asset)
-                    fut_regime = executor.submit(_fetch_regimes)
-                    fut_indices = executor.submit(_update_indices)
+                    fut_asset = executor.submit(_st_task(_fetch_asset))
+                    fut_regime = executor.submit(_st_task(_fetch_regimes))
+                    fut_indices = executor.submit(_st_task(_update_indices))
 
                     holdings, summary, deposit = fut_asset.result()
                     _k, _q = fut_regime.result()
@@ -3798,7 +3811,7 @@ class AutoTrader:
                                 # [추가] 장 마감 후 AI 마감 브리핑 자동 실행 (기존 포트폴리오 진단 대체)
                                 try:
                                     from modules.scheduler import SystemScheduler
-                                    threading.Thread(target=SystemScheduler().execute_daily_closing_report, daemon=True, name="DailyClosingReport").start()
+                                    threading.Thread(target=utils.inherit_account_context(SystemScheduler().execute_daily_closing_report), daemon=True, name="DailyClosingReport").start()
                                     self.log("장 마감 종합 브리핑(AI) 작성을 백그라운드에서 시작합니다.")
                                 except Exception as e:
                                     self.log(f"장 마감 브리핑 스케줄러 호출 실패: {e}")

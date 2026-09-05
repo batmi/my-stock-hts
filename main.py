@@ -1041,6 +1041,15 @@ def _install_journal_sigterm_handler():
                               mode=_Sched()._heartbeat_context().get("mode"))
         except Exception:
             pass
+        #  [DB 큐 배수 · 2026-09-05] 여기서 곧바로 죽으면 큐에 남은 쓰기가 사라진다
+        #   — DB 접근은 단일 워커로 직렬화되므로(modules/db_queue) 체결 기록·트레일링
+        #   최고가 갱신이 그 큐 안에 있을 수 있다. systemctl stop 은 기다려 주므로
+        #   짧게 비우고 나간다. 다 못 비우면 db_queue 가 로그로 남긴다.
+        try:
+            from modules import db_queue as _dbq
+            _dbq.shutdown(timeout=3.0)
+        except Exception:
+            pass
         signal.signal(signum, signal.SIG_DFL)
         os.kill(os.getpid(), signum)
 
@@ -1731,9 +1740,15 @@ def main():
             
             # 3. DB 큐 종료
             progress.update(task, description="[cyan][3/4] DB 작업 큐 처리 및 종료 중...[/cyan]")
-            db_queue.shutdown()
+            #  큐를 실제로 비웠는지 확인하고 그대로 적는다 — 종전에는 비우지 못했어도
+            #  '[완료]'라고 말했다(db_queue.DBWorker.stop 주석).
+            _db_drained = db_queue.shutdown()
             time.sleep(0.5)
-            config.console.print("[3/4] DB 작업 큐 처리 및 종료 [bold green][완료][/]")
+            if _db_drained:
+                config.console.print("[3/4] DB 작업 큐 처리 및 종료 [bold green][완료][/]")
+            else:
+                config.console.print("[3/4] DB 작업 큐 종료 [bold yellow][일부 미처리][/] "
+                                     "[dim]— 남은 기록은 저장되지 않았습니다(로그 참조)[/dim]")
             
             # 4. DB 최적화 (VACUUM)
             progress.update(task, description="[cyan][4/4] 데이터베이스 최적화(VACUUM) 수행 중...[/cyan]")

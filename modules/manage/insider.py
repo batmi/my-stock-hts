@@ -82,7 +82,11 @@ def _collect(code, name, cutoff):
 
 
 def _get_rem_shares(code):
-    """최근 전환청구권행사 공시를 파싱하여 회차별 잔존 주식수 맵을 반환. 없으면 None."""
+    """최근 전환청구권행사 공시에서 (회차별 잔존 주식수 맵, 그 공시의 접수일자).
+
+    찾지 못하면 **(None, None)** — 호출부가 둘을 함께 받는다. 여기서 '못 찾음'은
+    '잔존 물량 0'이 아니다. 호출부(rem_estimated)가 그 구분을 지킨다.
+    """
     import re
     docs = api.get_dart_disclosures(code, days=730)
     exercise_doc = None

@@ -125,6 +125,7 @@ def sync_today_trades():
             accounts.append({"cano": config.session.auto_cano, "acnt": config.session.auto_acnt_prdt_cd, "type": "AUTO"})
             
     total_count = 0
+    failed_accounts = []
     original_context = getattr(context.trade_context, 'use_auto_account', False)
     
     with Progress(
@@ -252,11 +253,28 @@ def sync_today_trades():
                                 else:
                                     if config.FILE_DEBUG_LEVEL == "DEBUG":
                                         logger.debug(f"[Account] 이미 존재하는 체결 내역입니다. 저장 스킵 (ODNO: {odno})")
-                except Exception: pass
+                except Exception as e:      # noqa: BLE001
+                    #  [Fix 2026-09-05] 종전에는 `except Exception: pass` 였다. 이 블록은
+                    #   당일 체결을 trades 에 적재하는 전체 경로를 감싼다 — 조회 실패도,
+                    #   insert_trade 실패도 여기서 통째로 사라졌다. 그러면 그 계좌의 오늘
+                    #   체결이 DB 에 없는 채로 화면은 '동기화 완료'라고 말하고, 평단·진입일·
+                    #   손절 기준이 붙을 자리를 잃는다(체결 기록이 그 모든 것의 근거다).
+                    #   2026-09-03 에 DB 조회 실패 20곳을 드러냈는데 이 바깥 except 가 남아
+                    #   있었다. 계좌별로 한 줄은 반드시 남긴다.
+                    failed_accounts.append(f"{cano}-{acnt}")
+                    logger.warning(f"[Account] 당일 체결 동기화 실패({cano}-{acnt}): "
+                                   f"{type(e).__name__}: {e}", exc_info=True)
                 progress.advance(task)
         finally:
             context.trade_context.use_auto_account = original_context
-        
+
+    if failed_accounts:
+        #  화면에도 밝힌다 — 로그만 남기면 '동기화 완료 N건'을 그대로 믿는다.
+        config.console.print(
+            f"[yellow]⚠️ 당일 체결 동기화에 실패한 계좌가 있습니다: "
+            f"{', '.join(failed_accounts)} — 아래 내역에 그 계좌의 오늘 체결이 빠져 있을 수 "
+            f"있습니다('없음'이 아닙니다).[/yellow]")
+
     logger.debug(f"[HISTORY_DEBUG] sync_today_trades() 종료. 처리 건수: {total_count}")
     return total_count
 

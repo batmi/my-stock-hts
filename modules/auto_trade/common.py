@@ -475,22 +475,33 @@ def remove_restricted_stock(code, cano=None, acnt=None):
         _pkg().save_restricted_stocks(data)
 
 def current_holding_qty(code, cano, acnt, is_overseas=False):
-    """계좌의 해당 종목 보유수량. **조회 실패는 None('모름')** — 0(없음)과 구분한다."""
-    if is_overseas:
-        bal = api.get_overseas_balance(cano, acnt)
+    """계좌의 해당 종목 보유수량. **조회 실패는 None('모름')** — 0(없음)과 구분한다.
+
+    [계좌 컨텍스트 · 2026-09-05] cano 를 TR 파라미터로 넘기는 것만으로는 부족하다.
+     **어느 앱키·토큰으로 나가는가**는 threading.local(use_auto_account)이 정하는데
+     (core.utils.get_common_headers · api.auth.get_current_token · api.http._real_bucket_key),
+     이 함수는 제한 정리 추적처럼 **새로 띄운 데몬 스레드**에서 불린다 — 그 스레드에서
+     플래그는 미설정(=수동)이라 자동 계좌 잔고를 수동 앱키로 묻게 된다. 계좌가 갈린
+     실전(mode 2)에서 그 조회는 실패하고, 실패는 여기서 None 이 되어 호출부가
+     '모름 → 제한 유지'로 굳는다. 그러면 그 종목의 손절·트레일링이 영영 멈춘다.
+     cano 를 아는 곳에서 컨텍스트도 함께 세운다.
+    """
+    with utils.AccountContext(cano):
+        if is_overseas:
+            bal = api.get_overseas_balance(cano, acnt)
+            if bal is None:
+                return None
+            for item in bal:
+                if item.get('ovrs_pdno') == code:
+                    return int(float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0)))
+            return 0
+        bal, _ = api.get_domestic_balance(cano, acnt)
         if bal is None:
             return None
         for item in bal:
-            if item.get('ovrs_pdno') == code:
-                return int(float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0)))
+            if item.get('pdno') == code:
+                return int(item.get('hldg_qty', 0))
         return 0
-    bal, _ = api.get_domestic_balance(cano, acnt)
-    if bal is None:
-        return None
-    for item in bal:
-        if item.get('pdno') == code:
-            return int(item.get('hldg_qty', 0))
-    return 0
 
 
 # [추가] 수동 매수 '발주 시점' 제한 등록의 사후 정리.

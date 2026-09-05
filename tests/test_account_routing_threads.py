@@ -14,6 +14,8 @@ getattr(..., False) 폴백에 걸려 **수동 계좌로 주문이 나간다**.
 import concurrent.futures
 import threading
 
+from unittest.mock import patch
+
 import pytest
 
 import api
@@ -180,3 +182,52 @@ def test_autopsy_call_site_is_wrapped():
     idx = src.find("_send_trading_autopsy, args=")
     assert idx == -1, "복기 스레드에 맨 메서드를 그대로 넘기고 있다(계좌 컨텍스트 유실)"
     assert "utils.inherit_account_context(self._send_trading_autopsy)" in src
+
+
+# ==========================================================
+# [2026-09-05] cano 를 아는 함수는 컨텍스트도 함께 세운다
+# ==========================================================
+def test_보유수량_조회는_스스로_계좌_컨텍스트를_세운다(separated_accounts):
+    """cano 를 TR 파라미터로 넘기는 것만으로는 부족하다.
+
+    **어느 앱키·토큰으로 나가는가**는 threading.local(use_auto_account)이 정한다
+    (core.utils.get_common_headers · api.auth.get_current_token · api.http._real_bucket_key).
+    current_holding_qty 는 제한 정리 추적처럼 **새로 띄운 데몬 스레드**에서 불리는데,
+    그 스레드에서 플래그는 미설정(=수동)이라 자동 계좌 잔고를 수동 앱키로 묻게 된다.
+    계좌가 갈린 실전(mode 2)에서 그 조회는 실패하고, 실패는 None 이 되어 호출부가
+    '모름 → 제한 유지'로 굳는다 — 그 종목의 손절·트레일링이 영영 멈춘다.
+    """
+    import concurrent.futures
+
+    from modules import auto_trade
+
+    seen = {}
+
+    def _fake_balance(cano, acnt, *a, **k):
+        seen['use_auto'] = getattr(context.trade_context, 'use_auto_account', False)
+        seen['cano'] = cano
+        return ([{'pdno': '005930', 'hldg_qty': '7'}], [])
+
+    with patch.object(auto_trade.common.api, 'get_domestic_balance', side_effect=_fake_balance):
+        # 컨텍스트가 없는 **새 스레드**에서 자동 계좌를 묻는다(실제 호출 조건과 같다).
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            qty = ex.submit(auto_trade.current_holding_qty,
+                            '005930', config.session.auto_cano,
+                            config.session.auto_acnt_prdt_cd, False).result()
+
+    assert qty == 7
+    assert seen['cano'] == config.session.auto_cano
+    assert seen['use_auto'] is True, (
+        "자동 계좌를 묻는데 수동 앱키 컨텍스트로 나갔다")
+
+
+def test_보유수량_조회가_끝나면_컨텍스트를_되돌린다(separated_accounts):
+    """컨텍스트를 남기면 같은 스레드의 다음 호출이 남의 계좌로 나간다."""
+    from modules import auto_trade
+
+    context.trade_context.use_auto_account = False
+    with patch.object(auto_trade.common.api, 'get_domestic_balance',
+                      return_value=([], [])):
+        auto_trade.current_holding_qty('005930', config.session.auto_cano,
+                                       config.session.auto_acnt_prdt_cd, False)
+    assert getattr(context.trade_context, 'use_auto_account', False) is False

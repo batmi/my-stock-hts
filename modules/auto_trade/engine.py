@@ -1812,9 +1812,14 @@ class OrderManager:
 
                 with self._lock:
                     # 임시 ID 삭제 및 실제 ODNO로 교체
-                    if temp_id in self.pending_orders[code]:
-                        del self.pending_orders[code][temp_id]
-                    self.pending_orders[code][odno] = OrderStatus.ORDER_SENT
+                    #  [방어] `self.pending_orders[code]` 를 직접 인덱싱하지 않는다. 이 자리는
+                    #   **주문이 이미 거래소에 접수된 뒤**라, 여기서 KeyError 가 나면 살아 있는
+                    #   주문이 추적에서 빠져 중복주문 가드가 그 종목을 못 본다. 현재 경로에서는
+                    #   temp_id 가 남아 있어 항목이 비지 않지만(=삭제되지 않는다), 그 불변식이
+                    #   깨져도 주문을 잃지 않도록 setdefault 로 받는다.
+                    bucket = self.pending_orders.setdefault(code, {})
+                    bucket.pop(temp_id, None)
+                    bucket[odno] = OrderStatus.ORDER_SENT
                     self.orders_sent_count += 1
                     # 한 번이라도 접수되면 그 종목의 억제 이력을 지운다 — 이후 다시 실패하면
                     #  '새로 생긴 문제'이므로 쿨다운을 기다리지 않고 알려야 한다.

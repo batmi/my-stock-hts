@@ -48,39 +48,141 @@ def test_buy_candidate_worker_logs_instead_of_vanishing(monkeypatch):
 
 
 # --------------------------------------------------- 계좌 컨텍스트 전파
-def _submits_are_wrapped(path, needles):
-    src = open(path, encoding='utf-8').read()
-    code = "\n".join(l for l in src.split("\n") if not l.strip().startswith("#"))
-    return code, [n for n in needles if n not in code]
+#
+# [왜 AST 전수 검사인가 · 2026-09-05]
+#  종전 이 절은 "이 문자열이 소스에 있는가"를 풀마다 손으로 나열했다. 그래서 **목록에
+#  없는 풀은 아무도 안 봤다** — 실제로 기동 초기화 풀(at_init: 잔고·예수금·미체결 복원)과
+#  상태 조회 풀(at_status: 잔고·예수금)이 빠진 채로 남아 있었다. 나열은 시간이 지나면
+#  낡는다. 규칙 자체를 검사한다:
+#
+#      AccountContext 블록 **안에서** 스레드를 띄우면 그 대상은 반드시 감싸져 있어야 한다.
+#
+#  use_auto_account 는 threading.local 이라 상속되지 않는다. 풀리면 그 요청은 수동
+#  앱키·수동 토큰으로 나가고(core.utils.get_common_headers · api.auth.get_current_token)
+#  TPS 도 수동 버킷에서 깎인다(api.http._real_bucket_key).
+import ast
+import os
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+#  감싸진 것으로 인정하는 표현. 제출 스레드에서 미리 만든 별칭도 포함한다.
+_WRAPPED_HINTS = ("inherit_account_context", "_task(", "_io(")
+
+#  일부러 감싸지 않는 자리. 사유 없이 넣지 말 것.
+_ALLOWED = {
+    # (파일, 호출 대상)
+}
 
 
-def test_candidate_pool_submits_through_the_context_wrapper():
-    """at_cand 풀과 그 안의 cand_io 풀 모두 래퍼를 지난다."""
-    code, missing = _submits_are_wrapped(
-        trader_mod.__file__.replace('.pyc', '.py'),
-        ["_cand_task = utils.inherit_account_context(self._analyze_candidate_worker)",
-         "executor.submit(_cand_task, item,",
-         "ex.submit(_io(api.get_chart_data)",
-         "ex.submit(_io(api.get_realtime_vol_strength)"])
-    assert not missing, f"계좌 컨텍스트 전파가 풀린 제출 지점이 있다: {missing}"
-    assert "executor.submit(self._analyze_candidate_worker" not in code, (
-        "감싸지 않은 원본 제출이 되살아났다")
+def _spawns_inside_account_context(path):
+    """AccountContext 블록 안에서 띄우는 (줄번호, 종류, 대상표현) 목록."""
+    hits = []
+
+    class _V(ast.NodeVisitor):
+        def __init__(self):
+            self.depth = 0
+
+        def visit_With(self, node):
+            inside = any(
+                isinstance(i.context_expr, ast.Call)
+                and getattr(getattr(i.context_expr, "func", None), "attr", "") == "AccountContext"
+                for i in node.items)
+            if inside:
+                self.depth += 1
+            self.generic_visit(node)
+            if inside:
+                self.depth -= 1
+
+        def visit_Call(self, node):
+            if self.depth > 0:
+                f = node.func
+                if isinstance(f, ast.Attribute) and f.attr == "submit" and node.args:
+                    hits.append((node.lineno, "submit", ast.unparse(node.args[0])))
+                elif isinstance(f, (ast.Name, ast.Attribute)) and ast.unparse(f).endswith("Thread"):
+                    tgt = next((k.value for k in node.keywords if k.arg == "target"), None)
+                    if tgt is not None:
+                        hits.append((node.lineno, "Thread", ast.unparse(tgt)))
+            self.generic_visit(node)
+
+    _V().visit(ast.parse(open(path, encoding="utf-8").read()))
+    return hits
 
 
-def test_holding_analysis_pool_submits_through_the_context_wrapper():
-    """analyze_holdings(at_engine)도 마찬가지 — 화면과 시스템의 판정이 갈리면 안 된다."""
-    code, missing = _submits_are_wrapped(
-        engine_mod.__file__.replace('.pyc', '.py'),
-        ["_task = utils.inherit_account_context(_worker)",
-         "executor.map(_task, entries)"])
-    assert not missing, f"계좌 컨텍스트 전파가 풀린 제출 지점이 있다: {missing}"
-    assert "executor.map(_worker, entries)" not in code, (
-        "감싸지 않은 원본 제출이 되살아났다")
+def _source_files():
+    for root, dirs, files in os.walk(ROOT):
+        dirs[:] = [d for d in dirs
+                   if d not in (".git", "__pycache__", ".venv", "data", "logs", "db",
+                                "tests", "tools", "chart", "json", "backups")]
+        for fn in files:
+            if fn.endswith(".py"):
+                yield os.path.join(root, fn)
 
 
-def test_sell_pool_still_wrapped():
-    """먼저 고쳐진 매도 워커가 되돌아가지 않았는지 함께 지킨다."""
-    code, missing = _submits_are_wrapped(
-        trader_mod.__file__.replace('.pyc', '.py'),
-        ["_sell_task = utils.inherit_account_context(_sell_worker_guarded)"])
-    assert not missing, missing
+def test_계좌_컨텍스트_안에서_띄우는_스레드는_전부_감싼다():
+    """[핵심] 나열이 아니라 규칙으로 지킨다 — 새 풀이 생겨도 자동으로 걸린다."""
+    bad = []
+    for path in _source_files():
+        rel = os.path.relpath(path, ROOT)
+        for lineno, kind, target in _spawns_inside_account_context(path):
+            if (rel, target) in _ALLOWED:
+                continue
+            if not any(h in target for h in _WRAPPED_HINTS):
+                bad.append(f"{rel}:{lineno} {kind} → {target}")
+    assert not bad, (
+        "AccountContext 안에서 감싸지 않은 채 스레드를 띄운다 — 워커는 수동 앱키로 나간다.\n"
+        "  utils.inherit_account_context(fn) 로 **제출 스레드에서** 감싸세요:\n  "
+        + "\n  ".join(bad))
+
+
+def test_검사기가_실제로_무언가를_보고_있다():
+    """0건을 훑고 초록인 상태를 막는다."""
+    found = [(os.path.relpath(p, ROOT), h)
+             for p in _source_files() for h in _spawns_inside_account_context(p)]
+    assert len(found) >= 5, f"AccountContext 안의 스레드 생성을 {len(found)}건밖에 못 찾았다"
+    assert any("trader.py" in rel for rel, _ in found)
+
+
+def test_먼저_고쳐진_풀들이_되돌아가지_않았다():
+    """AccountContext 밖에서 만들어지는 풀은 위 규칙에 안 걸리므로 따로 못박는다.
+
+    매도(at_sell)·후보(at_cand)·그 안의 I/O 풀(cand_io)·보유분석(at_engine)은
+    2026-08~09 에 각각 고쳐졌다. 이들은 컨텍스트를 함수 인자·상위 프레임에서 받으므로
+    구문만으로는 위 검사에 잡히지 않는다.
+    """
+    trader_src = open(trader_mod.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
+    engine_src = open(engine_mod.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
+    for needle in ("_sell_task = utils.inherit_account_context(_sell_worker_guarded)",
+                   "_cand_task = utils.inherit_account_context(self._analyze_candidate_worker)",
+                   "ex.submit(_io(api.get_chart_data)"):
+        assert needle in trader_src, f"되돌아갔다: {needle}"
+    assert "_task = utils.inherit_account_context(_worker)" in engine_src
+    assert "executor.submit(self._analyze_candidate_worker" not in trader_src
+    assert "executor.map(_worker, entries)" not in engine_src
+
+
+def test_래퍼가_실제로_값을_옮긴다():
+    """구조 검사만으로는 래퍼가 고장 난 것을 못 잡는다 — 동작도 한 번 건다."""
+    import concurrent.futures
+
+    from core import context, utils
+
+    seen = {}
+
+    def _peek():
+        seen["flag"] = getattr(context.trade_context, "use_auto_account", False)
+
+    prev = getattr(context.trade_context, "use_auto_account", False)
+    try:
+        context.trade_context.use_auto_account = True
+        task = utils.inherit_account_context(_peek)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            ex.submit(task).result()
+        assert seen["flag"] is True, "워커에 계좌 컨텍스트가 전달되지 않았다"
+
+        seen.clear()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            ex.submit(_peek).result()
+        assert seen["flag"] is False, (
+            "감싸지 않은 워커가 컨텍스트를 물려받았다 — 이 테스트의 전제가 무너졌다")
+    finally:
+        context.trade_context.use_auto_account = prev

@@ -767,23 +767,16 @@ class ConclusionMonitor:
                                             if self.shutdown.wait(3):
                                                 return
                                             try:
-                                                qty = None  # None: 조회 실패(미확정), 정수: 확정 잔고
-                                                if t_is_ovrs:
-                                                    bal = api.get_overseas_balance(t_cano, t_acnt)
-                                                    if bal is not None:
-                                                        qty = 0
-                                                        for item in bal:
-                                                            if item.get('ovrs_pdno') == t_code:
-                                                                qty = int(float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0)))
-                                                                break
-                                                else:
-                                                    bal, _ = api.get_domestic_balance(t_cano, t_acnt)
-                                                    if bal is not None:
-                                                        qty = 0
-                                                        for item in bal:
-                                                            if item.get('pdno') == t_code:
-                                                                qty = int(item.get('hldg_qty', 0))
-                                                                break
+                                                #  [계좌 컨텍스트 · 2026-09-05] 이 몸통은 새로 띄운
+                                                #   데몬 스레드에서 돈다. use_auto_account 는
+                                                #   threading.local 이라 미설정(=수동)이고, 그러면
+                                                #   자동 계좌 잔고를 **수동 앱키**로 묻는다. 실패하면
+                                                #   아래에서 qty=None → '제한 유지'로 굳어 그 종목의
+                                                #   손절·트레일링이 영영 멈춘다.
+                                                #   보유수량 판정은 common.current_holding_qty 가 정본이고
+                                                #   그쪽이 컨텍스트를 세운다 — 사본을 두지 않는다.
+                                                qty = _pkg().current_holding_qty(
+                                                    t_code, t_cano, t_acnt, t_is_ovrs)
 
                                                 if qty is None:
                                                     continue  # 조회 실패 → 재시도

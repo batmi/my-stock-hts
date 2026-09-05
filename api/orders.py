@@ -189,19 +189,48 @@ def _odno_known_to_db(odno):
 
 
 def place_order(market, action, code, qty, price, ord_dvsn, exchange_code=None):
-    """
-    주문 전송 통합 함수
-    market: "domestic" or "overseas"
-    action: "buy" or "sell"
+    """주문 전송 통합 함수. market: "domestic"|"overseas", action: "buy"|"sell".
+
+    [불변식 · 2026-09-05] **rt_cd='0' 이면 output.ODNO 가 반드시 있다.**
+     주문번호 없는 '성공'은 성공이 아니다 — 서버는 접수했는데 우리는 그 주문을 가리킬
+     수단이 없다는 뜻이고, 그 상태는 조용히 나쁘다: 체결 대사도 미체결 자동 취소도
+     odno 로 찾으므로 영영 못 찾고, pending_orders 에 '' 로 남아 그 종목이 is_pending 인
+     채로 **매도 워커에서 통째로 빠진다**(손절·트레일링 정지). 브로커마다 응답 모양이
+     달라 각자 막으면 또 어긋나므로, 모든 주문이 지나는 이 문에서 한 번에 건다.
     """
     # [관찰 모드 하드 가드] 호출부 실수와 무관하게 실주문을 원천 차단한다.
-    #  이 게이트는 함수 최상단에 있어야 의미가 있다 — 아래 어떤 분기도 타지 않는다.
+    #  이 게이트는 **가장 바깥**에 있어야 의미가 있다 — 아래 어떤 분기도, 결과 불명
+    #  대사 경로(_reconcile_unknown_order 는 실계좌 주문내역을 조회한다)도 타지 않는다.
     if _api()._paper_active():
         from modules import paper_broker
         if market != "domestic":
             return {"rt_cd": "1", "msg_cd": "PAPER_REJECT",
                     "msg1": "[가상투자] 해외 주문은 지원하지 않습니다", "output": {}}
         return paper_broker.place_order(action, code, qty, price)
+
+    res = _place_order_impl(market, action, code, qty, price, ord_dvsn, exchange_code)
+    return _require_odno(res, market, action, code, qty)
+
+
+def _require_odno(res, market, action, code, qty):
+    """'성공인데 주문번호가 없는' 응답을 결과 불명으로 되돌린다(place_order 독스트링 참조)."""
+    if not isinstance(res, dict) or res.get('rt_cd') != '0':
+        return res
+    out = res.get('output') or {}
+    odno = str(out.get('ODNO') or '').strip()
+    if odno:
+        return res
+    reason = "주문 응답에 주문번호(ODNO)가 없습니다"
+    logger.error(f"[ORDER_UNKNOWN] {code} {action} {qty}주 — {reason}. "
+                 f"재전송하지 않고 당일 주문내역으로 대사합니다. 응답={res}")
+    if market != "domestic":
+        return {'rt_cd': '1', 'msg_cd': 'ORDER_UNKNOWN',
+                'msg1': f'해외 주문 결과 불명({reason})', 'output': {}}
+    return _reconcile_unknown_order(action, code, qty, reason)
+
+
+def _place_order_impl(market, action, code, qty, price, ord_dvsn, exchange_code=None):
+    """실제 브로커 경로. 관찰 모드 가드는 place_order 가 이미 지났다(사본을 두지 않는다)."""
     if config.session.is_toss:
         # [Fix 2026-09-04] 토스도 응답 유실 시 재전송하지 않는다. 종전에는 브로커 계층이
         #  POST /orders 를 타임아웃·5xx에 그대로 다시 보내(최대 3회) 같은 주문이 중복

@@ -80,7 +80,9 @@ def check_and_refresh_token_if_expired():
                 if not toss_api.get_access_token(force_refresh=True):
                     success = False
                     fail_reason = "토스 API 토큰 발급 실패"
-            if not get_real_access_token(force_refresh=True):
+            #  토스 모드에는 KIS 키가 없다. 여기서 함께 부르면 반드시 실패해
+            #  '한투증권 토큰 발급 실패' 경고가 나간다 — 있지도 않은 장애를 알리는 셈이다.
+            elif not get_real_access_token(force_refresh=True):
                 success = False
                 fail_reason = "한투증권 토큰 발급 실패 (API 서버 응답 없음 또는 점검 중)"
                 
@@ -347,11 +349,21 @@ def call_api(url_path, market, category, action, params=None, data=None, method=
                 # [추가] 토큰 만료 예외 감지 시 갱신 후 재시도
                 if "Token Expired" in str(e) and attempt == 0:
                     logger.warning(f"[API] 토큰 만료 감지({str(e)}). 갱신 후 재시도합니다.")
-                    new_token = None
+                    #  [Fix 2026-09-05] 마지막 줄이 분기 **밖**에 있어, 자동 계좌 토큰이
+                    #   만료되면 자동 토큰을 갱신한 **뒤 수동 토큰까지 강제 재발급**했다.
+                    #   두 가지가 나빴다:
+                    #    · KIS 는 앱키당 1분에 한 번만 발급하고 발급 시 이전 토큰을 무효화한다.
+                    #      멀쩡한 수동 토큰을 버리고 그 1분 예산까지 태우므로, 곧바로 수동
+                    #      토큰이 진짜 만료되면 재발급이 거부된다.
+                    #    · new_token 이 항상 수동 토큰이라, 자동 갱신이 실패하고 수동만
+                    #      성공해도 TOKEN_EXPIRED 를 내려 '정상'으로 표시했다.
+                    #   (scheduler._heartbeat_context · trader 관제 표시에 이어 같은 모양의
+                    #    세 번째 자리다 — 분기 밖의 마지막 줄을 의심할 것.)
                     if getattr(context.trade_context, 'use_auto_account', False):
                         new_token = get_auto_access_token(force_refresh=True)
-                    new_token = get_real_access_token(force_refresh=True)
-                    
+                    else:
+                        new_token = get_real_access_token(force_refresh=True)
+
                     if new_token:
                         context.TOKEN_EXPIRED = False
 

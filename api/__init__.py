@@ -167,6 +167,10 @@ class _ApiPackage(_types.ModuleType):
         self.__dict__[name] = value
 
     def __delattr__(self, name):
+        #  [주의 · 테스트] 삭제도 전파된다. `mock.patch('api.X', create=True)` 는 종료 시
+        #   restore 가 아니라 **delattr** 을 부르므로, X 가 실제로 어느 서브모듈에 있으면
+        #   그 세션 내내 사라진다(뒤 테스트가 AttributeError 로 깨진다 — 실측).
+        #   이미 있는 이름에는 create=True 를 쓰지 말 것.
         layers = _NAME_INDEX.get(name)
         if layers:
             for layer in layers:

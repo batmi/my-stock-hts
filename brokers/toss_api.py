@@ -303,6 +303,19 @@ def _request(method, path, group, params=None, json_body=None, account=True, ret
             try:
                 body = res.json()
             except ValueError:
+                #  [Fix 2026-09-05] 조회는 본문을 못 읽어도 None(=데이터 없음)으로 넘어가면
+                #   그만이지만, **주문 계열은 다르다** — 2xx 라 서버는 접수했는데 우리는
+                #   주문번호를 모른다. 종전에는 그대로 None 을 돌려줘 호출부가
+                #   `(r or {}).get('orderId', '')` 로 **빈 주문번호를 '성공'** 으로 받았다.
+                #   그러면 추적 키가 '' 가 되어 체결 대사도, 자동 취소도 그 주문을 못 찾고,
+                #   그 종목은 is_pending 인 채로 손절 판정에서 통째로 빠진다.
+                #   결과를 모르면 모른다고 올린다 — 호출부가 조회로 대사한다.
+                if not idempotent:
+                    raise TossOrderOutcomeUnknown(
+                        "order-outcome-unknown",
+                        f"HTTP {res.status_code} 응답 본문을 해석할 수 없습니다",
+                        status=res.status_code,
+                        request_id=res.headers.get("X-Request-Id"))
                 return None
             return body.get("result")
 

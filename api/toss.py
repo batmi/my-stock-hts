@@ -1470,7 +1470,14 @@ def _toss_place_order(market, action, code, qty, price, ord_dvsn):
             symbol=code, side=side, order_type=order_type,
             quantity=qty, price=order_price,
         )
-        odno = (r or {}).get('orderId', '')
+        odno = str((r or {}).get('orderId') or '').strip()
+        if not odno:
+            #  [Fix 2026-09-05] 주문번호 없는 '성공'은 성공이 아니다. 서버는 접수했는데
+            #   우리는 그것을 가리킬 수단이 없다 — 추적 키가 '' 가 되면 체결 대사도,
+            #   미체결 자동 취소도 그 주문을 못 찾고, 그 종목은 is_pending 인 채로
+            #   손절·트레일링 판정에서 통째로 빠진다. 결과 불명으로 올려 조회로 대사한다.
+            raise _api().OrderOutcomeUnknown(
+                "토스 주문 응답에 주문번호가 없습니다(접수 여부 불명)")
         logger.info(f"[Toss] 주문 접수: {side} {code} {qty}주 @{order_price} ({order_type}) → {odno}")
         return {'rt_cd': '0', 'msg_cd': '0000', 'msg1': '주문 접수 완료',
                 'output': {'ODNO': odno, 'KRX_FWDG_ORD_ORGNO': '', 'ORD_TMD': ''}}
@@ -1506,7 +1513,11 @@ def _toss_revise_cancel(market, action, org_no, code, qty, price, ord_dvsn):
                 org_no, order_type=order_type,
                 quantity=mod_qty, price=(None if is_market else price),
             )
-        odno = (r or {}).get('orderId', '')
+        odno = str((r or {}).get('orderId') or '').strip()
+        if not odno:
+            #  정정·취소도 같다 — 새 주문번호를 모르면 그 주문을 추적할 수 없다.
+            raise _api().OrderOutcomeUnknown(
+                f"토스 {action} 응답에 주문번호가 없습니다(처리 여부 불명)")
         logger.info(f"[Toss] {action} 완료: 원주문={org_no} → 신규={odno}")
         return {'rt_cd': '0', 'msg_cd': '0000', 'msg1': f'{action} 완료',
                 'output': {'ODNO': odno, 'KRX_FWDG_ORD_ORGNO': ''}}

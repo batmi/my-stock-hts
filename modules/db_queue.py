@@ -32,7 +32,9 @@ class DBWorker(threading.Thread):
             try:
                 # timeout을 주어 주기적으로 _running 상태를 체크할 수 있게 함
                 task = self._queue.get(timeout=0.5)
-                if task is None:  # 종료 시그널 수신 시 루프 탈출
+                if task is None:  # 종료 시그널 — 앞의 작업을 모두 처리한 뒤에 도달한다
+                    self._running = False
+                    self._queue.task_done()
                     break
 
                 method_name, args, kwargs, result_queue, use_auto = task
@@ -78,9 +80,17 @@ class DBWorker(threading.Thread):
                 logger.error(f"[DBQueue] Worker loop critical error: {e}", exc_info=True)
 
     def stop(self):
-        """워커 스레드를 안전하게 종료합니다."""
-        self._running = False
-        self._queue.put(None) # 대기 중인 get()을 즉시 깨우기 위해 None(종료 시그널) 전송
+        """남은 작업을 **먼저 처리하고** 종료한다.
+
+        [Fix 2026-09-05] 종전에는 `_running = False` 를 먼저 세웠다. 그러면 루프가 다음
+         바퀴에서 조건에 걸려 끊기므로, 큐에 남아 있던 작업이 **처리되지 않은 채 사라진다**.
+         종료 화면은 그동안 "DB 작업 큐 처리 및 종료 [완료]" 라고 말하고 있었다 —
+         비우지 않은 것을 비웠다고 알린 셈이다.
+
+         종료 신호(None)는 이미 쌓인 작업들 **뒤에** 들어가므로, 그것을 만났다는 것은
+         앞의 작업을 전부 처리했다는 뜻이다. 플래그는 그때 내린다.
+        """
+        self._queue.put(None)
 
 class DBProxy:
     """
@@ -143,11 +153,23 @@ class DBProxy:
             return wrapper
         return attr
 
-    def stop(self):
-        """시스템 종료 시 DB 워커 스레드를 정리합니다."""
-        if self._worker.is_alive():
-            self._worker.stop()
-            self._worker.join(timeout=2.0)
+    def stop(self, timeout=5.0):
+        """워커를 정리한다. **큐를 다 비웠으면 True.**
+
+        비우지 못한 채 시간이 다하면 그 사실을 로그로 드러낸다 — 조용히 넘기면 종료
+        직전의 체결 기록·트레일링 최고가 갱신이 사라진 것을 아무도 모른다. 이어지는
+        VACUUM 이 아직 쓰고 있는 워커와 부딪히는 것도 이 신호로 설명된다.
+        """
+        if not self._worker.is_alive():
+            return True
+        self._worker.stop()
+        self._worker.join(timeout=timeout)
+        left = self._queue.qsize()
+        if self._worker.is_alive() or left:
+            logger.warning(f"[DBQueue] 종료 시한({timeout:.0f}s) 안에 큐를 비우지 못했습니다 "
+                           f"— 남은 작업 {left}건. 그 기록은 저장되지 않았습니다.")
+            return False
+        return True
 
 _proxy_instance = None
 
@@ -163,8 +185,9 @@ def install_proxy(db_manager_module):
         db_manager_module.db = _proxy_instance
         logger.info("[DBQueue] DB Proxy installed successfully.")
 
-def shutdown():
-    """시스템 종료 시 호출되어 Proxy를 안전하게 끕니다."""
+def shutdown(timeout=5.0):
+    """시스템 종료 시 호출되어 Proxy를 안전하게 끕니다. 큐를 다 비웠으면 True."""
     global _proxy_instance
     if _proxy_instance:
-        _proxy_instance.stop()
+        return _proxy_instance.stop(timeout=timeout)
+    return True
