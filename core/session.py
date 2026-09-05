@@ -2,9 +2,12 @@ import os
 import sys
 import json
 import hashlib
+import logging
 from core import jsonio
 from datetime import datetime, timedelta
 from rich.prompt import Prompt
+
+logger = logging.getLogger(__name__)
 
 
 def _config():
@@ -377,7 +380,11 @@ class SessionManager:
         return jsonio.load_json(_config().TOKEN_CACHE_FILE, default={}) or {}
 
     def _save_token_cache(self, cache_data):
-        jsonio.save_json(_config().TOKEN_CACHE_FILE, cache_data, indent=2)
+        if not jsonio.save_json(_config().TOKEN_CACHE_FILE, cache_data, indent=2):
+            #  [2026-09-05] 저장 실패를 조용히 넘기면 재기동 때 토큰이 없다. KIS 는
+            #   앱키당 1분에 한 번만 발급하므로 그 재발급이 곧 기동 지연이 된다.
+            logger.error("토큰 캐시 저장 실패 — 재기동 시 토큰을 다시 발급해야 합니다"
+                         "(앱키당 1분 1회 제한).")
 
     def _token_app_key(self, key):
         """토큰 슬롯을 발급한 앱키. 앱키 개념이 없는 슬롯(TOSS)은 None."""

@@ -89,3 +89,61 @@ def test_a_normal_day_logs_nothing(caplog):
     with caplog.at_level(logging.WARNING, logger="modules.auto_trade.common"):
         assert is_plausible_baseline(KEY, 10_100_000, last_known=10_000_000)
     assert not caplog.records, "정상 운용 중에 경고를 쏟으면 아무도 안 읽는다"
+
+
+# ===========================================================================
+# 저장 실패는 조용하면 안 된다 (2026-09-05)
+#
+# save_daily_initial_asset 은 jsonio.save_json 의 bool 반환을 버렸다. 그러면 그 세션
+# 동안은 메모리 값으로 정상 동작해 아무도 모르고, **재기동해야 소실이 드러난다**.
+#
+# 이 파일은 일일 손실 한도(비상 정지)의 분모이자 드로다운 리스크 스케일링의 기준선이다.
+# 잃으면 그날의 낙폭이 조용히 사라지고 차단기가 리셋된다 —
+# paper_broker._clear_daily_baseline 의 주석이 같은 사고를 '파일을 지우면'으로 적어 뒀는데,
+# 저장 실패는 지운 것과 같은 결과다. 운영기는 램 1GB·SD 카드 라즈베리파이라
+# 디스크 가득참·IO 오류가 실재한다.
+# ===========================================================================
+def test_저장_실패를_성공으로_보고하지_않는다(monkeypatch, tmp_path):
+    from core import jsonio
+    from modules.auto_trade import common
+
+    monkeypatch.setattr(common, "DAILY_STATE_FILE", str(tmp_path / "daily.json"))
+    monkeypatch.setattr(jsonio, "save_json", lambda *a, **k: False)
+    assert common.save_daily_initial_asset(KEY, 10_000_000) is False
+
+
+def test_저장_실패가_로그에_남는다(monkeypatch, tmp_path, caplog):
+    from core import jsonio
+    from modules.auto_trade import common
+
+    monkeypatch.setattr(common, "DAILY_STATE_FILE", str(tmp_path / "daily.json"))
+    monkeypatch.setattr(jsonio, "save_json", lambda *a, **k: False)
+    with caplog.at_level("ERROR", logger=common.__name__):
+        common.save_daily_initial_asset(KEY, 10_000_000)
+    assert "기준선" in caplog.text and "재기동" in caplog.text, caplog.text
+
+
+def test_정상_저장은_True다(monkeypatch, tmp_path):
+    from modules.auto_trade import common
+
+    monkeypatch.setattr(common, "DAILY_STATE_FILE", str(tmp_path / "daily.json"))
+    assert common.save_daily_initial_asset(KEY, 10_000_000) is True
+    assert common.load_daily_initial_asset(KEY) == 10_000_000
+
+
+def test_호출부가_실패를_사용자에게_알린다(monkeypatch, tmp_path):
+    """'갱신 및 저장'이라고 찍어 놓고 저장이 안 된 상태를 막는다."""
+    import ast
+    import os
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(root, "modules/auto_trade/trader.py"), encoding="utf-8").read()
+    tree = ast.parse(src)
+    bare = []
+    for n in ast.walk(tree):
+        if (isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)
+                and ast.unparse(n.value.func).endswith("save_daily_initial_asset")):
+            bare.append(n.lineno)
+    assert not bare, (
+        "기준선 저장 결과를 버리는 호출이 남아 있다 — 실패해도 '저장됨'으로 보인다: "
+        + ", ".join(f"trader.py:{ln}" for ln in bare))

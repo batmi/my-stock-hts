@@ -466,7 +466,9 @@ class AutoTrader:
                         self.baseline_principal = load_daily_principal(account_key)
                     elif is_plausible_baseline(account_key, tot_asset):
                         self.initial_asset = tot_asset
-                        save_daily_initial_asset(account_key, self.initial_asset)
+                        if not save_daily_initial_asset(account_key, self.initial_asset):
+                            self.log("[기준선] 당일 시작 자산을 파일에 저장하지 못했습니다 — "
+                                     "재기동하면 오늘의 손실 한도·드로다운 기준이 리셋됩니다")
                         db_manager.db.save_daily_asset(datetime.now().strftime("%Y-%m-%d"), account_key, self.initial_asset)
                     else:
                         # [안전장치] 직전 영업일 대비 반토막 이하 — 시세 결손으로 예수금만 잡힌
@@ -3750,11 +3752,12 @@ class AutoTrader:
                             asset_data = account.get_asset_status_data(target_cano, acnt)
                             if asset_data and asset_data.get('tot_asset', 0) > 0:
                                 self.initial_asset = asset_data['tot_asset']
-                                save_daily_initial_asset(f"{target_cano}-{acnt}", self.initial_asset)
+                                saved_ok = save_daily_initial_asset(f"{target_cano}-{acnt}", self.initial_asset)
                                 today_str = datetime.now().strftime("%Y-%m-%d")
                                 acc_str = f"{target_cano}-{acnt}"
                                 db_manager.db.save_daily_asset(today_str, acc_str, self.initial_asset)
-                                self.log(f"[초기화 완료] 새로운 당일 시작 자산 갱신: {self.initial_asset:,}원")
+                                self.log(f"[초기화 완료] 새로운 당일 시작 자산 갱신: {self.initial_asset:,}원"
+                                         + ("" if saved_ok else " ([bold red]파일 저장 실패[/] — 재기동 시 기준선 소실)"))
                         except Exception as e:
                             self.log(f"당일 시작 자산 갱신 실패: {e}")
 
@@ -4309,8 +4312,11 @@ class AutoTrader:
                                 self.log(f"[시스템 보정] 기존 초기 자산 기록 로드: {self.initial_asset:,}원")
                             elif is_plausible_baseline(acc_str, current_total):
                                 self.initial_asset = current_total
-                                save_daily_initial_asset(acc_str, self.initial_asset)
-                                self.log(f"[시스템 보정] 초기 자산 정보 갱신 및 저장: {self.initial_asset:,}원")
+                                if save_daily_initial_asset(acc_str, self.initial_asset):
+                                    self.log(f"[시스템 보정] 초기 자산 정보 갱신 및 저장: {self.initial_asset:,}원")
+                                else:
+                                    self.log(f"[시스템 보정] 초기 자산 {self.initial_asset:,}원 갱신 — "
+                                             f"[bold red]저장 실패[/]: 재기동 시 기준선을 잃습니다")
                             else:
                                 # [Fix 2026-09-01] 여기에 검사가 없어 initialize()의 안전장치가
                                 #  무력했다. 기동 경로가 '직전 기록의 반토막 이하'라며 거부한
@@ -4431,9 +4437,11 @@ class AutoTrader:
                             self.baseline_principal = current_principal
                             # 재기동이 같은 날 다시 일어나도 이 기준으로 대조할 수 있게 남긴다.
                             try:
-                                save_daily_initial_asset(f"{target_cano}-{acnt_cd}",
-                                                         self.initial_asset,
-                                                         principal=int(current_principal))
+                                if not save_daily_initial_asset(f"{target_cano}-{acnt_cd}",
+                                                                self.initial_asset,
+                                                                principal=int(current_principal)):
+                                    self.log("[기준선] 기준 원금 저장 실패 — 재기동 시 "
+                                             "오프라인 입출금 감지가 꺼집니다")
                             except Exception:
                                 pass
                             # [날짜를 넘는 대조점] 파일(daily_state)은 날짜가 바뀌면 비워지므로

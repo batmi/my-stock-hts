@@ -687,10 +687,18 @@ def is_plausible_baseline(account_key, tot_asset, last_known=None):
 
 
 def save_daily_initial_asset(account_key, asset_value, principal=None):
-    """계좌별 일일 시작 자산(과 기준 원금)을 저장합니다.
+    """계좌별 일일 시작 자산(과 기준 원금)을 저장합니다. **성공 여부를 돌려준다.**
 
     principal 을 주지 않으면 이미 저장된 값을 그대로 둔다 — 시작 자산만 고치는 호출이
     기준 원금을 지워 버리면, 재기동 때 오프라인 입출금 감지가 다시 꺼진다.
+
+    [왜 반환값이 필요한가 · 2026-09-05] jsonio.save_json 은 실패를 bool 로 알리는데
+     여기서 그것을 버렸다. 그러면 그 세션 동안은 메모리 값으로 정상 동작해 아무도
+     모르고, **재기동해야 소실이 드러난다**. 이 파일은 일일 손실 한도(비상 정지)의
+     분모이자 드로다운 리스크 스케일링의 기준선이다 — 잃으면 그날의 낙폭이 조용히
+     사라지고 차단기가 리셋된다(paper_broker._clear_daily_baseline 주석이 같은 사고를
+     '파일을 지우면'으로 적어 뒀다. 저장 실패는 지운 것과 같은 결과다).
+     운영기는 램 1GB·SD 카드 라즈베리파이라 디스크 가득참·IO 오류가 실재한다.
     """
     today_str = datetime.now().strftime("%Y-%m-%d")
     data = {"date": today_str, "accounts": {}}
@@ -704,7 +712,13 @@ def save_daily_initial_asset(account_key, asset_value, principal=None):
     if principal is not None:
         entry["principal"] = principal
     data["accounts"][account_key] = entry
-    jsonio.save_json(DAILY_STATE_FILE, data)
+    ok = jsonio.save_json(DAILY_STATE_FILE, data)
+    if not ok:
+        logger.error(
+            f"[기준선] 일일 시작 자산 저장 실패({account_key} = {asset_value:,.0f}원) — "
+            f"이 세션은 메모리 값으로 계속하지만, 재기동하면 오늘의 기준선을 잃습니다"
+            f"(일일 손실 한도·드로다운 기준이 현재 자산으로 다시 잡힙니다).")
+    return ok
 
 # [리팩토링] 시스템 트레이딩 운영 시간 판단 (단일 진입점)
 #  - ConclusionMonitor._is_market_open / AutoTrader.is_market_open 이 동일 로직을

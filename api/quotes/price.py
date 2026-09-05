@@ -656,7 +656,11 @@ def fetch_overseas_detail_price(code, excd):
         if cached is not None:
             return cached
         data = _tv_overseas_fundamentals(code)
-        _api()._set_micro_cache(cache_key, data)
+        #  [Fix 2026-09-05] 실패/미매칭({})은 굳히지 않는다. 같은 함수의 KIS 분기는
+        #   h52p 가 유효할 때만 캐시하는데(아래) 이쪽만 무조건 넣어, TradingView 가 한 번
+        #   흔들리면 그 종목의 PER/PBR/상장주수가 5분간 '없음'으로 굳었다.
+        if data:
+            _api()._set_micro_cache(cache_key, data)
         return data
     cache_key = f"detail_{code}"
     cached = _api()._get_micro_cache(cache_key, ttl=60.0) # [수정] 상세 정보 유지 시간 연장
