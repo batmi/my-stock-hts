@@ -27,6 +27,7 @@ cron)는 그 약속이 지나갔는지만 본다. 감시자는 장 시간도, �
 그래서 stopped() 는 '의도한 종료 경로'에서만 부른다 — atexit 로 걸면 크래시 종료까지
 정상 종료로 덮어써서 정작 알려야 할 죽음을 숨긴다.
 """
+import hashlib
 import json
 import logging
 import os
@@ -69,11 +70,56 @@ def _atomic_write(path, payload):
         raise
 
 
+#  모드 라벨 → 파일명 조각. **파일 이름은 ASCII 만 쓴다.**
+#  [왜 · 2026-09-05] 종전 _slug 는 `c.isalnum()` 만 봤는데 파이썬에서 한글은 alnum 이라
+#   그대로 남아 `logs/heartbeat.토스.json` 이 만들어졌다. 이 파일을 읽는 것은 cron 감시자·
+#   스크립트·로그 수집기처럼 **우리 코드 밖**이고, 거기서 비ASCII 파일명은 로케일(LANG 이
+#   비어 있는 cron 환경)·전송·아카이브마다 다르게 깨진다. 감시 장치의 파일명이 환경에 따라
+#   달라지면 감시가 조용히 대상을 잃는다.
+_MODE_SLUGS = {
+    "가상투자": "paper",
+    "토스": "toss",
+    "실전": "real",
+}
+
+
 def _slug(mode):
+    """모드 라벨 → ASCII 파일명 조각. 모르는 라벨도 반드시 ASCII 로 떨어진다."""
+    s = str(mode or "").strip()
+    if not s:
+        return ""
+    if s in _MODE_SLUGS:
+        return _MODE_SLUGS[s]
+    out = "".join(c if (c.isascii() and c.isalnum()) else "_" for c in s).strip("_").lower()
+    #  전부 비ASCII 라 아무것도 안 남는 경우가 있다(새 한글 모드명 등). 그때 빈 문자열을
+    #  돌려주면 공용 경로로 떨어져 **다른 모드의 도장을 덮어쓴다** — path_for 주석의 사고다.
+    #  라벨마다 다른 값이 나오기만 하면 되므로 해시로 자리를 만든다.
+    return out or ("m" + hashlib.sha1(s.encode("utf-8")).hexdigest()[:8])
+
+
+def _legacy_slug(mode):
+    """2026-09-05 이전 규칙(비ASCII 를 그대로 남기던 것). 이관에만 쓴다."""
     return "".join(c if c.isalnum() else "_" for c in str(mode)).strip("_").lower()
 
 
-def path_for(mode=None, base=None):
+def _retire_legacy_path(mode, base=None):
+    """옛 규칙으로 만들어진 파일이 남아 있으면 지운다.
+
+    그냥 두면 안 된다 — instance_paths 가 `heartbeat.*.json` 을 전부 감시 대상으로 잡으므로,
+    아무도 도장을 찍지 않는 옛 파일이 약속 시각을 넘겨 **살아 있는 인스턴스에 대한 사망
+    알림**이 된다. 새 이름으로 옮겨 가는 순간 옛 이름은 반드시 사라져야 한다.
+    """
+    try:
+        old = path_for(mode, base, _slug_fn=_legacy_slug)
+        new = path_for(mode, base)
+        if old != new and os.path.exists(old):
+            os.remove(old)
+            logger.info(f"[Heartbeat] 옛 이름 파일 정리: {os.path.basename(old)} → {os.path.basename(new)}")
+    except Exception as e:
+        logger.debug(f"[Heartbeat] 옛 이름 파일 정리 실패(무시): {e}")
+
+
+def path_for(mode=None, base=None, _slug_fn=None):
     """이 인스턴스의 하트비트 파일 경로.
 
     [왜 모드별인가 · 2026-09-04] 종전에는 모드를 가리지 않고 logs/heartbeat.json 하나를
@@ -88,7 +134,7 @@ def path_for(mode=None, base=None):
     mode 를 모르면 종전 경로를 그대로 쓴다 — 옛 파일·기존 cron 설정과의 호환을 위해서다.
     """
     base = base or HEARTBEAT_PATH
-    slug = _slug(mode) if mode else ""
+    slug = (_slug_fn or _slug)(mode) if mode else ""
     if not slug:
         return base
     root, ext = os.path.splitext(base)
@@ -115,6 +161,8 @@ def beat(interval_sec=60, running=None, mode=None, instance=None, holdings=None,
       호출부가 넘겨준 것만 적는다(이 모듈이 config·session 을 모르게 두기 위해서다).
     """
     path = path or path_for(mode)
+    if mode:
+        _retire_legacy_path(mode)
     now = time.time()
     try:
         _atomic_write(path, {
@@ -141,6 +189,8 @@ def stopped(reason="정상 종료", path=None, mode=None):
     그쪽 감시까지 꺼 버린다(path_for 주석의 두 번째 사례).
     """
     path = path or path_for(mode)
+    if mode:
+        _retire_legacy_path(mode)
     now = time.time()
     try:
         _atomic_write(path, {

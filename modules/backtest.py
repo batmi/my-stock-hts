@@ -1058,7 +1058,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                 daily_vol = atr_val / buy_price
                 annual_vol = daily_vol * np.sqrt(252)
 
-                target_vol = getattr(config, 'TARGET_VOLATILITY', 0.20)
+                target_vol = getattr(config, 'TARGET_VOLATILITY', 0.250)
                 scale_max = getattr(config, 'VOLATILITY_SCALING_MAX', 2.0)
                 scale_min = getattr(config, 'VOLATILITY_SCALING_MIN', 0.4)
 

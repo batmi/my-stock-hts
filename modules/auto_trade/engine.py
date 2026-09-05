@@ -2579,7 +2579,7 @@ class RiskManager:
             daily_vol = atr / current_price
             annual_vol = daily_vol * math.sqrt(252)
 
-            target_vol = getattr(config, 'TARGET_VOLATILITY', 0.20)
+            target_vol = getattr(config, 'TARGET_VOLATILITY', 0.25)
             scale_max = getattr(config, 'VOLATILITY_SCALING_MAX', 2.0)
             scale_min = getattr(config, 'VOLATILITY_SCALING_MIN', 0.4)
 

@@ -56,9 +56,9 @@ class SystemScheduler:
                 self._check_holiday_notification()
                 if getattr(config, 'AUTO_MORNING_BRIEFING_USE', False):
                     self._check_morning_briefing()
-                if getattr(config.settings, 'AUTO_DISCLOSURE_ALERT_USE', False):
+                if getattr(config.settings, 'AUTO_DISCLOSURE_ALERT_USE', True):
                     self._check_disclosure_alerts()
-                if getattr(config.settings, 'AUTO_CALENDAR_ALERT_USE', False):
+                if getattr(config.settings, 'AUTO_CALENDAR_ALERT_USE', True):
                     self._check_calendar_alerts()
                 #  [Fix 2026-09-04] 종전에는 CB 스위치(MARKET_HALT_ALERT_USE) 하나로
                 #   check() 진입 자체를 막았다. market_halt 는 CB 와 VI 를 독립 스위치로
@@ -200,7 +200,7 @@ class SystemScheduler:
             mode = None
         return {
             "mode": mode,
-            "instance": getattr(config.settings, 'TELEGRAM_INSTANCE_NAME', None),
+            "instance": getattr(config.settings, 'TELEGRAM_INSTANCE_NAME', 'HTS'),
             "running": bool(getattr(self.trader, 'is_running', False)),
             "holdings": getattr(self.trader, 'last_holdings_count', None),
         }

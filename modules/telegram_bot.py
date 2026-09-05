@@ -2392,7 +2392,7 @@ class TelegramCommander:
         slippage = getattr(config, 'SLIPPAGE_RATE', 0.002)
 
         use_vol = getattr(config, 'USE_VOLATILITY_TARGETING', True)
-        vol_target = getattr(config, 'TARGET_VOLATILITY', 0.20)
+        vol_target = getattr(config, 'TARGET_VOLATILITY', 0.250)
         vol_str = f"ON (목표 {vol_target*100:.0f}%)" if use_vol else "OFF"
 
         msg += f"\n[기타]\n"

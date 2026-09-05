@@ -503,20 +503,28 @@ class KisRealtimeFeed(RealtimeFeed):
         desired = set(self.manager.plan())
         to_add = desired - self._subscribed
         to_remove = self._subscribed - desired
+        #  [Fix 2026-09-05] 종전에는 send 가 중간에 실패해도 `self._subscribed = desired` 로
+        #   **전부 됐다고 기록**했다. 그러면 다음 주기의 to_add 가 비어 재시도가 없다 —
+        #   못 보낸 종목은 그 연결이 끊길 때까지 영영 구독되지 않는데 장부는 구독 중이라고
+        #   말한다. 실제로 보낸 것만 적는다(다음 주기가 차이를 다시 메운다).
+        applied = set(self._subscribed)
         for tr_id, code in to_remove:
             try:
                 await ws.send(self._sub_msg(approval, tr_id, code, subscribe=False))
                 await asyncio.sleep(0.02)
             except Exception:
                 break
+            applied.discard((tr_id, code))
         for tr_id, code in to_add:
             try:
                 await ws.send(self._sub_msg(approval, tr_id, code, subscribe=True))
                 await asyncio.sleep(0.02)  # 구독 폭주 완화
             except Exception:
                 break
+            applied.add((tr_id, code))
         prev_count = len(self._subscribed)
-        self._subscribed = desired
+        self._subscribed = applied
+        desired = applied          # 아래 로그가 '보낸 것'을 세도록
         if to_add or to_remove:
             codes = sorted({c for (_t, c) in desired})
             msg = (f"[WS] 구독 갱신: +{len(to_add)} -{len(to_remove)} "

@@ -1826,15 +1826,21 @@ class AutoTrader:
             warnings.append("실시간 피드 상태를 읽지 못했습니다")
 
         account = config.session.auto_cano
+        #  [Fix 2026-09-05] 마지막 줄이 분기 **밖**에 있어 무엇으로 떴든 항상 "KIS 실전"으로
+        #   덮였다. scheduler._heartbeat_context 에서 같은 형태를 2026-09-04 에 고쳤는데
+        #   쌍둥이인 이 자리가 남아 있었다 — 관제 첫 화면이 가상투자·토스에서도 'KIS 실전'
+        #   이라고 말한다. 두 인스턴스를 함께 돌리는 운용에서 화면이 계좌 성격을 거짓말하면
+        #   장애 때 실계좌부터 뒤지게 된다.
         if getattr(config.session, "is_paper", False):
             mode = "가상투자"
         elif getattr(config.session, "is_toss", False):
             mode = "토스 실전"
-        mode = "KIS 실전"
+        else:
+            mode = "KIS 실전"
 
         if self.last_success_at and isinstance(self.last_success_at, datetime):
             age = (now - self.last_success_at).total_seconds()
-            if self.is_running and age > max(120, getattr(config, "SYSTEM_TRADING_INTERVAL", 10) * 4):
+            if self.is_running and age > max(120, getattr(config, "SYSTEM_TRADING_INTERVAL", 60) * 4):
                 warnings.append(f"정상 루프 갱신 지연 {int(age)}초")
         elif self.is_running:
             warnings.append("아직 정상 루프 완료 기록이 없습니다")

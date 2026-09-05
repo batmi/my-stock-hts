@@ -16,6 +16,7 @@ import os
 import time
 
 import pytest
+from unittest.mock import patch
 
 from modules import heartbeat as hb
 
@@ -148,3 +149,52 @@ def test_no_heartbeat_files_is_silent(hb_dir):
     """한 번도 뜬 적 없는 기기에서 감시자를 켜면 매번 울릴 텐데, 그건 소음이다."""
     assert hb.check_all() == []
     assert hb_dir["sent"] == []
+
+
+# ==========================================================
+# [2026-09-05] 하트비트 파일 이름은 ASCII 만 쓴다
+# ==========================================================
+def test_파일_이름에_한글이_들어가지_않는다():
+    """실제로 `logs/heartbeat.토스.json` 이 만들어지고 있었다.
+
+    이 파일을 읽는 것은 cron 감시자·스크립트·로그 수집기처럼 **우리 코드 밖**이다.
+    거기서 비ASCII 파일명은 로케일(LANG 이 비어 있는 cron)·전송·아카이브마다 다르게
+    깨지고, 감시 장치가 조용히 대상을 잃는다. 종전 _slug 는 `c.isalnum()` 만 봤는데
+    파이썬에서 한글은 alnum 이라 그대로 남았다.
+    """
+    for mode in ("가상투자", "토스", "실전", "KIS 실전", "새로운모드"):
+        #  디렉토리는 테스트 러너가 정한다 — 우리가 만드는 것은 파일 이름뿐이다.
+        name = os.path.basename(hb.path_for(mode))
+        assert name.isascii(), f"{mode} → {name} 에 비ASCII 문자가 있다"
+
+
+def test_모드마다_다른_파일로_떨어진다():
+    """ASCII 로 바꾸다가 두 모드가 같은 이름이 되면 감시가 통째로 무력해진다."""
+    modes = ("가상투자", "토스", "실전", "한글모드하나", "한글모드둘")
+    paths = [os.path.basename(hb.path_for(m)) for m in modes]
+    assert len(set(paths)) == len(modes), f"파일 이름이 겹친다: {paths}"
+    #  전부 비ASCII 인 라벨도 공용 경로(heartbeat.json)로 떨어지면 안 된다 —
+    #  다른 모드의 도장을 덮어쓴다.
+    assert os.path.basename(hb.path_for("한글모드하나")) != os.path.basename(hb.HEARTBEAT_PATH)
+
+
+def test_옛_한글_이름_파일은_도장을_찍을_때_정리된다(tmp_path):
+    """남겨 두면 아무도 갱신하지 않는 파일이 약속 시각을 넘겨 **가짜 사망 알림**이 된다.
+
+    instance_paths 가 `heartbeat.*.json` 을 전부 감시 대상으로 잡기 때문이다.
+    """
+    base = str(tmp_path / "heartbeat.json")
+    legacy = hb.path_for("토스", base, _slug_fn=hb._legacy_slug)
+    current = hb.path_for("토스", base)
+    assert legacy != current and "토스" in legacy
+
+    os.makedirs(os.path.dirname(legacy), exist_ok=True)
+    with open(legacy, "w", encoding="utf-8") as f:
+        f.write('{"state": "alive", "ts": 0, "deadline": 0}')
+
+    with patch.object(hb, "HEARTBEAT_PATH", base):
+        hb.beat(interval_sec=60, mode="토스")
+
+    assert not os.path.exists(legacy), "옛 한글 이름 파일이 그대로 남았다"
+    assert os.path.exists(current)
+    assert hb.instance_paths(base) == [current]

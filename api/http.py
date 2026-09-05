@@ -277,9 +277,9 @@ class ThrottledSession(requests.Session):
 
     def _real_tps_bounds(self):
         nominal = config.REAL_TX_PER_SECOND
-        lo = nominal * getattr(config, 'REAL_TPS_SAFETY_MIN', 0.85)
-        hi = nominal * getattr(config, 'REAL_TPS_SAFETY_MAX', 0.98)
-        start = nominal * getattr(config, 'REAL_TPS_SAFETY', 0.9)
+        lo = nominal * getattr(config, 'REAL_TPS_SAFETY_MIN', 0.75)
+        hi = nominal * getattr(config, 'REAL_TPS_SAFETY_MAX', 1.0)
+        start = nominal * getattr(config, 'REAL_TPS_SAFETY', 1.0)
         return lo, hi, start
 
     def _tps_on_success_real(self):
@@ -301,7 +301,7 @@ class ThrottledSession(requests.Session):
             b.last_raise = now
             lo, hi, start = self._real_tps_bounds()
             cur = b.adaptive_limit if b.adaptive_limit is not None else start
-            b.adaptive_limit = min(hi, cur + getattr(config, 'TPS_ADAPT_STEP', 0.05))
+            b.adaptive_limit = min(hi, cur + getattr(config, 'TPS_ADAPT_STEP', 0.5))
 
     def _tps_on_rate_limit_real(self, url=None, tr_id=None):
         """실전 EGW00201(초당 거래건수 초과) 시 실효 TPS를 곱셈 감소시키고, 거부를 집계한다.
@@ -339,7 +339,7 @@ class ThrottledSession(requests.Session):
             if now - b.last_drop >= float(getattr(config, 'TPS_BACKOFF_WINDOW_SEC', 1.0) or 0):
                 sent_1s = sum(1 for t in b.history if t > now - 1.0)
                 ref = min(cur, float(sent_1s)) if sent_1s > 0 else cur
-                b.adaptive_limit = max(lo, ref * getattr(config, 'TPS_ADAPT_BACKOFF', 0.9))
+                b.adaptive_limit = max(lo, ref * getattr(config, 'TPS_ADAPT_BACKOFF', 0.95))
                 b.last_drop = now
                 # 물러난 직후 곧바로 올리지 않는다(한 윈도우는 낮춘 값으로 관찰한다).
                 b.last_raise = now
@@ -437,7 +437,7 @@ class ThrottledSession(requests.Session):
                             #  - config 설정값(REAL_TX_PER_SECOND 등)은 그대로 두고 로직 내부에서만 보정.
                             # [#7] 적응형 실효 한도(AIMD). 미초기화 시 시작 마진(REAL_TPS_SAFETY)으로 출발.
                             if bucket.adaptive_limit is None:
-                                bucket.adaptive_limit = target_limit * getattr(config, 'REAL_TPS_SAFETY', 0.9)
+                                bucket.adaptive_limit = target_limit * getattr(config, 'REAL_TPS_SAFETY', 1.0)
                             effective_limit = max(1.0, bucket.adaptive_limit)
                             min_interval = 1.0 / effective_limit
 
@@ -463,7 +463,7 @@ class ThrottledSession(requests.Session):
                             #  1.0초는 1.1초의 부분구간이라 어떤 1초를 잘라도 20건 이하다.
                             #  실측상 몰아 보내는 쪽이 처리량이 높다(30연결 폭주 측정).
                             #  모의투자(2 TPS)는 여유가 없어 균등 전송을 유지한다.
-                            if is_real_server and not getattr(config, 'TPS_EVEN_PACING', True):
+                            if is_real_server and not getattr(config, 'TPS_EVEN_PACING', False):
                                 gate_interval = 0.0
 
                             if not is_priority:

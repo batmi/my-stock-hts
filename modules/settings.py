@@ -513,7 +513,7 @@ def view_system_config(group=None):
             #  중앙 0.513, 변동성 층이 최종액을 정한 비율 99.0%.
             #  BREAK_EVEN_PROFIT_RATE 를 실제 동작(1R)과 달라 숨긴 것과 같은 취지다.
             table.add_row(
-                f"  [dim]└ 목표 연간 변동성 {getattr(config.settings, 'TARGET_VOLATILITY', 0.20)} / "
+                f"  [dim]└ 목표 연간 변동성 {getattr(config.settings, 'TARGET_VOLATILITY', 0.250)} / "
                 f"비중 배수 {getattr(config.settings, 'VOLATILITY_SCALING_MIN', 0.4)} ~ 1.0 "
                 f"(확대 없음 — 기초 비중이 상한)[/dim]", "", "")
 
@@ -618,7 +618,7 @@ def view_system_config(group=None):
 
         subheader("5-5. 화면 및 로그")
         row("화면 자동 지우기", "메뉴 이동 시 터미널 클리어", "CLEAR_SCREEN_ON_MENU", f"{getattr(config.settings, 'CLEAR_SCREEN_ON_MENU', False)}")
-        row("화면 로그 레벨", "터미널 디버그 출력 레벨", "SCREEN_DEBUG_LEVEL", f"{getattr(config.settings, 'SCREEN_DEBUG_LEVEL', 'OFF')}")
+        row("화면 로그 레벨", "터미널 디버그 출력 레벨", "SCREEN_DEBUG_LEVEL", f"{getattr(config.settings, 'SCREEN_DEBUG_LEVEL', 'ERROR')}")
         row("파일 로그 레벨", "로그 파일 저장 레벨", "FILE_DEBUG_LEVEL", f"{getattr(config.settings, 'FILE_DEBUG_LEVEL', 'WARNING')}")
 
     console.print(table)
@@ -1521,7 +1521,7 @@ def _risk_portfolio_items():
     if getattr(config.settings, 'USE_VOLATILITY_TARGETING', True):
         items.extend([
             {"desc": "목표 연간 변동성", "help": "0.1=10%, 0.2=20%, 0.3=30%", "name": "TARGET_VOLATILITY", "type": "float", "section": "3-1. 자산 배분/포지션",
-             "get": lambda: getattr(config.settings, 'TARGET_VOLATILITY', 0.20), "set": lambda v: setattr(config.settings, 'TARGET_VOLATILITY', v)},
+             "get": lambda: getattr(config.settings, 'TARGET_VOLATILITY', 0.250), "set": lambda v: setattr(config.settings, 'TARGET_VOLATILITY', v)},
             {"desc": "스케일링 최대 배수", "help": "비중 확대 제한", "name": "VOLATILITY_SCALING_MAX", "type": "float", "section": "3-1. 자산 배분/포지션",
              "get": lambda: getattr(config.settings, 'VOLATILITY_SCALING_MAX', 2.0), "set": lambda v: setattr(config.settings, 'VOLATILITY_SCALING_MAX', v)},
             {"desc": "스케일링 최소 배수", "help": "비중 축소 제한", "name": "VOLATILITY_SCALING_MIN", "type": "float", "section": "3-1. 자산 배분/포지션",
