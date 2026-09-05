@@ -10,6 +10,7 @@
 """
 import pytest
 
+import config
 from modules import holdings_backfill as hb
 
 
@@ -388,3 +389,102 @@ def test_recovered_external_fill_stays_labelled_external(monkeypatch):
     assert "(외부)" in args[0]
     assert kwargs['reason'] == hb.BACKFILL_REASON
     assert kwargs['stop_loss_rate'] == 0.0
+
+
+# ─────────────────────────────────────────────
+# 6. 조회 실패는 '체결 없음'이 아니다 (2026-09-05)
+#
+# api.get_period_executions 는 실패해도 빈 dict 를 돌려줬고, 그 아래
+# _fetch_period_executions 는 첫 구간 조회가 실패하면 조용히 break 해서
+# {code: []} 를 돌려줬다. 그러면 이 모듈은 그것을 '이 기간에 체결이 없다'로 읽는다:
+#
+#   · 보유분 전체가 '진입이 조회 구간(12개월)보다 과거 = 부분 복원'으로 보고된다.
+#     이 모듈의 다짐은 "없는 기록을 지어내지 않는다"인데, 없는 진단을 지어냈다.
+#   · 외부 매수를 하나도 못 찾아 제한 등록을 건너뛴다 — 운용자가 직접 산 종목을
+#     시스템이 자기 포지션으로 알고 관리한다(손절·트레일링이 그 종목에 걸린다).
+#   · summary['error'] 는 None 이라 정상 실행처럼 보인다.
+# ─────────────────────────────────────────────
+def test_조회_실패로는_계획을_세우지_않는다(monkeypatch):
+    monkeypatch.setattr(hb.api, 'get_period_executions', lambda *a, **k: None)
+    with pytest.raises(RuntimeError, match="체결 없음"):
+        hb.plan([_holding()])
+
+
+def test_체결이_정말_없으면_계획은_빈_기록이다(monkeypatch):
+    """대조군 — '없음'은 실패가 아니다. 이 경우는 부분 복원이 맞다."""
+    monkeypatch.setattr(hb.api, 'get_period_executions', lambda *a, **k: {"005930": []})
+    plans = hb.plan([_holding(qty=10)])
+    assert plans[0]['records'] == []
+    assert plans[0]['missing'] == 10, "설명 못 한 수량은 그대로 보고해야 한다"
+
+
+def test_동기화_실패는_부분복원으로_둔갑하지_않는다(monkeypatch):
+    monkeypatch.setattr(hb, 'supports_broker_history', lambda: True)
+    monkeypatch.setattr(hb.api, 'get_domestic_balance', lambda *a, **k: ([_holding()], []))
+    monkeypatch.setattr(hb.api, 'get_period_executions', lambda *a, **k: None)
+
+    summary = hb.sync_account(register_restrictions=True)
+    assert summary['error'], "실패가 흔적 없이 지나갔다"
+    assert summary['partial'] == [], (
+        "조회 실패가 '진입이 12개월보다 과거'라는 진단으로 보고됐다")
+    assert summary['restricted'] == []
+    assert summary['written'] == 0
+
+
+def test_첫_구간_조회_실패는_ok_False로_돌아온다(monkeypatch):
+    """아래 계층에서 '못 읽었다'를 만들어 준다 — 위에서 가를 수 있게."""
+    import api as api_mod
+    from api import account as acct
+
+    monkeypatch.setattr(acct, "_paper_active", lambda: False)
+    monkeypatch.setattr(api_mod, "call_api",
+                        lambda *a, **k: {'rt_cd': '1', 'msg1': 'EGW00201'})
+    rows, win, ok = acct._fetch_period_executions(["005930"], cano="1", acnt_prdt_cd="01")
+    assert ok is False, "실패인데 '읽었다'로 답했다"
+    assert rows == {"005930": []} and win is None
+
+    monkeypatch.setattr(api_mod, "call_api", lambda *a, **k: {'rt_cd': '0', 'output1': []})
+    _rows, _win, ok2 = acct._fetch_period_executions(["005930"], cano="1", acnt_prdt_cd="01")
+    assert ok2 is True, "정상 응답인데 실패로 봤다"
+
+
+def test_실패한_진입일_조회는_캐시에_굳지_않는다(monkeypatch):
+    """굳으면 15분 동안 '증권사 이력 없음'이 되어 보유일수가 0일로 남는다."""
+    import api as api_mod
+    from api import account as acct
+
+    monkeypatch.setattr(acct, "_paper_active", lambda: False)
+    monkeypatch.setattr(config.session, "is_toss", False, raising=False)
+    stored = []
+    monkeypatch.setattr(api_mod, "_set_micro_cache",
+                        lambda k, v, *a, **kw: stored.append((k, v)))
+    monkeypatch.setattr(api_mod, "_get_micro_cache", lambda *a, **k: None)
+    monkeypatch.setattr(api_mod, "call_api", lambda *a, **k: {'rt_cd': '1', 'msg1': 'boom'})
+
+    assert acct.get_period_entry_dates(["005930"], qty_map={"005930": 10}) == {}
+    assert not stored, "조회 실패로 나온 빈 답이 캐시에 굳었다"
+
+
+def test_공개_진입점이_실패를_None으로_올린다(monkeypatch):
+    """[실제 계층] plan() 이 가르려면 그 아래가 먼저 갈라 줘야 한다."""
+    import api as api_mod
+    from api import account as acct
+
+    monkeypatch.setattr(acct, "_paper_active", lambda: False)
+    monkeypatch.setattr(config.session, "is_toss", False, raising=False)
+
+    monkeypatch.setattr(api_mod, "call_api", lambda *a, **k: {'rt_cd': '1', 'msg1': 'boom'})
+    assert acct.get_period_executions(["005930"], cano="1", acnt_prdt_cd="01") is None, (
+        "조회 실패를 빈 dict 로 답했다 — 호출부가 '체결 없음'으로 읽는다")
+
+    monkeypatch.setattr(api_mod, "call_api", lambda *a, **k: {'rt_cd': '0', 'output1': []})
+    got = acct.get_period_executions(["005930"], cano="1", acnt_prdt_cd="01")
+    assert got == {"005930": []}, f"정상 응답인데 실패로 봤다: {got}"
+
+
+def test_지원하지_않는_모드는_실패가_아니다(monkeypatch):
+    """가상투자·토스는 '해당 없음'이라 빈 dict 다 — 그래야 복원이 조용히 넘어간다."""
+    from api import account as acct
+
+    monkeypatch.setattr(acct, "_paper_active", lambda: True)
+    assert acct.get_period_executions(["005930"]) == {}

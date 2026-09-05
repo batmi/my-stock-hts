@@ -280,7 +280,7 @@ def get_period_entry_dates(codes, qty_map=None, cano=None, acnt_prdt_cd=None, mo
                 [(r['date'], r['is_buy'], r['qty']) for r in rows[c]], qty_map.get(c))
                 for c in wanted)
 
-        rows, window_start = _fetch_period_executions(
+        rows, window_start, ok = _fetch_period_executions(
             wanted, cano=cano, acnt_prdt_cd=acnt_prdt_cd, months=months, should_stop=_done)
 
         found = {}
@@ -290,7 +290,11 @@ def get_period_entry_dates(codes, qty_map=None, cano=None, acnt_prdt_cd=None, mo
                 qty_map.get(code), window_start)
             if d:
                 found[code] = d
-        _api()._set_micro_cache(cache_key, found)
+        #  [Fix 2026-09-05] 조회에 실패한 빈 답은 **굳히지 않는다**. 굳히면 15분 동안
+        #   '이 종목들은 증권사 이력이 없다'가 되어, 보유일수가 0일로 남고 시간청산이
+        #   그만큼 밀린다(휴장 판정에서 겪은 것과 같은 형태 — [[unknown-vs-empty]]).
+        if ok:
+            _api()._set_micro_cache(cache_key, found)
         return found
     except Exception as e:
         logger.debug(f"기간 진입일 조회 실패: {e}")
@@ -298,7 +302,12 @@ def get_period_entry_dates(codes, qty_map=None, cano=None, acnt_prdt_cd=None, mo
 
 
 def _fetch_period_executions(codes, cano=None, acnt_prdt_cd=None, months=12, should_stop=None):
-    """기간 체결 내역을 종목별로 모은다. ({code: [체결 dict...]}, window_start) 반환.
+    """기간 체결 내역을 종목별로 모은다. ({code: [체결 dict...]}, window_start, ok) 반환.
+
+    ok=False 는 **첫 구간부터 조회에 실패했다**는 뜻이다 — 모은 것이 없고, 그것은
+    '이 기간에 체결이 없다'와 전혀 다르다([[unknown-vs-empty]]). 호출부가 그 둘을
+    섞으면 '진입이 조회 구간보다 과거'라는 틀린 진단이 나가고, 보유분 복원은 외부
+    매수를 못 찾아 제한 등록을 건너뛴다.
 
     체결 dict: date(YYYYMMDD) · time(HHMMSS) · is_buy · qty · price · odno · name · type_name
 
@@ -311,12 +320,13 @@ def _fetch_period_executions(codes, cano=None, acnt_prdt_cd=None, months=12, sho
     wanted = set(codes)
     rows = {c: [] for c in wanted}
     window_start = None
+    ok = True                 # 첫 구간을 읽었는가(=결과를 '없음'으로 해석해도 되는가)
 
     # [관찰 모드] 가상 계좌에는 증권사 체결 이력이 없다. 호출부(get_period_entry_dates·
     #  get_period_executions)도 각자 막고 있지만, 계좌 파라미터를 실어 보내는 함수는
     #  자신이 마지막 방어선을 갖는다 — 새 호출부가 생겨도 실계좌를 긁지 않게.
     if _paper_active():
-        return rows, None
+        return rows, None, True
 
     cano, acnt_prdt_cd = _api()._prepare_account_params(cano, acnt_prdt_cd)
     url = constants.API_URLS["DOMESTIC"]["INQUIRY"]["HISTORY"]
@@ -344,6 +354,14 @@ def _fetch_period_executions(codes, cano=None, acnt_prdt_cd=None, months=12, sho
                        tr_id=(tr_recent if chunk == 0 else tr_old))
         if not res or res.get('rt_cd') != '0':
             # 과거 조회 TR을 지원하지 않는 계좌·환경이면 여기서 멈춘다(모은 것까지 쓴다).
+            #  [Fix 2026-09-05] 다만 **첫 구간**이 실패하면 모은 것이 없다 — 그것은
+            #   '체결이 없다'가 아니라 '못 읽었다'다. 그 사실을 돌려준다.
+            if chunk == 0:
+                ok = False
+                logger.warning(
+                    f"[체결내역] 최근 3개월 구간 조회 실패 — 이 결과를 '체결 없음'으로 "
+                    f"읽으면 안 됩니다(rt_cd={(res or {}).get('rt_cd')}, "
+                    f"msg={(res or {}).get('msg1')})")
             break
 
         window_start = start.strftime("%Y%m%d")
@@ -359,7 +377,7 @@ def _fetch_period_executions(codes, cano=None, acnt_prdt_cd=None, months=12, sho
 
     for c in wanted:
         rows[c].sort(key=lambda r: (r['date'], r['time'], r['odno']))
-    return rows, window_start
+    return rows, window_start, ok
 
 
 def _parse_execution_row(row, wanted):
@@ -401,15 +419,23 @@ def _parse_execution_row(row, wanted):
 
 
 def get_period_executions(codes, cano=None, acnt_prdt_cd=None, months=12):
-    """보유 종목의 기간 체결 내역(공개 진입점). 실패 시 빈 dict."""
+    """보유 종목의 기간 체결 내역(공개 진입점). {code: [...]}.
+
+    **조회에 실패하면 None 을 돌려준다** — 빈 dict('이 기간에 체결이 없다')와 다르다.
+    호출부(holdings_backfill)는 그 둘을 갈라야 한다: 실패를 '없음'으로 읽으면
+    보유분 전체가 '진입이 조회 구간보다 과거(부분 복원)'라는 틀린 진단으로 보고되고,
+    외부 매수를 못 찾아 제한 등록도 건너뛴다(= 운용자가 직접 산 종목을 시스템이 관리).
+    지원하지 않는 모드(가상투자·토스)는 실패가 아니라 '해당 없음'이라 빈 dict 다.
+    """
     if not codes or _paper_active() or config.session.is_toss:
         return {}
     try:
-        rows, _ = _fetch_period_executions(codes, cano=cano, acnt_prdt_cd=acnt_prdt_cd, months=months)
-        return rows
+        rows, _win, ok = _fetch_period_executions(codes, cano=cano,
+                                                  acnt_prdt_cd=acnt_prdt_cd, months=months)
+        return rows if ok else None
     except Exception as e:
-        logger.debug(f"기간 체결 내역 조회 실패: {e}")
-        return {}
+        logger.warning(f"기간 체결 내역 조회 실패 — '체결 없음'이 아닙니다: {e}")
+        return None
 
 
 def get_overseas_today_history(cano=None, acnt_prdt_cd=None, retries=None, target_date=None):

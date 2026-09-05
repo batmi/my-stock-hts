@@ -119,6 +119,9 @@ def plan(holdings, cano=None, acnt_prdt_cd=None, months=12):
     """복원 계획을 만든다(DB 쓰기 없음). [{code, name, qty, records, missing, already}] 반환.
 
     holdings: KIS 국내 잔고 output1 형식
+
+    체결 내역 조회에 실패하면 **RuntimeError 를 올린다** — 빈 계획을 돌려주면 호출부가
+    그것을 '복원할 것이 없다'로 읽는다. 모르는 것으로 계획을 세우지 않는다.
     """
     positions = {}
     for h in holdings or []:
@@ -133,6 +136,13 @@ def plan(holdings, cano=None, acnt_prdt_cd=None, months=12):
 
     fetched = api.get_period_executions(list(positions), cano=cano,
                                         acnt_prdt_cd=acnt_prdt_cd, months=months)
+    #  [Fix 2026-09-05] None = 조회 실패. 빈 dict('체결 없음')와 갈라야 한다.
+    #   섞으면 보유분 전체가 '진입이 조회 구간보다 과거(부분 복원)'라는 **틀린 진단**으로
+    #   보고되고(이 모듈의 다짐은 "없는 기록을 지어내지 않는다"이다), 외부 매수를 하나도
+    #   못 찾아 제한 등록을 건너뛴다 — 운용자가 직접 산 종목을 시스템이 자기 포지션으로
+    #   관리하게 된다. 모르면 계획을 세우지 않는다.
+    if fetched is None:
+        raise RuntimeError("증권사 체결 내역을 조회하지 못했습니다 — '체결 없음'이 아닙니다")
 
     out = []
     for code, (qty, name) in positions.items():
@@ -270,7 +280,10 @@ def sync_account(cano=None, acnt_prdt_cd=None, months=12, register_restrictions=
             summary['restricted'] = _restrict_external_buys(new_buy_codes, cano, acnt_prdt_cd)
     except Exception as e:
         summary['error'] = str(e)
-        logger.warning(f"[보유분 복원] 동기화 실패: {e}")
+        #  [2026-09-05] 실패를 '부분 복원' 목록으로 흘려보내지 않는다 — 그러면 조회
+        #   실패가 "진입이 12개월보다 과거"라는 진단으로 화면에 나간다.
+        summary['partial'] = []
+        logger.warning(f"[보유분 복원] 동기화 실패 — 복원하지 않았습니다: {e}")
     return summary
 
 
