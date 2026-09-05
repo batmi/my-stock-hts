@@ -197,3 +197,79 @@ def test_handle_exec_frame_no_key_is_silent():
     feed._aes_key = feed._aes_iv = None
     feed._handle_exec_frame("anything")  # 키 미보유 → 조용히 무시(REST 폴백)
     assert got == []
+
+
+# ===========================================================================
+# 호가 구독은 실제로 몇 건이 붙는가 (2026-09-05)
+#
+# config 주석은 WS_SUBSCRIBE_ORDERBOOK 를 켜면 "매수후보/매도조건 분석에서 종목당 호가
+# REST 1콜을 절감한다"고 약속했다. 그런데 plan() 은 등록 예산을 현재가에 **전부** 배정한
+# 뒤 "남는 슬롯"에 호가를 얹는다 — 남는 슬롯은 `구독 대상 종목 수 < 용량`일 때만 생긴다.
+#
+# 관심종목이 국내 64개(주식 44 + ETF 20)인 실제 운용에서는 호가가 **한 건도** 붙지 않는다.
+# 켜 뒀으니 되고 있다고 읽히는 자리라, 산술을 테스트로 못박고 코드가 그 사실을 알리게 한다.
+#
+# 배분 정책 자체(현재가 커버리지 ↔ 호가)는 제로섬이라 여기서 바꾸지 않는다 — 운영자 축이다.
+from brokers.realtime import TR_ASK, TR_PRICE, SubscriptionManager
+
+
+def _mgr(n_priority, n_other, reserved=1, max_regs=41):
+    m = SubscriptionManager(max_regs=max_regs, subscribe_orderbook=True)
+    m.set_reserved(reserved)
+    m.set_symbols(priority=[f"P{i:04d}" for i in range(n_priority)],
+                  other=[f"O{i:04d}" for i in range(n_other)])
+    return m
+
+
+def _counts(m):
+    regs = m.plan()
+    return (sum(1 for t, _ in regs if t == TR_PRICE),
+            sum(1 for t, _ in regs if t == TR_ASK))
+
+
+def test_관심종목이_용량을_넘으면_호가는_한_건도_안_붙는다():
+    """실제 관심종목 규모(64종목)에서의 동작을 못박는다."""
+    price, ob = _counts(_mgr(4, 60))
+    assert price == 40, f"현재가가 용량을 다 쓰지 않았다: {price}"
+    assert ob == 0, (
+        f"호가 {ob}건 — 이 산술에서는 0이어야 한다. 0이 아니게 바꿨다면 "
+        "현재가 커버리지를 그만큼 내준 것이므로 config 주석과 함께 고칠 것")
+
+
+def test_종목이_용량보다_적을_때만_호가가_붙는다():
+    """대조군 — 호가 경로 자체는 살아 있다(죽은 코드가 아니다)."""
+    price, ob = _counts(_mgr(4, 10))
+    assert price == 14 and ob == 14
+
+
+def test_경계에서_한_칸씩_붙는다():
+    """용량 40에 39종목이면 남는 1슬롯이 호가로 간다."""
+    price, ob = _counts(_mgr(4, 35))          # 39종목
+    assert (price, ob) == (39, 1)
+    price, ob = _counts(_mgr(4, 36))          # 40종목 = 용량
+    assert (price, ob) == (40, 0)
+
+
+def test_커버리지_보고가_그_사실을_그대로_말한다():
+    """coverage()가 호가 0건을 숨기지 않아야 운영자가 알 수 있다."""
+    cov = _mgr(4, 60).coverage()
+    assert cov['ob_covered'] == 0
+    assert cov['price_covered'] == cov['capacity'] == 40
+    assert cov['rest_fallback'] == 0, "시스템 종목은 전부 현재가가 붙어야 한다"
+
+
+def test_무동작을_알리는_문이_있다(caplog):
+    """켜 뒀으니 되고 있다고 읽히는 자리 — 실제 0건이면 남겨야 한다."""
+    import brokers.realtime as rt
+
+    feed = rt.KisRealtimeFeed.__new__(rt.KisRealtimeFeed)
+    feed.manager = _mgr(4, 60)
+    with caplog.at_level("INFO", logger="hts"):
+        feed._warn_if_orderbook_inert()
+    assert "호가 구독 0건" in caplog.text, caplog.text
+
+    caplog.clear()
+    feed.manager = _mgr(4, 10)
+    with caplog.at_level("INFO", logger="hts"):
+        feed._warn_if_orderbook_inert()
+    assert "호가 구독 0건" not in caplog.text, "붙는 상황에서 경고가 났다"

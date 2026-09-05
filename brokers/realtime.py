@@ -196,6 +196,16 @@ class SubscriptionManager:
         등록 예산(=한도-예약)을 현재가(H0STCNT0)에 우선 배정해 최대한 많은 종목을 커버하고,
         호가(H0STASP0)는 남는 슬롯에 우선순위(보유→후보) 순으로 best-effort로 얹는다.
         이렇게 하면 호가 구독을 켜도 현재가 커버리지가 절반으로 줄지 않는다.
+
+        [호가가 언제 붙는가 · 실측 2026-09-05] 현재가에 예산을 **전부** 주므로, 남는 슬롯은
+         `구독 대상 종목 수 < 용량`일 때만 생긴다. 즉 호가는 **관심종목 총수가 용량(한도-예약,
+         체결통보 사용 시 40)보다 적을 때만** 붙는다. 지금 관심종목은 국내 64개(주식 44 +
+         ETF 20)라 실제 운용에서는 호가 구독이 **0건**이고, 그만큼 REST 호가 조회가
+         그대로 나간다(coverage()['ob_covered'] 로 확인 가능).
+
+         이것을 바꾸려면 현재가 커버리지를 호가와 맞바꿔야 한다(등록 슬롯은 제로섬이다).
+         커버리지를 절반으로 깎지 않겠다는 것이 이 함수의 설계 선택이므로, 배분 정책은
+         여기서 임의로 바꾸지 않는다 — 운영자가 정할 축이다.
         """
         with self._lock:
             budget = max(0, self.max_regs - self._reserved)  # 남은 등록 예산
@@ -453,6 +463,7 @@ class KisRealtimeFeed(RealtimeFeed):
                     self._aes_key = self._aes_iv = None
                     # 체결통보를 쓰면 등록 슬롯 1개를 예약(시세 종목 용량에서 제외) 후 먼저 구독한다.
                     self.manager.set_reserved(1 if self._exec_enabled() else 0)
+                    self._warn_if_orderbook_inert()
                     await self._subscribe_exec(ws, approval)
                     await self._reconcile(ws, approval)
                     reconciler = asyncio.ensure_future(self._reconcile_loop(ws, approval))
@@ -471,6 +482,28 @@ class KisRealtimeFeed(RealtimeFeed):
             if self._stop.is_set():
                 break
             await asyncio.sleep(1)
+
+    def _warn_if_orderbook_inert(self):
+        """호가 구독을 켜 뒀는데 실제로 0건이면 한 번 알린다.
+
+        [왜 · 2026-09-05] 등록 예산을 현재가에 전부 주므로 호가는 '구독 대상 < 용량'일
+         때만 붙는다. 관심종목이 용량을 넘는 평상시에는 **한 건도 안 붙는데**, 설정
+         주석은 "종목당 호가 REST 1콜을 절감한다"고 약속한다. 켜 뒀으니 되고 있다고
+         읽히는 자리라, 실제로 0건이면 그 사실을 남긴다(연결당 한 번).
+        """
+        try:
+            if not self.manager.subscribe_orderbook:
+                return
+            cov = self.manager.coverage()
+            if cov.get('ob_covered', 0) > 0:
+                return
+            total = cov.get('priority', 0) + len(self.manager._other)
+            logger.info(
+                f"[WS] 호가 구독 0건 — 구독 대상 {total}종목이 용량 {cov.get('capacity', 0)}종목을 "
+                f"넘어 현재가에 슬롯을 모두 씁니다. WS_SUBSCRIBE_ORDERBOOK 의 REST 절감 효과는 "
+                f"이 상태에서 없습니다(현재가 커버리지 우선).")
+        except Exception as e:      # noqa: BLE001
+            logger.debug(f"[WS] 호가 커버리지 점검 실패: {e}")
 
     async def _disable_watcher(self, ws):
         """USE_WEBSOCKET이 꺼지거나 중지되면 소켓을 닫아 수신 루프를 즉시 종료한다(연결 해제)."""
