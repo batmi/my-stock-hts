@@ -202,3 +202,44 @@ def test_passing_the_hooks_silences_the_notice():
     from modules import portfolio_backtest as pbt2
     pbt2._HOOK_WARNED.clear()
     assert pbt2._warn_missing_live_hooks(10.0, True, 1.5) == []
+
+
+def test_인자를_안_넘겨도_설정에서_켜진_게이트는_없다고_하지_않는다(monkeypatch):
+    """[2026-09-05] 없는 격차를 알리면 있는 격차까지 함께 안 믿게 된다.
+
+    oversize_limit 은 인자를 안 넘기면 config.MAX_POSITION_OVERSHOOT(정본 1.3)으로
+    켜진 채 돈다. 그런데 경고 호출이 그 해결보다 **앞**에 있어, 인자를 안 넘긴 모든
+    실행이 늘 '최소 주문 금액 보정 없음'으로 찍혔다 — 실제로는 1.3 으로 동작하는데도.
+    감사 도구 대부분이 이 인자를 넘기지 않으므로 사실상 상시 오보였다.
+    """
+    import inspect
+
+    from modules import portfolio_backtest as pbt2
+
+    src = inspect.getsource(pbt2.run_portfolio)
+    warn_at = src.index("_warn_missing_live_hooks(")
+    resolve_at = src.index('getattr(config, "MAX_POSITION_OVERSHOOT"')
+    assert resolve_at < warn_at, (
+        "경고가 oversize_limit 해결보다 먼저 불린다 — 켜져 있는 게이트를 '없다'고 알린다")
+
+
+def test_설정값이_상한_1_이하면_그때는_알린다():
+    """대조군 — 실제로 무동작인 값(≤1.0)일 때는 알려야 한다."""
+    from modules import portfolio_backtest as pbt2
+    pbt2._HOOK_WARNED.clear()
+    assert "최소 주문 금액 보정" in pbt2._warn_missing_live_hooks(10.0, True, 1.0)
+    pbt2._HOOK_WARNED.clear()
+    assert "최소 주문 금액 보정" not in pbt2._warn_missing_live_hooks(10.0, True, 1.3)
+
+
+def test_초과집행_폴백이_정본과_같다():
+    """폴백 리터럴 1.0 은 MAX_POSITION_OVERSHOOT 이 생기기 전의 값이었다."""
+    import inspect
+
+    import config
+    from modules import portfolio_backtest as pbt2
+
+    src = inspect.getsource(pbt2.run_portfolio)
+    assert 'getattr(config, "MAX_POSITION_OVERSHOOT", 1.3)' in src, (
+        "폴백 리터럴이 정본과 다르다 — 키 이름이 바뀌면 폐기된 값이 되살아난다")
+    assert config.MAX_POSITION_OVERSHOOT == 1.3

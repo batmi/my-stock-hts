@@ -32,7 +32,9 @@ ALLOWED = {
     ("modules/portfolio_backtest.py", "SYSTEM_DAILY_LOSS_LIMIT"),
     ("modules/portfolio_backtest.py", "SYSTEM_ENTRY_OPEN_DELAY_USE"),
     ("modules/portfolio_backtest.py", "SYSTEM_ENTRY_OPEN_DELAY_MINUTES"),
-    ("modules/portfolio_backtest.py", "MAX_POSITION_OVERSHOOT"),
+    #  [2026-09-05] MAX_POSITION_OVERSHOOT 은 여기서 뺐다. 위 세 키는 '켜져 있는지
+    #  탐지'하는 헬퍼의 폴백이라 '선언 안 됨 → 경고 안 함'이 맞지만, 그것은 시뮬레이션이
+    #  실제로 쓰는 값이라 정본(1.3)과 같아야 한다. 1.0 은 그 설정이 생기기 전의 값이었다.
     #  비용 0 은 '비용 모름'이 아니라 '슬리피지 미적용'이라는 뜻으로 쓰인다
     #  (관찰모드·백테스트가 각자 배수를 넘긴다).
     ("core/trading_cost.py", "SLIPPAGE_RATE"),

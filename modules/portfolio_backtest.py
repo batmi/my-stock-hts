@@ -661,14 +661,22 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     atr_mult = atr_mult if atr_mult is not None else sell_cfg.get("ATR_STOP_MULTIPLIER", 2.0)
     if heat_cap_pct is None:
         heat_cap_pct = getattr(config, "SYSTEM_MAX_PORTFOLIO_RISK", 10.0)
-    _warn_missing_live_hooks(daily_loss_limit, reentry_block, oversize_limit)
-
     # [사이징 파리티] 1주 값이 배분액을 넘을 때 얼마까지 초과 집행을 허용하는가.
-    #  종전 백테스트는 무조건 건너뛰었는데(=1.0) 실매매는 무제한 허용이라 두 경로가
-    #  달랐다. 시드 500만·고가주에서 이 차이가 계좌 비중 3배까지 벌어진다.
+    #  종전 백테스트는 무조건 건너뛰었는데(=1.0) 실매매는 제한 없이 1주를 허용했다.
+    #  시드 500만·고가주에서 이 차이가 계좌 비중 3배까지 벌어져, 실매매에
+    #  MAX_POSITION_OVERSHOOT(정본 1.3)가 생겼고 백테스트도 그것을 따른다.
+    #  폴백 리터럴을 1.0 으로 두면 키 이름이 바뀌는 순간 폐기된 '무조건 건너뛰기'가
+    #  되살아난다 — 정본과 같은 값을 적는다.
     if oversize_limit is None:
-        oversize_limit = getattr(config, "MAX_POSITION_OVERSHOOT", 1.0)
+        oversize_limit = getattr(config, "MAX_POSITION_OVERSHOOT", 1.3)
     oversize_limit = float(oversize_limit or 1.0)
+
+    #  [순서 · 2026-09-05] 경고는 **확정된 값**으로 판단한다. 종전에는 이 호출이 위
+    #   해결보다 앞에 있어 인자로 안 넘긴 실행이 늘 '최소 주문 금액 보정 없음'으로
+    #   찍혔다 — 실제로는 config 값(1.3)으로 켜져 돌고 있는데도. 감사 도구 대부분이
+    #   이 인자를 넘기지 않으므로 사실상 상시 오보였다. 파리티 격차를 알리는 것이 일인
+    #   문에서 없는 격차를 알리면, 있는 격차까지 함께 안 믿게 된다.
+    _warn_missing_live_hooks(daily_loss_limit, reentry_block, oversize_limit)
 
     # [하루 증액 횟수] None이면 자동 — 분봉 모드에서는 실매매와 같이 **제한 없음**,
     #  일봉 모드에서는 구조상 하루 1회다(하루에 한 번밖에 판정할 수 없다).
