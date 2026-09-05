@@ -32,11 +32,13 @@ _WEEKDAY_KR = ["월", "화", "수", "목", "금", "토", "일"]
 
 
 def _kr_year_end_holiday(year):
-    """KRX 연말 휴장일 = 그 해 마지막 평일(12/31이 주말이면 직전 평일)."""
-    d = date(year, 12, 31)
-    while d.weekday() >= 5:
-        d -= timedelta(days=1)
-    return d
+    """KRX 연말 휴장일. **정본은 api.kr_year_end_closing_day 다.**
+
+    [SSOT 2026-09-05] 종전에는 여기와 api/market_calendar 가 규칙을 따로 들고 있었고
+     서로 달랐다(그쪽은 무조건 12/31). 2026~2040 중 4년이 갈라진다 — 정본 주석 참조.
+     이름은 호출부 호환을 위해 남기고 구현만 위임한다.
+    """
+    return api.kr_year_end_closing_day(year)
 
 
 def _is_kr_trading_day(d):

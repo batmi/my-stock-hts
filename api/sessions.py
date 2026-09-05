@@ -139,7 +139,11 @@ def market_today(is_overseas=False):
     if hit:
         return hit
     res = _api().last_trading_day(dt, country)
-    _api()._TRADING_DAY_CACHE[key] = res
+    #  [Fix 2026-09-05] 휴장 판정이 '조회 실패를 라이브러리로 메운 잠정값'이면 굳히지
+    #   않는다. 굳히면 그 잠정값이 여기서 하루짜리 확정으로 승격돼, 아래 계층에서 재조회를
+    #   해 봐야 소용이 없다(임시공휴일에 '거래일'로 굳는 방향이다).
+    if not _api().holiday_answer_provisional(key[0], country):
+        _api()._TRADING_DAY_CACHE[key] = res
     return res
 
 def domestic_trading_session_open():

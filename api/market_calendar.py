@@ -5,6 +5,7 @@
 '휴장 없음'으로 퇴화할 수 있다는 점을 requirements.txt 의 holidays 주석에 함께 적어 두었다.
 """
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 import config
 from brokers import toss_api
@@ -23,8 +24,19 @@ def _api():
     import api
     return api
 
-# [추가] 휴장일 캐시
+# [추가] 휴장일 캐시 — **확정된 답만** 담는다.
 _HOLIDAY_CACHE = {}
+
+#  조회에 실패해 라이브러리로 메운 답. (키 -> (값, 다시 물어도 되는 시각))
+#  [왜 나눠 두나 · 2026-09-05] 종전에는 실패한 답도 _HOLIDAY_CACHE 에 그대로 넣었다.
+#   그러면 `if date_str in _HOLIDAY_CACHE: return` 에 걸려 **API 를 두 번 다시 묻지 않는다**
+#   — 기동 직후(라즈베리파이 부팅·토큰 발급 전)에 한 번 실패하면 그 답이 하루 종일 굳는다.
+#   실측 재현: check_holiday 가 None 을 돌려준 뒤 API 가 '휴장'이라고 답해도 재조회 0회.
+#   방향이 나쁘다 — holidays 라이브러리는 **임시공휴일을 모른다**(그 해에 정해지므로
+#   설치된 버전에 없다). 즉 실패의 기본값이 '거래일'이고, 닫힌 시장에 매매 루프가 돈다.
+#   ('조회 실패 ≠ 없음'의 또 한 자리다 — [[unknown-vs-empty]])
+_HOLIDAY_PROVISIONAL = {}
+HOLIDAY_RETRY_SEC = 300.0      # 실패한 답을 다시 물어보기까지. 5분이면 하루 288회다.
 
 def check_holiday(date_str):
     """한국투자증권 휴장일 조회 API 호출"""
@@ -45,45 +57,78 @@ def check_holiday(date_str):
                     return False
     return None
 
+def _cached_holiday(key):
+    """확정 답이 있으면 (True, 값). 아직 유효한 잠정 답이 있으면 (True, 잠정값)."""
+    if key in _HOLIDAY_CACHE:
+        return True, _HOLIDAY_CACHE[key]
+    entry = _HOLIDAY_PROVISIONAL.get(key)
+    if entry and time.time() < entry[1]:
+        return True, entry[0]
+    return False, None
+
+
+def _remember_holiday(key, value, confirmed):
+    """확정 답이면 굳히고, 실패로 메운 답이면 재조회 시각과 함께 따로 둔다."""
+    if confirmed:
+        _HOLIDAY_CACHE[key] = value
+        _HOLIDAY_PROVISIONAL.pop(key, None)
+    else:
+        _HOLIDAY_PROVISIONAL[key] = (value, time.time() + HOLIDAY_RETRY_SEC)
+    return value
+
+
+def holiday_answer_provisional(date_str, country='KR'):
+    """그 날짜의 휴장 판정이 '조회 실패를 라이브러리로 메운 잠정값'인가.
+
+    잠정값에서 나온 결과는 캐시에 굳히면 안 된다 — 굳히면 재조회의 의미가 사라진다
+    (market_today 의 거래일 캐시가 이 함수를 본다).
+    """
+    key = date_str if country == 'KR' else f"{country}_{date_str}"
+    return key not in _HOLIDAY_CACHE and key in _HOLIDAY_PROVISIONAL
+
+
 def is_holiday_on(date_str):
     """지정 일자(YYYYMMDD)가 주말 또는 공휴일(휴장일)인지 확인합니다.
 
     '오늘'이 아닌 날짜도 물을 수 있어야 한다 — 코스피200 야간선물처럼 자정을 넘겨
     이어지는 세션은 새벽(00:00~05:00)에 '전날'이 거래일이었는지가 개폐를 가른다.
     (토스 market-calendar 는 조회일 기준 응답 해석이 오늘에만 확실하므로 오늘에만 쓴다)
+
+    조회에 실패해 holidays 라이브러리로 메운 답은 **굳히지 않는다** — 잠깐 그 값을 쓰되
+    HOLIDAY_RETRY_SEC 뒤에 다시 묻는다(_HOLIDAY_PROVISIONAL 주석 참조).
     """
-    if date_str in _HOLIDAY_CACHE: return _HOLIDAY_CACHE[date_str]
+    hit, value = _cached_holiday(date_str)
+    if hit:
+        return value
 
     if datetime.strptime(date_str, "%Y%m%d").weekday() > 4:
-        _HOLIDAY_CACHE[date_str] = True
-        return True
+        return _remember_holiday(date_str, True, confirmed=True)
 
+    is_today = date_str == datetime.now().strftime("%Y%m%d")
     # [추가] 토스 모드일 경우 토스 API의 market-calendar 이용
-    if config.session.is_toss and date_str == datetime.now().strftime("%Y%m%d"):
+    if config.session.is_toss and is_today:
         from brokers import toss_api
         try:
             today_formatted = datetime.now().strftime("%Y-%m-%d")
             res = toss_api.get_market_calendar("KR", today_formatted)
             if res and res.get('today'):
                 is_holiday = not bool(res['today'].get('integrated'))
-                _HOLIDAY_CACHE[date_str] = is_holiday
-                return is_holiday
+                return _remember_holiday(date_str, is_holiday, confirmed=True)
         except Exception as e:
             logger.debug(f"Toss market-calendar error: {e}")
-            pass
 
     # 실전투자 모드일 경우에만 API 우선 조회 시도
     if not config.session.is_toss:
         res = check_holiday(date_str)
         if res is not None:
-            _HOLIDAY_CACHE[date_str] = res
-            return res
+            return _remember_holiday(date_str, res, confirmed=True)
 
-    # 모의투자이거나 API 호출이 실패(장애 등)한 경우 holidays 라이브러리로 자체 판단
+    # holidays 라이브러리 자체 판단.
+    #  물어볼 권위가 있었는데 못 물은 경우(= 아래 asked_authority)만 잠정으로 둔다.
+    #  토스 모드의 '오늘이 아닌 날짜'처럼 애초에 물을 곳이 없으면 이게 유일한 답이므로 확정이다.
+    asked_authority = (not config.session.is_toss) or is_today
     is_holiday = get_holiday_name(date_str, country='KR') is not None
-    _HOLIDAY_CACHE[date_str] = is_holiday
-
-    return is_holiday
+    return _remember_holiday(date_str, is_holiday, confirmed=not asked_authority)
 
 def is_holiday_today():
     """오늘이 주말 또는 공휴일(휴장일)인지 확인합니다."""
@@ -97,11 +142,12 @@ def is_us_holiday_on(date_str):
     (토스 market-calendar 는 조회일 기준 응답 해석이 오늘에만 확실하므로 오늘에만 쓴다)
     """
     cache_key = f"US_{date_str}"
-    if cache_key in _HOLIDAY_CACHE: return _HOLIDAY_CACHE[cache_key]
+    hit, value = _cached_holiday(cache_key)
+    if hit:
+        return value
 
     if datetime.strptime(date_str, "%Y%m%d").weekday() > 4:
-        _HOLIDAY_CACHE[cache_key] = True
-        return True
+        return _remember_holiday(cache_key, True, confirmed=True)
 
     # [추가] 토스 모드일 경우 토스 API의 market-calendar 이용
     if config.session.is_toss and date_str == datetime.now().strftime("%Y%m%d"):
@@ -137,6 +183,26 @@ def is_us_holiday_today():
     """
     return is_us_holiday_on(datetime.now().strftime("%Y%m%d"))
 
+def kr_year_end_closing_day(year):
+    """그 해 KRX 연말 휴장일(date). **12/31이 주말이면 직전 평일**이 휴장일이다.
+
+    [SSOT 2026-09-05] 이 규칙이 두 곳에 서로 다르게 적혀 있었다. 여기(get_holiday_name)는
+     **무조건 12/31**로 못박았고, modules/manage/events._kr_year_end_holiday 는 주말 롤백을
+     했다. 2026~2040년 15년 중 **4년(2028·2033·2034·2039)이 갈라진다** — 예컨대 12/31이
+     일요일인 2028년의 폐장일은 12/29(금)인데, 이쪽 정의로는 그 날이 평범한 거래일이다.
+
+     이 판정은 _is_closed_day → last_trading_day → market_today 로 이어져 '오늘이 어느
+     거래일인가'를 정한다. 틀리면 휴장일에 가짜 당일 봉이 붙고(등락률 0%), 주말에 물었을 때
+     직전 거래일을 하루 늦게 짚는다. 규칙은 여기 하나만 둔다 — events 는 이걸 부른다.
+
+     (KRX 규정: 12월 31일은 휴장하고, 그 날이 휴일이면 직전 영업일이 휴장한다.)
+    """
+    d = datetime(year, 12, 31).date()
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
 def get_holiday_name(date_str, country='KR'):
     """holidays 라이브러리를 이용하여 공휴일 이름을 반환합니다."""
     try:
@@ -146,7 +212,7 @@ def get_holiday_name(date_str, country='KR'):
         if country == 'KR':
             h_cal = holidays.KR()
             h_cal[dt.replace(month=5, day=1)] = "근로자의 날" # 법정공휴일이 아닌 근로자의 날 강제 추가
-            h_cal[dt.replace(month=12, day=31)] = "연말 폐장일" # 한국거래소(KRX) 연말 휴장일 강제 추가
+            h_cal[kr_year_end_closing_day(dt.year)] = "연말 폐장일" # 한국거래소(KRX) 연말 휴장일 강제 추가
             name = h_cal.get(dt)
             return name
         elif country == 'US':
