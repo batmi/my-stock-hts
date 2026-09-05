@@ -185,6 +185,60 @@ def test_failure_does_not_block_sell_analysis(trader):
     assert out == pytest.approx(105_000)
 
 
+# ---------------------------------------------------------------------------
+#  환산 실패 (2026-09-05)
+#
+#  rescale_highest_price 는 DB 잠금이 5회 소진되면 None 을 돌려준다. 종전에는 그 None 을
+#  조용히 넘기고 **기준값은 조정 후 값으로 옮겼다**. 그러면 다음 주기의
+#  detect_corporate_action 이 배율 1.0 을 보고 분할을 **다시는 감지하지 못한다** —
+#  앵커는 조정 전 값(105,000)으로 영구히 남고, 5:1 분할이면 청산선이 현재가의 4배쯤에
+#  서므로 그 종목은 트레일링 즉시 발동으로 시장가 강제 청산된다. 이 함수가 존재하는
+#  이유가 바로 그것을 막는 것이다.
+def test_환산_실패하면_기준값을_옮기지_않는다(trader):
+    db_manager.db.update_highest_price(CODE, 105_000)
+    _apply(trader, 10, 90_000, 105_000)                     # 1주기: 기준값 기록
+    ref_before = db_manager.db.get_position_ref(CODE)
+
+    with patch.object(db_manager.db, 'rescale_highest_price', return_value=None):
+        out, tg = _apply(trader, 50, 18_000, 105_000)       # 2주기: 분할, 환산 실패
+
+    assert db_manager.db.get_position_ref(CODE) == ref_before, (
+        "환산에 실패했는데 기준값을 옮겼다 — 다음 주기에 분할을 다시 감지하지 못한다")
+    assert out == pytest.approx(105_000), "앵커는 조정 전 값 그대로여야 한다(거짓 보고 금지)"
+    assert tg.called, "환산 실패는 사용자가 알아야 한다"
+
+
+def test_다음_주기가_환산을_다시_시도한다(trader):
+    """기준값을 안 옮겼으므로 같은 배율이 다시 감지되어야 한다."""
+    db_manager.db.update_highest_price(CODE, 105_000)
+    _apply(trader, 10, 90_000, 105_000)
+
+    with patch.object(db_manager.db, 'rescale_highest_price', return_value=None):
+        _apply(trader, 50, 18_000, 105_000)
+
+    out, tg = _apply(trader, 50, 18_000, 105_000)           # 3주기: 이번엔 성공
+    assert out == pytest.approx(21_000), "재시도가 이루어지지 않았다"
+    assert db_manager.db.get_highest_price(CODE) == pytest.approx(21_000)
+
+
+def test_환산_실패는_알림에_적힌다(trader):
+    db_manager.db.update_highest_price(CODE, 105_000)
+    _apply(trader, 10, 90_000, 105_000)
+    with patch.object(db_manager.db, 'rescale_highest_price', return_value=None):
+        _out, tg = _apply(trader, 50, 18_000, 105_000)
+    body = tg.call_args[0][0]
+    assert "환산 실패" in body, f"실패가 알림에 안 보인다:\n{body}"
+    assert "105,000" in body, "어느 값이 남았는지 알려야 조치할 수 있다"
+
+
+def test_앵커가_없으면_실패가_아니다(trader):
+    """환산할 앵커 자체가 없는 것(highest=0)은 실패가 아니다 — 기준값은 옮겨야 한다."""
+    _apply(trader, 10, 90_000, 0)
+    _apply(trader, 50, 18_000, 0)                           # 분할, 앵커 없음
+    assert db_manager.db.get_position_ref(CODE) == (pytest.approx(18_000),
+                                                    pytest.approx(900_000))
+
+
 # ===========================================================================
 # 4. 예약 주문 — 환산하지 않고 취소한다
 # ===========================================================================

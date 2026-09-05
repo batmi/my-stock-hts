@@ -164,3 +164,54 @@ def test_blocked_increase_releases_the_heat_reservation(trader):
     with patch.object(trader.risk_manager, 'portfolio_risk_budget_left', return_value=10_000_000):
         _pyramid(trader, db_count=0, bump=False)
     assert trader.portfolio_heat_amt == 0.0, "보류했는데 히트 예산이 선점된 채 남았다"
+
+
+# ──────────────── 잃어버린 갱신(lost update) ────────────────
+#
+# bump_pyramid_count(code, expected) 는 이름과 달리 비교-교환이 아니었다. SQL 이
+#     ON CONFLICT(code) DO UPDATE SET pyramid_count = excluded.pyramid_count
+# 였고 expected 는 아무 데도 쓰이지 않았다.
+#
+# 호출부는 get_pyramid_count 로 읽고 → 시장 필터·히트 캡·수량 산정 등 여러 게이트를
+# 지난 뒤 → 여기서 쓴다. 그 창 사이에 값이 올라가 있으면 이 쓰기가 그것을 **덮어 내린다**.
+# 횟수가 뒤로 가면 상한이 한 칸 늘고, 증액은 보유수량의 50%씩 커지므로 그 한 칸이
+# 그대로 노출로 남는다.
+def test_이미_더_큰_기록을_덮어_내리지_않는다(clean_db):
+    """읽은 뒤 다른 경로가 먼저 올린 상황 — 뒤늦은 쓰기는 거부되어야 한다."""
+    assert db_manager.db.bump_pyramid_count(CODE, 0) is True      # → 1
+    assert db_manager.db.bump_pyramid_count(CODE, 1) is True      # → 2
+
+    # expected=0 을 들고 뒤늦게 도착한 쓰기(창 사이에 값이 2가 됐다).
+    assert db_manager.db.bump_pyramid_count(CODE, 0) is False, (
+        "낡은 expected 로 온 쓰기가 통과했다 — 횟수가 뒤로 간다")
+    assert db_manager.db.get_pyramid_count(CODE) == 2, "기록이 덮여 내려갔다"
+
+
+def test_같은_값으로_다시_쓰는_것도_거부한다(clean_db):
+    """두 경로가 같은 expected 를 읽은 경우 — 한쪽만 성공해야 한다."""
+    assert db_manager.db.bump_pyramid_count(CODE, 0) is True      # → 1
+    assert db_manager.db.bump_pyramid_count(CODE, 0) is False     # 같은 1차를 또
+    assert db_manager.db.get_pyramid_count(CODE) == 1
+
+
+def test_거부되면_증액도_하지_않는다(clean_db, trader):
+    """'기록 못 하면 주문 안 낸다'는 계약이 거부(False)에도 그대로 걸린다."""
+    order, bumped = _pyramid(trader, db_count=0, bump=False)
+    assert bumped.called, "기록 시도 자체가 없었다"
+    assert not order.called, "횟수 기록이 거부됐는데 증액 주문이 나갔다"
+
+
+def test_구버전_포지션의_따라잡기는_허용한다(clean_db):
+    """사유 문자열에서 읽은 legacy_count 로 0인 행을 한 번에 올리는 정당한 경로.
+
+    엄격한 CAS(`= expected`)를 쓰면 이 경로가 막힌다 — 그래서 단조 조건을 쓴다.
+    """
+    db_manager.db.update_highest_price(CODE, 70000)      # pyramid_count 없이 행만 생성
+    assert db_manager.db.get_pyramid_count(CODE) == 0
+    assert db_manager.db.bump_pyramid_count(CODE, 2) is True, "구버전 따라잡기가 막혔다"
+    assert db_manager.db.get_pyramid_count(CODE) == 3
+
+
+def test_행이_없으면_그대로_만든다(clean_db):
+    assert db_manager.db.bump_pyramid_count(CODE, 0) is True
+    assert db_manager.db.get_pyramid_count(CODE) == 1

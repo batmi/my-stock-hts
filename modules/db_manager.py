@@ -812,6 +812,7 @@ class DBManager:
         except Exception as e:
             if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                 config.console.print(f"[red][DB] Select Error: {e}[/red]")
+            _swallowed("get_trades", e)
             return []
             
     def delete_trade_by_id(self, trade_id):
@@ -829,6 +830,7 @@ class DBManager:
                     if "locked" in str(e) and attempt < 4:
                         time.sleep(0.5)
                         continue
+                    self._note_write_failure("거래내역 삭제", str(trade_id), e)
                     return False
                 except Exception as e:
                     _swallowed("delete_trade_by_id", e)
@@ -1123,7 +1125,9 @@ class DBManager:
             return {c: {'date': result.get(c), 'qty': q}
                     for c, q in running.items() if q > 0}
         except Exception as e:
-            logger.debug(f"진입일 조회 실패: {e}")
+            #  진입일은 시간청산(TIME_STOP_DAYS)과 TS 앵커 복원의 근거다. 빈 dict 는
+            #  호출부에서 '보유일수 0일(오늘 매수)'이 되어 시간청산이 통째로 멈춘다.
+            _swallowed("get_position_entry_info", e)
             return {}
 
     def get_latest_buy_trades(self, codes, account=None):
@@ -1261,7 +1265,9 @@ class DBManager:
                            (code,))
             row = cursor.fetchone()
             return (float(row[0] or 0.0), float(row[1] or 0.0)) if row else (0.0, 0.0)
-        except Exception:
+        except Exception as e:
+            #  (0,0)은 '기준 없음'으로 읽혀 권리 조정 감지가 통째로 건너뛰어진다.
+            _swallowed("get_position_ref", e)
             return (0.0, 0.0)
 
     def update_position_ref(self, code, avg_price, pchs_amt):
@@ -1325,9 +1331,13 @@ class DBManager:
                     if "locked" in str(e) and attempt < 4:
                         time.sleep(0.5)
                         continue
+                    #  [Fix 2026-09-05] 잠금 소진이 가장 흔한 실패인데 이 갈래만 조용했다.
+                    #   이 값이 안 바뀌면 분할 전 최고가가 그대로 남아 트레일링이 즉시
+                    #   발동한다 — 같은 표의 update_highest_price 와 같게 기록한다.
+                    self._note_write_failure("권리조정 최고가 환산", f"{code} ×{ratio}", e)
                     return None
                 except Exception as e:
-                    _swallowed("rescale_highest_price", e)
+                    self._note_write_failure("권리조정 최고가 환산", f"{code} ×{ratio}", e)
                     return None
 
     def get_all_trailing_stops(self):
@@ -1395,7 +1405,10 @@ class DBManager:
             cursor = conn.cursor()
             cursor.execute("SELECT code FROM half_tp_status")
             return set(row[0] for row in cursor.fetchall())
-        except Exception: return set()
+        except Exception as e:
+            #  빈 집합은 '아무도 반익절 안 했다'로 읽혀 이미 반익절한 종목을 또 판다.
+            _swallowed("get_all_half_tp", e)
+            return set()
 
     def is_disclosure_notified(self, rcept_no):
         """공시 접수번호가 이미 알림 발송됐는지 확인"""
@@ -2180,18 +2193,37 @@ class DBManager:
         주문을 내기 **전에** 호출한다 — 기록이 안 되면 주문도 내지 않는다. 반대 순서면
         '주문은 나갔는데 횟수는 그대로'가 되어 다음 주기에 같은 증액이 또 나간다.
         기록만 되고 주문이 실패하면 증액 기회를 하나 잃을 뿐이라, 이쪽이 안전한 방향이다.
+
+        [단조 조건 · 2026-09-05] 종전 SQL 은 `pyramid_count = excluded.pyramid_count` 를
+         **조건 없이** 썼다. expected 를 인자로 받으면서 아무 데도 쓰지 않아, 이름과 달리
+         비교-교환이 아니었다. 호출부는 get_pyramid_count 로 읽고 → 여러 게이트를 지나 →
+         여기서 쓴다. 그 사이에 값이 올라가 있으면 이 쓰기가 그것을 **덮어 내린다**
+         (lost update). 횟수가 뒤로 가면 상한이 한 칸 늘어나고, 증액은 보유수량의 50%씩
+         커지므로 그 한 칸이 그대로 노출로 남는다.
+
+         엄격한 CAS(`= expected`)는 쓸 수 없다 — 구 버전 포지션은 사유 문자열에서 읽은
+         legacy_count 로 0인 행을 3 으로 올리는 정당한 경로가 있다(trader.py). 대신 같은
+         표의 최고가 갱신과 같은 **단조 조건**을 쓴다: 올라가는 쓰기만 받는다.
+         조건에 걸려 아무 행도 안 바뀌면 False 다 — 호출부는 그때 증액을 보류한다.
         """
         with self.lock:
             for attempt in range(5):
                 try:
                     conn = self._get_conn()
                     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    conn.execute(
+                    cur = conn.execute(
                         "INSERT INTO trailing_stops (code, highest_price, update_time, pyramid_count) "
                         "VALUES (?, 0.0, ?, ?) "
-                        "ON CONFLICT(code) DO UPDATE SET pyramid_count=excluded.pyramid_count",
+                        "ON CONFLICT(code) DO UPDATE SET pyramid_count=excluded.pyramid_count "
+                        "WHERE COALESCE(trailing_stops.pyramid_count, 0) < excluded.pyramid_count",
                         (code, now_str, int(expected) + 1))
                     conn.commit()
+                    if cur.rowcount == 0:
+                        #  누군가 먼저 올렸다(또는 이미 더 크다). 덮어 내리지 않고 물러선다.
+                        logger.warning(
+                            f"[DB] 증액 횟수 기록 거부({code}): {int(expected) + 1}차로 쓰려 했으나 "
+                            f"기록이 이미 그 이상입니다 — 다른 경로가 먼저 올렸을 수 있습니다.")
+                        return False
                     return True
                 except sqlite3.OperationalError as e:
                     if "locked" in str(e) and attempt < 4:

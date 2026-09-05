@@ -4720,17 +4720,28 @@ class AutoTrader:
             ref_avg, ref_amt = db_manager.db.get_position_ref(code)
             ratio, reason = _pkg().detect_corporate_action(ref_avg, ref_amt, buy_price, pchs_amt)
 
+            rescale_failed = False
             if ratio != 1.0:
                 lines = [f"🔀 [권리 조정] {name}({code})", reason]
 
                 #  ① 트레일링 최고가는 같은 배율로 환산한다 — 시스템이 만든 값이고,
                 #     환산하면 조정 전과 정확히 같은 판정이 나오기 때문이다.
                 new_high = db_manager.db.rescale_highest_price(code, ratio) if highest_price > 0 else None
+                #  [Fix 2026-09-05] 환산 실패를 조용히 넘기면 안 된다. 실패하면 앵커가
+                #   **분할 전 값**으로 남는다 — 5:1 분할이면 청산선이 현재가의 4배쯤에
+                #   서므로 다음 주기에 트레일링이 즉시 발동해 시장가로 강제 청산된다.
+                #   이 함수가 존재하는 이유가 바로 그것을 막는 것이다.
+                rescale_failed = (highest_price > 0 and not new_high)
                 if new_high:
                     with self._lock:
                         self.trailing_stop_cache[code] = new_high
                     highest_price = new_high
                     lines.append(f"· 트레일링 최고가 {ratio:.4f}배 보정 (→ {new_high:,.0f}원)")
+                elif rescale_failed:
+                    lines.append(f"· ⚠️ 트레일링 최고가 환산 실패 — 앵커가 조정 전 값({highest_price:,.0f}원)"
+                                 f"으로 남아 있습니다. 다음 주기에 다시 시도합니다.")
+                    logger.error(f"[권리 조정] {code} 최고가 환산 실패(ratio={ratio:.4f}, "
+                                 f"anchor={highest_price}) — 기준값을 옮기지 않고 재시도합니다.")
 
                 #  ② 예약 주문은 환산하지 않고 **취소**한다 — 목표가는 운영자가 조정 전
                 #     가격을 보고 직접 정한 값이라, 기계적으로 환산해도 의도한 자리가
@@ -4760,7 +4771,14 @@ class AutoTrader:
                     pass
 
             # 배율이 1이어도 기준값은 항상 최신으로 옮겨야 다음 주기 비교가 성립한다.
-            if (ref_avg, ref_amt) != (float(buy_price), float(pchs_amt)):
+            #  [Fix 2026-09-05] **다만 환산에 실패했으면 옮기지 않는다.** 기준값을 조정 후
+            #   값으로 옮기면 다음 주기의 detect_corporate_action 이 배율 1.0 을 보고
+            #   분할을 **다시는 감지하지 못한다** — 앵커는 조정 전 값으로 영구히 남고,
+            #   그 종목은 트레일링 즉시 발동으로 강제 청산된다. 옮기지 않으면 다음 주기가
+            #   같은 배율을 다시 감지해 환산을 재시도한다(알림이 한 번 더 나가는 대가).
+            if rescale_failed:
+                pass
+            elif (ref_avg, ref_amt) != (float(buy_price), float(pchs_amt)):
                 db_manager.db.update_position_ref(code, buy_price, pchs_amt)
         except Exception as e:
             # 보정 실패가 매도 분석 자체를 막아서는 안 된다(원래 값으로 계속 진행).
