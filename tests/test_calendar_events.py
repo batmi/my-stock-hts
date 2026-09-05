@@ -127,12 +127,18 @@ def test_get_dart_dividend_returns_none_when_no_corp():
         assert api.get_dart_dividend("999999") is None
 
 
-def test_call_dart_returns_none_without_key():
-    """API 키가 없으면 호출하지 않고 None."""
+def test_call_dart_raises_without_key():
+    """API 키가 없으면 호출하지 않는다 — 그리고 그것은 '데이터 없음'이 아니다.
+
+    [2026-09-05] 종전에는 None 이었다. None 은 013(조회된 데이터 없음)과 같은 값이라
+    호출부가 '키가 없어 못 봤다'와 '봤는데 없다'를 구분할 수 없었다.
+    """
+    from modules.dart_api import DartQueryError
     saved = config.DART_API_KEY
     config.DART_API_KEY = ""
     try:
-        assert api.call_dart("alotMatter.json", {"corp_code": "x"}) is None
+        with pytest.raises(DartQueryError):
+            api.call_dart("alotMatter.json", {"corp_code": "x"})
     finally:
         config.DART_API_KEY = saved
 

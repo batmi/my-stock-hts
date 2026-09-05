@@ -20,6 +20,7 @@ from datetime import datetime
 import config
 import api
 from core import utils
+from modules.telegram_notify import alert_delivered
 
 logger = logging.getLogger(__name__)
 
@@ -99,8 +100,9 @@ class MarketHaltMonitor:
             # VI: 보유+관심 종목별 REST 폴링(기본 OFF).
             if vi_on and (now - self.last_vi_check) >= getattr(config, "MARKET_HALT_VI_INTERVAL", 30):
                 self.last_vi_check = now
-                current = self._check_vi_toss() if is_toss else self._check_vi_kis()
-                self._diff_vi_alerts(current)
+                current, checked = (self._check_vi_toss() if is_toss
+                                    else self._check_vi_kis())
+                self._diff_vi_alerts(current, checked)
         except Exception as e:
             logger.error(f"[MarketHalt] 점검 오류: {e}")
 
@@ -167,18 +169,26 @@ class MarketHaltMonitor:
                 except Exception:
                     pass
 
-            if checked == 0:
+            #  [Fix 2026-09-05] 종전 조건은 `checked == 0` 이었다. 판정에는 최소 2종목이
+            #   필요한데(need >= 2), 한 종목만 응답하면 halted 가 1 을 넘을 수 없어
+            #   **무조건 '정지 아님'** 이 되고, 정지 중이던 시장에 '해제' 오보가 나간다
+            #   (실측 재현: 3종목 중 2종목 조회 실패 → "✅ 서킷브레이커 해제").
+            #   하필 CB 중은 모두가 시세를 두드려 조회가 가장 잘 실패하는 순간이다.
+            #   못 세면 판정하지 않는다 — 직전 상태를 그대로 둔다.
+            if checked < 2:
                 continue
             # 시장 CB 판정: 최소 2종목 이상 '동시' 정지 (개별 정지 오탐 방지)
             need = max(2, math.ceil(checked / 2))
             is_cb = halted >= need
 
+            #  상태는 **전달을 확인한 뒤에** 뒤집는다. 먼저 뒤집으면 텔레그램이 끊긴 동안
+            #   난 CB 를 영영 알리지 못한다(다음 주기엔 상태가 같아 재알림이 없다).
             if is_cb and not self.cb_active[market]:
-                self.cb_active[market] = True
-                self._alert_cb(market, True)
+                if self._alert_cb(market, True):
+                    self.cb_active[market] = True
             elif not is_cb and self.cb_active[market]:
-                self.cb_active[market] = False
-                self._alert_cb(market, False)
+                if self._alert_cb(market, False):
+                    self.cb_active[market] = False
 
     def _index_rate(self, market):
         code = _INDEX_CODE.get(market)
@@ -213,12 +223,20 @@ class MarketHaltMonitor:
         else:
             msg = (f"✅ [서킷브레이커 해제] {name} 시장{rate_str}\n"
                    f"거래가 재개된 것으로 감지되었습니다.")
-        api.send_telegram_message(msg)
-        logger.info(f"[MarketHalt] CB {name} {'발동' if active else '해제'}")
+        delivered = alert_delivered(msg, urgent=active)
+        logger.info(f"[MarketHalt] CB {name} {'발동' if active else '해제'}"
+                    f"{'' if delivered else ' (알림 전달 실패 — 다음 주기 재시도)'}")
+        return delivered
 
     # ---- VI : KIS ----
     def _check_vi_kis(self):
+        """반환: (VI 발동 중인 code->name, **조회에 성공한 code 집합**).
+
+        성공 집합을 따로 돌려주는 이유는 _diff_vi_alerts 주석 참조 — 조회 실패를
+        '해제'로 읽으면 알림이 스스로 뒤집힌다.
+        """
         current = {}
+        checked = set()
         any_field = False
         for code, name in self._domestic_targets().items():
             try:
@@ -226,8 +244,12 @@ class MarketHaltMonitor:
                 if not res or res.get("rt_cd") != "0":
                     continue
                 out = res.get("output", {}) or {}
-                if "vi_cls_code" in out:
-                    any_field = True
+                if "vi_cls_code" not in out:
+                    #  필드가 없으면 이 종목의 VI 여부를 **모른다**. 조회 성공으로 세면
+                    #   발동 중인 종목이 해제로 뒤집힌다.
+                    continue
+                any_field = True
+                checked.add(code)
                 if _kis_vi_active(out.get("vi_cls_code")):
                     current[code] = name
             except Exception:
@@ -235,34 +257,60 @@ class MarketHaltMonitor:
         if not any_field and not self._warned_no_vi_field:
             self._warned_no_vi_field = True
             logger.warning("[MarketHalt] KIS 시세 응답에 vi_cls_code 필드가 없어 VI 감지를 건너뜁니다.")
-        return current
+        return current, checked
 
     # ---- VI : 토스 ----
     def _check_vi_toss(self):
+        """반환: (VI 발동 중인 code->name, 조회에 성공한 code 집합)."""
         current = {}
+        checked = set()
         try:
             from brokers import toss_api
         except Exception as e:
             logger.debug(f"[MarketHalt] toss_api 임포트 실패: {e}")
-            return current
+            return current, checked
         for code, name in self._domestic_targets().items():
             try:
                 warnings = toss_api.get_warnings(code) or []
-                if any(_toss_warning_is_vi(w) for w in warnings):
-                    current[code] = name
             except Exception:
-                pass
-        return current
+                continue
+            checked.add(code)
+            if any(_toss_warning_is_vi(w) for w in warnings):
+                current[code] = name
+        return current, checked
 
-    def _diff_vi_alerts(self, current):
-        """현재 VI 집합과 직전 상태를 비교해 신규 발동/해제 알림을 전송."""
+    def _diff_vi_alerts(self, current, checked):
+        """현재 VI 집합과 직전 상태를 비교해 신규 발동/해제 알림을 전송.
+
+        [Fix 2026-09-05] 종전에는 `self.vi_active - current` 를 전부 '해제'로 봤다.
+         그런데 current 는 **조회에 성공한 종목만** 담긴다 — 한 종목의 REST 호출이
+         타임아웃 한 번 나면 그 종목이 빠지고, 발동 중인데도 '🔄 VI 해제'가 나간 뒤
+         래치까지 풀려 다음 주기에 '⚡ VI 발동'이 다시 나간다(실측 재현: 3주기 만에
+         발동→해제→발동). VI 지속은 약 2분이고 폴링은 30초라 그 사이에 흔히 벌어진다.
+         감시 대상(_domestic_targets)이 잔고 조회 실패로 통째로 비면 보유 종목 전부가
+         한꺼번에 '해제'된다.
+
+         조회에 **성공한** 종목만 해제 판정에 넣는다. 못 본 종목은 직전 상태를 유지한다
+         — 모르는 것을 '아니다'로 읽지 않는다.
+
+         알림 전달에 실패하면 상태를 바꾸지 않는다. 그래야 다음 주기에 다시 시도한다.
+
+         checked 는 기본값을 두지 않는다 — 안 넘기면 '전부 봤다'로 굳어 같은 결함이
+         조용히 돌아온다. 호출부가 자기가 무엇을 봤는지 밝히게 한다.
+        """
         cur_codes = set(current.keys())
+        known = set(checked)
+
+        next_active = set(self.vi_active)
         for c in cur_codes - self.vi_active:
-            self._alert_vi(c, current.get(c, c), True)
-        for c in self.vi_active - cur_codes:
-            self._alert_vi(c, self.vi_names.get(c, c), False)
+            if self._alert_vi(c, current.get(c, c), True):
+                next_active.add(c)
+        for c in (self.vi_active - cur_codes) & known:
+            if self._alert_vi(c, self.vi_names.get(c, c), False):
+                next_active.discard(c)
+
         self.vi_names.update(current)
-        self.vi_active = cur_codes
+        self.vi_active = next_active
 
     def _alert_vi(self, code, name, active):
         if active:
@@ -271,5 +319,7 @@ class MarketHaltMonitor:
         else:
             msg = (f"🔄 [VI 해제] {name}({code})\n"
                    f"변동성완화장치(VI)가 해제되어 정상 거래가 재개되었습니다.")
-        api.send_telegram_message(msg)
-        logger.info(f"[MarketHalt] VI {name}({code}) {'발동' if active else '해제'}")
+        delivered = alert_delivered(msg, urgent=active)
+        logger.info(f"[MarketHalt] VI {name}({code}) {'발동' if active else '해제'}"
+                    f"{'' if delivered else ' (알림 전달 실패 — 다음 주기 재시도)'}")
+        return delivered

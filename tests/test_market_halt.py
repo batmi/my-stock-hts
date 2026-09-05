@@ -41,7 +41,7 @@ def test_domestic_code_filter():
 def test_cb_detection_and_alert(monkeypatch):
     m = _fresh_monitor()
     sent = []
-    monkeypatch.setattr(market_halt.api, "send_telegram_message", lambda msg, *a, **k: sent.append(msg))
+    monkeypatch.setattr(market_halt, "alert_delivered", lambda msg, urgent=False: (sent.append(msg), True)[1])
     monkeypatch.setattr(market_halt.api, "get_domestic_index_price", lambda code: {"rt_cd": "9999"})
 
     # 1) 코스피 바스켓 전부 정지 → CB 발동 알림 1회
@@ -72,7 +72,7 @@ def test_cb_single_halt_no_false_positive(monkeypatch):
     """개별 종목 1개만 정지(예: 단일 공시 정지)면 시장 CB로 오판하지 않는다."""
     m = _fresh_monitor()
     sent = []
-    monkeypatch.setattr(market_halt.api, "send_telegram_message", lambda msg, *a, **k: sent.append(msg))
+    monkeypatch.setattr(market_halt, "alert_delivered", lambda msg, urgent=False: (sent.append(msg), True)[1])
 
     def only_first_halted(code, is_overseas=False):
         stop = "Y" if code == "005930" else "N"
@@ -86,22 +86,23 @@ def test_cb_single_halt_no_false_positive(monkeypatch):
 def test_vi_diff_alerts():
     m = _fresh_monitor()
     sent = []
-    market_halt.api_send_backup = market_halt.api.send_telegram_message
-    market_halt.api.send_telegram_message = lambda msg, *a, **k: sent.append(msg)
+    backup = market_halt.alert_delivered
+    market_halt.alert_delivered = lambda msg, urgent=False: (sent.append(msg), True)[1]
     try:
         # 신규 발동 2건
-        m._diff_vi_alerts({"005930": "삼성전자", "000660": "SK하이닉스"})
+        all3 = {"005930", "000660", "247540"}
+        m._diff_vi_alerts({"005930": "삼성전자", "000660": "SK하이닉스"}, all3)
         assert sum("VI 발동" in s for s in sent) == 2
         assert m.vi_active == {"005930", "000660"}
 
         # 한 종목 해제 + 한 종목 신규
         sent.clear()
-        m._diff_vi_alerts({"000660": "SK하이닉스", "247540": "에코프로비엠"})
+        m._diff_vi_alerts({"000660": "SK하이닉스", "247540": "에코프로비엠"}, all3)
         assert any("VI 발동" in s and "에코프로비엠" in s for s in sent)
         assert any("VI 해제" in s and "삼성전자" in s for s in sent)
         assert m.vi_active == {"000660", "247540"}
     finally:
-        market_halt.api.send_telegram_message = market_halt.api_send_backup
+        market_halt.alert_delivered = backup
 
 
 # ==========================================================
@@ -146,7 +147,7 @@ def test_cb_alert_does_not_claim_trading_is_paused(monkeypatch):
     """알림은 하지 않는 일을 알리지 않는다 — CB 중에도 자동매매는 돈다."""
     m = _fresh_monitor()
     sent = []
-    monkeypatch.setattr(market_halt.api, "send_telegram_message", lambda msg, *a, **k: sent.append(msg))
+    monkeypatch.setattr(market_halt, "alert_delivered", lambda msg, urgent=False: (sent.append(msg), True)[1])
     monkeypatch.setattr(market_halt.MarketHaltMonitor, "_index_rate", lambda self, mk: None)
 
     m._alert_cb("KOSPI", True)

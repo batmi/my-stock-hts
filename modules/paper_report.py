@@ -12,6 +12,7 @@ import logging
 from datetime import datetime
 
 from rich import box
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
 from rich.prompt import Prompt
 from rich.table import Table
 
@@ -338,11 +339,17 @@ def _print_verification_detail(perf):
 
     pt = Table(title="\n보유 포지션 상세 (판정 상태)", box=box.HORIZONTALS,
                header_style="dim", border_style="dim", collapse_padding=True)
-    for col, just in (("종목", "left"), ("보유", "right"), ("평단", "right"),
-                      ("현재가", "right"), ("수익률", "right"), ("증액", "right"),
-                      ("최고가", "right"), ("TS", "left"), ("TS 기준", "right"),
-                      ("시간청산", "right"), ("손절선", "right"), ("여유", "right"),
-                      ("리스크(예산비)", "right")):
+    #  [열 구성 · 2026-09-05] 수량·평가금액을 넣으면서 표 폭 상한(메뉴 2-1 실측 135열)을
+    #   넘겼다. 열을 지우기 전에 접는다는 순서대로 두 번 접었다:
+    #    · TS 상태와 TS 기준을 한 열로 합쳤다(둘 다 항상 같이 읽는 값이다).
+    #    · 최고가(원)를 지우고 트레일링 열의 '최고 +x%'만 남겼다 — 같은 값을 절대가와
+    #      상대율로 두 번 쓰고 있었고, 무장 여부를 가르는 것은 상대율 쪽이다.
+    #   결과 134열. 헤더에 두 숫자의 뜻을 적어(발동/최고) 칸 안의 설명 글자를 덜어냈다.
+    for col, just in (("종목", "left"), ("일수", "right"), ("수량", "right"), ("평단", "right"),
+                      ("현재가", "right"), ("평가금액", "right"), ("수익률", "right"),
+                      ("증액", "right"), ("트레일링(발동/최고)", "right"),
+                      ("기한", "right"), ("손절선", "right"), ("여유", "right"),
+                      ("리스크", "right")):
         pt.add_column(col, justify=just, no_wrap=True)
 
     # [왜 손절선을 함께 보여주는가] 위 TS 열은 '무장 전'이면 아직 없는 선이다. 그 상태에서
@@ -351,76 +358,91 @@ def _print_verification_detail(perf):
     #  오픈 리스크는 그 선까지의 잠재손실(= 히트 캡이 세는 값)이고, 예산비는 그 종목이
     #  계좌 전체 리스크 예산에서 차지하는 몫이다. 한 종목이 예산을 삼키면 다른 종목의
     #  신규 진입·증액이 막히므로([[heat-cap-formula-divergence]]) 여기서 보여야 한다.
-    risk_by_code, budget_left, heat_cap, scale_known = _position_open_risk(positions)
-    heat_cap_amt = (perf["total"] * heat_cap / 100.0) if heat_cap else 0.0
+    #  [진행 표시 · 2026-09-05] 이 표는 종목마다 차트를 받아 ATR 을 다시 낸다
+    #   (_position_indicators → 원격 조회). 보유가 몇 종목만 돼도 화면이 수 초 멈춰 있어
+    #   멈춘 것인지 계산 중인지 구분되지 않았다. 다른 원격 조회 화면(manage/insider·
+    #   disclosure)과 같은 방식으로 진행률을 보여준다. transient=True 라 끝나면 사라지고
+    #   표만 남는다.
+    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
+                  BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                  console=config.console, transient=True) as progress:
+        #  +1 은 리스크 예산 산출(포지션 전체를 한 번에 계산한다).
+        task = progress.add_task("[cyan]포지션 판정 상태 계산 중...[/cyan]",
+                                 total=len(positions) + 1)
+        risk_by_code, budget_left, heat_cap, scale_known = _position_open_risk(positions)
+        heat_cap_amt = (perf["total"] * heat_cap / 100.0) if heat_cap else 0.0
+        progress.advance(task)
 
-    for p in positions:
-        # 총자산과 같은 규칙으로 평가한다(장 종료 후 = KRX 확정 종가). 종전에는
-        #  _current_price 라 표만 NXT 최종가였고, 총자산과 합계가 어긋났다.
-        cur = paper_broker.valuation_price(p["code"], p["avg_price"])
-        profit = (cur - p["avg_price"]) / p["avg_price"] * 100 if p["avg_price"] else 0.0
-        held = _holding_days(p.get("first_buy_at"))
-        try:
-            pyr = db_manager.db.get_pyramid_count(p["code"])
-        except Exception:
-            pyr = -1
-        high = float(highs.get(p["code"]) or 0.0)
+        for p in positions:
+            # 총자산과 같은 규칙으로 평가한다(장 종료 후 = KRX 확정 종가). 종전에는
+            #  _current_price 라 표만 NXT 최종가였고, 총자산과 합계가 어긋났다.
+            cur = paper_broker.valuation_price(p["code"], p["avg_price"])
+            profit = (cur - p["avg_price"]) / p["avg_price"] * 100 if p["avg_price"] else 0.0
+            held = _holding_days(p.get("first_buy_at"))
+            try:
+                pyr = db_manager.db.get_pyramid_count(p["code"])
+            except Exception:
+                pyr = -1
+            high = float(highs.get(p["code"]) or 0.0)
 
-        ts = None
-        if high:
-            # 트레일링 스탑 계산에 필요한 기술적 지표(ATR)를 구한다.
-            #  변동성을 반영하지 않으면 전역 고정 발동선(5%)으로 폴백해 9-2 화면('대기')과
-            #  이 화면('무장')이 갈린다.
-            #
-            #  [당일 봉 반영 · 2026-08-29] 9-2(analyze_holdings)는 차트를 받은 뒤
-            #   apply_realtime_price 로 당일 봉을 실시간가로 덮고 지표를 낸다. 여기서
-            #   그 한 줄을 빠뜨리면 소스가 pykrx/FDR 이라 **장중 당일이 통째로 빠진 채**
-            #   ATR 이 계산된다(krx_daily 주석: pykrx·FDR 은 장중 당일 값을 주지 않는다).
-            #   변동성이 큰 날 — 정확히 이 표기를 고치게 만든 상황 — 에 발동선이 다시
-            #   어긋나므로 같은 보정을 태운다. chart_overlay_price 가 정규장 밖에서는
-            #   0.0 을 돌려주므로 장 종료 후에는 KRX 확정 종가가 그대로 남는다.
-            ind = _position_indicators(p["code"], cur)
-            ts = engine.compute_trailing_stop(high, p["avg_price"], cur, ind=ind)
+            ts = None
+            if high:
+                # 트레일링 스탑 계산에 필요한 기술적 지표(ATR)를 구한다.
+                #  변동성을 반영하지 않으면 전역 고정 발동선(5%)으로 폴백해 9-2 화면('대기')과
+                #  이 화면('무장')이 갈린다.
+                #
+                #  [당일 봉 반영 · 2026-08-29] 9-2(analyze_holdings)는 차트를 받은 뒤
+                #   apply_realtime_price 로 당일 봉을 실시간가로 덮고 지표를 낸다. 여기서
+                #   그 한 줄을 빠뜨리면 소스가 pykrx/FDR 이라 **장중 당일이 통째로 빠진 채**
+                #   ATR 이 계산된다(krx_daily 주석: pykrx·FDR 은 장중 당일 값을 주지 않는다).
+                #   변동성이 큰 날 — 정확히 이 표기를 고치게 만든 상황 — 에 발동선이 다시
+                #   어긋나므로 같은 보정을 태운다. chart_overlay_price 가 정규장 밖에서는
+                #   0.0 을 돌려주므로 장 종료 후에는 KRX 확정 종가가 그대로 남는다.
+                ind = _position_indicators(p["code"], cur)
+                ts = engine.compute_trailing_stop(high, p["avg_price"], cur, ind=ind)
 
-        if ts is None:
-            ts_txt, ts_ref = "[dim]추적 전[/dim]", "[dim]-[/dim]"
-        elif ts["armed"]:
-            # 무장했으면 '지금 이 가격 아래로 내려가면 판다' — 실제 청산선을 그대로 보여준다.
-            ts_txt = "[red]무장[/]"
-            ts_ref = f"청산 {ts['stop_price']:,.0f} (-{ts['callback']:.1f}%)"
-        else:
-            # 아직이면 '얼마나 더 올라야 무장하는가'가 확인할 값이다.
-            ts_txt = "[dim]대기[/dim]"
-            ts_ref = f"발동 +{ts['activation']:.1f}% (최고 +{ts['max_profit_rate']:.1f}%)"
+            if ts is None:
+                ts_txt = "[dim]추적 전[/dim]"
+            elif ts["armed"]:
+                # 무장했으면 '지금 이 가격 아래로 내려가면 판다' — 실제 청산선을 그대로
+                #  보여준다. 뒤 숫자는 콜백폭이다.
+                ts_txt = f"[red]무장[/] {ts['stop_price']:,.0f} / -{ts['callback']:.1f}%"
+            else:
+                # 아직이면 '얼마나 더 올라야 무장하는가'(발동선)와 '지금 어디까지
+                #  올라와 있나'(최고)를 나란히 둔다.
+                ts_txt = (f"[dim]대기[/dim] +{ts['activation']:.1f}% "
+                          f"/ +{ts['max_profit_rate']:.1f}%")
 
-        if use_time_stop and held is not None:
-            #  기한은 그 종목에 실제로 적용되는 값이다 — 개별 룰이 바꾸면 청산 판정도
-            #  그 값을 쓴다(common.effective_time_stop_days). 전역만 보면 D-n 이 거짓말한다.
-            left = common.effective_time_stop_days(p["code"]) - held
-            stop_txt = f"D-{left}" if left > 0 else "[yellow]도달[/]"
-        else:
-            stop_txt = "[dim]-[/dim]"
+            if use_time_stop and held is not None:
+                #  기한은 그 종목에 실제로 적용되는 값이다 — 개별 룰이 바꾸면 청산 판정도
+                #  그 값을 쓴다(common.effective_time_stop_days). 전역만 보면 D-n 이 거짓말한다.
+                left = common.effective_time_stop_days(p["code"]) - held
+                stop_txt = f"D-{left}" if left > 0 else "[yellow]도달[/]"
+            else:
+                stop_txt = "[dim]-[/dim]"
 
-        # 손절선·오픈리스크. 산출 실패는 '0'이 아니라 '모름'으로 적는다 — 리스크를 0으로
-        #  보여주면 없는 안전을 있는 것처럼 읽힌다(히트 산식의 fail-closed와 같은 이유).
-        sl_price, risk = risk_by_code.get(p["code"], (None, None))
-        if sl_price is None:
-            sl_txt = room_txt = risk_txt = "[dim]?[/dim]"
-        else:
-            room = (sl_price - cur) / cur * 100 if cur else 0.0
-            sl_txt = f"{sl_price:,.0f}"
-            room_txt = f"[blue]{room:.1f}%[/]" if room < 0 else f"[red]+{room:.1f}%[/]"
-            # 예산비 = 이 종목이 계좌 리스크 예산(히트 캡)에서 차지하는 몫.
-            share = f" ({risk / heat_cap_amt * 100:.0f}%)" if heat_cap_amt else ""
-            risk_txt = f"{risk:,.0f}{share}"
+            # 손절선·오픈리스크. 산출 실패는 '0'이 아니라 '모름'으로 적는다 — 리스크를 0으로
+            #  보여주면 없는 안전을 있는 것처럼 읽힌다(히트 산식의 fail-closed와 같은 이유).
+            sl_price, risk = risk_by_code.get(p["code"], (None, None))
+            if sl_price is None:
+                sl_txt = room_txt = risk_txt = "[dim]?[/dim]"
+            else:
+                room = (sl_price - cur) / cur * 100 if cur else 0.0
+                sl_txt = f"{sl_price:,.0f}"
+                room_txt = f"[blue]{room:.1f}%[/]" if room < 0 else f"[red]+{room:.1f}%[/]"
+                # 예산비 = 이 종목이 계좌 리스크 예산(히트 캡)에서 차지하는 몫.
+                share = f" ({risk / heat_cap_amt * 100:.0f}%)" if heat_cap_amt else ""
+                risk_txt = f"{risk:,.0f}{share}"
 
-        pc = "red" if profit > 0 else ("blue" if profit < 0 else "white")
-        pt.add_row(f"{p['name']}", f"{held if held is not None else '-'}일",
-                   f"{p['avg_price']:,.0f}", f"{cur:,.0f}", f"[{pc}]{profit:+.2f}%[/]",
-                   ("?" if pyr < 0 else f"{pyr}차"), f"{high:,.0f}" if high else "[dim]-[/dim]",
-                   ts_txt, ts_ref, stop_txt, sl_txt, room_txt, risk_txt)
-        if pt.row_count % 5 == 0 and pt.row_count < len(positions):
-            pt.add_section()
+            pc = "red" if profit > 0 else ("blue" if profit < 0 else "white")
+            pt.add_row(f"{p['name']}", f"{held if held is not None else '-'}",
+                       f"{p['qty']:,}", f"{p['avg_price']:,.0f}", f"{cur:,.0f}",
+                       f"{cur * p['qty']:,.0f}", f"[{pc}]{profit:+.2f}%[/]",
+                       ("?" if pyr < 0 else f"{pyr}차"),
+                       ts_txt, stop_txt, sl_txt, room_txt, risk_txt)
+            if pt.row_count % 5 == 0 and pt.row_count < len(positions):
+                pt.add_section()
+            progress.advance(task)
     config.console.print(pt)
 
     # 리스크 예산 — 개별 행의 '예산비'가 무엇의 몫인지 여기서 분모를 밝힌다.

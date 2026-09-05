@@ -44,7 +44,7 @@ def test_unconfigured_telegram_counts_as_delivered(monkeypatch):
     """토큰이 없으면 '전송 실패'가 아니라 '알림 수단 없음'이다 — 로그가 알림 역할을 한다."""
     monkeypatch.setattr(config, 'TELEGRAM_BOT_TOKEN', '', raising=False)
     monkeypatch.setattr(config, 'TELEGRAM_CHAT_ID', '', raising=False)
-    with patch('modules.auto_trade.common.api.send_telegram_message') as send:
+    with patch('modules.telegram_notify.send_telegram_message') as send:
         assert common.alert_delivered("x") is True
     send.assert_not_called()
 
@@ -53,7 +53,7 @@ def test_configured_telegram_is_sent_synchronously(monkeypatch):
     """전달 여부를 알아야 하므로 동기 전송이어야 한다(비동기는 None 을 준다)."""
     monkeypatch.setattr(config, 'TELEGRAM_BOT_TOKEN', 'tok', raising=False)
     monkeypatch.setattr(config, 'TELEGRAM_CHAT_ID', 'chat', raising=False)
-    with patch('modules.auto_trade.common.api.send_telegram_message', return_value=True) as send:
+    with patch('modules.telegram_notify.send_telegram_message', return_value=True) as send:
         assert common.alert_delivered("x") is True
     assert send.call_args.kwargs.get('sync') is True
 
@@ -61,9 +61,9 @@ def test_configured_telegram_is_sent_synchronously(monkeypatch):
 def test_send_failure_is_reported(monkeypatch):
     monkeypatch.setattr(config, 'TELEGRAM_BOT_TOKEN', 'tok', raising=False)
     monkeypatch.setattr(config, 'TELEGRAM_CHAT_ID', 'chat', raising=False)
-    with patch('modules.auto_trade.common.api.send_telegram_message', return_value=False):
+    with patch('modules.telegram_notify.send_telegram_message', return_value=False):
         assert common.alert_delivered("x") is False
-    with patch('modules.auto_trade.common.api.send_telegram_message', side_effect=OSError("down")):
+    with patch('modules.telegram_notify.send_telegram_message', side_effect=OSError("down")):
         assert common.alert_delivered("x") is False
 
 

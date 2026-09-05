@@ -101,6 +101,34 @@ def _get_telegram_footer():
     return f"[{instance_name} | {acc_label} {full_acc}]" if full_acc \
         else f"[{instance_name} | {acc_label}]"
 
+#  경보 전달 확인 실패 시의 재시도 간격. 스로틀을 24시간으로 찍어 버리면 그동안
+#  침묵하고, 아예 안 찍으면 매 주기 같은 줄이 반복된다 — 그 사이 값이다.
+ALERT_RETRY_SEC = 600.0
+
+
+def alert_delivered(message, urgent=False):
+    """경보를 보내고 **스로틀을 찍어도 되는가**를 돌려준다.
+
+    [왜 필요한가 · 2026-09-04] 경보 스로틀(`unmanaged_stop_notified` 등)은 종전에 보내기
+     **전에** 찍혔다. `api.send_telegram_message` 는 기본이 비동기라 예외를 던지지 않으므로
+     호출부의 try 는 전송 실패를 잡지 못한다 — 네트워크가 끊겨 있어도 전부 '보냈다'로 굳는다.
+     캘린더·공시 알림은 같은 결함을 이미 고쳤는데(modules/manage/events.py) 매매 경보 쪽은
+     남아 있었다. 손절선 이탈 경보는 스스로 '시스템이 손절해 주지 않는 포지션의 마지막
+     안전망'이라고 적어 둔 알림이고, 한 번 놓치면 24시간 침묵한다.
+
+    텔레그램이 아예 구성돼 있지 않으면(토큰·챗ID 없음) 전송 실패가 아니라 **알림 수단이
+    없는 것**이므로 True 를 돌려준다. 그때는 화면·파일 로그가 알림이고, 매 주기 같은 줄을
+    다시 찍어도 얻는 것이 없다.
+    """
+    if not (getattr(config, 'TELEGRAM_BOT_TOKEN', '') and getattr(config, 'TELEGRAM_CHAT_ID', '')):
+        return True
+    try:
+        return bool(send_telegram_message(message, is_urgent=urgent, sync=True))
+    except Exception as e:      # noqa: BLE001 - 전달 실패로 취급해 다음 기회에 재시도한다
+        logger.warning(f"[경보] 텔레그램 전송 오류 — 다음 기회에 재시도합니다: {e}")
+        return False
+
+
 def send_telegram_message(message, reply_markup=None, is_urgent=False, sync=False):
     """텔레그램 메시지 전송 (시스템 트레이딩 알림용).
 

@@ -34,42 +34,66 @@ _dart_corp_map_cache = None  # 프로세스 메모리 캐시
 _dart_corp_map_lock = threading.Lock()  # [중요] 동시 다운로드 방지용 락
 
 
+class DartQueryError(Exception):
+    """DART 조회가 **실패**했다 — '데이터가 없다'와 다르다.
+
+    [왜 예외인가 · 2026-09-05] 종전 call_dart 는 한도초과(020)·네트워크 오류·JSON 파손을
+     모두 None 으로 돌려줬고, 위의 get_dart_* 들은 그 None 을 `[]` 로 바꿔 내놨다. 그래서
+     DART 일일 한도(20,000건)를 소진한 상태로 메뉴 6-7(수급·물량)을 열면 화면은
+     **"최근 90일간 수급·물량 관련 보고가 없습니다"** 를 찍는다 — 아무것도 조회하지 못한
+     채로 무결점 진단서를 내주는 것이다(실측 재현). 관심종목 하나당 여러 건을 부르는
+     화면이라 한도 소진은 드문 일이 아니다.
+
+     오버할(잠재 매도물량)·자기주식은 '없다'로 읽는 순간 판단이 반대로 간다. 같은 파일의
+     rem_estimated 가 이미 '모르면 위험 쪽'을 택하는데, 그보다 앞단인 조회 실패가 조용했다.
+     실패를 예외로 올리면 modules/manage/scan.ScanFailures 가 이미 깔아 둔 수집 경로를 타고
+     화면 맨 위에 밝혀진다. **013(데이터 없음)만 None 이다.**
+    """
+
+
 def call_dart(endpoint, params, timeout=10):
     """OpenDART OpenAPI 공통 호출 래퍼.
 
-    반환: 성공 시 응답 JSON의 'list'(없으면 dict 전체), 실패/데이터없음 시 None.
-    status: 000=정상, 013=데이터없음, 020/021=한도초과/오류.
+    반환: 성공 시 응답 JSON의 'list'(없으면 dict 전체), **데이터 없음(013)이면 None**.
+    실패(한도초과·오류·네트워크·JSON 파손)는 DartQueryError 를 던진다 — 호출부가
+    '없음'과 구분할 수 있어야 하기 때문이다(DartQueryError 주석 참조).
+    API 키 미설정도 조회를 못 한 것이므로 None 이 아니라 예외다.
     """
     if not config.DART_API_KEY:
-        return None
+        raise DartQueryError("DART API 키가 설정되지 않았습니다(환경변수 DART_API_KEY)")
     try:
         p = dict(params)
         p["crtfc_key"] = config.DART_API_KEY
         res = requests.get(f"{DART_BASE_URL}/{endpoint}", params=p, timeout=timeout)
         data = res.json()
-        status = data.get("status")
-        if status == "000":
-            return data.get("list", data)
-        if status == "013":  # 조회된 데이터 없음 (정상 케이스)
-            return None
-        logger.warning(f"[DART] {endpoint} 응답 코드 {status}: {data.get('message')}")
-        return None
     except Exception as e:
         logger.error(f"[DART] {endpoint} 호출 오류: {e}")
+        raise DartQueryError(f"{endpoint}: {e}") from e
+    status = data.get("status")
+    if status == "000":
+        return data.get("list", data)
+    if status == "013":  # 조회된 데이터 없음 (정상 케이스)
         return None
+    logger.warning(f"[DART] {endpoint} 응답 코드 {status}: {data.get('message')}")
+    raise DartQueryError(f"{endpoint}: 응답 코드 {status} ({data.get('message')})")
 
 
 def get_dart_corp_map(force_refresh=False):
     """종목코드(6자리) -> DART 고유번호(corp_code, 8자리) 매핑.
 
     corpCode.xml(ZIP) 1회 다운로드 후 json 파일로 캐시(30일 TTL).
+
+    맵을 **못 받으면 DartQueryError** 를 던진다. 종전에는 빈 dict 를 돌려줬는데, 위의
+    get_dart_* 들이 전부 `corp = map.get(code)` → `if not corp: return []` 이라 맵 하나가
+    비면 관심종목 전부가 조용히 '해당 없음'이 된다 — 화면 한 장이 통째로 거짓말한다.
+    맵은 받았는데 그 코드가 없는 것(비상장·폐지)은 실패가 아니므로 종전대로 빈 값이다.
     """
     global _dart_corp_map_cache
     if _dart_corp_map_cache is not None and not force_refresh:
         return _dart_corp_map_cache
 
     if not config.DART_API_KEY:
-        return {}
+        raise DartQueryError("DART API 키가 설정되지 않았습니다(환경변수 DART_API_KEY)")
 
     # [중요] 동시 다운로드 방지: 여러 워커 스레드(공시 수집 등)가 동시에 진입하면
     # 각자 DART 기업코드 ZIP(수십 MB XML+10만건 dict)을 중복 다운로드/파싱해 메모리가
@@ -129,8 +153,12 @@ def _load_dart_corp_map_locked(force_refresh):
             return corp_map
     except Exception as e:
         logger.error(f"[DART] corp_map 다운로드 오류: {e}")
+        if not _dart_corp_map_cache:
+            raise DartQueryError(f"DART 기업코드 맵을 받지 못했습니다: {e}") from e
 
-    return _dart_corp_map_cache or {}
+    if not _dart_corp_map_cache:
+        raise DartQueryError("DART 기업코드 맵이 비어 있습니다(다운로드/파싱 실패)")
+    return _dart_corp_map_cache
 
 
 def get_dart_dividend(stock_code, year=None, reprt_code="11011"):

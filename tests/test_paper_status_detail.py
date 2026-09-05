@@ -96,3 +96,28 @@ def test_보유가_없어도_화면이_깨지지_않는다(capsys):
     out = _render(capsys, [], {})
     assert "운용 표본" in out
     assert "보유 포지션 상세" not in out
+
+
+def test_평가금액과_수량이_함께_보인다(capsys):
+    """수량 × 현재가 = 평가금액. 둘 다 없으면 '이 종목이 계좌에서 얼마인가'를 알 수 없다."""
+    out = _render(capsys, [_position()], {"005930": 82000.0}, price=77000.0)
+    assert "수량" in out and "평가금액" in out
+    assert "770,000" in out, "평가금액(10주 × 77,000원)이 표에 없다"
+
+
+def test_표_폭이_상한을_넘지_않는다(capsys):
+    """표 폭 상한은 메뉴 2-1 출력 폭(실측 135열)이다.
+
+    열을 더할 때마다 조용히 넘어가면 좁은 터미널에서 rich 가 값을 '…'로 잘라낸다 —
+    잘리는 것은 대개 오른쪽 끝의 손절선·리스크, 즉 가장 봐야 할 열이다. 넓은 폭으로
+    렌더해서 실제 필요 폭을 재고, 상한을 넘으면 여기서 깨뜨린다.
+
+    자릿수가 큰 종목(6자리 단가·네 자리 수량)을 넣는다 — 폭은 데이터가 정한다.
+    """
+    pos = _position(name="SK이노베이션", avg=522_000.0)
+    pos["qty"] = 1_270
+    out = _render(capsys, [pos], {"005930": 600_000.0}, price=548_000.0)
+    rules = [ln.rstrip() for ln in out.splitlines() if ln.strip() and set(ln.strip()) <= {"─"}]
+    assert rules, "표가 렌더되지 않았다"
+    assert max(len(ln) for ln in rules) <= 135, \
+        f"보유 포지션 상세 표가 {max(len(ln) for ln in rules)}열 — 상한 135열을 넘었다"
