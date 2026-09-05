@@ -491,3 +491,128 @@ def test_journal_sync_follows_toggle_in_paper_mode(monkeypatch):
     finally:
         db_manager.db.close_all_connections()
         db_manager.db.switch_path(original_path)
+
+
+# ===========================================================================
+# 원장 원자성 (2026-09-05)
+#
+# place_order 는 예수금·포지션·체결 기록 **세 줄**을 고친다. 종전에는 execute_query 를
+# 세 번 불러 각각 커밋했다. 중간에 하나가 실패하면(잠금 5회 소진 → execute_query 는
+# raise 한다) 절반만 반영된 원장이 남는다:
+#   · 매수 — 예수금은 빠졌는데 포지션이 없다(가상 자산이 조용히 증발)
+#   · 매도 — 예수금은 늘었는데 포지션이 그대로다(자산이 공짜로 불어난다)
+#
+# 가상 계좌의 자산곡선은 드로다운 → 리스크 한도로 이어지므로, 어긋난 원장이 그대로
+# 매매 강도를 바꾼다.
+# ===========================================================================
+def _break_after(n_ok):
+    """n_ok 번째 execute 까지만 통과시키고 그 다음에 터지는 커서 래퍼를 만든다."""
+    import contextlib
+
+    from modules import db_manager as dbm
+
+    real = dbm.db.transaction
+    state = {"n": 0}
+
+    class _Cur:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def execute(self, *a, **k):
+            state["n"] += 1
+            if state["n"] > n_ok:
+                raise RuntimeError("database is locked")
+            return self._inner.execute(*a, **k)
+
+    @contextlib.contextmanager
+    def _wrapped():
+        with real() as cur:
+            yield _Cur(cur)
+
+    return _wrapped
+
+
+def test_매수_원장이_절반만_남지_않는다(paper, monkeypatch):
+    from modules import db_manager as dbm
+
+    before_cash = paper.get_cash()
+    monkeypatch.setattr(dbm.db, "transaction", _break_after(1))   # 예수금만 쓰고 터진다
+    res = paper.place_order('buy', '005930', 10, 70000)
+
+    assert res['rt_cd'] != '0', "원장 기록에 실패했는데 체결로 답했다"
+    assert paper.get_cash() == before_cash, (
+        f"예수금이 빠진 채 남았다 — 가상 자산이 증발한다 ({before_cash} → {paper.get_cash()})")
+    assert not [p for p in paper.get_positions() if p['code'] == '005930']
+    assert not [f for f in paper.get_fills() if f['code'] == '005930']
+
+
+def test_매도_원장이_절반만_남지_않는다(paper, monkeypatch):
+    from modules import db_manager as dbm
+
+    assert paper.place_order('buy', '005930', 10, 70000)['rt_cd'] == '0'
+    cash_after_buy = paper.get_cash()
+
+    monkeypatch.setattr(dbm.db, "transaction", _break_after(1))   # 예수금만 쓰고 터진다
+    res = paper.place_order('sell', '005930', 10, 70000)
+
+    assert res['rt_cd'] != '0'
+    assert paper.get_cash() == cash_after_buy, (
+        "예수금은 늘고 포지션은 남았다 — 자산이 공짜로 불어난다")
+    held = [p for p in paper.get_positions() if p['code'] == '005930']
+    assert held and held[0]['qty'] == 10, "포지션이 어긋났다"
+
+
+def test_실패는_거부로_답한다(paper, monkeypatch):
+    """예외를 그대로 올리면 호출부가 '주문 결과 불명'으로 다룬다 — 여기선 확정 거부다."""
+    from modules import db_manager as dbm
+
+    monkeypatch.setattr(dbm.db, "transaction", _break_after(0))
+    res = paper.place_order('buy', '005930', 10, 70000)
+    assert res['rt_cd'] == '1' and res['msg_cd'] == 'PAPER_REJECT'
+    assert not (res.get('output') or {}).get('ODNO'), "거부인데 주문번호를 줬다"
+
+
+def test_정상_경로는_그대로다(paper):
+    """대조군 — 트랜잭션으로 묶어도 결과가 달라지지 않는다."""
+    seed = paper.get_cash()
+    assert paper.place_order('buy', '005930', 10, 70000)['rt_cd'] == '0'
+    pos = [p for p in paper.get_positions() if p['code'] == '005930']
+    assert pos and pos[0]['qty'] == 10
+    assert paper.get_cash() < seed
+    assert [f for f in paper.get_fills() if f['code'] == '005930']
+
+
+def test_입출금은_시드와_현금을_함께_움직인다(paper, monkeypatch):
+    """이 함수의 독스트링이 적어 둔 불변식 — 따로 쓰면 입금액이 '수익'으로 보인다."""
+    from modules import db_manager as dbm
+
+    seed_before, cash_before = paper.get_seed(), paper.get_cash()
+    monkeypatch.setattr(dbm.db, "transaction", _break_after(1))   # 현금만 쓰고 터진다
+    ok, msg = paper.adjust_seed(1_000_000)
+
+    assert ok is False, f"기록에 실패했는데 성공으로 답했다: {msg}"
+    assert paper.get_cash() == cash_before, "현금만 움직였다"
+    assert paper.get_seed() == seed_before, "시드만 움직였다"
+
+
+def test_정상_입출금은_둘_다_움직인다(paper):
+    seed_before, cash_before = paper.get_seed(), paper.get_cash()
+    ok, _ = paper.adjust_seed(1_000_000)
+    assert ok is True
+    assert paper.get_cash() == cash_before + 1_000_000
+    assert paper.get_seed() == seed_before + 1_000_000
+
+
+def test_초기화가_반쯤_된_계좌를_남기지_않는다(paper, monkeypatch):
+    """paper_state 만 비워진 계좌(현금 0·시드 없음)로 자동매매가 기동하면 안 된다."""
+    from modules import db_manager as dbm
+
+    assert paper.place_order('buy', '005930', 10, 70000)['rt_cd'] == '0'
+    cash_before = paper.get_cash()
+
+    monkeypatch.setattr(dbm.db, "transaction", _break_after(2))   # DELETE 두 개만
+    with pytest.raises(Exception):
+        paper.reset(seed=3_000_000)
+
+    assert paper.get_cash() == cash_before, "예수금이 사라졌다"
+    assert [p for p in paper.get_positions() if p['code'] == '005930'], "포지션이 지워졌다"

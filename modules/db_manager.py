@@ -1,4 +1,5 @@
 # modules/db_manager.py
+import contextlib
 import sqlite3
 import json
 import logging
@@ -214,6 +215,31 @@ class DBManager:
                     logger.error(f"[DB] execute_query 실패: {e} | {query[:80]}")
                     raise
         return None
+
+    @contextlib.contextmanager
+    def transaction(self):
+        """여러 쓰기를 **한 트랜잭션**으로 묶는다. 하나라도 실패하면 전부 되돌린다.
+
+        [왜 필요한가 · 2026-09-05] execute_query 는 호출마다 commit 한다. 원장처럼 여러
+         행이 함께 맞아야 하는 갱신을 그렇게 쓰면, 중간에 하나가 실패했을 때
+         **절반만 반영된 상태**가 남는다. 가상투자 체결이 그랬다 — 예수금·포지션·체결
+         기록을 따로 썼다.
+
+         쓰기는 이 커서로만 할 것. 블록 안에서 execute_query 를 부르면 같은 스레드의
+         같은 연결에서 먼저 commit 해 버려 트랜잭션이 깨진다(읽기는 블록 밖에서 미리).
+        """
+        with self.lock:
+            conn = self._get_conn()
+            cur = conn.cursor()
+            try:
+                yield cur
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception as e:      # noqa: BLE001
+                    logger.error(f"[DB] 트랜잭션 롤백 실패: {e}")
+                raise
+            conn.commit()
 
     def _init_db(self):
         """DB 초기화 (테이블 생성 등) - 메인 스레드에서 한 번만 실행"""

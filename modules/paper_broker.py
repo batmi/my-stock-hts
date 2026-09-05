@@ -378,25 +378,46 @@ def place_order(action, code, qty, price, name=None):
             _is_etf = False
         price = fill_price(price, action, market=is_market, is_etf=_is_etf)
 
+        #  [원자성 · 2026-09-05] 예수금·포지션·체결 기록은 **함께** 맞아야 한다. 종전에는
+        #   세 번의 execute_query 로 각각 커밋했다. 중간에 하나가 실패하면(잠금 5회 소진 →
+        #   execute_query 는 raise 한다) 절반만 반영된 원장이 남는다:
+        #     · 매수 — 예수금은 빠졌는데 포지션이 없다(가상 자산이 조용히 증발)
+        #     · 매도 — 예수금은 늘었는데 포지션이 그대로다(자산이 공짜로 불어난다)
+        #   가상 계좌의 자산곡선은 드로다운 → 리스크 한도로 이어지므로, 어긋난 원장이
+        #   그대로 매매 강도를 바꾼다([[daily-asset-baseline-transfers]] 와 같은 계열).
+        #   읽기(get_cash·pos)는 트랜잭션 **밖**에서 이미 끝냈다 — 같은 스레드에서
+        #   execute_query 를 부르면 먼저 커밋해 버려 트랜잭션이 깨진다.
+        _FILL_SQL = ("INSERT INTO paper_fills (time, type, code, name, qty, price, amount, fee, "
+                     "profit_amt, profit_rate, odno) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+        _CASH_SQL = "INSERT OR REPLACE INTO paper_state (key, value) VALUES (?, ?)"
+
         if action.lower() == 'buy':
             amount = price * qty
             fee = trading_cost.buy_fee(amount)
             cash = get_cash()
             if cash < amount + fee:
                 return _fail(f"가상 예수금 부족 (필요 {int(amount+fee):,} / 보유 {int(cash):,})")
-            _set_state('cash', cash - amount - fee)
             if pos and int(pos[1]) > 0:
                 new_qty = int(pos[1]) + qty
                 new_avg = (float(pos[2]) * int(pos[1]) + amount) / new_qty
-                _db().execute_query(
-                    "UPDATE paper_positions SET qty=?, avg_price=?, last_buy_at=?, name=? WHERE code=?",
-                    (new_qty, new_avg, now, name or pos[0], code))
+                pos_sql = ("UPDATE paper_positions SET qty=?, avg_price=?, last_buy_at=?, "
+                           "name=? WHERE code=?")
+                pos_args = (new_qty, new_avg, now, name or pos[0], code)
             else:
-                _db().execute_query(
-                    "INSERT OR REPLACE INTO paper_positions "
-                    "(code, name, qty, avg_price, first_buy_at, last_buy_at) VALUES (?,?,?,?,?,?)",
-                    (code, name, qty, price, now, now))
-            _record_fill(now, '매수', code, name, qty, price, amount, fee, 0.0, 0.0, odno)
+                pos_sql = ("INSERT OR REPLACE INTO paper_positions "
+                           "(code, name, qty, avg_price, first_buy_at, last_buy_at) "
+                           "VALUES (?,?,?,?,?,?)")
+                pos_args = (code, name, qty, price, now, now)
+            try:
+                with _db().transaction() as cur:
+                    cur.execute(_CASH_SQL, ('cash', json.dumps(cash - amount - fee)))
+                    cur.execute(pos_sql, pos_args)
+                    cur.execute(_FILL_SQL, (now, '매수', code, name, qty, price,
+                                            amount, fee, 0.0, 0.0, odno))
+            except Exception as e:      # noqa: BLE001
+                logger.error(f"[PAPER] 매수 원장 기록 실패({code} {qty}주) — "
+                             f"되돌렸습니다(주문 없음): {e}", exc_info=True)
+                return _fail(f"가상 원장 기록 실패 — 주문이 접수되지 않았습니다: {e}")
 
         elif action.lower() == 'sell':
             if not pos or int(pos[1]) < qty:
@@ -407,14 +428,22 @@ def place_order(action, code, qty, price, name=None):
             # 보고 손익은 왕복 비용을 모두 뺀다(매수 수수료는 진입 시 현금에서 이미 나갔지만,
             # '이 거래로 얼마를 벌었나'는 양쪽을 다 뺀 값이어야 한다 — trading_cost 주석 참조).
             profit_amt, profit_rate = trading_cost.net_realized_profit(avg, price, qty)
-            _set_state('cash', get_cash() + amount - fee)
+            new_cash = get_cash() + amount - fee
             remain = int(pos[1]) - qty
             if remain > 0:
-                _db().execute_query("UPDATE paper_positions SET qty=? WHERE code=?", (remain, code))
+                pos_sql, pos_args = "UPDATE paper_positions SET qty=? WHERE code=?", (remain, code)
             else:
-                _db().execute_query("DELETE FROM paper_positions WHERE code=?", (code,))
-            _record_fill(now, '매도', code, name or pos[0], qty, price, amount, fee,
-                         profit_amt, profit_rate, odno)
+                pos_sql, pos_args = "DELETE FROM paper_positions WHERE code=?", (code,)
+            try:
+                with _db().transaction() as cur:
+                    cur.execute(_CASH_SQL, ('cash', json.dumps(new_cash)))
+                    cur.execute(pos_sql, pos_args)
+                    cur.execute(_FILL_SQL, (now, '매도', code, name or pos[0], qty, price,
+                                            amount, fee, profit_amt, profit_rate, odno))
+            except Exception as e:      # noqa: BLE001
+                logger.error(f"[PAPER] 매도 원장 기록 실패({code} {qty}주) — "
+                             f"되돌렸습니다(주문 없음): {e}", exc_info=True)
+                return _fail(f"가상 원장 기록 실패 — 주문이 접수되지 않았습니다: {e}")
         else:
             return _fail(f"알 수 없는 주문 유형: {action}")
 
@@ -646,8 +675,18 @@ def adjust_seed(amount):
         new_seed = get_seed() + amount
         if new_seed <= 0:
             return False, "시드가 0 이하가 됩니다"
-        _set_state('cash', cash + amount)
-        _set_state('seed', new_seed)
+        #  [원자성 · 2026-09-05] 위 독스트링이 불변식을 적어 뒀다 — "시드와 현금을
+        #   **함께** 움직여야 수익률 분모가 맞는다". 따로 쓰면 그 불변식이 깨진다:
+        #   현금만 반영되고 시드가 안 움직이면 입금액이 그대로 '수익'으로 보인다.
+        try:
+            with _db().transaction() as cur:
+                sql = "INSERT OR REPLACE INTO paper_state (key, value) VALUES (?, ?)"
+                cur.execute(sql, ('cash', json.dumps(cash + amount)))
+                cur.execute(sql, ('seed', json.dumps(new_seed)))
+        except Exception as e:      # noqa: BLE001
+            logger.error(f"[PAPER] 입출금 기록 실패({amount:+,}원) — 되돌렸습니다: {e}",
+                         exc_info=True)
+            return False, f"가상 원장 기록 실패 — 반영되지 않았습니다: {e}"
         logger.info(f"[PAPER] 가상 {'입금' if amount >= 0 else '출금'} {abs(amount):,}원 "
                     f"(시드 {new_seed:,.0f} / 현금 {cash+amount:,.0f})")
     # 락 밖에서 — 기준선 보정은 DB·JSON·트레이더 메모리를 함께 만진다.
@@ -836,13 +875,23 @@ def _clear_restricted_stocks():
 def reset(seed=None):
     """가상 계좌 초기화. 포지션·체결·자산곡선·매매 기록을 모두 지우고 시드를 다시 넣는다."""
     with _lock:
-        for tbl in ("paper_positions", "paper_fills", "paper_equity", "paper_state"):
-            _db().execute_query(f"DELETE FROM {tbl}")
         cleared = _clear_trade_history()
         seed = int(seed if seed is not None else getattr(config, 'PAPER_SEED_CAPITAL', 10_000_000))
-        _set_state('seed', seed)
-        _set_state('cash', seed)
-        _set_state('started_at', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        #  비우기와 새 시드 넣기를 한 트랜잭션으로 묶는다. 중간에 끊기면 paper_state 만
+        #  비워진 계좌(현금 0·시드 없음)가 남는다 — 다시 초기화하면 복구되지만, 그 사이
+        #  기동한 자동매매가 예수금 0 으로 판단한다.
+        try:
+            with _db().transaction() as cur:
+                for tbl in ("paper_positions", "paper_fills", "paper_equity", "paper_state"):
+                    cur.execute(f"DELETE FROM {tbl}")
+                sql = "INSERT OR REPLACE INTO paper_state (key, value) VALUES (?, ?)"
+                cur.execute(sql, ('seed', json.dumps(seed)))
+                cur.execute(sql, ('cash', json.dumps(seed)))
+                cur.execute(sql, ('started_at',
+                                  json.dumps(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))))
+        except Exception as e:      # noqa: BLE001
+            logger.error(f"[PAPER] 계좌 초기화 실패 — 되돌렸습니다: {e}", exc_info=True)
+            raise
         logger.info(f"[PAPER] 가상 계좌 초기화 (시드 {seed:,}원, 매매 기록 삭제 "
                     f"{'완료' if cleared else '건너뜀'})")
     _clear_daily_baseline()
