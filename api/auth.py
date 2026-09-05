@@ -250,6 +250,27 @@ def safe_int(value):
         logger.debug(f"safe_int parse error: {e}")
         return 0
 
+def safe_float(value, default=0.0):
+    """숫자로 못 읽으면 default. KIS 는 값이 없을 때 **빈 문자열**을 준다.
+
+    [왜 필요한가 · 2026-09-05] `float(out.get('pask1', 0))` 는 키가 **있고 값이 ''** 인
+     흔한 경우에 ValueError 를 낸다. dict.get 의 기본값은 키가 없을 때만 쓰이기 때문이다.
+     그 예외가 거래소 탐색 루프를 통째로 끊어, 정작 루프가 존재하는 이유인 '이 거래소가
+     아니다'라는 상황에서 나머지 거래소를 못 보게 만들었다(get_order_book).
+    """
+    try:
+        if value is None:
+            return default
+        s_val = str(value).strip().replace(',', '')
+        if not s_val:
+            return default
+        out = float(s_val)
+        return default if out != out else out       # NaN
+    except Exception as e:
+        logger.debug(f"safe_float parse error: {e}")
+        return default
+
+
 def call_api(url_path, market, category, action, params=None, data=None, method="GET", timeout=None, retries=None, tr_id=None):
     """
     통합 API 호출 함수

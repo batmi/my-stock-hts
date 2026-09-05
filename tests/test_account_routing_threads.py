@@ -296,3 +296,71 @@ def test_지수_재검증_래퍼가_소스에_남아_있다():
     for t in targets:
         assert "_task" in t or "inherit_account_context" in t, (
             f"감싸지 않은 채 띄운다: {t}")
+
+
+# ---------------------------------------------------------------------------
+# 수량 칸을 읽을 수 없을 때 (2026-09-05)
+#
+# current_holding_qty 의 계약은 "조회 실패는 None('모름'), 없음은 0" 이다. 그런데 수량을
+# 꺼내는 줄이 그 계약을 깼다:
+#     int(item.get('hldg_qty', 0))
+# dict.get 의 기본값은 키가 **없을 때만** 쓰인다. 증권사 응답은 값이 없을 때 키를 주고
+# **빈 문자열**을 담으므로 int('') 가 ValueError 를 내고 함수 밖으로 나갔다.
+#
+# 호출부(제한 정리 추적)는 그 예외를 '조회 실패'로 세어 5회 재시도 뒤 '제한 해제 보류'로
+# 끝낸다 = 그 종목의 손절·트레일링이 영영 멈춘다. 반대로 0(=전량 매도)으로 단정하면
+# 아직 들고 있는 수동 포지션의 제한이 풀린다. 둘 다 틀렸다 — 모르면 모른다고 답한다.
+def test_수량_칸이_비면_모름으로_답한다(separated_accounts):
+    from modules import auto_trade
+
+    for row in ({'pdno': '005930', 'hldg_qty': ''},
+                {'pdno': '005930', 'hldg_qty': None},
+                {'pdno': '005930'},
+                {'pdno': '005930', 'hldg_qty': 'N/A'}):
+        with patch.object(auto_trade.common.api, 'get_domestic_balance',
+                          return_value=([row], [])):
+            got = auto_trade.current_holding_qty(
+                '005930', config.session.auto_cano,
+                config.session.auto_acnt_prdt_cd, False)
+        assert got is None, f"읽을 수 없는 수량을 값으로 포장했다({row}): {got}"
+
+
+def test_보유가_없으면_0이다(separated_accounts):
+    """'모름'과 '없음'을 뒤섞지 않는다 — 0 이어야 제한이 풀린다."""
+    from modules import auto_trade
+
+    with patch.object(auto_trade.common.api, 'get_domestic_balance',
+                      return_value=([{'pdno': '000660', 'hldg_qty': '3'}], [])):
+        assert auto_trade.current_holding_qty(
+            '005930', config.session.auto_cano,
+            config.session.auto_acnt_prdt_cd, False) == 0
+
+
+def test_수량_0은_그대로_0이다(separated_accounts):
+    """잔고에 남아 있지만 수량이 0인 행 — 전량 매도 확정이다."""
+    from modules import auto_trade
+
+    with patch.object(auto_trade.common.api, 'get_domestic_balance',
+                      return_value=([{'pdno': '005930', 'hldg_qty': '0'}], [])):
+        assert auto_trade.current_holding_qty(
+            '005930', config.session.auto_cano,
+            config.session.auto_acnt_prdt_cd, False) == 0
+
+
+def test_해외도_같은_규칙이다(separated_accounts):
+    from modules import auto_trade
+
+    with patch.object(auto_trade.common.api, 'get_overseas_balance',
+                      return_value=[{'ovrs_pdno': 'AAPL', 'ovrs_cblc_qty': '',
+                                     'ord_psbl_qty': ''}]):
+        assert auto_trade.current_holding_qty(
+            'AAPL', config.session.auto_cano,
+            config.session.auto_acnt_prdt_cd, True) is None
+
+    # 첫 필드가 비면 두 번째로 넘어간다(종전 `or` 동작 유지).
+    with patch.object(auto_trade.common.api, 'get_overseas_balance',
+                      return_value=[{'ovrs_pdno': 'AAPL', 'ovrs_cblc_qty': '',
+                                     'ord_psbl_qty': '5'}]):
+        assert auto_trade.current_holding_qty(
+            'AAPL', config.session.auto_cano,
+            config.session.auto_acnt_prdt_cd, True) == 5

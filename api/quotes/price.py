@@ -247,7 +247,12 @@ def get_order_book(code, is_overseas=False):
             res = _api().call_api(url_path, "overseas", "quotations", "order_book", params=params, tr_id="HHDFS76200200", timeout=3)
             if res.get('rt_cd') == '0':
                 out = res.get('output1', {})
-                if out and (float(out.get('pask1', 0)) > 0 or float(out.get('pbid1', 0)) > 0):
+                #  [Fix 2026-09-05] float() 직접 호출은 값이 '' 일 때 ValueError 를 내고,
+                #   그 예외가 이 탐색 루프를 통째로 끊었다 — 정작 루프가 존재하는 이유인
+                #   '이 거래소가 아니다'(KIS 는 rt_cd='0' 에 빈 output 을 준다)에서
+                #   나머지 거래소를 못 보게 된다.
+                if out and (_api().safe_float(out.get('pask1')) > 0
+                            or _api().safe_float(out.get('pbid1')) > 0):
                     if cached_ex != excd: config.session.update_cache_and_save(code, excd)
                     _api()._set_micro_cache(cache_key, res)
                     return res

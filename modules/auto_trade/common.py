@@ -486,6 +486,30 @@ def current_holding_qty(code, cano, acnt, is_overseas=False):
      '모름 → 제한 유지'로 굳는다. 그러면 그 종목의 손절·트레일링이 영영 멈춘다.
      cano 를 아는 곳에서 컨텍스트도 함께 세운다.
     """
+    def _qty(*values):
+        """수량 필드를 읽는다. **못 읽으면 None('모름')** — 0(없음)으로 넘기지 않는다.
+
+        [Fix 2026-09-05] 종전에는 `int(item.get('hldg_qty', 0))` 이었다. dict.get 의
+         기본값은 키가 **없을 때만** 쓰이는데, 증권사 응답은 값이 없을 때 키를 주고
+         **빈 문자열**을 담는다 → int('') 가 ValueError 를 내고 이 함수 밖으로 나갔다.
+         호출부(제한 정리 추적)는 그 예외를 '조회 실패'로 세어 5회 재시도 뒤
+         '제한 해제 보류'로 끝낸다 = 그 종목의 손절·트레일링이 영영 멈춘다.
+         읽을 수 없는 수량을 0(=전량 매도)으로 단정하지도 않는다 — 그러면 반대로
+         아직 들고 있는 수동 포지션의 제한이 풀린다. 모르는 것은 모른다고 답한다.
+        """
+        for v in values:
+            if v is None:
+                continue
+            s = str(v).strip().replace(',', '')
+            if not s:
+                continue
+            try:
+                return int(float(s))
+            except (TypeError, ValueError):
+                logger.warning(f"[Restriction] {code} 보유수량 필드를 읽을 수 없습니다: {v!r}")
+                return None
+        return None
+
     with utils.AccountContext(cano):
         if is_overseas:
             bal = api.get_overseas_balance(cano, acnt)
@@ -493,14 +517,15 @@ def current_holding_qty(code, cano, acnt, is_overseas=False):
                 return None
             for item in bal:
                 if item.get('ovrs_pdno') == code:
-                    return int(float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0)))
+                    #  잔고에 실려 있는데 수량 칸이 비었다 = 응답이 이상하다 → '모름'.
+                    return _qty(item.get('ovrs_cblc_qty'), item.get('ord_psbl_qty'))
             return 0
         bal, _ = api.get_domestic_balance(cano, acnt)
         if bal is None:
             return None
         for item in bal:
             if item.get('pdno') == code:
-                return int(item.get('hldg_qty', 0))
+                return _qty(item.get('hldg_qty'))
         return 0
 
 
