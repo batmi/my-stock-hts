@@ -1566,8 +1566,17 @@ def _trigger_async_refresh(market_type):
         finally:
             _release()
 
+    #  [계좌 컨텍스트 · 2026-09-05] **제출 스레드에서** 싼다. use_auto_account 는
+    #   threading.local 이라 새 스레드에 상속되지 않는데, 그 깃발이 고르는 것은 계좌번호가
+    #   아니라 **앱키·액세스 토큰·TPS 버킷**이다(core.utils.get_common_headers ·
+    #   api.auth.get_current_token · api.http._real_bucket_key).
+    #   이 갱신은 자동매매 루프에서도 걸린다: get_market_regime → get_domestic_index_data →
+    #   캐시 stale → 여기. 안 싸면 KIS 지수 조회(api.get_domestic_index_chart)가 수동 앱키로
+    #   나가고 수동 버킷의 TPS 를 깎는다 — 정작 수동 주문이 필요할 때 눌린다.
+    _refresh_task = utils.inherit_account_context(_worker)
+
     try:
-        threading.Thread(target=_worker, name=f"IndexRefresh-{market_type}", daemon=True).start()
+        threading.Thread(target=_refresh_task, name=f"IndexRefresh-{market_type}", daemon=True).start()
     except Exception as e:
         # 스레드 생성 실패(라즈베리파이 메모리 압박 등). inflight 표시를 반드시 되돌린다.
         logger.warning(f"[MARKET_INDEX] {market_type} 재검증 스레드 기동 실패: {e}")

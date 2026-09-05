@@ -231,3 +231,68 @@ def test_보유수량_조회가_끝나면_컨텍스트를_되돌린다(separated
         auto_trade.current_holding_qty('005930', config.session.auto_cano,
                                        config.session.auto_acnt_prdt_cd, False)
     assert getattr(context.trade_context, 'use_auto_account', False) is False
+
+
+# ---------------------------------------------------------------------------
+# 지수 캐시의 백그라운드 재검증 스레드 (2026-09-05)
+#
+# `analysis._trigger_async_refresh` 는 stale 캐시를 그대로 서빙한 뒤 뒤에서 1스레드로
+# 재조회한다. 그 스레드가 부르는 _fetch_domestic_index_data 는 모드 1/2 에서
+# **KIS 지수 차트 TR**(api.get_domestic_index_chart)을 탄다 — 계좌번호는 안 쓰지만
+# 앱키·토큰·TPS 버킷은 use_auto_account 가 고른다.
+#
+# 이 경로는 자동매매 루프에서 걸린다:
+#     engine/trader → analysis.get_market_regime → get_domestic_index_data
+#                   → 캐시 stale → _trigger_async_refresh
+# 안 싸면 자동매매가 유발한 조회가 **수동 앱키**로 나가고 수동 버킷의 TPS 를 깎는다.
+#
+# 이 자리는 AccountContext 블록 안에 있지 않아 test_worker_thread_contract 의 구문
+# 검사(AccountContext 안의 spawn)에 잡히지 않는다 — 그래서 여기서 따로 못박는다.
+def test_지수_비동기_재검증이_계좌_컨텍스트를_들고_간다(monkeypatch):
+    import threading as _th
+
+    from modules import analysis
+
+    monkeypatch.setattr(analysis, "_index_cache_enabled", lambda: True)
+    done = _th.Event()
+    seen = {}
+
+    def _fake_fetch(market_type):
+        seen['use_auto'] = getattr(context.trade_context, 'use_auto_account', False)
+        done.set()
+        return None
+
+    monkeypatch.setattr(analysis, "_fetch_domestic_index_data", _fake_fetch)
+    monkeypatch.setattr(analysis, "_store_index_cache", lambda *a, **k: None)
+    analysis._INDEX_REFRESH_INFLIGHT.pop("KOSPI", None)
+
+    prev = getattr(context.trade_context, "use_auto_account", False)
+    try:
+        context.trade_context.use_auto_account = True
+        analysis._trigger_async_refresh("KOSPI")
+        assert done.wait(5), "재검증 워커가 돌지 않았다"
+    finally:
+        context.trade_context.use_auto_account = prev
+        analysis._INDEX_REFRESH_INFLIGHT.pop("KOSPI", None)
+
+    assert seen['use_auto'] is True, (
+        "지수 재검증이 수동 앱키로 나갔다 — 자동매매가 유발한 조회다")
+
+
+def test_지수_재검증_래퍼가_소스에_남아_있다():
+    """동작 검사만으로는 '되돌림'을 늦게 안다 — 구문으로도 못박는다."""
+    import ast
+
+    from modules import analysis
+
+    tree = ast.parse(open(analysis.__file__.replace(".pyc", ".py"), encoding="utf-8").read())
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "_trigger_async_refresh")
+    targets = [ast.unparse(k.value)
+               for n in ast.walk(fn) if isinstance(n, ast.Call)
+               and ast.unparse(n.func).endswith("Thread")
+               for k in n.keywords if k.arg == "target"]
+    assert targets, "재검증 스레드 생성을 찾지 못했다 — 검사기가 낡았다"
+    for t in targets:
+        assert "_task" in t or "inherit_account_context" in t, (
+            f"감싸지 않은 채 띄운다: {t}")
