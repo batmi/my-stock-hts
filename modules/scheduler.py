@@ -267,6 +267,17 @@ class SystemScheduler:
                        f"(정상 간격의 5배인 {int(limit)}초 초과). 스레드는 살아 있으나 "
                        f"손절·트레일링 감시가 멈춰 있을 수 있습니다.")
                 
+            # [추가 2026-09-06] **매매 스레드 말고 나머지 감시 스레드들.** 종전에는 이
+            #  점검이 self.trader.thread 하나만 봤다. 프로세스가 살아 있으면 밖의 cron
+            #  감시자(tools/hts_watchdog.py)는 아무 이상을 못 보고, 감시기 자신은
+            #  is_running 이 True 라 스스로 '실행 중'이라 답한다 — 죽은 채로 영원히
+            #  살아 있는 상태가 어느 층에도 보이지 않았다.
+            dead = self._dead_monitor_threads()
+            if dead:
+                is_problem = True
+                msg = ("감시 스레드가 예기치 않게 종료되었습니다: "
+                       + ", ".join(f"{n}({w})" for n, w in dead))
+
             if not hasattr(self, '_last_problem_msg'):
                 self._last_problem_msg = ""
                 
@@ -277,6 +288,49 @@ class SystemScheduler:
             else:
                 self._last_problem_msg = ""
                 
+    #  점검 대상 감시 스레드. (표시 이름, 잃는 것, 싱글톤을 얻는 함수, 스레드 속성)
+    #   여기 없는 스레드는 죽어도 아무도 모른다 — 새 감시 루프를 만들면 여기에 적는다.
+    def _monitor_threads(self):
+        specs = []
+        try:
+            from modules import auto_trade
+            specs.append(("체결 감시", "체결 확정이 멈춰 매수가 원장에 오르지 않습니다",
+                          auto_trade.ConclusionMonitor(), "thread"))
+        except Exception as e:      # noqa: BLE001 - 감시가 감시를 죽이지 않게
+            logger.debug(f"[하트비트] 체결 감시 상태를 읽지 못했습니다: {e}")
+        try:
+            from modules.reserved_order_monitor import ReservedOrderMonitor
+            specs.append(("예약 주문 감시", "예약 손절·익절이 발동하지 않습니다",
+                          ReservedOrderMonitor(), "monitor_thread"))
+        except Exception as e:      # noqa: BLE001
+            logger.debug(f"[하트비트] 예약 주문 감시 상태를 읽지 못했습니다: {e}")
+        try:
+            from modules import journal_sync
+            specs.append(("매매일지 연동", "매매일지 전송이 큐에 쌓이기만 합니다",
+                          journal_sync.JournalSyncWorker(), "thread"))
+        except Exception as e:      # noqa: BLE001
+            logger.debug(f"[하트비트] 매매일지 연동 상태를 읽지 못했습니다: {e}")
+        return specs
+
+    def _dead_monitor_threads(self):
+        """'돌아야 하는데 죽은' 감시 스레드 목록. [(이름, 잃는 것), ...]
+
+        판정은 세 조건이 모두 맞을 때만이다 — 스스로 돌고 있다고 말하고(is_running),
+        스레드 객체가 있으며, 그 스레드가 죽어 있다. 아직 안 띄운 감시기(thread=None)나
+        stop() 으로 내려간 것(is_running=False)은 사고가 아니다.
+        """
+        dead = []
+        for name, what_is_lost, obj, attr in self._monitor_threads():
+            try:
+                if not getattr(obj, 'is_running', False):
+                    continue
+                thread = getattr(obj, attr, None)
+                if thread is not None and not thread.is_alive():
+                    dead.append((name, what_is_lost))
+            except Exception as e:  # noqa: BLE001 - 감시가 감시를 죽이지 않게
+                logger.debug(f"[하트비트] {name} 스레드 상태 점검 실패: {e}")
+        return dead
+
     def execute_briefing(self):
         """글로벌 마켓 데이터를 수집하고 Gemini에게 브리핑을 요청하여 전송"""
         try:

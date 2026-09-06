@@ -137,10 +137,19 @@ class ConclusionMonitor:
                 cls._instance.shutdown = threading.Event()
                 cls._instance.initialized = False # [추가] 초기화 여부
                 cls._instance.consecutive_errors = 0 # [추가] 연속 에러 카운트 (Kill Switch용)
+                # 감시 루프가 예기치 않게 끝난 시각. None 이면 정상(또는 아직 안 띄움).
+                cls._instance.loop_died_at = None
             return cls._instance
 
     def start(self):
-        if self.is_running: return
+        #  [Fix 2026-09-06] 종전에는 is_running 만 봤다. 스레드가 죽어도 그 값은 True 로
+        #   남아 있어, 되살리려는 start() 가 "이미 돌고 있다"며 되돌아갔다 — 죽은 채로
+        #   영원히 '실행 중'인 상태였다. 정말 돌고 있는지는 스레드에게 묻는다.
+        if self.is_running and self.thread is not None and self.thread.is_alive():
+            return
+        if self.loop_died_at:
+            logger.warning("[Monitor] 종료됐던 체결 감시 스레드를 다시 띄웁니다.")
+            self.loop_died_at = None
 
         self.shutdown.clear()   # 재시작 시 이전 종료 신호가 남아 있으면 보조 스레드가 즉시 죽는다
         self.is_running = True
@@ -193,9 +202,39 @@ class ConclusionMonitor:
         self.event.set()
 
     def is_healthy(self):
-        """체결 감시 시스템 상태 확인 (Kill Switch 연동)"""
+        """체결 감시 시스템 상태 확인 (Kill Switch 연동).
+
+        [Fix 2026-09-06] 종전에는 연속 에러만 셌다. 그런데 루프가 **예외로 끝나** 버리면
+         에러를 셀 주체 자체가 사라져 카운터는 0에 얼어붙는다 — 죽은 감시기가 "건강하다"
+         고 답했고, 자동매매의 Kill Switch 는 그 답을 믿고 신규 주문을 계속 냈다.
+         체결 확인이 되지 않는 상태의 신규 주문이 바로 이 스위치가 막으려던 것이다.
+        """
+        if self.loop_died_at:
+            return False
         max_err = getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5)
         return self.consecutive_errors < max_err
+
+    def _note_loop_exit(self, my_thread):
+        """감시 루프가 빠져나왔다는 사실을 남긴다.
+
+        stop() 으로 내려온 정상 종료나 스레드 교체면 조용하다. 그러나 **아직 돌아야
+        하는데** 나왔다면 그것은 사고다 — 체결 확정이 멈추면 매수는 원장에 오르지 않고,
+        그 종목은 손절·트레일링 감시 대상이 되지도 못한다.
+
+        되살리지는 않는다([[process-death-watchdog]] 와 같은 방침 — 재기동은 운용자의
+        결정이다). 대신 상태가 거짓말을 하지 않게 표식을 남긴다. 그러면 ① is_healthy()
+        가 거짓이 되어 자동매매 Kill Switch 가 신규 주문을 막고 ② 스케줄러의 1분 하트비트
+        점검이 스레드 사망을 알리며 ③ start() 가 되살릴 수 있다. is_running 은 **내리지
+        않는다** — '돌아야 하는데 죽었다'가 밖에서 보이는 유일한 근거다.
+        """
+        if self.thread is not my_thread:
+            return          # 새 스레드로 교체됐다 — 이 스레드의 퇴장은 정상이다
+        if not self.is_running:
+            return          # stop() 으로 내려온 정상 종료
+        self.loop_died_at = time.time()
+        logger.error("[Monitor] 체결 감시 스레드가 예기치 않게 종료됐습니다 — "
+                     "체결 확정이 멈춥니다(매수가 원장에 오르지 않아 손절·트레일링 "
+                     "감시 대상이 되지 못합니다). 신규 주문은 차단됩니다.")
 
     def _is_market_open(self):
         """국내 정규장 운영 시간 확인 (공용 판정 함수 위임)"""
@@ -209,92 +248,110 @@ class ConclusionMonitor:
         initial_delay = getattr(config, 'CONCLUSION_CHECK_INTERVAL', 5) * 3
         time.sleep(initial_delay)
         
-        while self.is_running and self.thread is my_thread:
-            # [추가] 대기 중인 미체결 주문이 있는지 확인 (해외주식 장외 시간 대응)
-            has_pending_orders = False
-            try:
-                trader_cls = globals().get('AutoTrader')
-                if trader_cls:
-                    trader = trader_cls()
-                    if trader.order_manager.pending_orders:
-                        has_pending_orders = True
-            except Exception: pass
+        #  [Fix 2026-09-06] 종전에는 이 두 겹의 보호가 없어 **한 바퀴의 일부만** 막혔다.
+        #   안쪽 try 는 _check_conclusions 하나만 감쌌고, 휴장 판정(_is_market_open)·
+        #   대기(event.wait)·모드 전환 기록은 맨몸이었다. 휴장일 조회가 한 번 던지면
+        #   그것으로 스레드가 끝났고, 그 뒤로는 **체결 확정이 영원히 멈춘다** — 매수가
+        #   원장에 오르지 않으니 그 종목은 손절·트레일링 감시 대상이 되지도 못한다.
+        #   바깥 finally 는 어떤 경로로 나가든 그 사실을 남긴다(_note_loop_exit).
+        try:
+            while self.is_running and self.thread is my_thread:
+                try:
+                    # [추가] 대기 중인 미체결 주문이 있는지 확인 (해외주식 장외 시간 대응)
+                    has_pending_orders = False
+                    try:
+                        trader_cls = globals().get('AutoTrader')
+                        if trader_cls:
+                            trader = trader_cls()
+                            if trader.order_manager.pending_orders:
+                                has_pending_orders = True
+                    except Exception: pass
 
-            # [수정] 장 운영 시간 외이더라도 미체결 주문이 있으면 모니터링 지속
-            # 단, 시스템 초기 1회 실행(초기화)은 장 마감 상태여도 무조건 수행해야 하므로 조건 추가
-            if self.initialized and not self._is_market_open() and not has_pending_orders:
-                # [추가] 조회를 쉬는 동안에는 '연속 에러' 개념이 성립하지 않으므로 리셋
-                # (장애 중 누적된 카운터가 얼어붙어 Kill Switch가 영구히 걸리는 것 방지)
-                if self.consecutive_errors:
-                    self.consecutive_errors = 0
-                self.event.wait(60)
-                if not self.event.is_set():
-                    continue
+                    # [수정] 장 운영 시간 외이더라도 미체결 주문이 있으면 모니터링 지속
+                    # 단, 시스템 초기 1회 실행(초기화)은 장 마감 상태여도 무조건 수행해야 하므로 조건 추가
+                    if self.initialized and not self._is_market_open() and not has_pending_orders:
+                        # [추가] 조회를 쉬는 동안에는 '연속 에러' 개념이 성립하지 않으므로 리셋
+                        # (장애 중 누적된 카운터가 얼어붙어 Kill Switch가 영구히 걸리는 것 방지)
+                        if self.consecutive_errors:
+                            self.consecutive_errors = 0
+                        self.event.wait(60)
+                        if not self.event.is_set():
+                            continue
 
-            # [추가] 현재 모드(Active/Idle)에 따른 주기 결정
-            is_active_mode = time.time() < self.active_until
+                    # [추가] 현재 모드(Active/Idle)에 따른 주기 결정
+                    is_active_mode = time.time() < self.active_until
             
-            if is_active_mode != self.was_active_mode:
-                if is_active_mode:
-                    logger.debug(f"[Monitor] 집중 감시 모드 진입 (주기: {self.active_interval}초)")
-                else:
-                    logger.debug(f"[Monitor] 대기 모드 복귀 (주기: {self.idle_interval}초)")
-                self.was_active_mode = is_active_mode
+                    if is_active_mode != self.was_active_mode:
+                        if is_active_mode:
+                            logger.debug(f"[Monitor] 집중 감시 모드 진입 (주기: {self.active_interval}초)")
+                        else:
+                            logger.debug(f"[Monitor] 대기 모드 복귀 (주기: {self.idle_interval}초)")
+                        self.was_active_mode = is_active_mode
             
-            if is_active_mode:
-                wait_time = self.active_interval
-            else:
-                wait_time = self.idle_interval
+                    if is_active_mode:
+                        wait_time = self.active_interval
+                    else:
+                        wait_time = self.idle_interval
             
-            # Idle 주기가 0이면(비활성), 이벤트가 올 때까지 무한 대기 (트래픽 0)
-            if not is_active_mode and wait_time <= 0:
-                self.event.wait() 
-                self.event.clear()
-                continue
+                    # Idle 주기가 0이면(비활성), 이벤트가 올 때까지 무한 대기 (트래픽 0)
+                    if not is_active_mode and wait_time <= 0:
+                        self.event.wait() 
+                        self.event.clear()
+                        continue
 
-            is_rate_limited = False
-            has_error = False # [추가] 에러 발생 여부 플래그
+                    is_rate_limited = False
+                    has_error = False # [추가] 에러 발생 여부 플래그
             
-            # [수정] 초기화 상태에 따라 모드 결정 (초기화 실패 시 재시도 보장)
-            is_initial_run = not self.initialized
+                    # [수정] 초기화 상태에 따라 모드 결정 (초기화 실패 시 재시도 보장)
+                    is_initial_run = not self.initialized
 
-            try:
-                # 초기화가 안 되었다면 initial=True로 호출하여 알림 없이 상태만 동기화
-                is_rate_limited, has_error = self._check_conclusions(initial=is_initial_run)
+                    try:
+                        # 초기화가 안 되었다면 initial=True로 호출하여 알림 없이 상태만 동기화
+                        is_rate_limited, has_error = self._check_conclusions(initial=is_initial_run)
                 
-                if is_initial_run: logger.debug(f"[ORDER_DEBUG] 체결 모니터 초기화 실행 (결과: RateLimit={is_rate_limited}, Error={has_error})")
-                # 에러 없이 수행되었다면 초기화 완료 처리
-                if is_initial_run and not has_error:
-                    self.initialized = True
-                    logger.info("[ConclusionMonitor] 체결 내역 초기화 완료 (알림 모드 전환)")
+                        if is_initial_run: logger.debug(f"[ORDER_DEBUG] 체결 모니터 초기화 실행 (결과: RateLimit={is_rate_limited}, Error={has_error})")
+                        # 에러 없이 수행되었다면 초기화 완료 처리
+                        if is_initial_run and not has_error:
+                            self.initialized = True
+                            logger.info("[ConclusionMonitor] 체결 내역 초기화 완료 (알림 모드 전환)")
                 
-                # [추가] 에러 카운트 관리
-                if has_error:
+                        # [추가] 에러 카운트 관리
+                        if has_error:
+                            self.consecutive_errors += 1
+                            if self.consecutive_errors >= getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5):
+                                logger.error(f"[Monitor] 체결 감시 시스템 불안정 (연속 에러 {self.consecutive_errors}회)")
+                        else:
+                            self.consecutive_errors = 0
+
+                    except Exception as e:
+                        self.consecutive_errors += 1
+                        logger.error(f"체결 감시 중 오류: {e}")
+                        has_error = True
+                        if config.SCREEN_DEBUG_LEVEL in ["ERROR", "TRACE", "DEBUG"]:
+                            config.console.print(f"[bold red][ERROR] 체결 감시 중 오류 발생: {e}[/bold red]")
+            
+                    # [추가] Rate Limit 감지 시 호출 간격 자동 조절
+                    if is_rate_limited:
+                        wait_time = min(wait_time * 2.0, 60.0) # 최대 60초까지 증가
+                        logger.warning(f"[Monitor] API 호출 제한(Rate Limit) 감지. 대기 시간을 {wait_time:.1f}초로 조정합니다.")
+                    elif has_error:
+                        # [추가] 서버 에러(OPSQ2000 등) 발생 시 대기 시간을 늘려 로그 도배 방지
+                        wait_time = max(wait_time, 20.0)
+                        logger.debug(f"[Monitor] 체결 확인 중 에러 발생. 대기 시간을 {wait_time:.1f}초로 조정합니다.")
+            
+                    # interval 만큼 대기하되, event가 설정되면 즉시 깨어남
+                    self.event.wait(wait_time)
+                    self.event.clear()
+                except Exception as _le:
+                    #  한 바퀴가 통째로 실패해도 루프는 계속 돈다. 다만 조용히 넘기지
+                    #   않는다 — 연속 에러로 세어 Kill Switch(is_healthy)에 실린다.
                     self.consecutive_errors += 1
-                    if self.consecutive_errors >= getattr(config, 'SYSTEM_MAX_CONSECUTIVE_ERRORS', 5):
-                        logger.error(f"[Monitor] 체결 감시 시스템 불안정 (연속 에러 {self.consecutive_errors}회)")
-                else:
-                    self.consecutive_errors = 0
-
-            except Exception as e:
-                self.consecutive_errors += 1
-                logger.error(f"체결 감시 중 오류: {e}")
-                has_error = True
-                if config.SCREEN_DEBUG_LEVEL in ["ERROR", "TRACE", "DEBUG"]:
-                    config.console.print(f"[bold red][ERROR] 체결 감시 중 오류 발생: {e}[/bold red]")
-            
-            # [추가] Rate Limit 감지 시 호출 간격 자동 조절
-            if is_rate_limited:
-                wait_time = min(wait_time * 2.0, 60.0) # 최대 60초까지 증가
-                logger.warning(f"[Monitor] API 호출 제한(Rate Limit) 감지. 대기 시간을 {wait_time:.1f}초로 조정합니다.")
-            elif has_error:
-                # [추가] 서버 에러(OPSQ2000 등) 발생 시 대기 시간을 늘려 로그 도배 방지
-                wait_time = max(wait_time, 20.0)
-                logger.debug(f"[Monitor] 체결 확인 중 에러 발생. 대기 시간을 {wait_time:.1f}초로 조정합니다.")
-            
-            # interval 만큼 대기하되, event가 설정되면 즉시 깨어남
-            self.event.wait(wait_time)
-            self.event.clear()
+                    logger.error(f"[Monitor] 체결 감시 주기 오류(계속 진행): "
+                                 f"{type(_le).__name__}: {_le}", exc_info=True)
+                    self.event.wait(5)
+                    self.event.clear()
+        finally:
+            self._note_loop_exit(my_thread)
 
     #  체결·취소 추적 캐시에 남겨 둘 일자 수. 오늘과 어제만 있으면 된다 — 자정을 넘겨
     #  걸쳐 있는 주문(야간 해외)까지만 덮으면 충분하고, 그 이상은 램만 먹는다.

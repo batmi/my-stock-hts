@@ -314,7 +314,14 @@ def print_breadcrumb():
                 env_str = "[가상투자]"; env_color = "cyan"
             elif config.session.is_toss:
                 env_str = "[토스증권]"; env_color = "magenta"
-            env_str = "[한투증권]"; env_color = "bold red"
+            else:
+                #  [Fix 2026-09-06] 이 줄이 분기 **밖**에 있어 무엇으로 떴든 항상
+                #   "[한투증권]"(빨강)으로 덮였다. 모든 1-Depth 메뉴 머리에 찍히는
+                #   줄이라, 가상투자·토스로 띄워도 화면은 내내 실전이라고 말한다.
+                #   같은 오타를 scheduler·trader(2곳)·auth 에서 이미 고쳤는데,
+                #   운영자가 **가장 자주 보는** 이 자리가 남아 있었다.
+                #   (빨강은 실전 경고색이다 — 색까지 함께 거짓말한다)
+                env_str = "[한투증권]"; env_color = "bold red"
             
             print("\n" + "─"*50)
             config.console.print(f" [cyan]시스템 시간: {now_str}[/cyan] | [{env_color}]{env_str}[/]")

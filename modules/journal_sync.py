@@ -1763,7 +1763,9 @@ class JournalSyncWorker:
             self._next_purge = 0.0
 
     def start(self):
-        if self.is_running:
+        #  [Fix 2026-09-06] 죽은 스레드를 '실행 중'으로 읽어 재기동을 거절하던 자리
+        #   (ConclusionMonitor·ReservedOrderMonitor 와 같은 모양).
+        if self.is_running and self.thread is not None and self.thread.is_alive():
             return
         if not is_enabled():
             # 왜 안 도는지가 로그만 봐도 판별되어야 한다 — 설정(메뉴)과 자격증명(환경변수)을 구분해 남긴다.

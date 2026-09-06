@@ -135,16 +135,23 @@ def test_conclusion_monitor_error_handling(mock_ovs, mock_dom):
     monitor.is_running = True
     monitor.thread = threading.current_thread()
     
+    #  [수정 2026-09-06] 종전에는 event.wait 이 InterruptedError 를 던지게 해서 루프를
+    #   빠져나왔다. 이제 루프는 **한 바퀴 전체**를 감싸므로 그 예외도 잡아 세고(연속 에러
+    #   2회가 된다) 다음 바퀴로 간다 — 대기가 터진다고 감시가 끝나서는 안 되는 것이
+    #   이번 수정의 요지다. 여기서는 한 바퀴만 돌리는 것이 목적이므로 대기에서
+    #   is_running 을 내려 정상 종료로 빠져나온다.
+    def _stop_after_one_turn(*a, **k):
+        monitor.is_running = False
+        return False
+
     with patch.object(monitor, '_is_market_open', return_value=True):
         with patch('time.sleep'):
             with patch.object(monitor, '_check_conclusions', side_effect=Exception("Simulated Crash")):
-                with patch.object(monitor.event, 'wait', side_effect=InterruptedError):
-                    try:
-                        monitor._run_loop()
-                    except InterruptedError:
-                        pass
-    
+                with patch.object(monitor.event, 'wait', side_effect=_stop_after_one_turn):
+                    monitor._run_loop()
+
     assert monitor.consecutive_errors == 1
+    assert not monitor.loop_died_at, "stop 요청에 의한 정상 종료는 사망이 아니다"
 
 # ==============================================================================
 # 3. modules/analysis.py 커버리지 (파일 에러, 그룹 필터링 엣지)

@@ -59,7 +59,11 @@ class ReservedOrderMonitor:
     CHECK_INTERVAL_SEC = 10.0
 
     def start(self):
-        if self.is_running: return
+        #  [Fix 2026-09-06] is_running 만 보면 **죽은 스레드도 '실행 중'**이다 —
+        #   되살리려는 start() 가 그 값을 보고 되돌아간다. 실제로 도는지는 스레드에게
+        #   묻는다(ConclusionMonitor.start 와 같은 이유·같은 모양).
+        if self.is_running and self.monitor_thread is not None and self.monitor_thread.is_alive():
+            return
         self.is_running = True
         self.monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True, name="ReservedOrderMonitor")
         self.monitor_thread.start()
