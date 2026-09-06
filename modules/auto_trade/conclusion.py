@@ -478,11 +478,24 @@ class ConclusionMonitor:
                                 try:
                                     cancel_record = db_manager.db.get_cancel_record_by_org_odno(odno)
                                     if cancel_record:
-                                        rec_reason = cancel_record['reason']
+                                        rec_reason = cancel_record.get('reason') or ""
                                         if "수동" in rec_reason or "초과" in rec_reason or "타임아웃" in rec_reason or "외부" in rec_reason:
                                             # 이미 시스템에서 의도했거나 알림을 보낸 취소면 중복 알림 생략
                                             is_external_cancel = False
-                                except Exception: pass
+                                except Exception as _e:
+                                    #  [Fix 2026-09-06] 종전에는 `except Exception: pass` 라
+                                    #   조회가 실패해도 is_external_cancel 이 True 로 남았다.
+                                    #   그러면 시스템이 방금 자기 손으로 낸 취소를 '외부 취소'로
+                                    #   단정해 ① 사람이 하지 않은 일을 했다고 알리고
+                                    #   ② 원장에 같은 취소를 `취소(외부)` 행으로 한 번 더 남긴다.
+                                    #   모르면 단정하지 않는다 — 알림도 원장 행도 만들지 않고,
+                                    #   다음 주기에 다시 본다(cancel_status 는 아래에서 갱신되지만
+                                    #   그건 '이번 취소를 이미 보았다'는 뜻일 뿐이다).
+                                    is_external_cancel = False
+                                    logger.warning(
+                                        f"[취소 판별] {name}({code}) 주문 {odno} 의 취소 이력을 "
+                                        f"조회하지 못했습니다 — 외부 취소로 단정하지 않습니다: "
+                                        f"{type(_e).__name__}: {_e}")
                                 
                                 if not initial:
                                     if is_external_cancel:
@@ -802,8 +815,17 @@ class ConclusionMonitor:
                                 #  판정 일자는 **이 행이 실제로 저장될 일자**여야 한다 —
                                 #  trade_time_str 은 위에서 시간 역전 보정을 거치므로 ord_dt 와
                                 #  다를 수 있고, 어긋나면 같은 체결이 두 번 적재된다.
-                                if not db_manager.db.check_trade_exists(
-                                        odno, "체결", on_date=_odno_scope_date(item, trade_time_str)):
+                                try:
+                                    _already = db_manager.db.check_trade_exists(
+                                        odno, "체결", on_date=_odno_scope_date(item, trade_time_str))
+                                except Exception as _ce:
+                                    #  모르면 적지 않는다 — 중복 체결 행은 되돌릴 수 없고
+                                    #  실현손익을 이중 계상한다. 다음 주기가 같은 내역을
+                                    #  다시 훑으므로 스스로 낫는다.
+                                    logger.warning(f"[체결] {name}({code}) {odno} 중복 여부를 "
+                                                   f"확인하지 못해 이번 주기 기록을 미룹니다: {_ce}")
+                                    _already = True
+                                if not _already:
                                     if config.FILE_DEBUG_LEVEL == "DEBUG":
                                         logger.debug(f"[ORDER_DEBUG] DB 저장 시도: {odno}")
                                         logger.debug(f"[AutoTrade] 신규 체결 DB 저장 시도: {odno} ({name})")
@@ -983,7 +1005,10 @@ class ConclusionMonitor:
             success_db = False
             
             # [수정] '체결' 또는 '체결(추정)' 상태가 이미 존재하는지 확인
-            exists_check = False
+            #  [Fix 2026-09-06] 종전에는 실패해도 exists_check 가 False 로 남아 **적었다** —
+            #   중복 체결 행이다. 모르면 적지 않고 다음 주기에 다시 본다(이 경로는 매 주기
+            #   같은 내역을 다시 훑는다).
+            exists_check = True
             try:
                 # 큐를 통해 순차 처리되므로 별도의 락이나 재시도 불필요
                 today = datetime.now().strftime('%Y-%m-%d')
@@ -992,7 +1017,8 @@ class ConclusionMonitor:
                 if config.FILE_DEBUG_LEVEL == "DEBUG":
                     logger.debug(f"[ORDER_DEBUG] 체결 내역 존재 여부: {exists_check}")
             except Exception as e:
-                logger.error(f"[ORDER_DEBUG] check_trade_exists 오류: {e}", exc_info=True)
+                logger.error(f"[ORDER_DEBUG] check_trade_exists 오류 — 이번 주기 기록을 "
+                             f"미룹니다({odno}): {e}", exc_info=True)
 
             if not exists_check:
                 # [수정] 큐 시스템 적용으로 단순 호출로 변경

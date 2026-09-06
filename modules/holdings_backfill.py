@@ -170,8 +170,12 @@ def _exists(odno, on_date=None):
         return False
     try:
         return bool(db_manager.db.check_trade_exists(odno, "체결", on_date=on_date))
-    except Exception:
-        return False
+    except Exception as e:
+        #  [Fix 2026-09-06] 종전에는 False('없다')였다 — 같은 체결을 한 번 더 적어
+        #   평단·실현손익이 이중 계상된다. 모르면 '이미 있다'로 보고 건너뛴다.
+        #   복원은 기동 때마다 다시 도므로 다음 기회에 채워진다.
+        logger.warning(f"[복원] {odno} 중복 여부를 확인하지 못해 이번 복원에서 건너뜁니다: {e}")
+        return True
 
 
 def our_order_row(odno):

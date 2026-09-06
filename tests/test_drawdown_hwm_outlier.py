@@ -299,7 +299,10 @@ def test_고점_조회_실패는_이력없음과_구분된다(monkeypatch):
     def _boom(*a, **k):
         raise RuntimeError("database is locked")
 
-    monkeypatch.setattr(dbm.db, '_get_conn', _boom)
+    #  클래스에 건다 — 인스턴스에 걸면 monkeypatch 가 되돌릴 때 바인드 메서드가
+    #  인스턴스 속성으로 남아, 뒤 테스트의 클래스 패치를 가린다
+    #  (tests/test_db_patch_scope_guard.py).
+    monkeypatch.setattr(type(dbm.db), '_get_conn', lambda self, *a, **k: _boom())
     with pytest.raises(Exception):
         dbm.db.get_max_daily_asset("2026-05-30", ACC)
 

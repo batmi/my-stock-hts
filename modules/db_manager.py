@@ -41,6 +41,16 @@ def _swallowed(where, exc):
                    f"{type(exc).__name__}: {exc}")
 
 
+def _daily_asset_write_failed(date_str, account, exc):
+    """자산 스냅샷 쓰기 실패를 드러낸다.
+
+    조회 실패(_swallowed)와 달리 이쪽은 **뒤늦게도 드러나지 않는다** — 다음 주기가
+    같은 값을 다시 쓰려 해도 호출부가 '이미 반영했다'고 여기면 재시도 자체가 없다.
+    """
+    logger.error(f"[DB] 자산 스냅샷 저장 실패({account} {date_str}) — 입출금 보정과 "
+                 f"드로다운 고점이 이 행에 걸려 있습니다: {type(exc).__name__}: {exc}")
+
+
 class DBManager:
     def __init__(self):
         self.db_path = config.DB_FILE_PATH
@@ -938,8 +948,12 @@ class DBManager:
                 config.console.print(f"[dim yellow][DB] check_trade_exists: {odno} ({order_status}) -> 존재함[/dim yellow]")
             return cnt > 0
         except Exception as e:
+            #  [Fix 2026-09-06] False 는 '없다'로 읽혀 같은 체결을 한 번 더 INSERT 한다
+            #   — 실현손익 이중 계상·매매일지 중복 전송이고, 되돌릴 방법이 없다.
+            #   호출부는 전부 주기적으로 같은 내역을 다시 훑으므로, 모르면 이번 주기를
+            #   건너뛰고 다음에 다시 보는 편이 옳다([[unknown-vs-empty]]).
             _swallowed("check_trade_exists", e)
-            return False
+            raise
             
     def get_original_order_type(self, odno):
         """주문번호로 원 주문(접수 상태)의 유형 조회"""
@@ -968,7 +982,14 @@ class DBManager:
             return None
 
     def get_cancel_record_by_org_odno(self, odno):
-        """원주문번호(org_odno)로 가장 최근 취소 이력 1건 조회 (외부/사후 취소 중복 판별용)"""
+        """원주문번호(org_odno)로 가장 최근 취소 이력 1건 조회 (외부/사후 취소 중복 판별용)
+
+        **조회 실패는 올린다.** 이력 없음(None)과 갈라야 한다 — 유일한 호출부
+        (ConclusionMonitor)는 None 을 "우리가 낸 취소가 아니다"로 읽어 운영자에게
+        '앱(MTS)/HTS 외부 취소' 알림을 보내고 매매 원장에 `취소(외부)` 행을 하나 더
+        남긴다. 조회가 잠깐 실패했을 뿐인데 **사람이 하지 않은 일을 했다고 알리고**
+        같은 취소가 원장에 두 번 남는다([[unknown-vs-empty]]).
+        """
         try:
             conn = self._get_conn()
             cursor = conn.cursor()
@@ -980,7 +1001,7 @@ class DBManager:
             return dict(row) if row else None
         except Exception as e:
             _swallowed("get_cancel_record_by_org_odno", e)
-            return None
+            raise
 
     def get_reserved_order_by_odno(self, odno):
         """주문번호(odno)로 발동된 예약 주문 1건 조회"""
@@ -1271,7 +1292,13 @@ class DBManager:
             return False
 
     def get_highest_price(self, code):
-        """종목의 기록된 최고가 조회"""
+        """종목의 기록된 트레일링 앵커(최고가). 기록이 없으면 None.
+
+        **조회 실패는 올린다.** 기록 없음(None)과 갈라야 한다 — 호출부는 None 을 0.0 으로
+        접고, 앵커가 0 이면 트레일링 스탑 판정이 통째로 건너뛰어진다(주청산 수단이다).
+        게다가 trader._cached_anchor 는 그 0.0 을 **세션 캐시에 굳혀** DB 가 회복돼도
+        그대로 남았다([[unknown-vs-empty]] · '실패를 캐시에 굳힌다').
+        """
         try:
             conn = self._get_conn()
             cursor = conn.cursor()
@@ -1280,10 +1307,18 @@ class DBManager:
             return row[0] if row else None
         except Exception as e:
             _swallowed("get_highest_price", e)
-            return None
+            raise
 
     def get_position_ref(self, code):
-        """코퍼레이트 액션 판정용 기준값 조회 → (평단, 매입금액). 기록이 없으면 (0.0, 0.0)."""
+        """코퍼레이트 액션 판정용 기준값 조회 → (평단, 매입금액). 기록이 없으면 (0.0, 0.0).
+
+        **조회 실패는 올린다.** (0,0)은 detect_corporate_action 에서 "기준이 없다
+        (최초 관측) — 이번 주기는 기록만 한다"로 읽히고, 그 '기록'이 기준값을 **조정 후
+        값으로 덮는다**. 그 순간부터 다음 주기의 배율은 영원히 1.0 이라 분할을 다시는
+        감지하지 못하고, 앵커는 분할 전 값으로 남아 트레일링이 즉시 발동해 시장가
+        강제 청산이 난다 — 이 판정이 존재하는 이유가 바로 그 사고다.
+        (같은 위험을 rescale 실패 쪽에서는 이미 막아 뒀다: `if rescale_failed: pass`.)
+        """
         try:
             conn = self._get_conn()
             cursor = conn.cursor()
@@ -1292,9 +1327,8 @@ class DBManager:
             row = cursor.fetchone()
             return (float(row[0] or 0.0), float(row[1] or 0.0)) if row else (0.0, 0.0)
         except Exception as e:
-            #  (0,0)은 '기준 없음'으로 읽혀 권리 조정 감지가 통째로 건너뛰어진다.
             _swallowed("get_position_ref", e)
-            return (0.0, 0.0)
+            raise
 
     def update_position_ref(self, code, avg_price, pchs_amt):
         """코퍼레이트 액션 판정용 기준값 갱신.
@@ -1433,8 +1467,10 @@ class DBManager:
             return set(row[0] for row in cursor.fetchall())
         except Exception as e:
             #  빈 집합은 '아무도 반익절 안 했다'로 읽혀 이미 반익절한 종목을 또 판다.
+            #  [Fix 2026-09-06] 그래서 실패를 올린다 — 호출부가 '못 읽음'을 알아야
+            #  '없음'과 다르게 다룰 수 있다([[unknown-vs-empty]]).
             _swallowed("get_all_half_tp", e)
-            return set()
+            raise
 
     def is_disclosure_notified(self, rcept_no):
         """공시 접수번호가 이미 알림 발송됐는지 확인"""
@@ -1758,6 +1794,17 @@ class DBManager:
           자산만 갱신하는 호출이 입출금 기록을 지우면 드로다운 기준이 다시 어긋난다.
         principal: 그날의 기준 원금(현금+매입원가-실현손익). None이면 기존 값을 보존한다 —
           같은 이유다. 이 값이 지워지면 재기동 때 오프라인 입출금을 되찾을 대조점이 사라진다.
+
+        **성공 여부를 돌려준다.**
+
+        [왜 반환값이 필요한가 · 2026-09-06] 읽기 쌍둥이(get_max_daily_asset)는 조회 실패를
+         '이력 없음'과 갈라 올리도록 이미 고쳐졌는데, 같은 값을 **쓰는** 이 자리는 예외를
+         통째로 삼키고 아무것도 돌려주지 않았다. 파일 쪽 쌍둥이(common.save_daily_initial_asset)
+         는 처음부터 bool 을 돌려주고 그 사유까지 적어 뒀다 — 둘은 같은 기준선을 담는다.
+         net_transfer 가 유실되면 옛 자산이 오늘 자본으로 환산되지 않아 **가짜 드로다운**이
+         남고, 그것이 DD_LOOKBACK_DAYS(기본 90일) 내내 리스크 한도를 묶는다
+         ([[daily-asset-baseline-transfers]] · 실측: 300만 출금 기록 유실 → 드로다운
+         0.0% 가 30.0% 로 계산돼 DD_LEVEL_2 를 넘는다).
         """
         with self.lock:
             for attempt in range(5):
@@ -1780,14 +1827,17 @@ class DBManager:
                     ''', (date_str, account, asset_value, float(net_transfer or 0),
                           None if principal is None else float(principal)))
                     conn.commit()
-                    break
+                    return True
                 except sqlite3.OperationalError as e:
                     if "locked" in str(e) and attempt < 4:
                         time.sleep(0.5)
                         continue
-                    break
-                except Exception:
-                    break
+                    _daily_asset_write_failed(date_str, account, e)
+                    return False
+                except Exception as e:
+                    _daily_asset_write_failed(date_str, account, e)
+                    return False
+            return False
 
     def shift_daily_assets(self, account, amount):
         """계좌의 일일 자산 스냅샷 전체를 amount만큼 평행이동한다. (외부 입출금 보정)

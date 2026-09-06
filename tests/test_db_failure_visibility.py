@@ -12,6 +12,17 @@
 반환 계약을 바꾸면 호출부 전체를 손봐야 하므로 **동작은 그대로 두고 흔적만 남긴다.**
 '모름'과 '없음'을 가르는 것은 그다음 문제이고, 지금 급한 것은 보이지 않는다는 사실이다.
 운영기가 라즈베리파이(SD 카드)라 I/O 오류·용량 부족이 남의 일이 아니다.
+
+[2026-09-06] 그 '그다음 문제'를 하나씩 걷어내는 중이다. 호출부가 적고 대가가 큰 자리부터
+ 실패를 **올리도록** 바꾸고 있다. 여기서 흔적만 확인하는 목록(BROKEN)은 아직 종전 계약을
+ 지키는 자리들이고, 계약이 바뀐 자리는 아래 RAISING 에 옮겨 적는다 — 둘을 한 파일에 두는
+ 이유는, 어느 쪽이 남았는지가 한눈에 보여야 다음 감사가 이어지기 때문이다.
+   · get_highest_price          → tests/test_anchor_read_failure.py
+   · get_max_daily_asset        → tests/test_drawdown_hwm_outlier.py
+   · get_cancel_record_by_org_odno → tests/test_cancel_origin_unknown.py
+   · check_trade_exists          → tests/test_duplicate_fill_guard.py
+   · get_position_ref            → tests/test_corporate_action.py
+   · get_all_half_tp             → tests/test_half_tp_unknown.py
 """
 import ast
 import os
@@ -38,10 +49,18 @@ def _real_db():
 
 BROKEN = [
     ("get_pending_reserved_orders", (), []),
-    ("check_trade_exists", ("0001", "체결"), False),
     ("get_all_trailing_stops", (), {}),
     ("get_all_stock_strategies", (), []),
-    ("get_highest_price", ("005930",), None),
+]
+
+#  실패를 '없음'과 갈라 **올리도록** 계약이 바뀐 자리. 흔적은 여전히 남긴다.
+RAISING = [
+    ("get_highest_price", ("005930",)),
+    ("check_trade_exists", ("0001", "체결")),
+    ("get_position_ref", ("005930",)),
+    ("get_all_half_tp", ()),
+    ("get_cancel_record_by_org_odno", ("ODNO-1",)),
+    ("get_max_daily_asset", ("2026-01-01", "ACC")),
 ]
 
 
@@ -61,11 +80,27 @@ def test_failure_is_logged_and_return_value_is_unchanged(monkeypatch, caplog, na
     assert any("디스크 오류" in r.message for r in caplog.records), "원인이 안 남았다"
 
 
+@pytest.mark.parametrize("name,args", RAISING)
+def test_a_changed_contract_raises_and_still_leaves_a_trace(monkeypatch, caplog, name, args):
+    """계약이 바뀐 자리는 실패를 올린다 — 그래도 흔적은 남아야 원인을 찾는다."""
+    db = _real_db()
+    monkeypatch.setattr(type(db), '_get_conn',
+                        lambda self: (_ for _ in ()).throw(RuntimeError("디스크 오류")))
+
+    with caplog.at_level("WARNING", logger="modules.db_manager"):
+        with pytest.raises(Exception):
+            getattr(db, name)(*args)
+
+    assert any(name in r.message for r in caplog.records), (
+        f"{name} 실패가 로그에 남지 않았다")
+
+
 def test_repeated_failure_is_throttled(monkeypatch, caplog):
     """같은 자리가 계속 실패해도 로그를 익사시키지 않는다.
 
     get_highest_price 는 주기마다 종목 수만큼 불린다. 매번 남기면 정작 읽어야 할
-    다른 로그가 묻힌다.
+    다른 로그가 묻힌다. (이제 예외를 올리므로 호출부에서 받아 넘긴다 — 로그 스로틀은
+    그대로 필요하다.)
     """
     db = _real_db()
     monkeypatch.setattr(type(db), '_get_conn',
@@ -73,7 +108,10 @@ def test_repeated_failure_is_throttled(monkeypatch, caplog):
 
     with caplog.at_level("WARNING", logger="modules.db_manager"):
         for _ in range(50):
-            db.get_highest_price("005930")
+            try:
+                db.get_highest_price("005930")
+            except Exception:
+                pass
 
     hits = [r for r in caplog.records if "get_highest_price" in r.message]
     assert len(hits) == 1, f"스로틀이 동작하지 않는다: {len(hits)}건"

@@ -383,3 +383,102 @@ def test_sell_path_feeds_corrected_highest_into_analysis(trader):
     passed = mock_analyze.call_args.kwargs.get('highest_price')
     assert passed == pytest.approx(21_000), (
         f"매도 판정에 분할 전 고점이 그대로 넘어갔다({passed}) — 즉시 강제 청산된다")
+
+
+import contextlib as _contextlib
+
+
+@_contextlib.contextmanager
+def _broken_db():
+    """**기준값 SELECT 하나만** 실패시킨다.
+
+    연결을 통째로 깨면 뒤이은 update_position_ref 도 함께 막혀, 옛 결함('기준값이
+    조정 후 값으로 덮인다')이 재현되지 않는다 — 물기 시험에서 실제로 그랬다.
+    쓰기는 살려 두어야 이 테스트가 무엇인가를 시험한다.
+
+    연결은 **클래스**에 패치한다(tests/test_db_patch_scope_guard.py 참조).
+    """
+    import sqlite3
+
+    real = getattr(db_manager.db, '_real_db', db_manager.db)
+    orig = type(real)._get_conn
+
+    class _Cursor:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def execute(self, sql, *a, **k):
+            if "ref_avg_price" in sql and sql.strip().upper().startswith("SELECT"):
+                raise sqlite3.OperationalError("database is locked")
+            return self._inner.execute(sql, *a, **k)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    class _Conn:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def cursor(self):
+            return _Cursor(self._inner.cursor())
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(type(real), "_get_conn",
+                   lambda self, *a, **k: _Conn(orig(self, *a, **k)))
+        yield
+
+
+# ---------------------------------------------------------------------------
+#  기준값 **조회** 실패 (2026-09-06)
+#
+#  환산 실패는 위에서 막았는데, 그 앞단인 '기준값을 읽지 못한 경우'는 열려 있었다.
+#  get_position_ref 가 조회 실패를 (0.0, 0.0) 으로 돌려줬고, detect_corporate_action 은
+#  그것을 "기준이 없다(최초 관측) — 이번 주기는 기록만 한다"로 읽는다. 그 '기록'이
+#  기준값을 **조정 후 값으로 덮는다** — 결과는 환산 실패와 똑같다. 다시는 감지하지 못한다.
+def test_기준값_조회_실패는_기준값을_옮기지_않는다(trader):
+    db_manager.db.update_highest_price(CODE, 105_000)
+    _apply(trader, 10, 90_000, 105_000)                     # 1주기: 기준값 기록
+    ref_before = db_manager.db.get_position_ref(CODE)
+    assert ref_before[0] > 0, "시나리오 전제가 성립하지 않는다"
+
+    #  [중요] 메서드가 아니라 **DB 연결**을 깨뜨린다. 메서드를 예외로 갈아끼우면
+    #   옛 동작((0,0) 반환)을 재현하지 못해 이 테스트가 아무것도 시험하지 않는다.
+    with _broken_db():
+        out, _tg = _apply(trader, 50, 18_000, 105_000)      # 2주기: 분할, 조회 실패
+
+    assert db_manager.db.get_position_ref(CODE) == ref_before, (
+        "기준값을 읽지 못했는데 기준값을 옮겼다 — 다음 주기에 분할을 다시 감지하지 못한다")
+    assert out == pytest.approx(105_000), "앵커는 건드리지 않아야 한다"
+
+
+def test_조회가_회복되면_같은_분할을_다시_감지한다(trader):
+    """기준값을 안 옮겼으므로 다음 주기에 그대로 잡혀야 한다."""
+    db_manager.db.update_highest_price(CODE, 105_000)
+    _apply(trader, 10, 90_000, 105_000)
+
+    with _broken_db():
+        _apply(trader, 50, 18_000, 105_000)
+
+    out, tg = _apply(trader, 50, 18_000, 105_000)           # 조회 회복
+    assert out == pytest.approx(21_000), "회복 후에도 분할을 감지하지 못했다"
+    assert tg.called
+
+
+def test_조회_실패는_읽기_계약에서도_구분된다():
+    """DB 계층 — 실패와 '기록 없음'이 같은 (0,0) 이면 위 판정이 성립할 수 없다."""
+    import sqlite3
+
+    real = getattr(db_manager.db, '_real_db', db_manager.db)
+    assert real.get_position_ref("NO-SUCH-CODE") == (0.0, 0.0), "기록 없음은 (0,0) 이다"
+
+    class _Broken:
+        def cursor(self):
+            raise sqlite3.OperationalError("database is locked")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(type(real), "_get_conn", lambda self, *a, **k: _Broken())
+        with pytest.raises(Exception):
+            real.get_position_ref(CODE)

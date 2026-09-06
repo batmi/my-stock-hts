@@ -209,6 +209,9 @@ class AutoTrader:
                 cls._instance.order_manager = OrderManager(cls._instance) # [추가] 주문 매니저
                 cls._instance.risk_manager = RiskManager(cls._instance)   # [추가] 리스크 매니저
                 cls._instance.half_tp_cache = set()       # [추가] 반익절 실행 여부 추적 캐시
+                #  캐시가 **실제로 적재됐는가**. 빈 집합은 '아무도 반익절 안 했다'로도
+                #  '못 읽었다'로도 보인다 — 바로 아래 portfolio_heat_unknown 과 같은 규약이다.
+                cls._instance.half_tp_cache_loaded = False
                 cls._instance.portfolio_heat_amt = 0.0    # [추가] 포트폴리오 히트(총 오픈 리스크, 원) 주기별 스냅샷
                 cls._instance.portfolio_heat_unknown = False  # 산출 실패 여부 — '0(없음)'과 '못 셈'을 가른다
                 # 보유 종목별 '직전 주기 매도 판정이 실제로 쓴' 손절률·ATR — 오픈 리스크
@@ -392,8 +395,21 @@ class AutoTrader:
 
                 def _load_db_caches():
                     progress.update(task, description="[cyan]DB 캐시 로드...[/cyan]")
-                    ts_cache = db_manager.db.get_all_trailing_stops()
-                    half_cache = db_manager.db.get_all_half_tp()
+                    try:
+                        ts_cache = db_manager.db.get_all_trailing_stops()
+                    except Exception as _te:
+                        #  앵커는 종목별로 다시 읽는 길이 있다(_cached_anchor) — 비워 둬도
+                        #  스스로 낫는다. 흔적만 남긴다.
+                        logger.warning(f"[기동] 트레일링 앵커 캐시 적재 실패 — 종목별로 "
+                                       f"다시 읽습니다: {_te}")
+                        ts_cache = {}
+                    try:
+                        half_cache = db_manager.db.get_all_half_tp()
+                    except Exception as _he:
+                        #  반익절은 다르다. 빈 집합은 '아무도 반익절 안 했다'로 읽혀
+                        #  이미 반쪽 판 종목을 **또 판다**. 못 읽었다는 사실을 들고 간다.
+                        logger.error(f"[기동] 반익절 이력 적재 실패: {_he}")
+                        half_cache = None
                     # [재기동 복구] 거래소에 살아 있는 미체결 주문을 메모리 추적에 되살린다.
                     #  이걸 안 하면 첫 주기에 같은 종목으로 두 번째 주문이 나간다.
                     #  DB 캐시 작업에 얹어 시작 시 API 호출이 몰리지 않게 한다(라즈베리파이 OOM).
@@ -440,7 +456,11 @@ class AutoTrader:
                 self._sync_external_fills(target_cano, acnt, holdings)
 
                 self.trailing_stop_cache = ts_cache
-                self.half_tp_cache = half_cache
+                self.half_tp_cache = half_cache if half_cache is not None else set()
+                self.half_tp_cache_loaded = half_cache is not None
+                if not self.half_tp_cache_loaded:
+                    self.log("[기동] 반익절 이력을 읽지 못했습니다 — 판정 때 다시 읽고, "
+                             "그래도 못 읽으면 추가 반익절을 내지 않습니다(중복 매도 방지).")
                 self.initial_holdings = holdings
                 self.initial_summary = summary
                 
@@ -469,7 +489,12 @@ class AutoTrader:
                         if not save_daily_initial_asset(account_key, self.initial_asset):
                             self.log("[기준선] 당일 시작 자산을 파일에 저장하지 못했습니다 — "
                                      "재기동하면 오늘의 손실 한도·드로다운 기준이 리셋됩니다")
-                        db_manager.db.save_daily_asset(datetime.now().strftime("%Y-%m-%d"), account_key, self.initial_asset)
+                        #  파일 저장의 성공 여부는 바로 위에서 검사한다 — 같은 기준선을 담는
+                        #  DB 쪽도 같게 다룬다(둘 중 하나만 검사하면 절반은 조용히 사라진다).
+                        if not db_manager.db.save_daily_asset(
+                                datetime.now().strftime("%Y-%m-%d"), account_key, self.initial_asset):
+                            self.log("[기준선] 당일 시작 자산을 자산 이력에 남기지 못했습니다 — "
+                                     "내일의 드로다운 기준에서 오늘이 빠집니다")
                     else:
                         # [안전장치] 직전 영업일 대비 반토막 이하 — 시세 결손으로 예수금만 잡힌
                         #  응답을 의심한다. 이 값을 기준선으로 박으면 차단기의 분모가 작아져
@@ -3759,9 +3784,10 @@ class AutoTrader:
                                 saved_ok = save_daily_initial_asset(f"{target_cano}-{acnt}", self.initial_asset)
                                 today_str = datetime.now().strftime("%Y-%m-%d")
                                 acc_str = f"{target_cano}-{acnt}"
-                                db_manager.db.save_daily_asset(today_str, acc_str, self.initial_asset)
+                                db_ok = db_manager.db.save_daily_asset(today_str, acc_str, self.initial_asset)
                                 self.log(f"[초기화 완료] 새로운 당일 시작 자산 갱신: {self.initial_asset:,}원"
-                                         + ("" if saved_ok else " ([bold red]파일 저장 실패[/] — 재기동 시 기준선 소실)"))
+                                         + ("" if saved_ok else " ([bold red]파일 저장 실패[/] — 재기동 시 기준선 소실)")
+                                         + ("" if db_ok else " ([bold red]이력 저장 실패[/] — 내일 드로다운 기준에서 오늘이 빠짐)"))
                         except Exception as e:
                             self.log(f"당일 시작 자산 갱신 실패: {e}")
 
@@ -4348,10 +4374,18 @@ class AutoTrader:
 
                             # [추가] DB에 기록
                             if self.initial_asset > 0:
+                                #  [Fix 2026-09-06] 종전에는 `except Exception: pass` 였다.
+                                #   이 행이 없으면 내일의 드로다운 고점과 오프라인 입출금
+                                #   대조점이 오늘치만큼 비고, 그 사실은 어디에도 남지 않았다.
+                                today_str = datetime.now().strftime("%Y-%m-%d")
                                 try:
-                                    today_str = datetime.now().strftime("%Y-%m-%d")
-                                    db_manager.db.save_daily_asset(today_str, acc_str, self.initial_asset)
-                                except Exception: pass
+                                    _ok = db_manager.db.save_daily_asset(today_str, acc_str, self.initial_asset)
+                                except Exception as _e:
+                                    _ok = False
+                                    logger.debug(f"[기준선] 자산 스냅샷 저장 예외: {_e}")
+                                if not _ok:
+                                    self.log("[기준선] 오늘 시작 자산을 자산 이력에 남기지 "
+                                             "못했습니다 — 내일의 드로다운 기준에서 오늘이 빠집니다")
 
                         # [안전장치] 계좌 차단기(일일 손실 한도)를 **표시 코드보다 먼저** 돌린다.
                         #  종전에는 이 함수 맨 끝(265줄 아래)에 있었고 함수 전체가
@@ -4462,12 +4496,18 @@ class AutoTrader:
                             #  건너뛰어도 다음 대조는 그 이전 스냅샷과 이뤄져 식은 그대로 성립한다.
                             if realized_ok and self.initial_asset > 0:
                                 try:
-                                    db_manager.db.save_daily_asset(
+                                    _ok = db_manager.db.save_daily_asset(
                                         datetime.now().strftime("%Y-%m-%d"),
                                         f"{target_cano}-{acnt_cd}", self.initial_asset,
                                         principal=int(current_principal))
                                 except Exception as _e:
-                                    logger.debug(f"[입출금] 기준 원금 스냅샷 저장 실패: {_e}")
+                                    _ok = False
+                                    logger.debug(f"[입출금] 기준 원금 스냅샷 저장 예외: {_e}")
+                                if not _ok:
+                                    #  파일(daily_state)은 날짜가 바뀌면 비워지므로, 이 행이
+                                    #  없으면 날짜를 넘는 오프라인 입출금 대조점이 사라진다.
+                                    self.log("[입출금] 기준 원금 스냅샷을 남기지 못했습니다 — "
+                                             "다음 기동에서 오프라인 입출금을 되찾지 못할 수 있습니다")
 
                         # [파생값] 오늘 누적 순입출금. 저장하지 않고 매 주기 다시 잰다.
                         #  기준 자산을 **옮기지 않아도** 차단기·사이징이 이 값으로 즉시 보정된다
@@ -4486,19 +4526,35 @@ class AutoTrader:
                             #  출금도 전 재산에 가깝고, 이 값은 사이징·차단기의 보정에 쓰인다.
                             if abs(_net) < OFFLINE_TRANSFER_FLOOR:
                                 _net = 0
-                            if _net != getattr(self, 'net_transfer_today', 0):
-                                self.net_transfer_today = _net
-                                # [여러 날 보정] 오늘 행에 남겨야 내일부터의 드로다운 기준이 맞는다.
-                                #  이력을 옮기지 않고 이 값으로 환산한다(get_max_daily_asset).
-                                #  값이 바뀔 때만 쓴다 — 매 주기 쓰면 파이3에 부담이고 의미도 없다.
+                            #  [당일 보정] 이 값은 오늘의 차단기·사이징을 즉시 보정한다
+                            #   (effective_baseline). DB 기록과 무관하게 항상 최신으로 둔다.
+                            self.net_transfer_today = _net
+                            # [여러 날 보정] 오늘 행에 남겨야 내일부터의 드로다운 기준이 맞는다.
+                            #  이력을 옮기지 않고 이 값으로 환산한다(get_max_daily_asset).
+                            #  값이 바뀔 때만 쓴다 — 매 주기 쓰면 파이3에 부담이고 의미도 없다.
+                            #  [Fix 2026-09-06] '쓸지 말지'의 기준을 메모리 값이 아니라
+                            #   **마지막으로 저장에 성공한 값**으로 바꾼다. 종전에는 쓰기 전에
+                            #   메모리를 찍어서, 한 번 실패하면 다음 주기의 조건이 거짓이 되어
+                            #   그날 내내 다시 시도하지 않았다(save_daily_asset 은 예외도 삼켰다).
+                            #   그러면 오늘의 출금이 환산에서 빠져 90일(DD_LOOKBACK_DAYS) 동안
+                            #   가짜 드로다운이 리스크 한도를 묶는다
+                            #   ([[daily-asset-baseline-transfers]] · 실측 30.0% vs 0.0%).
+                            if _net != getattr(self, '_net_transfer_saved', 0):
                                 try:
-                                    db_manager.db.save_daily_asset(
+                                    _saved = db_manager.db.save_daily_asset(
                                         datetime.now().strftime("%Y-%m-%d"),
                                         f"{target_cano}-{acnt_cd}", self.initial_asset,
                                         net_transfer=_net)
-                                    self._hwm_cache_date = None   # 환산이 바뀌었으니 다시 잰다
                                 except Exception as _e:
+                                    _saved = False
                                     logger.debug(f"[입출금] 일자별 순입출금 기록 실패: {_e}")
+                                if _saved:
+                                    self._net_transfer_saved = _net
+                                    self._hwm_cache_date = None   # 환산이 바뀌었으니 다시 잰다
+                                else:
+                                    self.log(f"[입출금] 오늘 순입출금({_net:+,}원)을 자산 이력에 "
+                                             f"남기지 못했습니다 — 다음 주기에 다시 시도합니다"
+                                             f"(그때까지 드로다운이 실제보다 크게 잡힙니다).")
                         else:
                             self.net_transfer_today = 0   # 못 쟀으면 보정하지 않는다(옛 동작 유지)
 
@@ -4765,7 +4821,16 @@ class AutoTrader:
             #  같은 정의(수량 × 평단)로 복원한다 — 잔고 표시부(_print_holdings)와 동일 규칙.
             pchs_amt = api.safe_int(item.get('pchs_amt')) or int(qty * buy_price)
 
-            ref_avg, ref_amt = db_manager.db.get_position_ref(code)
+            #  [Fix 2026-09-06] 조회 실패는 '기준 없음'이 아니다. 종전에는 (0,0)이 와서
+            #   배율 1.0 으로 흘렀고, 함수 끝에서 기준값이 **조정 후 값으로 덮였다** —
+            #   그 뒤로는 분할을 영영 감지하지 못한다. 모르면 이번 주기를 통째로 건너뛴다
+            #   (아래 update_position_ref 도 실행되지 않는다).
+            try:
+                ref_avg, ref_amt = db_manager.db.get_position_ref(code)
+            except Exception as _re:
+                logger.warning(f"[권리 조정] {code} 기준값을 읽지 못해 이번 주기 판정을 "
+                               f"건너뜁니다(기준값도 옮기지 않습니다): {_re}")
+                return highest_price
             ratio, reason = _pkg().detect_corporate_action(ref_avg, ref_amt, buy_price, pchs_amt)
 
             rescale_failed = False
@@ -4834,14 +4899,49 @@ class AutoTrader:
             logger.debug(f"[권리 조정] 판정 실패({code}): {e}")
         return highest_price
 
+    def _already_half_sold(self, code):
+        """이 종목이 이미 반익절됐는가. **모르면 '했다'로 답한다.**
+
+        [왜 그 방향인가 · 2026-09-06] 틀리는 두 방향의 대가가 다르다.
+          · '안 했다'로 틀리면 → 이미 반쪽 판 포지션을 **또 판다**(실제 돈이 나간다)
+          · '했다'로 틀리면   → 이번 반익절을 걸렀을 뿐, 청산 체인은 그대로 흐른다
+            (트레일링 스탑이 주청산이고, 반익절은 기본 OFF 인 보조 수단이다)
+        캐시가 적재되지 않았으면 여기서 한 번 더 읽는다 — 기동 때의 DB 실패가 세션
+        내내 굳지 않게 한다([[unknown-vs-empty]] · '실패를 캐시에 굳힌다').
+        """
+        if not getattr(self, 'half_tp_cache_loaded', False):
+            try:
+                self.half_tp_cache = db_manager.db.get_all_half_tp()
+                self.half_tp_cache_loaded = True
+                self.log("[반익절] 이력을 다시 읽었습니다.")
+            except Exception as e:
+                logger.warning(f"[반익절] {code} 이력을 읽지 못해 '이미 반익절함'으로 "
+                               f"다룹니다(중복 매도 방지): {e}")
+                return True
+        return code in self.half_tp_cache
+
     def _cached_anchor(self, code):
-        """기록된 트레일링 앵커(최고가). 캐시에 없으면 DB에서 읽어 채운다. 없으면 0.0."""
+        """기록된 트레일링 앵커(최고가). 캐시에 없으면 DB에서 읽어 채운다. 없으면 0.0.
+
+        [Fix 2026-09-06] **조회에 실패했으면 캐시에 넣지 않는다.** 종전에는 실패도
+         '기록 없음'과 같은 None 으로 와서 0.0 이 세션 캐시에 박혔고, 그 뒤로는 DB 가
+         회복돼도 다시 읽지 않았다(캐시에 값이 있으므로). 앵커 0 은 트레일링 스탑 판정을
+         통째로 건너뛰게 한다 — 주청산 수단이 그 종목에서 조용히 꺼진다.
+         이번 호출만 0.0 으로 다루고, 다음 호출이 다시 읽는다.
+        """
         with self._lock:
             cached = self.trailing_stop_cache.get(code)
-            if cached is None:
-                val = db_manager.db.get_highest_price(code)
-                cached = val if val is not None else 0.0
-                self.trailing_stop_cache[code] = cached
+            if cached is not None:
+                return cached
+        try:
+            val = db_manager.db.get_highest_price(code)
+        except Exception as e:
+            logger.warning(f"[TrailingStop] {code} 앵커 조회 실패 — 이번 주기만 0 으로 "
+                           f"다루고 캐시하지 않습니다(다음 주기에 다시 읽습니다): {e}")
+            return 0.0
+        cached = val if val is not None else 0.0
+        with self._lock:
+            self.trailing_stop_cache[code] = cached
         return cached
 
     def _restore_trailing_anchor(self, code, name, entry_date, highest_price=None,
@@ -5398,7 +5498,7 @@ class AutoTrader:
                 fallback_atr_rate=_pkg().entry_atr_stop_rate(df, entry_date)
             )
 
-            already_half_sold = code in self.half_tp_cache
+            already_half_sold = self._already_half_sold(code)
             result = self.strategy.analyze_sell(code, name, df, current_price, buy_price, profit_rate, thresholds=thresholds, already_half_sold=already_half_sold, holding_days=holding_days, is_mr_holding=is_mr_holding, highest_price=highest_price)
             
             # [추가] 분석 성공 시 상태 업데이트

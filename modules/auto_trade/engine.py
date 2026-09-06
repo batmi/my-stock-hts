@@ -1044,7 +1044,12 @@ def analyze_holdings(entries, max_workers=None, restricted_codes=None, account=N
     latest_buy_map = _safe(lambda: db_manager.db.get_latest_buy_trades(codes, account=account), {})
     buy_trades_map = _safe(lambda: db_manager.db.get_buy_trades_for_current_holdings(codes, account=account), {})
     highest_map = _safe(lambda: db_manager.db.get_all_trailing_stops(), {})
-    half_tp_set = _safe(lambda: db_manager.db.get_all_half_tp(), set())
+    #  None = 못 읽었다. 빈 집합('아무도 반익절 안 했다')과 갈라야 한다 —
+    #  섞이면 이미 반쪽 판 종목을 또 판다.
+    half_tp_set = _safe(lambda: db_manager.db.get_all_half_tp(), None)
+    if half_tp_set is None:
+        logger.warning("[보유분석] 반익절 이력을 읽지 못했습니다 — 이번 주기에는 "
+                       "'이미 반익절함'으로 다룹니다(중복 매도 방지).")
     # ------------------------------------------------------------------ 진입일
     # 진입일 = 누적 보유수량이 0에서 1 이상으로 바뀐 시점. 분할 매수·부분 매도가 섞여도
     #  정확하다. 두 소스를 모두 재생하고 '더 이른 쪽'을 쓴다.
@@ -1187,7 +1192,8 @@ def analyze_holdings(entries, max_workers=None, restricted_codes=None, account=N
 
             res = strategy.analyze_sell(
                 code, entry.get('name', ''), df, current_price, buy_price, profit_rate,
-                thresholds=thresholds, already_half_sold=(code in half_tp_set),
+                thresholds=thresholds,
+                already_half_sold=(True if half_tp_set is None else code in half_tp_set),
                 holding_days=holding_days, is_mr_holding=is_mr_holding,
                 highest_price=highest_price,
             )
@@ -2059,7 +2065,17 @@ class OrderManager:
                                 
                             self.trader.log(f"[미체결 관리] {name}({code}) 주문({odno})이 {int(elapsed)}초 동안 체결되지 않아 취소합니다.")
                             
-                            res = api.revise_cancel_order("domestic", "cancel", odno, code, qty, "0", "02", "00")
+                            #  [Fix 2026-09-06] 예외도 '취소 실패'다. revise_cancel_order 는
+                            #   OrderOutcomeUnknown 만 dict 로 바꾸고, 네트워크·파싱·계좌
+                            #   파라미터 준비 실패는 그대로 올린다. 종전에는 그 예외가 바깥의
+                            #   `except Exception: pass` 로 새어 나가 아래 _note_cancel_failure
+                            #   가 아예 불리지 않았다 — 누적도 경보도 없이, 그 종목의 손절만
+                            #   무기한 멈췄다(is_pending 인 종목은 매도 워커에서 빠진다).
+                            try:
+                                res = api.revise_cancel_order("domestic", "cancel", odno, code, qty, "0", "02", "00")
+                            except Exception as _ce:
+                                res = {'rt_cd': '1', 'msg_cd': 'CANCEL_EXCEPTION',
+                                       'msg1': f'{type(_ce).__name__}: {_ce}', 'output': {}}
                             
                             if res.get('rt_cd') == '0':
                                 trade = db_manager.db.get_trade_by_odno(odno)
@@ -2082,7 +2098,13 @@ class OrderManager:
                                 #  판정에서 빠지므로 보호 공백이 무기한이 된다. 연속 실패를 세어
                                 #  한도를 넘으면 경보한다(운영자 개입 없이는 복구 불가한 상태다).
                                 self._note_cancel_failure(odno, code, name, res, elapsed)
-                    except Exception: pass
+                    except Exception as e:
+                        #  [Fix 2026-09-06] 종전에는 `pass` 였다. 이 블록에는 취소 발주와
+                        #   취소 이력 기록이 들어 있어, 무엇이 깨졌는지 모르면 다음 주기가
+                        #   같은 일을 반복하는지조차 알 수 없다. 한 주문이 깨져도 나머지
+                        #   주문은 계속 본다(루프는 유지) — 흔적만 남긴다.
+                        logger.warning(f"[미체결 관리] {name}({code}) 주문 {odno} 처리 중 "
+                                       f"오류: {type(e).__name__}: {e}")
 
             # 2. [추가] API에는 없지만 로컬에는 남아있는 주문 처리 (API 누락 대응)
             # 모의투자 등에서 API가 미체결 내역을 반환하지 않는 경우, 로컬 상태를 믿고 강제 확인
@@ -2358,8 +2380,12 @@ class RiskManager:
                     with self.trader._lock:
                         highest = self.trader.trailing_stop_cache.get(code) or 0.0
                     if highest <= 0:
+                        #  조회 실패는 이제 예외로 온다 — 아래에서 0.0 으로 접는다.
+                        #  이 함수는 오픈 리스크를 **과대**평가하는 쪽이 안전하므로
+                        #  앵커를 모르면 0(= BEP 상향 없음)이 옳은 방향이다.
                         highest = db_manager.db.get_highest_price(code) or 0.0
-                except Exception:
+                except Exception as _he:
+                    logger.debug(f"[오픈리스크] {code} 앵커 조회 실패 — 0 으로 다룬다: {_he}")
                     highest = 0.0
 
                 if highest > 0:

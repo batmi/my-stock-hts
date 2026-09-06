@@ -29,9 +29,10 @@ import os
 #  기준은 하나다: **사람의 조치를 요구하는가, 그리고 한 번만 나가는가.**
 #  둘 다 아니면 폴백이 옳다 — 못 닿아도 다음 기회가 있고, 놓쳐도 잃는 것이 없다.
 _ALLOWED: dict[str, str] = {
-    'modules/auto_trade/engine.py::manage_unfilled_orders':
-        "미체결 시간 초과 취소 통지 — 조치를 요구하지 않는 사후 통지이고, 취소 자체는 "
-        "DB(insert_trade)와 로그에 남는다. 같은 상황이 또 오면 또 나간다.",
+    #  [2026-09-06] manage_unfilled_orders 는 목록에서 빠졌다 — 그 자리를 감싸던
+    #   `except Exception: pass` 자체가 사라졌기 때문이다(취소 예외를 '취소 실패'로
+    #   세도록 고치면서). 탐지되지 않으므로 예외도 필요 없다. 낡음 자기점검이
+    #   이 사실을 알려 줬다.
     'modules/auto_trade/trader.py::_reconcile_offline_transfer':
         "정지 중 입출금 자동 반영 통지 — 본문이 '조치할 것은 없습니다'라고 적는다. "
         "반영은 이미 DB 에 끝났고 리스크 기준은 파생 보정된다.",

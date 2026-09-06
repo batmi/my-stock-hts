@@ -259,7 +259,8 @@ def _create_fill_history(db_order, reason_msg):
 
         # 이미 체결 내역이 있는지 확인 (중복 방지)
         # [수정] '체결' 또는 '체결(추정)' 상태가 이미 존재하는지 확인
-        exists_check = False
+        #  모르면 적지 않는다(중복 체결 행 방지) — check_trade_exists 는 실패를 올린다.
+        exists_check = True
         try:
             #  odno 는 당일 채번이라 날짜와 짝지어야 유일하다. 방금 낸 주문이므로 오늘로 좁힌다.
             _today = datetime.now().strftime('%Y-%m-%d')

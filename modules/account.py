@@ -200,7 +200,16 @@ def sync_today_trades():
                                 _scope = (f"{_scope_dt[:4]}-{_scope_dt[4:6]}-{_scope_dt[6:]}"
                                           if len(_scope_dt) == 8 and _scope_dt.isdigit()
                                           else datetime.now().strftime('%Y-%m-%d'))
-                                if not db_manager.db.check_trade_exists(odno, "체결", on_date=_scope):
+                                try:
+                                    _already = db_manager.db.check_trade_exists(
+                                        odno, "체결", on_date=_scope)
+                                except Exception as _ce:
+                                    #  모르면 적지 않는다 — 중복 체결 행은 실현손익을
+                                    #  이중 계상하고 되돌릴 수 없다. 다음 동기화가 다시 본다.
+                                    logger.warning(f"[Account] {odno} 중복 여부를 확인하지 못해 "
+                                                   f"이번 동기화에서 미룹니다: {_ce}")
+                                    _already = True
+                                if not _already:
                                     if config.FILE_DEBUG_LEVEL == "DEBUG":
                                         logger.debug(f"[Account] 신규 체결 DB 저장 시도: {odno}")
                                     
