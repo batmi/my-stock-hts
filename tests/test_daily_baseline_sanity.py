@@ -147,3 +147,58 @@ def test_호출부가_실패를_사용자에게_알린다(monkeypatch, tmp_path)
     assert not bare, (
         "기준선 저장 결과를 버리는 호출이 남아 있다 — 실패해도 '저장됨'으로 보인다: "
         + ", ".join(f"trader.py:{ln}" for ln in bare))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ② 기준선을 쓰는 세 경로가 **같은 검사**를 지나는가 (2026-09-06)
+#
+#  이 함수가 있어도 부르지 않으면 없는 것과 같다. 실제로 네 곳 중 한 곳 — 무중단
+#  운용에서 자정에 도는 **날짜 변경 갱신** — 만 `tot_asset > 0` 이었다. 그 값은 그날
+#  하루의 손실 한도 분모이자 사이징 기준이 된다.
+# ─────────────────────────────────────────────────────────────────────────────
+import ast
+import inspect
+
+
+def _baseline_write_sites():
+    """save_daily_initial_asset 을 부르는 자리와, 그 자리가 검사를 지나는지."""
+    import modules.auto_trade.trader as T
+
+    src = inspect.getsource(T)
+    tree = ast.parse(src)
+    calls = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        names = {n.func.id for n in ast.walk(fn)
+                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        if "save_daily_initial_asset" in names:
+            calls.append((fn.name, names))
+    return calls
+
+
+def test_기준선을_적는_함수는_타당성_검사를_함께_지난다():
+    """[가드] 새 저장 경로가 생겨도 검사 없이 지나가지 못하게 못 박는다."""
+    sites = _baseline_write_sites()
+    assert sites, "save_daily_initial_asset 호출부를 하나도 못 찾았다 — 검사기가 낡았다"
+    bad = [name for name, names in sites
+           if "is_plausible_baseline" not in names]
+    assert not bad, (
+        "기준선을 저장하면서 타당성 검사를 지나지 않는 함수가 있다: "
+        f"{bad}\n  이 값은 하루 종일 고정된다 — 작게 박히면 차단기가 종일 발동하지 않는다.")
+
+
+def test_집계_결손은_기준선_갱신을_막는다():
+    """비율 검사는 이 시스템에서 도달 불가능하다(노출 상한 40% < 문턱 50%).
+
+    그래서 값이 아니라 **못 읽었다는 사실**로 막아야 한다.
+    """
+    import modules.auto_trade.trader as T
+
+    src = inspect.getsource(T.AutoTrader._run_loop)
+    head = src[:src.index("당일 시작 자산 갱신")]
+    tail = head[head.rindex("날짜 변경 감지"):]
+    assert "degraded" in tail, \
+        "날짜 변경 갱신이 자산 집계의 결손 표식을 보지 않는다"
+    assert "is_plausible_baseline" in tail, \
+        "날짜 변경 갱신이 타당성 검사를 지나지 않는다"

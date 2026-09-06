@@ -561,6 +561,16 @@ def entry_atr_stop_rate(df, entry_date=None, atr_mult=None):
     """
     if df is None or df.empty or 'close' not in df.columns:
         return None
+    #  [Fix 2026-09-06] 봉 수를 보지 않았다. ATR 은 ewm 이라 3봉에서도 숫자를 내는데,
+    #   그 숫자는 '모름'이 아니라 단정이다. calculate_indicators 는 같은 지표를
+    #   `len(df) >= 15` 로 막는데 이 복원 경로만 규칙 밖이었다 — 같은 모듈이 두 기준을
+    #   쓰면 한쪽만 짖는다. 실측(평소 변동폭 5%, 최근 3봉만 조용):
+    #       3봉 → -1.200%   /   53봉 → -8.246%
+    #   -1.2% 손절선은 정상 눌림에서 곧바로 잘린다. 차트가 잘려 오는 일은 드물지 않다
+    #   (신규상장·거래정지 해제 직후·데이터 소스가 일부만 준 경우).
+    #   모르면 None 이다 — 호출부는 매수 기록이 없을 때와 같은 길로 간다.
+    if len(df) < indicators.ATR_MIN_BARS:
+        return None
     try:
         atr_series = indicators.get_atr_full_series(df)
         if atr_series is None or atr_series.empty:
@@ -1043,7 +1053,15 @@ def analyze_holdings(entries, max_workers=None, restricted_codes=None, account=N
     rules_map = {r['code']: r for r in rules_list}
     latest_buy_map = _safe(lambda: db_manager.db.get_latest_buy_trades(codes, account=account), {})
     buy_trades_map = _safe(lambda: db_manager.db.get_buy_trades_for_current_holdings(codes, account=account), {})
-    highest_map = _safe(lambda: db_manager.db.get_all_trailing_stops(), {})
+    #  [Fix 2026-09-06] 빈 dict 는 '앵커가 하나도 없다'로 읽혀 트레일링 스탑이 통째로
+    #   무장 해제된다 — 고점을 모르면 발동할 수 없다. 동작은 종전대로 두되(앵커 없이도
+    #   판정은 돌아야 한다) 못 읽은 사실은 반드시 남긴다.
+    try:
+        highest_map = db_manager.db.get_all_trailing_stops(strict=True)
+    except Exception as _he:
+        logger.error(f"[보유분석] 트레일링 앵커를 읽지 못했습니다 — 이번 판정에서 "
+                     f"트레일링 스탑이 무장 해제됩니다: {type(_he).__name__}: {_he}")
+        highest_map = {}
     #  None = 못 읽었다. 빈 집합('아무도 반익절 안 했다')과 갈라야 한다 —
     #  섞이면 이미 반쪽 판 종목을 또 판다.
     half_tp_set = _safe(lambda: db_manager.db.get_all_half_tp(), None)

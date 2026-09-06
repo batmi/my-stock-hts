@@ -98,8 +98,11 @@ def _run_time_order(monkeypatch, session_open):
     executed = []
     m = _monitor()
     monkeypatch.setattr(rom, 'datetime', _FixedNow)
+    #  [2026-09-06] 계약이 strict= 를 얻었다. 인자를 안 받는 스텁이면 TypeError 가 나고
+    #   감시기는 그것을 '조회 실패'로 읽어 주기를 건너뛴다 — 이 테스트가 조용히
+    #   '발동 안 함'을 보게 된다(쌍둥이 테스트는 그 결과를 기대해서 거짓으로 통과했다).
     monkeypatch.setattr(rom.db_manager.db, 'get_pending_reserved_orders',
-                        lambda: [dict(TIME_ORDER)], raising=False)
+                        lambda **_k: [dict(TIME_ORDER)], raising=False)
     monkeypatch.setattr(rom.api, 'domestic_trading_session_open', lambda: session_open)
     monkeypatch.setattr(rom.api, 'get_current_price', lambda *a, **k: 70000.0)
     monkeypatch.setattr(rom._at_common(), 'is_single_price_break', lambda *a, **k: False)

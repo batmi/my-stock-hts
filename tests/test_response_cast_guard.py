@@ -55,18 +55,46 @@ def _casts(path):
     for n in ast.walk(tree):
         if not (isinstance(n, ast.Call) and getattr(n.func, "id", None) in ("int", "float")):
             continue
-        if not (n.args and isinstance(n.args[0], ast.Call)
-                and isinstance(n.args[0].func, ast.Attribute)
-                and n.args[0].func.attr == "get"):
+        if not n.args:
             continue
-        owner = n.args[0].func.value
-        name = getattr(owner, "id", None)
-        if name is None and isinstance(owner, ast.Subscript):
-            name = getattr(owner.value, "id", None)
-        if name in _RESPONSE_NAMES:
+        if any(_is_response_get(a) for a in _unwrap(n.args[0])):
             out.append((owner_of.get(id(n), "<module>"), n.lineno,
                         lines[n.lineno - 1].strip()[:90]))
     return out
+
+
+def _unwrap(node):
+    """캐스팅 인자 안에서 **실패할 수 있는** 조각들.
+
+    [넓힘 2026-09-06] 종전에는 인자가 곧바로 `x.get(...)` 인 경우만 봤다. 그래서
+     `float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0))` 를 놓쳤다 —
+     해외 잔고 합산의 첫 줄이고, 거기서 터지면 **해외분 전체**가 총자산에서 빠진다.
+
+    [왜 `or 0` 은 넘기는가] 빈 문자열과 None 은 둘 다 거짓이라 숫자 리터럴로 떨어진다.
+     남는 위험은 '참인데 숫자가 아닌 값'(예: 콤마가 붙은 '1,234')뿐이고, 그건 이 관용구가
+     아니라 다른 축이다. 반면 마지막 항이 **또 다른 응답 필드**면 그 필드가 비었을 때
+     그대로 캐스팅에 닿는다 — 빈 문자열이 두 번 오면 터진다. 실제로 문 자리가 그것이었다.
+    """
+    if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
+        last = node.values[-1]
+        if isinstance(last, ast.Constant) and isinstance(last.value, (int, float)):
+            return []          # 숫자 리터럴로 끝난다 — 실패할 경로가 없다
+        parts = []
+        for v in node.values:
+            parts.extend(_unwrap(v))
+        return parts
+    return [node]
+
+
+def _is_response_get(node):
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"):
+        return False
+    owner = node.func.value
+    name = getattr(owner, "id", None)
+    if name is None and isinstance(owner, ast.Subscript):
+        name = getattr(owner.value, "id", None)
+    return name in _RESPONSE_NAMES
 
 
 def _source_files():
@@ -130,3 +158,29 @@ def test_검사기가_저장소를_실제로_훑는다():
     #  tests·tools 를 뺀 본체 기준. 크게 줄면 훑는 범위가 무너진 것이다.
     files = list(_source_files())
     assert len(files) > 60, f"소스 파일을 {len(files)}개밖에 못 찾았다"
+
+
+def test_or_폴백_안의_get도_잡는다(tmp_path):
+    """[넓힘 자체 점검] 이 구멍으로 해외 잔고 합산의 첫 줄이 빠져 있었다.
+
+    필드 이름이 응답마다 달라 `A or B` 로 늘어놓는 것은 이 코드베이스의 관용구다 —
+    오히려 이 모양에서 더 자주 나온다.
+    """
+    s = tmp_path / "or.py"
+    s.write_text(
+        "def f(item):\n"
+        "    return float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0))\n",
+        encoding="utf-8")
+    assert [(h[0], h[1]) for h in _casts(str(s))] == [("f", 2)]
+
+
+def test_숫자_리터럴로_끝나는_or_는_잡지_않는다(tmp_path):
+    """`x.get(k) or 0` 은 빈 문자열·None 이 둘 다 거짓이라 리터럴로 떨어진다.
+
+    이것까지 잡으면 가드가 시끄러워지고, 시끄러운 가드는 결국 꺼진다.
+    """
+    s = tmp_path / "ok_or.py"
+    s.write_text(
+        "def f(item):\n"
+        "    return float(item.get('qty') or 0)\n", encoding="utf-8")
+    assert _casts(str(s)) == []

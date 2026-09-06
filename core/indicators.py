@@ -16,6 +16,15 @@ import config
 W52_DAYS = 365
 W52_MIN_BARS = 200   # 창이 52주를 못 채우면(신규상장·차트 절단) 좁아진 밴드를 그대로 쓰지 않는다
 
+#  지수이동평균(ewm) 기반 지표는 **첫 봉부터 값을 낸다** — rolling 과 달리 NaN 구간이
+#  없어서, 3봉짜리 프레임도 숫자를 돌려준다. 그 숫자는 '모름'이 아니라 단정이라 그대로
+#  판정에 들어간다. calculate_indicators 는 지표마다 `len(df) >= N` 으로 이것을 막는데,
+#  같은 시리즈 함수를 **직접** 부르는 자리에는 그 규칙이 없었다.
+#  실측(평소 변동폭 5%인 종목이 최근 3봉만 조용했을 때):
+#      3봉 → 손절률 -1.200%      53봉 → 손절률 -8.246%
+#  -1.2% 는 정상 눌림에서 곧바로 잘리는 선이다. 추세추종에서 가장 비싼 종류의 오답이다.
+ATR_MIN_BARS = 15    # calculate_indicators 의 ATR 가드와 같은 값 — 두 곳이 갈리면 안 된다
+
 
 def w52_high_low(df, now=None):
     """'최근 365일'(=52주) 구간의 (고가, 저가). 창을 못 채우면 (None, None).
@@ -659,7 +668,7 @@ def calculate_indicators(df):
         indicators['plus_di'] = di_p_series.iloc[-1]
         indicators['minus_di'] = di_m_series.iloc[-1]
         
-    if len(df) >= 15:
+    if len(df) >= ATR_MIN_BARS:
         indicators['atr'] = get_atr_full_series(df).iloc[-1]
         
     if len(df) >= 5:

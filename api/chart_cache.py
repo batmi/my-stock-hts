@@ -95,6 +95,29 @@ def _chart_disk_get(cache_key, today_str, is_overseas=False):
         logger.debug(f"[ChartDisk] get 실패({cache_key}): {e}")
     return None
 
+def _chart_disk_get_any(cache_key):
+    """저장된 일봉을 **날짜·TTL 을 묻지 않고** 그대로 꺼낸다. 반쪽 차트 복구 전용.
+
+    평소 조회(_chart_disk_get)가 날짜와 TTL 을 따지는 이유는 마지막 봉이 낡으면 그것이
+    '현재가'로 노출되기 때문이다(2026-07-27 실측). 여기서는 그 위험이 없다 — 낡은 봉을
+    **그대로 쓰지 않고**, 방금 받은 최신 봉들과 병합해 과거 구간만 메운다. 과거 봉은
+    불변이므로 이 병합은 언제나 성립한다.
+    """
+    if getattr(config, 'CHART_DISK_CACHE', True) is False:
+        return None
+    try:
+        with _CHART_DISK_LOCK, closing(sqlite3.connect(_chart_disk_path())) as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS chart_cache (cache_key TEXT PRIMARY KEY, trade_date TEXT, df_blob BLOB, ts REAL)")
+            row = conn.execute("SELECT df_blob FROM chart_cache WHERE cache_key=?", (cache_key,)).fetchone()
+            if row and row[0]:
+                df = pickle.loads(row[0])
+                if df is not None and not df.empty:
+                    return df
+    except Exception as e:
+        logger.debug(f"[ChartDisk] get_any 실패({cache_key}): {e}")
+    return None
+
+
 def _chart_disk_set(cache_key, df, today_str):
     """디스크 일봉 캐시에 '오늘자' DataFrame을 저장하고, 과거일자 항목은 하루 1회 정리한다."""
     if getattr(config, 'CHART_DISK_CACHE', True) is False:
@@ -489,6 +512,40 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
     #   이번 호출에는 그대로 돌려주되(있는 것이 없는 것보다 낫다) 굳히지는 않는다 —
     #   다음 호출이 온전한 차트를 받으면 스스로 낫는다.
     partial = bool(getattr(df, 'attrs', {}).get('partial')) if df is not None else False
+
+    #  [Fix 2026-09-06] '있는 것이 없는 것보다 낫다'는 봉 수에 따라 거짓이 된다.
+    #   ewm 기반 지표(ATR·RSI·ADX·MACD)는 rolling 과 달리 **첫 봉부터 값을 내므로**,
+    #   반쪽 차트를 받은 호출부는 그것이 반쪽인 줄 모른 채 확신 있는 숫자를 얻는다.
+    #   실측(평소 변동폭 5%인 종목): 3봉이면 손절률이 -1.200%, 53봉이면 -8.246% —
+    #   -1.2% 는 정상 눌림에서 곧바로 잘리는 선이다.
+    #   attrs['partial'] 은 캐시만 보고, 그 표식은 슬라이싱·copy 를 지나며 사라져
+    #   호출부까지 가지도 못한다(pandas attrs 는 전파가 제한적이다).
+    #   페이지네이션은 **오늘부터 과거로** 훑으므로 반쪽 프레임에 남는 것은 항상
+    #   **최신 봉**이다. 과거 봉은 불변이니, 저장해 둔 옛 프레임과 병합하면 최신성을
+    #   잃지 않고 길이를 되찾는다. 날짜가 지난 저장본도 쓴다 — 그 낡은 마지막 봉은
+    #   방금 받은 봉이 덮어쓴다.
+    if partial and df is not None and not df.empty:
+        try:
+            with _CHART_CACHE_LOCK:
+                _prev = _CHART_CACHE.get(cache_key)
+            prev_df = (_prev or {}).get('df')
+            if prev_df is None and not is_index:
+                prev_df = _chart_disk_get_any(cache_key)
+            if prev_df is not None and not prev_df.empty and len(prev_df) > len(df):
+                merged = (pd.concat([prev_df, df], ignore_index=True)
+                            .drop_duplicates(subset=['date'], keep='last')
+                            .sort_values('date')
+                            .reset_index(drop=True)
+                            .tail(250))
+                logger.warning(
+                    f"[Chart] {code} 일봉이 조회 실패로 {len(df)}봉만 왔습니다 — "
+                    f"저장해 둔 {len(prev_df)}봉과 병합해 {len(merged)}봉으로 씁니다"
+                    f"(과거 봉은 불변, 최신 봉은 방금 받은 것).")
+                merged.attrs['partial'] = True   # 여전히 굳히지 않는다
+                df = merged
+        except Exception as e:      # noqa: BLE001 - 복구가 복구를 죽이지 않게
+            logger.debug(f"[Chart] {code} 반쪽 차트 병합 실패: {e}")
+
     if df is not None and not df.empty and not partial:
         with _CHART_CACHE_LOCK:
             _CHART_CACHE[cache_key] = {

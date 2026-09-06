@@ -376,7 +376,8 @@ def run_holding_analysis(domestic_items, overseas_items, restricted_codes=None, 
         })
 
     for item in overseas_items:
-        qty = float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0))
+        qty = (api.safe_float(item.get('ovrs_cblc_qty'), default=0.0)
+         or api.safe_float(item.get('ord_psbl_qty'), default=0.0))
         pchs_avg = float(item.get('pchs_avg_pric') or 0)
         cur_price = float(item.get('ovrs_now_pric') or 0)
         if cur_price == 0 and qty > 0:
@@ -708,7 +709,8 @@ def build_overseas_holdings_table(items, holding_analysis, marks_ctx=None, title
     sell_signals = []
 
     for item in items:
-        qty = float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0))
+        qty = (api.safe_float(item.get('ovrs_cblc_qty'), default=0.0)
+         or api.safe_float(item.get('ord_psbl_qty'), default=0.0))
         if qty <= 0:
             continue
 
@@ -1249,7 +1251,8 @@ def _display_balance_details(cano, acnt_prdt_cd):
         #  해외분이 조용히 사라졌다(합계도 그만큼 적게 나온다). 사실을 밝히고 비운다.
         overseas_failed = all_overseas_holdings is None
         ovrs_output = [item for item in (all_overseas_holdings or [])
-                       if float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0)) > 0]
+                       if (api.safe_float(item.get('ovrs_cblc_qty'), default=0.0)
+                        or api.safe_float(item.get('ord_psbl_qty'), default=0.0)) > 0]
         if overseas_failed:
             config.console.print("[yellow]해외 잔고를 조회하지 못했습니다 — 아래 표에 해외분이 빠져 있습니다.[/yellow]")
 
@@ -1355,7 +1358,18 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
         "d2_real": 0,        # [추가] 실제 D+2 예수금
         "next_day_plus": 0,  # [추가] 익일결재(+)
         "next_day_minus": 0, # [추가] 익일결재(-)
-        "api_tot_asset": 0   # [추가] API 제공 총 평가금액 (검증용)
+        "api_tot_asset": 0,  # [추가] API 제공 총 평가금액 (검증용)
+        #  [추가 2026-09-06] **이 값이 온전한가.** 아래 네 구간은 각자 예외를 삼키고
+        #   넘어가므로, 한 구간이 실패해도 tot_asset 은 **숫자로** 나온다 — 그저 그만큼
+        #   작을 뿐이다. 실측(주식비중 36% 계좌, 국내 잔고 조회만 실패):
+        #       정상          : 총자산 10,000,000 (주식 3,600,000 + 현금 6,400,000)
+        #       국내잔고 실패 : 총자산  6,400,000 (주식 0 + 현금 6,400,000)
+        #   호출부는 이것을 '자산이 36% 줄었다'로 읽는다. 기존 방어 둘(차단기의 '비정상
+        #   급감' 문턱, is_plausible_baseline)은 **직전 대비 0.5배**를 본다 — 이 시스템의
+        #   노출 상한이 40%라(4슬롯·균등배분) 주식 평가액이 통째로 빠져도 그 문턱에
+        #   영영 닿지 않는다. 문턱을 낮추는 것은 답이 아니다. **못 읽었다는 사실 자체**를
+        #   전한다 — 기준선처럼 되돌릴 수 없는 결정은 그때 판단을 미룬다.
+        "degraded": []       # 값을 채우지 못한 구간 이름들. 비어 있어야 온전한 값이다.
     }
     
     # 1. 금일 데이터 조회
@@ -1421,7 +1435,11 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
             except Exception as e:
                 logger.debug(f"DB 금일 데이터 조회 실패: {e}")
 
-    except Exception: pass
+    except Exception as e:
+        #  실현손익이 0으로 남으면 그 차액이 **가짜 입금**으로 둔갑해 자산 기준선이
+        #  밀린다([[daily-asset-baseline-transfers]]). 조용히 넘길 수 없다.
+        summary_data['degraded'].append("금일손익")
+        logger.error(f"자산 현황 — 금일 매매 손익 조회 실패: {type(e).__name__}: {e}")
 
     # 2. 국내 주식 잔고 및 자산
     if progress: progress.update(task, description="[cyan]국내 주식 잔고 및 평가금 조회 중...[/cyan]")
@@ -1430,7 +1448,12 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
         with utils.AccountContext(cano):
             output1, output2 = api.get_domestic_balance(cano, acnt_prdt_cd)
 
-        if output1 is not None:
+        if output1 is None:
+            #  None = 조회 실패다(빈 리스트는 '보유 없음'이라 정상). 예외가 안 났을 뿐
+            #  주식 평가액을 모르는 것은 같다.
+            summary_data['degraded'].append("국내잔고")
+            logger.warning("자산 현황 — 국내 잔고를 읽지 못했습니다(주식 평가액이 빠집니다)")
+        else:
             # [수정] 보유 중인 종목만 필터링
             holdings = [h for h in output1 if api.safe_int(h.get('hldg_qty')) > 0]
             calc_buy = 0; calc_eval = 0; calc_pl = 0
@@ -1482,8 +1505,9 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
                 summary_data['withdraw'] = summary_data['d2_dep'] 
 
     except Exception as e:
+        #  이 구간이 실패하면 **주식 평가액이 통째로 빠진** 총자산이 만들어진다.
+        summary_data['degraded'].append("국내잔고")
         logger.error(f"자산 현황 조회 오류: {str(e)}")
-        pass
         
     # [추가] 해외 주식 잔고 합산 (원화 환산)
     if progress: progress.update(task, description="[cyan]해외 주식 잔고 및 환산액 계산 중...[/cyan]")
@@ -1494,13 +1518,18 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
         #  집계까지 함께 사라진다**. 해외만 비우고 실패 사실을 남긴다.
         if ovrs_holdings is None:
             logger.warning("자산 현황 — 해외 잔고 조회 실패(해외분 제외하고 계산합니다)")
+            summary_data['degraded'].append("해외잔고")
             ovrs_holdings = []
         ovrs_buy_usd = 0.0
         ovrs_eval_usd = 0.0
         ovrs_pl_usd = 0.0
         
         for item in ovrs_holdings:
-            qty = float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0))
+            #  맨 float() 였다 — 증권사는 값이 없을 때 빈 문자열을 준다. `A or B` 안에
+            #  있어 형태만 다를 뿐 같은 사고다(빈 문자열은 거짓이라 B 로 넘어가지만,
+            #  B 도 빈 문자열이면 float('') 가 터져 **해외분 전체**가 사라진다).
+            qty = api.safe_float(item.get('ovrs_cblc_qty'), default=0.0) \
+                or api.safe_float(item.get('ord_psbl_qty'), default=0.0)
             if qty > 0:
                 pchs = api.safe_float(item.get('pchs_avg_pric'), default=0.0)
                 profit = api.safe_float(item.get('frcr_evlu_pfls_amt'), default=0.0)
@@ -1525,7 +1554,10 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
         summary_data['sec_eval'] += ovrs_eval_krw
         summary_data['sec_pl'] += ovrs_pl_krw
     except Exception as e:
-        pass
+        #  `except Exception: pass` 였다. 바로 위 None 처리는 실패를 남기는데, 예외
+        #  경로만 조용했다 — 해외 보유가 있는 계좌에서는 그만큼 총자산이 작아진다.
+        summary_data['degraded'].append("해외잔고")
+        logger.error(f"자산 현황 — 해외 잔고 합산 실패: {type(e).__name__}: {e}")
 
     # 3. 예수금 조회
     if progress: progress.update(task, description="[cyan]예수금 조회 및 최종 집계 중...[/cyan]")
@@ -1549,7 +1581,14 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
             
             if config.FILE_DEBUG_LEVEL == "DEBUG":
                 logger.debug(f"[ACCOUNT_DEBUG] Deposit Detail: {dep_data}")
-    except Exception: pass
+            if not dep_data:
+                #  예수금을 못 읽으면 총자산에서 **현금이 통째로** 빠진다(구간 2의
+                #  output2 값이 있으면 그것으로 버티지만, 없으면 0원이다).
+                summary_data['degraded'].append("예수금")
+                logger.warning("자산 현황 — 예수금을 읽지 못했습니다")
+    except Exception as e:
+        summary_data['degraded'].append("예수금")
+        logger.error(f"자산 현황 — 예수금 조회 실패: {type(e).__name__}: {e}")
     
     # 4. 최종 계산
     # API 지연(Lag)에 의한 총 자산 금액의 왜곡을 방지하기 위해

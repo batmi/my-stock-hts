@@ -187,12 +187,35 @@ class ReservedOrderMonitor:
             logger.error(f"[Reserve] 권리 조정 취소 알림을 전달하지 못했습니다 — {code} "
                          f"{len(canceled)}건이 취소된 사실이 운영자에게 닿지 않았습니다.")
 
+    #  예약 목록 조회가 연속 몇 번 실패하면 사람에게 알리는가. 10초 주기이므로
+    #   6회면 약 1분이다 — 한 번의 잠금 경합으로 경보를 내지 않으면서, 감시가 실제로
+    #   멈춘 상태는 1분 안에 드러난다.
+    PENDING_FAIL_ALERT_STREAK = 6
+
     def _check_orders(self):
         try:
-            pending_orders = db_manager.db.get_pending_reserved_orders()
+            #  [Fix 2026-09-06] 종전에는 실패도 빈 목록이라 아래 `if not pending_orders`
+            #   가 그것을 "대기 중인 예약이 없다"로 읽고 **그 주기를 통째로 건너뛰었다.**
+            #   예약은 대개 손절·익절이므로, 조회가 계속 실패하면 그 보호가 무기한
+            #   멈춘 채 아무 소리도 나지 않는다. db_manager 파일 머리의 경고가 이
+            #   조합을 지목해 두고 고치는 것은 미뤄 뒀던 자리다.
+            pending_orders = db_manager.db.get_pending_reserved_orders(strict=True)
         except AttributeError:
             return # DB 미구현 상태이면 스킵
-            
+        except Exception as e:
+            self._pending_fail_streak = getattr(self, '_pending_fail_streak', 0) + 1
+            logger.error(f"[Reserve] 예약 목록을 읽지 못했습니다({self._pending_fail_streak}회 "
+                         f"연속) — 이번 주기의 예약 손절·익절 점검을 건너뜁니다: "
+                         f"{type(e).__name__}: {e}")
+            if self._pending_fail_streak == self.PENDING_FAIL_ALERT_STREAK:
+                alert_delivered(
+                    f"🚨 [예약 감시 정지]\n예약 주문 목록 조회가 "
+                    f"{self._pending_fail_streak}회 연속 실패했습니다.\n"
+                    f"예약 손절·익절이 발동하지 않고 있습니다 — DB 상태를 확인하십시오.\n"
+                    f"오류: {type(e).__name__}: {e}", urgent=True)
+            return
+        self._pending_fail_streak = 0
+
         if not pending_orders: return
 
         # [안전장치] 권리 조정으로 목표가가 무의미해진 예약 주문을 먼저 걷어낸다.
@@ -200,7 +223,8 @@ class ReservedOrderMonitor:
         #  보여서, 순서가 바뀌면 취소하기 전에 오발동이 먼저 나간다.
         try:
             self._guard_corporate_actions(pending_orders)
-            pending_orders = db_manager.db.get_pending_reserved_orders()
+            #  여기서 실패하면 아래 except 가 잡아 이번 주기를 건너뛴다(위와 같은 이유).
+            pending_orders = db_manager.db.get_pending_reserved_orders(strict=True)
             if not pending_orders: return
         except Exception as e:
             logger.error(f"[Reserve] 권리 조정 점검 실패: {e}")

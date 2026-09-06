@@ -281,18 +281,36 @@ def get_yf_fast_info(code, ttl=60.0):
                 if pd.notna(row.get('close')) and pd.notna(change_abs):
                     prev_close = row.get('close') - change_abs
 
+                #  [Fix 2026-09-06] 이 분기만 값을 검사하지 않았다. 바로 아래 yfinance
+                #   분기는 `if last_price is None or pd.isna(last_price): raise` 로 막고,
+                #   tvDatafeed 분기도 `if not (last_price > 0): raise` 로 막는데, 세
+                #   갈래 중 여기만 NaN 을 그대로 성공으로 돌려줬다(실측: 스크리너가
+                #   NaN 행을 주면 last_price=nan 이 그대로 캐시에 굳는다).
+                #   대가가 캐시 때문에 커진다 — 한 번 굳으면 60초 동안 그 값이 답이고,
+                #   그 뒤로도 stale-if-error 유예(900초) 안에서는 **'직전 성공값'** 이라는
+                #   이름으로 계속 나온다. NaN 은 비교가 전부 거짓이라 `price > 0` 류의
+                #   검사를 조용히 통과하는 대신 등락률·역산 계산을 NaN 으로 물들인다.
+                #   값이 아니면 실패다 — 예외를 내 다음 소스(yfinance)로 넘긴다.
+                if close_p is None or pd.isna(close_p) or float(close_p) <= 0:
+                    raise ValueError(f"TV 스크리너 현재가 없음({code}): {close_p!r}")
+
+                _vol = row.get('volume', 0)
+                _yhi = row.get('High.52Week')
                 data = {
-                    'last_price': close_p,
+                    'last_price': float(close_p),
                     'regular_market_previous_close': prev_close,
-                    'last_volume': row.get('volume', 0),
-                    'year_high': row.get('High.52Week'),
+                    #  거래량·52주 고점의 결측은 시세만큼 치명적이지 않지만, NaN 을 그대로
+                    #  흘리면 호출부의 포맷·비교가 조용히 무너진다. '없음'으로 만든다.
+                    'last_volume': 0 if _vol is None or pd.isna(_vol) else _vol,
+                    'year_high': None if _yhi is None or pd.isna(_yhi) else _yhi,
                     'src': 'tv',            # [추가] 소스 구분 (해외주식 현재가 폴백은 TV만 허용)
                     'is_extended': is_extended  # [추가] 장외(프리/애프터) 세션 가격 여부
                 }
                 _set_micro_cache(cache_key, data)
                 return data
-        except Exception:
-            pass
+        except Exception as e:
+            #  조용히 넘기면 '왜 TV 가 아니라 yfinance 값이 나왔는가'를 추적할 수 없다.
+            logger.debug(f"[TV Screener] {code} 조회/검증 실패 → 다음 소스로: {e}")
 
     # 2. yfinance
     try:

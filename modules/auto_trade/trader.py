@@ -3789,7 +3789,27 @@ class AutoTrader:
                             
                             # [수정] 해외 자산 누락 방지
                             asset_data = account.get_asset_status_data(target_cano, acnt)
-                            if asset_data and asset_data.get('tot_asset', 0) > 0:
+                            #  [Fix 2026-09-06] 이 자리만 검사가 없었다. 같은 값을 쓰는
+                            #   기동 경로(488줄)와 주기 갱신 경로(4353줄)는 둘 다
+                            #   is_plausible_baseline 을 지나는데, **날짜 변경 갱신**만
+                            #   `> 0` 이었다. 이 값은 그날의 손실 한도 분모이자 사이징
+                            #   기준이고, 한 번 저장되면 하루 종일 고정된다.
+                            #   게다가 집계가 일부 실패해도 tot_asset 은 숫자로 나온다 —
+                            #   실측: 국내 잔고 조회만 실패하면 -36%(주식비중만큼). 이
+                            #   시스템의 노출 상한이 40%라 0.5배 문턱에는 영영 닿지
+                            #   않는다. 그래서 비율이 아니라 **결손 표식**을 본다.
+                            _degraded = list((asset_data or {}).get('degraded') or [])
+                            _acc_key = f"{target_cano}-{acnt}"
+                            _tot = (asset_data or {}).get('tot_asset', 0)
+                            if _degraded:
+                                self.log(f"[기준선] 자산 집계가 온전하지 않아 갱신을 "
+                                         f"미룹니다(결손: {', '.join(_degraded)}). "
+                                         f"다음 주기에 다시 측정합니다.")
+                            elif _tot > 0 and not is_plausible_baseline(_acc_key, _tot):
+                                self.log(f"[기준선] 새 시작 자산 {_tot:,}원이 직전 이력과 "
+                                         f"너무 어긋나 채택하지 않습니다. 다음 주기에 "
+                                         f"다시 측정합니다.")
+                            elif asset_data and _tot > 0:
                                 self.initial_asset = asset_data['tot_asset']
                                 saved_ok = save_daily_initial_asset(f"{target_cano}-{acnt}", self.initial_asset)
                                 today_str = datetime.now().strftime("%Y-%m-%d")
@@ -4306,9 +4326,18 @@ class AutoTrader:
                     asset_data = account.get_asset_status_data(target_cano, acnt_cd)
                     
                     # [Fix] API 지연/오류로 인해 account 모듈 내부에서 주식 잔고가 누락(0)된 경우 감지
+                    #  [Fix 2026-09-06] 종전 판정은 `sec_eval == 0` **하나**였다. 그러면
+                    #   국내는 되고 해외만 실패한 경우나, 예수금만 실패한 경우처럼
+                    #   **일부만 빠진** 총자산이 그대로 통과한다. 이제 집계 쪽이 어느
+                    #   구간을 못 채웠는지 말해 주므로 그것을 본다.
                     is_asset_broken = False
+                    _degraded = list((asset_data or {}).get('degraded') or [])
                     if asset_data and total_eval > 0 and asset_data.get('sec_eval', 0) == 0:
                         is_asset_broken = True
+                    elif _degraded:
+                        is_asset_broken = True
+                        self.log(f"⚠️ 자산 집계 일부 실패(결손: {', '.join(_degraded)}) — "
+                                 f"이번 주기 총자산을 대안 계산으로 대체합니다.")
 
                     if asset_data and not is_asset_broken:
                         current_total = asset_data.get('tot_asset', 0)
@@ -4697,6 +4726,28 @@ class AutoTrader:
                                        if k in codes}
             return dict(self.holding_risk_cache)
 
+    def _last_known_sl_rate(self, code):
+        """직전 주기의 매도 판정이 **실제로 쓴** 손절률(%). 없으면 None.
+
+        [왜 필요한가] 안전망 두 곳(미체결 매수 취소 · 미관리 포지션 이탈 경보)은 주기
+        앞머리에서 도느라 일봉이 없다. 그래서 매수 기록이 없거나 못 읽으면 전역 고정
+        손절률로 떨어지는데, 매도 엔진은 같은 상황에서 진입 봉 ATR 로 복원한 값을 쓴다
+        (entry_atr_stop_rate). 두 선이 갈리면 경보와 취소가 **조용히 늦는다** — 실측으로
+        엔진이 -3.2% 를 보는 동안 안전망은 -7.0% 를 봤다. 손절선을 이미 지났는데
+        마지막 안전망이 울지 않는 상태다.
+
+        holding_risk_cache 는 직전 주기가 그 종목에 실제로 적용한 선이고(60초 전의 일봉
+        ATR 이라 실질 차이가 없다) 메모리에 이미 있어 조회 비용이 0이다. 없으면 None 을
+        돌려줘 종전 경로로 돌아간다 — 모르면 안 건드린다.
+        """
+        with self._lock:
+            entry = (self.holding_risk_cache or {}).get(code) or {}
+        try:
+            rate = float(entry.get('sl_rate') or 0.0)
+        except (TypeError, ValueError):
+            return None
+        return rate if rate < 0 else None
+
     def _effective_stop_loss_rate(self, buy_trades=None, rule=None, fallback_atr_rate=None):
         """포지션의 실효 손절률(%) — 매도 판정이 실제로 쓰는 그 값. 미사용(0)이면 None.
 
@@ -4740,7 +4791,8 @@ class AutoTrader:
             if profit_rate is None:
                 logger.warning(f"[손절 보호] {code} 수익률을 구할 수 없어 판정을 보류한다")
                 return
-            sl_rate = self._effective_stop_loss_rate(buy_trades, rule=rule)
+            sl_rate = self._effective_stop_loss_rate(
+                buy_trades, rule=rule, fallback_atr_rate=self._last_known_sl_rate(code))
             if sl_rate is None or profit_rate > sl_rate:
                 return
 
@@ -5049,7 +5101,10 @@ class AutoTrader:
             # [SSOT] 손절선은 매도 엔진이 쓰는 그 값이어야 한다(_effective_stop_loss_rate).
             #  종전에는 여기에 수량가중평균을 한 벌 더 복제해 두어, ATR 손절 OFF·개별 룰
             #  조이기 같은 조건에서 실제 판정과 다른 선을 보고 경보했다.
-            sl_rate = self._effective_stop_loss_rate(buy_trades, rule=rule)
+            #  기록이 없거나 못 읽었으면 직전 주기가 실제로 쓴 선을 이어받는다.
+            #  기록이 있으면 그것이 항상 우선한다(build_sell_thresholds 의 우선순위).
+            sl_rate = self._effective_stop_loss_rate(
+                buy_trades, rule=rule, fallback_atr_rate=self._last_known_sl_rate(code))
             if sl_rate is None:
                 return  # 손절 기준 자체가 없으면(0=미사용) 경보할 기준도 없다
 
@@ -5280,7 +5335,18 @@ class AutoTrader:
 
         # [추가] 개별 룰 로드 ([최적화] 루프에서 주기당 1회 로드해 전달받으면 재조회 생략)
         if rules_map is None:
-            custom_rules = db_manager.db.get_all_stock_strategies()
+            #  [Fix 2026-09-06] 매도 쪽은 **멈추지 않는다** — 매도 검사를 거르면 손절·
+            #   트레일링이 통째로 꺼지고, 그것이 룰을 잃는 것보다 훨씬 비싸다. 다만
+            #   조용히 넘기지 않는다: 룰은 손절을 **조이는 방향만** 허용되므로
+            #   (build_sell_thresholds), 룰을 잃는 것은 곧 그 종목의 손절선이 넓어지는
+            #   것이다 — 운용자가 못 박은 지시가 이번 주기에 빠진 사실을 남긴다.
+            try:
+                custom_rules = db_manager.db.get_all_stock_strategies(strict=True)
+            except Exception as _re:
+                self.log(f"[개별 룰] 읽지 못했습니다 — 이번 주기의 매도 판정은 전역 "
+                         f"기준으로 돕니다(룰로 조여 둔 손절이 그만큼 넓어집니다): "
+                         f"{type(_re).__name__}: {_re}")
+                custom_rules = []
             custom_rules = _enrich_rules_with_weights(custom_rules) # [추가] 가중치 보강
             rules_map = {r['code']: r for r in custom_rules}
 
@@ -5296,8 +5362,25 @@ class AutoTrader:
         #  테이블에 쌓인다). 계좌로 거르지 않으면 같은 종목을 두 계좌에서 들고 있을 때
         #  **남의 계좌 매수 기록**으로 손절선(수량가중평균)·오픈 리스크·진입일이 계산된다.
         _acct = self._trade_account_key()
+        #  [Fix 2026-09-06] 종전에는 이 두 조회가 실패해도 **빈 dict** 를 돌려줘서,
+        #   호출부가 그것을 "이 종목들은 매수 기록이 전혀 없다"로 읽었다. 그 기록이
+        #   손절선의 근거다 — 실측: 진입 시 기록된 -3.2% 가 전역 고정 -7.0% 로 떨어져
+        #   손절폭이 2.19배가 된다. 매도 엔진 자체는 일봉 ATR 로 복원해 버티지만
+        #   (entry_atr_stop_rate), **안전망 두 곳**(미체결 매수 취소·미관리 이탈 경보)은
+        #   차트를 안 보므로 그대로 전역값으로 떨어진다. 이제 못 읽은 것은 못 읽었다고
+        #   답하므로, 그때는 직전 주기가 **실제로 쓴** 선을 이어받는다.
         latest_buy_map = db_manager.db.get_latest_buy_trades(_all_hold_codes, account=_acct)
         buy_trades_map = db_manager.db.get_buy_trades_for_current_holdings(_all_hold_codes, account=_acct)
+        self._buy_records_unknown = buy_trades_map is None
+        if self._buy_records_unknown:
+            self.log("[손절 기준] 매수 기록을 읽지 못했습니다 — 이번 주기의 손절선은 "
+                     "직전 주기 실측값과 일봉 ATR 로 복원합니다(전역 고정폭으로 넓히지 "
+                     "않습니다).")
+            buy_trades_map = {}
+        if latest_buy_map is None:
+            self.log("[진입일] 최근 매수 기록을 읽지 못했습니다 — 진입일 복원과 트레일링 "
+                     "앵커 복원이 이번 주기에는 근거를 잃습니다.")
+            latest_buy_map = {}
         # 진입일(보유수량이 0 → 1 이상이 된 시점) — 시간청산 기준
         entry_date_map = db_manager.db.get_position_entry_dates(_all_hold_codes, account=_acct)
 
@@ -6019,7 +6102,17 @@ class AutoTrader:
             
         # [추가] 개별 룰 로드 ([최적화] 루프에서 주기당 1회 로드해 전달받으면 재조회 생략)
         if rules_map is None:
-            custom_rules = db_manager.db.get_all_stock_strategies()
+            #  [Fix 2026-09-06] 빈 목록은 '개별 룰이 없다'로 읽혀 모든 종목이 전역값으로
+            #   판정된다. 룰은 매수 기준(BUY_SCORE·RSI 상한)과 종목당 비중까지 정하므로,
+            #   룰을 잃은 채 낸 매수는 운용자가 못 박은 조건 밖에서 나간 주문이다.
+            #   진입을 한 주기 미루는 것은 되돌릴 수 있다.
+            try:
+                custom_rules = db_manager.db.get_all_stock_strategies(strict=True)
+            except Exception as _re:
+                self.log(f"매수 보류: 종목별 개별 룰을 읽지 못했습니다 — 전역값으로 "
+                         f"판정하면 운용자가 정한 조건 밖에서 주문이 나갑니다 "
+                         f"({type(_re).__name__}: {_re})")
+                return
             custom_rules = _enrich_rules_with_weights(custom_rules) # [추가] 가중치 보강
             rules_map = {r['code']: r for r in custom_rules}
 
@@ -6029,18 +6122,39 @@ class AutoTrader:
         if config.session.auto_cano:
             target_account = f"{config.session.auto_cano}-{config.session.auto_acnt_prdt_cd}"
             
+        #  [Fix 2026-09-06] 이 조회는 **게이트 두 개의 입력**이다 — 재진입 체결강도 허들과
+        #   '손절가보다 비싸게 되사지 않는다'. 종전에는 실패해도 빈 목록이 돌아와
+        #   "오늘 판 종목이 없다"로 읽혔고, 두 게이트가 동시에 사라졌다. 그 게이트가
+        #   막으려던 것이 2026-08-05 실측의 손절·재매수 반복 루프인데(103.1% → 127.3%
+        #   → 127.5% 로 스스로 세운 허들을 넘으며 왕복 스프레드만큼 손실 누적),
+        #   조회 한 번이 실패하면 정확히 그 상태로 돌아간다.
+        #   못 읽었으면 이번 주기의 **매수만** 미룬다 — 진입을 한 주기 미루는 것은
+        #   되돌릴 수 있고, 방어 없이 낸 재매수는 되돌릴 수 없다. 매도 검사는 다른
+        #   경로라 그대로 돈다(손절·트레일링은 멈추지 않는다).
         try:
-            today_trades = db_manager.db.get_trades(start_date=today_str, end_date=today_str, is_sim=False, account=target_account)
+            today_trades = db_manager.db.get_trades(start_date=today_str, end_date=today_str,
+                                                    is_sim=False, account=target_account,
+                                                    strict=True)
         except TypeError:
             today_trades = db_manager.db.get_trades(start_date=today_str, end_date=today_str, is_sim=False)
             if target_account:
                 today_trades = [t for t in today_trades if t.get('account') == target_account]
+        except Exception as _te:
+            self.log(f"매수 보류: 당일 매매 이력을 읽지 못해 재진입 방어(체결강도 허들·"
+                     f"손절가 재매수 차단)를 세울 수 없습니다 — 다음 주기에 다시 봅니다 "
+                     f"({type(_te).__name__}: {_te})")
+            return
                 
         sold_today = set(t['code'] for t in today_trades if "sell" in t.get('type', '').lower() or "매도" in t.get('type', ''))
         
         reentry_hurdles = {}
         # [최적화] 당일 매도 종목의 최근 매수 내역을 배치 쿼리로 일괄 조회
+        #  None = 못 읽었다. 재진입 허들은 '없으면 통과'라 조용히 열린다 — 흔적을 남긴다.
         _sold_latest_buys = db_manager.db.get_latest_buy_trades(sold_today, account=target_account)
+        if _sold_latest_buys is None:
+            self.log("[재진입 허들] 당일 매도분의 매수 기록을 읽지 못했습니다 — "
+                     "이번 주기에는 허들 없이 판정합니다.")
+            _sold_latest_buys = {}
         for scode in sold_today:
             last_buy = _sold_latest_buys.get(scode)
             if last_buy:

@@ -223,8 +223,8 @@ def test_the_read_only_analysis_path_passes_the_account_down():
     with patch.object(engine.db_manager.db, 'get_latest_buy_trades', _rec('latest')), \
          patch.object(engine.db_manager.db, 'get_buy_trades_for_current_holdings', _rec('buys')), \
          patch.object(engine.db_manager.db, 'get_position_entry_info', _rec('entry')), \
-         patch.object(engine.db_manager.db, 'get_all_stock_strategies', lambda: []), \
-         patch.object(engine.db_manager.db, 'get_all_trailing_stops', lambda: {}), \
+         patch.object(engine.db_manager.db, 'get_all_stock_strategies', lambda **_k: []), \
+         patch.object(engine.db_manager.db, 'get_all_trailing_stops', lambda **_k: {}), \
          patch.object(engine.db_manager.db, 'get_all_half_tp', lambda: set()), \
          patch.object(engine.api, 'get_period_entry_dates', lambda *a, **k: {}), \
          patch.object(engine.DefaultStrategy, 'analyze_sell', lambda *a, **k: {}):

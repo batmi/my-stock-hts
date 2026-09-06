@@ -138,7 +138,8 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
                 overseas_query_failed = True
                 holdings = []
             for item in holdings:
-                qty = float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0))
+                qty = (api.safe_float(item.get('ovrs_cblc_qty'), default=0.0)
+                 or api.safe_float(item.get('ord_psbl_qty'), default=0.0))
                 if qty > 0:
                     pchs_avg = api.safe_float(item.get('pchs_avg_pric'), default=0.0)
                     profit = api.safe_float(item.get('frcr_evlu_pfls_amt'), default=0.0)

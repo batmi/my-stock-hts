@@ -193,6 +193,27 @@ def block_side_effects_for_whole_session():
 
     mp.setattr(_requests.Session, "request", _guarded_request)
 
+    #  [Fix 2026-09-06] **yfinance 는 requests.Session 을 쓰지 않는다.**
+    #   위 _LIVE_HOSTS 에 finance.yahoo.com 이 있어 막힌다고 믿었지만, yfinance 는
+    #   자체 HTTP 클라이언트(curl_cffi 등)로 나가므로 이 패치를 통째로 비켜 간다.
+    #   실측: api.yf_quotes.get_yf_fast_info("AAPL") 이 테스트 안에서 **진짜 시세**를
+    #   받아 왔다(319.97). 목록이 '막는다'고 말하는데 실제로는 안 막히는 상태가 가장
+    #   나쁘다 — 스위트가 느려지고 야후 스로틀에 따라 결과가 흔들리며, 무엇보다
+    #   '네트워크를 안 탄다'는 전제 위에 쓴 다른 테스트들이 조용히 거짓이 된다.
+    #   호스트가 아니라 **우리가 쓰는 진입점**을 막는다. 필요하면 각 테스트가 명시적으로
+    #   목을 세우면 된다(그 편이 무엇을 가정했는지도 드러난다).
+    try:
+        import yfinance as _yf
+
+        def _yf_blocked(*a, **k):
+            raise RuntimeError(f"{_BLOCKED_MSG} (yfinance)")
+
+        mp.setattr(_yf, "download", _yf_blocked, raising=False)
+        mp.setattr(_yf, "Ticker", _yf_blocked, raising=False)
+        mp.setattr(_yf, "Tickers", _yf_blocked, raising=False)
+    except Exception:       # noqa: BLE001 - yfinance 미설치 환경
+        pass
+
     yield
     mp.undo()
 

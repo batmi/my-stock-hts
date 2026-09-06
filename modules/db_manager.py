@@ -847,8 +847,17 @@ class DBManager:
                     return False
             return False
 
-    def get_trades(self, limit=None, start_date=None, end_date=None, code=None, is_auto=False, is_sim=None, order_status=None, account=None):
-        """거래 내역 조회"""
+    def get_trades(self, limit=None, start_date=None, end_date=None, code=None, is_auto=False, is_sim=None, order_status=None, account=None, strict=False):
+        """거래 내역 조회
+
+        strict=True 면 조회 실패를 **올린다**. 기본값(False)은 종전대로 빈 목록이다 —
+        화면·리포트는 빈 목록으로 흘러도 손해가 없지만, **게이트의 입력**으로 쓰는 곳은
+        다르다. 빈 목록은 '오늘 판 종목이 없다'로 읽혀 재진입 방어가 통째로 열린다:
+        체결강도 허들도, '손절가보다 비싸게 되사지 않는다'는 게이트도 함께 사라진다.
+        그 게이트가 막으려던 것이 2026-08-05 실측의 손절·재매수 반복 루프
+        (103.1% → 127.3% → 127.5% 로 스스로 세운 허들을 넘으며 왕복 스프레드만큼
+        실현 손실이 누적)인데, 조회가 한 번 실패하면 정확히 그 상태로 돌아간다.
+        """
         # 읽기 작업은 락 없이 수행 가능 (WAL 모드 덕분)
         try:
             conn = self._get_conn()
@@ -898,6 +907,8 @@ class DBManager:
             if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                 config.console.print(f"[red][DB] Select Error: {e}[/red]")
             _swallowed("get_trades", e)
+            if strict:
+                raise
             return []
             
     def delete_trade_by_id(self, trade_id):
@@ -1217,8 +1228,17 @@ class DBManager:
                     continue
                 result[t['code']].append(t)
             return result
-        except Exception:
-            return result
+        except Exception as e:
+            #  [Fix 2026-09-06] 종전에는 `{code: []}` 를 그대로 돌려줬다 — 호출부는 그것을
+            #   "이 종목들은 **매수 기록이 전혀 없다**"로 읽는다. 그 기록이 손절선의
+            #   근거이므로, 조회가 잠깐 실패한 것만으로 판정 기준이 통째로 바뀐다
+            #   (실측: 진입 시 기록된 -3.2% → 전역 고정 -7.0%, 손절폭 2.19배).
+            #   포지션 크기는 진입 시점 손절폭을 전제로 정해졌다 — 사후에 넓히면 실제
+            #   손실이 사이징이 가정한 상한을 넘는다(build_sell_thresholds 독스트링).
+            #   올리지는 않는다: 여기서 던지면 그 주기의 **매도 검사 전체**가 멈춰
+            #   손절·트레일링이 무감시가 된다. 모른다고 답하고 흔적을 남긴다.
+            _swallowed("get_buy_trades_for_current_holdings", e)
+            return None
 
     def get_position_entry_dates(self, codes, account=None):
         """[배치] 현재 보유 포지션의 진입일을 일괄 조회합니다. {code: 'YYYY-MM-DD'}
@@ -1342,8 +1362,11 @@ class DBManager:
                 picked = slot[0] or slot[1] or slot[2]
                 if picked: result[code] = picked
             return result
-        except Exception:
-            return result
+        except Exception as e:
+            #  빈 dict 는 '최근 매수 기록 없음'으로 읽혀 진입일 복원(resolve_entry_date)과
+            #  트레일링 앵커 복원의 근거가 사라진다. 흔적을 남긴다.
+            _swallowed("get_latest_buy_trades", e)
+            return None
 
     def get_latest_buy_trade(self, code):
         """특정 종목의 가장 최근 매수 내역 조회 (ATR 손절률 확인용)"""
@@ -1524,7 +1547,12 @@ class DBManager:
                     self._note_write_failure("권리조정 최고가 환산", f"{code} ×{ratio}", e)
                     return None
 
-    def get_all_trailing_stops(self):
+    def get_all_trailing_stops(self, strict=False):
+        """전 종목 트레일링 앵커. **strict=True 면 조회 실패를 올린다.**
+
+        빈 dict 는 '앵커가 하나도 없다'로 읽혀 트레일링 스탑이 통째로 무장 해제된다 —
+        고점을 모르면 발동할 수 없다. 이 파일 머리의 경고가 지목한 조합 중 하나다.
+        """
         """모든 종목의 트레일링 스탑 기준가 조회 (시스템 시작 시 캐시 로드용)"""
         try:
             conn = self._get_conn()
@@ -1533,6 +1561,8 @@ class DBManager:
             return {row[0]: row[1] for row in cursor.fetchall()}
         except Exception as e:
             _swallowed("get_all_trailing_stops", e)
+            if strict:
+                raise
             return {}
 
     def delete_trailing_stop(self, code):
@@ -1719,7 +1749,14 @@ class DBManager:
             _swallowed("get_stock_strategy", e)
             return None
 
-    def get_all_stock_strategies(self):
+    def get_all_stock_strategies(self, strict=False):
+        """종목별 개별 룰 전체. **strict=True 면 조회 실패를 올린다.**
+
+        빈 목록은 '개별 룰이 없다'로 읽혀 모든 종목이 전역값으로 판정된다. 룰은
+        **손절을 조이는 방향만** 허용되므로(build_sell_thresholds), 룰을 잃는 것은 곧
+        손절이 넓어지는 것이다 — 운용자가 그 종목만 빨리 자르겠다고 못 박은 지시가
+        조용히 사라진다. 이 파일 머리의 경고가 지목한 조합 중 하나다.
+        """
         """모든 종목별 매매 전략 조회"""
         try:
             conn = self._get_conn()
@@ -1729,6 +1766,8 @@ class DBManager:
             return [dict(row) for row in rows]
         except Exception as e:
             _swallowed("get_all_stock_strategies", e)
+            if strict:
+                raise
             return []
 
     def delete_stock_strategy(self, code):
@@ -2285,7 +2324,14 @@ class DBManager:
             ''', (cano, acnt, market, order_type, code, name, qty, order_price, condition_type, target_price, target_time, expire_dt, composite_json))
             conn.commit()
 
-    def get_pending_reserved_orders(self):
+    def get_pending_reserved_orders(self, strict=False):
+        """대기 중인 예약 주문 목록.
+
+        [strict · 2026-09-06] 조회 실패도 빈 목록이라, 감시기는 그것을 "대기 중인 예약이
+        없다"로 읽고 **그 주기를 통째로 건너뛴다** — 예약 손절·익절이 조용히 멈춘다.
+        이 파일 머리의 경고가 이 조합을 지목해 두고 "동작은 그대로 두고 흔적만
+        남긴다"고 미뤄 둔 자리다. 판정에 쓰는 호출부는 strict=True 로 갈라 받는다.
+        """
         try:
             conn = self._get_conn()
             cursor = conn.cursor()
@@ -2293,6 +2339,8 @@ class DBManager:
             return [dict(row) for row in cursor.fetchall()]
         except Exception as e:
             _swallowed("get_pending_reserved_orders", e)
+            if strict:
+                raise
             return []
 
     def get_completed_reserved_orders(self, start_date=None, keyword=None):
