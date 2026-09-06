@@ -151,10 +151,28 @@ def _reconcile_rows():
     다음 주기가 같은 주문을 또 낸다. 재전송을 막으려던 대사가 재전송을 부르는 셈이다.
     미체결 목록을 합쳐 KIS와 같은 범위로 맞춘다.
     """
-    rows = list(((_api().get_today_history() or {}).get('output1')) or [])
+    #  [Fix 2026-09-06] **조회 실패를 '주문 없음'으로 읽지 않는다.**
+    #   종전에는 실패 응답(rt_cd != '0', output1 없음)이 그대로 빈 목록이 되어,
+    #   호출부가 "접수 흔적 없음 → 미접수로 봅니다"로 단정했다. 실측:
+    #     당일 주문내역 조회 실패 → msg_cd=ORDER_NOT_PLACED, '대사 확인'이라고 적힌 채.
+    #   그 결론은 이 계층이 존재하는 이유와 정반대다 — 응답 유실 뒤 '미접수'로 단정하면
+    #   다음 주기가 같은 주문을 다시 낸다([[order-timeout-no-resend]]). 게다가
+    #   ORDER_NOT_PLACED 는 운용자에게 알리지도 않아, 이중 주문이 조용히 난다.
+    #   여기서 올린 예외는 _reconcile_unknown_order 의 try 가 받아 '결과 불명'으로 남긴다.
+    hist = _api().get_today_history()
+    if not isinstance(hist, dict) or str(hist.get('rt_cd', '')) != '0':
+        raise RuntimeError(
+            f"당일 주문내역을 조회하지 못했습니다 — '주문 없음'이 아닙니다"
+            f" ({(hist or {}).get('msg_cd')} {(hist or {}).get('msg1')})")
+    rows = list(hist.get('output1') or [])
     if config.session.is_toss:
+        #  토스 당일 이력은 CLOSED 만 준다 — 미체결을 합쳐야 KIS 와 같은 범위가 된다.
+        #  그 조회가 실패하면(None) 범위가 반쪽이고, 반쪽으로 '미접수'를 결론지을 수 없다.
+        open_rows = _api()._toss_open_orders('domestic')
+        if open_rows is None:
+            raise RuntimeError("토스 미체결 주문을 조회하지 못했습니다 — 대사 범위가 반쪽입니다")
         seen = {str(r.get('odno') or '') for r in rows}
-        for r in (_api()._toss_open_orders('domestic') or []):
+        for r in open_rows:
             if str(r.get('odno') or '') not in seen:
                 rows.append(r)
     return rows
@@ -432,7 +450,14 @@ def get_deposit_balance(cano=None, acnt_prdt_cd=None, skip_balance_check=False, 
         #  반대매매가 붙어 손절 규칙 바깥에서 포지션이 정리된다.
         #  (실측 2026-08-09: 이 계좌들은 ord_psbl_amt 자체가 응답에 없어 이미 폴백으로
         #   안전했으나, 그건 우연이다. 순서를 뒤집어 명시적으로 만든다.)
-        res['order_possible'] = _api().safe_int(out.get('nrcvb_buy_amt')) or _api().safe_int(out.get('ord_psbl_amt'))
+        #  [Fix 2026-09-06] `A or B` 는 A 가 **진짜 0원일 때** B 로 넘어간다 — 하필
+        #   현금이 없어 미수가 날 수 있는 유일한 상황에서 신용·대용 포함 금액을 쓰게 된다.
+        #   safe_int 는 '필드 없음'과 '0원'을 똑같이 0으로 만들어 둘을 구분할 수 없다.
+        #   실측: nrcvb_buy_amt='0', ord_psbl_amt='9,000,000' → 매수여력 9,000,000원.
+        #   값이 **읽혔으면** 그것이 답이다. 폴백은 필드가 없을 때만이다.
+        _nrcvb = _api().safe_float(out.get('nrcvb_buy_amt'), default=None)
+        res['order_possible'] = (int(_nrcvb) if _nrcvb is not None
+                                 else _api().safe_int(out.get('ord_psbl_amt')))
         logger.info(f"[API] 주문가능금액 조회 성공: {res['order_possible']:,}원 (TR_ID: TTTC8908R)")
         res['withdraw'] = _api().safe_int(out.get('ord_psbl_cash')) # 출금가능은 현금 기준
         # 예수금 정보가 없을 경우 주문가능현금으로 대체

@@ -356,11 +356,22 @@ class SessionManager:
                     self.exchange_cache[item['code']] = item['exchange']
 
     def save_stock_config(self, data):
+        """관심종목을 저장한다. **성공 여부를 돌려준다.**
+
+        [왜 반환값이 필요한가 · 2026-09-06] 종전에는 실패를 화면에 한 줄 찍고 끝냈고,
+         호출부 여섯 곳은 그 결과와 무관하게 "추가되었습니다"·"삭제되었습니다"를 초록색으로
+         이어 붙였다. 운영자는 두 줄을 함께 보고도 **바뀐 줄 안다**. 실제로는 뒤따르는
+         load_stock_config() 가 파일을 다시 읽어 옛 목록을 되살리므로, 지운 종목이 그대로
+         매매 대상에 남는다 — 탐색 메뉴는 한술 더 떠 "다음 감시 주기부터 반영됩니다"라고
+         약속한다. 운영기는 램 1GB·SD 카드 라즈베리파이라 쓰기 실패가 실재한다.
+        """
         self.stock_data = data
         #  원자적 저장(core/jsonio.save_json). 종전에는 파일을 먼저 비우고 써서,
         #  쓰는 도중 프로세스가 죽으면 관심종목이 통째로 반쪽 JSON 이 됐다.
         if not jsonio.save_json(_config().STOCK_DATA_FILE, data):
             _config().console.print("[red]종목 설정 저장 실패 (상세는 로그 참조)[/red]")
+            return False
+        return True
 
     def update_cache_and_save(self, code, exchange):
         self.exchange_cache[code] = exchange

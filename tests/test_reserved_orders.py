@@ -716,6 +716,37 @@ def test_monitor_holding_exit_fails_closed_on_balance_error(mock_execute, mock_d
     assert not monitor.holding_cache      # 실패는 캐시에 남기지 않는다 (다음 주기 재시도)
 
 
+@patch('modules.reserved_order_monitor.db_manager.db.get_pending_reserved_orders')
+@patch('modules.reserved_order_monitor.api.get_current_price')
+@patch('modules.reserved_order_monitor.api.get_overseas_balance')
+@patch('modules.reserved_order_monitor.api.get_domestic_balance')
+@patch('modules.reserved_order_monitor.ReservedOrderMonitor._execute_order')
+def test_국내잔고만_실패해도_보유분석_실패는_캐시에_굳지_않는다(mock_execute, mock_dom, mock_ovs,
+                                                        mock_get_price, mock_get_orders):
+    """한쪽만 실패해도 보유 목록은 반쪽이다 — 반쪽으로 전량 청산을 판단하지 않는다.
+
+    [무엇을 지키는가] 종전 가드는 `raw_dom is None and raw_ovs is None` 이었다. 그때
+     api.get_overseas_balance 는 실패해도 **빈 목록**을 돌려줬으므로 raw_ovs 는 결코
+     None 이 되지 않았고, 가드는 통째로 죽어 있었다. 국내 조회가 실패하면 보유분석
+     결과 {} 가 캐시에 굳어, API 가 회복된 뒤에도 HOLDING_ANALYSIS_INTERVAL 동안
+     HOLDING_EXIT 예약이 판정 불가로 남았다 — 실패를 캐시에 굳히는 전형이다.
+    """
+    monitor = ReservedOrderMonitor()
+    monitor.holding_cache.clear()
+    mock_get_orders.return_value = [_holding_exit_order(35, "005930", "삼성전자")]
+    mock_get_price.side_effect = lambda code, is_ovs: 50000.0
+    mock_dom.return_value = (None, None)     # 국내만 실패
+    mock_ovs.return_value = []               # 해외는 '진짜 보유 없음'
+
+    with patch('modules.reserved_order_monitor.datetime') as mock_dt:
+        mock_dt.now.return_value.strftime.side_effect = lambda fmt: "1200" if fmt == "%H%M" else "20240101"
+        monitor._check_orders()
+
+    assert mock_dom.called
+    mock_execute.assert_not_called()
+    assert not monitor.holding_cache, "국내 조회 실패가 '보유 없음'으로 캐시에 굳었다"
+
+
 # -------------------------------------------------------------------
 # 5. 발주 직전 매도 수량 대사 (외부 HTS 매매 대응)
 # -------------------------------------------------------------------
@@ -745,14 +776,18 @@ def test_execute_sell_shrinks_to_actual_qty(mock_place, mock_sellable, mock_upda
     assert "40" in mock_tg.call_args[0][0]    # 축소 사실이 알림에 남는다
 
 
-@patch('modules.reserved_order_monitor.api.send_telegram_message')
+@patch('modules.reserved_order_monitor.alert_delivered', return_value=True)
 @patch('modules.reserved_order_monitor.db_manager.db.cancel_other_reserved_orders')
 @patch('modules.reserved_order_monitor.db_manager.db.update_reserved_order_status')
 @patch('modules.reserved_order_monitor.api.fetch_sellable_quantity')
 @patch('modules.reserved_order_monitor.api.place_order')
 def test_execute_sell_cancels_when_position_gone(mock_place, mock_sellable, mock_update,
-                                                 mock_cancel_others, mock_tg):
-    """보유가 0이면 주문하지 않고 같은 종목의 예약을 모두 취소하고 알린다."""
+                                                 mock_cancel_others, mock_alert):
+    """보유가 0이면 주문하지 않고 같은 종목의 예약을 모두 취소하고 알린다.
+
+    [2026-09-06] 알림은 alert_delivered 를 지난다 — api.send_telegram_message 는 기본이
+     비동기라 전송 실패에도 예외가 오지 않아, 그것만 보면 '보냈다'가 늘 참이 된다.
+    """
     m = ReservedOrderMonitor()
     mock_sellable.return_value = 0
     mock_cancel_others.return_value = [{"id": 42}]
@@ -762,7 +797,7 @@ def test_execute_sell_cancels_when_position_gone(mock_place, mock_sellable, mock
     mock_place.assert_not_called()
     mock_cancel_others.assert_called_once()
     mock_update.assert_any_call(41, 'CANCELED', fail_reason="보유 수량 없음(외부 매도 추정)")
-    assert "외부 매도" in mock_tg.call_args[0][0]
+    assert "외부 매도" in mock_alert.call_args[0][0]
 
 
 @patch('modules.reserved_order_monitor.api.send_telegram_message')
@@ -814,3 +849,37 @@ def test_execute_buy_skips_qty_reconcile(mock_place, mock_sellable, mock_update,
 
     mock_sellable.assert_not_called()
     assert mock_place.call_args[0][3] == 100
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 경보가 전달되지 않은 사실은 로그에라도 남는다 (감사 2026-09-06)
+# ══════════════════════════════════════════════════════════════════════
+
+@patch('modules.reserved_order_monitor.db_manager.db.update_reserved_order_status')
+def test_결과불명_경보가_전달되지_않으면_그_사실을_남긴다(mock_update, caplog):
+    """[왜 가장 중요한 알림인가] 발주 중 오류가 나면 주문이 거래소에 들어갔는지 알 수
+    없고, 예약은 FAILED 로 닫혀 **다시 발동하지 않는다**. 사람이 HTS 를 열어 확인해야만
+    끝나는 상태다. 그런데 종전에는 전송을 `except: pass` 로 감쌌고, 게다가
+    api.send_telegram_message 는 기본이 비동기라 실패해도 예외조차 오지 않는다 —
+    즉 알림이 사라져도 아무 흔적이 없었다.
+    """
+    import logging
+    m = ReservedOrderMonitor()
+    with patch('modules.reserved_order_monitor.alert_delivered', return_value=False), \
+         caplog.at_level(logging.ERROR, logger="modules.reserved_order_monitor"):
+        m._abort_execution(_sell_order(), RuntimeError("타임아웃"), sent=True)
+
+    body = "\n".join(r.getMessage() for r in caplog.records)
+    assert "전달하지 못했습니다" in body, f"경보 유실이 로그에 남지 않았다:\n{body}"
+    assert "005930" in body
+
+
+@patch('modules.reserved_order_monitor.db_manager.db.update_reserved_order_status')
+def test_경보가_전달되면_유실_로그는_남기지_않는다(mock_update, caplog):
+    import logging
+    m = ReservedOrderMonitor()
+    with patch('modules.reserved_order_monitor.alert_delivered', return_value=True), \
+         caplog.at_level(logging.ERROR, logger="modules.reserved_order_monitor"):
+        m._abort_execution(_sell_order(), RuntimeError("타임아웃"), sent=True)
+
+    assert "전달하지 못했습니다" not in "\n".join(r.getMessage() for r in caplog.records)

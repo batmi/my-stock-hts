@@ -1576,6 +1576,10 @@ class TelegramCommander:
             with utils.AccountContext(target_cano):
                 holdings, summary = api.get_domestic_balance(target_cano, acnt)
             
+            #  holdings is None = 조회 실패다. 아래의 '없음' 응답으로 흘려보내면 운영자가
+            #  포지션이 정리된 줄 안다 — 손절 판단이 그 위에 선다([[unknown-vs-empty]]).
+            if holdings is None:
+                return "⚠️ 잔고를 조회하지 못했습니다 — '보유 없음'이 아닙니다.\n(증권사 API 응답 실패, 잠시 후 다시 시도하세요)"
             # [수정] 보유수량 0 초과인 종목만 필터링
             valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
             
@@ -1827,12 +1831,25 @@ class TelegramCommander:
                 is_open = market.is_market_open_for_index(name)
                 prefix = "*" if is_open else "•"
 
-                if current is None or prev is None:
+                if current is None:
                     msg += f"\n{prefix} {display_name}: 데이터 조회 실패"
                     continue
 
+                #  전일값을 모르면 등락을 **지어내지 않는다.** 종전에는 봉이 하나뿐이면
+                #  prev = current 로 채워 0.00%('변동 없음')로 찍혔다 — 모르는 것을 아는
+                #  것처럼 말하는 자리다([[unknown-vs-empty]]).
+                if prev is None or prev <= 0:
+                    if "미국채" in display_name:
+                        msg += f"\n{prefix} {display_name} {current:,.3f}% (전일대비 모름)"
+                    elif code == "^KRXGOLD":
+                        msg += f"\n{prefix} {display_name} {current:,.0f} (전일대비 모름)"
+                    else:
+                        val_fmt = f"{current:,.2f}" + ("원" if code == "KRW=X" else "")
+                        msg += f"\n{prefix} {display_name} {val_fmt} (전일대비 모름)"
+                    continue
+
                 diff = current - prev
-                rate = (diff / prev) * 100 if prev > 0 else 0
+                rate = (diff / prev) * 100
 
                 if "미국채" in display_name:
                     # 지수 화면과 동일하게 소수점 3자리 (선물적용 폴백 표기 포함)

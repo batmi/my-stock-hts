@@ -773,7 +773,15 @@ def fetch_buyable_quantity(stock_code, price):
     if data.get('rt_cd') == '0':
         out = data.get('output', {})
         # 미수 없는 수량을 1순위로 쓴다(get_deposit_balance의 order_possible과 같은 이유).
-        api_qty = _api().safe_int(out.get('nrcvb_buy_qty')) or _api().safe_int(out.get('ord_psbl_qty')) or _api().safe_int(out.get('max_buy_qty'))
+        #  [Fix 2026-09-06] `or` 사슬은 nrcvb_buy_qty 가 **진짜 0주일 때** 신용 포함
+        #   수량으로 넘어갔다 — 현금이 없어 미수가 날 수 있는 바로 그 상황이다.
+        #   실측: nrcvb_buy_qty='0', ord_psbl_qty='900' → 매수가능 900주.
+        #   값이 읽혔으면 그것이 답이고, 폴백은 필드가 없을 때만이다.
+        _nq = _api().safe_float(out.get('nrcvb_buy_qty'), default=None)
+        if _nq is not None:
+            api_qty = int(_nq)
+        else:
+            api_qty = _api().safe_int(out.get('ord_psbl_qty')) or _api().safe_int(out.get('max_buy_qty'))
         if price > 0:
             cash = _api().safe_int(out.get('ord_psbl_cash'))
             return min(api_qty, int(cash / price))

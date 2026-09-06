@@ -362,6 +362,35 @@ def _render_result(picked, cur):
     )
 
 
+def _commit_additions(chosen, console=None):
+    """고른 종목을 관심종목에 넣고 **저장까지 확인**한다. 성공 여부를 돌려준다.
+
+    [왜 저장 결과를 확인하는가 · 2026-09-06] 호출부는 성공 시
+     "자동매매가 돌고 있다면 다음 감시 주기부터 반영됩니다"라고 약속한다. 그런데 종전에는
+     save_stock_config 의 결과를 보지 않고 그 문구를 냈다. 저장이 실패하면 바로 뒤의
+     load_stock_config() 가 파일을 다시 읽어 **추가분이 사라지므로**, 지키지 못할 약속이
+     된다. 운영기는 램 1GB·SD 카드 라즈베리파이라 쓰기 실패가 실재한다.
+    """
+    console = console or config.console
+    have = {s["code"] for s in config.session.stock_data.get("stocks_kr", [])}
+    added = 0
+    for c in chosen:
+        if c["code"] in have:
+            continue
+        config.session.stock_data["stocks_kr"].append(
+            {"name": c["name"], "code": c["code"], "exchange": c["exchange"]})
+        have.add(c["code"])
+        added += 1
+
+    saved = config.session.save_stock_config(config.session.stock_data)
+    config.session.load_stock_config()
+    if not saved:
+        logger.error(f"관심 종목 탐색 결과({added}종목) 저장 실패 — 추가되지 않았습니다")
+        console.print(f"\n[bold red]{added}종목을 저장하지 못했습니다 — 관심종목은 그대로입니다.[/bold red]")
+        return False
+    return True
+
+
 def discover_candidates():
     """[7-5] 규칙 기반 관심 종목 탐색 → 번호 다중 선택 → 자동 추가."""
     if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
@@ -473,17 +502,8 @@ def discover_candidates():
         console.print("\n[dim]취소했습니다.[/dim]")
         return False
 
-    have = {s["code"] for s in config.session.stock_data.get("stocks_kr", [])}
-    added = 0
-    for c in chosen:
-        if c["code"] in have:
-            continue
-        config.session.stock_data["stocks_kr"].append(
-            {"name": c["name"], "code": c["code"], "exchange": c["exchange"]})
-        have.add(c["code"])
-        added += 1
-    config.session.save_stock_config(config.session.stock_data)
-    config.session.load_stock_config()
+    if not _commit_additions(chosen, console):
+        return False
 
     total = len(config.session.stock_data.get("stocks_kr", []))
     logger.info(f"관심 종목 탐색으로 {added}종목 추가 (총 {total}종목)")

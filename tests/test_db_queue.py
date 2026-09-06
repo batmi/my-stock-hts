@@ -45,27 +45,34 @@ def test_execute_custom_exception(db_proxy_setup):
         proxy.execute_custom(fail)
 
 def test_db_proxy_timeout():
-    """DB 작업 타임아웃 발생 시 예외 처리 테스트"""
+    """DB 작업 타임아웃 발생 시 예외 처리 테스트.
+
+    [2026-09-06] 종전에는 proxy.stop() 으로 워커를 죽여 타임아웃을 흉내 냈다. 그런데
+     '워커가 없다'와 '워커는 있는데 응답이 없다'는 서로 다른 상황이고, 전자는 이제
+     30초를 기다리지 않고 즉시 실패한다(test_db_queue_shutdown.py). 타임아웃 경로를
+     시험하려면 **워커를 살려 둔 채** 결과 대기만 막아야 한다.
+    """
     real_db = MockDB()
     proxy = db_queue.DBProxy(real_db)
-    # 워커를 정지시켜 큐 처리가 안되게 함 (하지만 timeout=30초를 기다려야 하므로 get을 모킹해야 함)
-    proxy.stop()
-    
-    # queue.Queue.get을 모킹하여 즉시 Empty 예외 발생 (타임아웃 시뮬레이션)
-    # 이렇게 하면 30초를 기다리지 않고 바로 타임아웃 예외 발생 경로를 테스트할 수 있음
-    with patch('queue.Queue.get', side_effect=queue.Empty):
-        with pytest.raises(Exception, match="DB Method 'dummy_method' Timeout"):
-            proxy.dummy_method()
+    try:
+        # queue.Queue.get을 모킹하여 즉시 Empty 예외 발생 (타임아웃 시뮬레이션)
+        # 이렇게 하면 30초를 기다리지 않고 바로 타임아웃 예외 발생 경로를 테스트할 수 있음
+        with patch('queue.Queue.get', side_effect=queue.Empty):
+            with pytest.raises(Exception, match="DB Method 'dummy_method' Timeout"):
+                proxy.dummy_method()
+    finally:
+        proxy.stop()
 
 def test_execute_custom_timeout():
-    """execute_custom 타임아웃 테스트"""
+    """execute_custom 타임아웃 테스트 (워커는 살아 있다 — 위 주석 참조)"""
     real_db = MockDB()
     proxy = db_queue.DBProxy(real_db)
-    proxy.stop()
-    
-    with patch('queue.Queue.get', side_effect=queue.Empty):
-        with pytest.raises(Exception, match="DB Operation Timeout"):
-            proxy.execute_custom(lambda: None)
+    try:
+        with patch('queue.Queue.get', side_effect=queue.Empty):
+            with pytest.raises(Exception, match="DB Operation Timeout"):
+                proxy.execute_custom(lambda: None)
+    finally:
+        proxy.stop()
 
 def test_install_proxy_and_shutdown():
     """install_proxy 및 shutdown 함수 테스트"""

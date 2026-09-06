@@ -398,6 +398,39 @@ def _fast_info_pair(fi):
     return current, prev
 
 
+def _usable(value):
+    """시세로 쓸 수 있는 수치면 float, 아니면 None.
+
+    [왜 필요한가 · 2026-09-06] 결측은 None 으로만 오지 않는다. 지수 최후 폴백(yfinance)이
+     최신 종가를 **NaN** 으로 주는 일이 잦은데(trader.py 시장 필터 주석 참조), NaN 은
+     `is not None` 검사를 그대로 통과한다. 그러면 텔레그램 지수 요약에 'nan (nan%)' 이
+     찍히거나, 더 나쁘게는 등락률 계산이 조용히 무의미해진다.
+    """
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if v != v else v      # NaN
+
+
+def _last_two_closes(df):
+    """마지막 두 종가를 (현재, 전일)로 돌려준다. 못 쓰면 (None, None) / (현재, None).
+
+    봉이 하나뿐일 때 종전에는 `prev = current` 로 채웠다. 그러면 등락률이 **0.00%**
+     가 되어 화면에는 '변동 없음'으로 나온다 — 모르는 것을 아는 것처럼 말하는 자리다.
+     전일값을 모르면 모른다고(None) 답하고, 표시 쪽이 등락 칸을 비우게 한다.
+    """
+    if df is None or getattr(df, 'empty', True):
+        return None, None
+    cur = _usable(df.iloc[-1]['close'])
+    if cur is None:
+        return None, None
+    prev = _usable(df.iloc[-2]['close']) if len(df) > 1 else None
+    return cur, prev
+
+
 def fetch_index_quote(name, code):
     """단일 지수의 경량 시세 (표시명, 현재값, 전일값)을 반환한다. 실패 시 (name, None, None).
 
@@ -417,25 +450,21 @@ def fetch_index_quote(name, code):
             fut_iscd = api.get_k200_futures_front_code()
             fut_q = api.get_k200_futures_quote(fut_div, fut_iscd) if fut_iscd else None
             if fut_q:
-                current = float(fut_q['current'])
-                prev = current - float(fut_q['diff'])
-                display_name = f"{name} {fut_div}"
+                current = _usable(fut_q.get('current'))
+                diff = _usable(fut_q.get('diff'))
+                prev = (current - diff) if (current is not None and diff is not None) else None
+                if current is not None:
+                    display_name = f"{name} {fut_div}"
         elif name in domestic_map:
             df = analysis.get_domestic_index_data(domestic_map[name])
-            if df is not None and not df.empty:
-                current = float(df.iloc[-1]['close'])
-                prev = float(df.iloc[-2]['close']) if len(df) > 1 else current
+            current, prev = _last_two_closes(df)
         elif name == KRX_GOLD_INDEX:
             gold_df = analysis.get_krx_gold_data()
-            if gold_df is not None and not gold_df.empty and len(gold_df) >= 2:
-                current = float(gold_df['close'].iloc[-1])
-                prev = float(gold_df['close'].iloc[-2])
+            current, prev = _last_two_closes(gold_df)
         elif name in config.US_TREASURY_SPOT_SYMBOLS:
             tdf = analysis.get_us_treasury_spot_data(config.US_TREASURY_SPOT_SYMBOLS[name])
-            if tdf is not None and not tdf.empty and len(tdf) >= 2:
-                current = float(tdf['close'].iloc[-1])
-                prev = float(tdf['close'].iloc[-2])
-            elif name != "미국채 2년물 금리":
+            current, prev = _last_two_closes(tdf)
+            if current is None and name != "미국채 2년물 금리":
                 fi = api.get_yf_fast_info(code)
                 cur_v, prev_v = _fast_info_pair(fi)
                 if cur_v is not None:
@@ -468,11 +497,14 @@ def fetch_index_quote(name, code):
                 pass
             if current is None:
                 df = api.get_chart_data(code, is_overseas=True)
-                if df is not None and not df.empty:
-                    current = float(df.iloc[-1]['close'])
-                    prev = float(df.iloc[-2]['close']) if len(df) > 1 else current
+                current, prev = _last_two_closes(df)
     except Exception as e:
         logger.debug(f"fetch_index_quote 실패({name}): {e}")
+    #  어느 경로를 지났든 마지막에 한 번 더 거른다 — fast_info 는 NaN 을 그대로 준다.
+    current = _usable(current)
+    prev = _usable(prev)
+    if current is None:
+        prev = None                   # 현재값을 모르면 전일값만 남길 이유가 없다
     return display_name, current, prev
 
 def _process_index_worker(name, ticker, df_daily, df_intraday):

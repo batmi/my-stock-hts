@@ -176,7 +176,7 @@ def _open_row(code="005930", side="02", qty=10, odno="TOSS-1"):
 
 def test_an_unfilled_order_that_landed_is_adopted_not_resent(toss_mode, monkeypatch):
     """접수됐지만 아직 미체결인 주문 — 토스 체결이력에는 없고 미체결 목록에만 있다."""
-    monkeypatch.setattr(api, "get_today_history", lambda *a, **k: {"output1": []})
+    monkeypatch.setattr(api, "get_today_history", lambda *a, **k: {"rt_cd": "0", "output1": []})
     monkeypatch.setattr(api, "_toss_open_orders", lambda market: [_open_row()])
 
     res = api.place_order("domestic", "buy", "005930", 10, 70000, "00")
@@ -185,7 +185,7 @@ def test_an_unfilled_order_that_landed_is_adopted_not_resent(toss_mode, monkeypa
 
 
 def test_an_order_that_never_landed_is_reported_as_not_placed(toss_mode, monkeypatch):
-    monkeypatch.setattr(api, "get_today_history", lambda *a, **k: {"output1": []})
+    monkeypatch.setattr(api, "get_today_history", lambda *a, **k: {"rt_cd": "0", "output1": []})
     monkeypatch.setattr(api, "_toss_open_orders", lambda market: [])
 
     res = api.place_order("domestic", "buy", "005930", 10, 70000, "00")
@@ -196,7 +196,7 @@ def test_reconcile_does_not_double_count_the_same_order(monkeypatch):
     """체결이력과 미체결에 같은 주문번호가 겹쳐도 후보가 둘로 늘면 안 된다
     (후보 2건은 '단정 불가'로 처리돼 운용자 호출까지 간다)."""
     monkeypatch.setattr(config.session, "is_toss", True, raising=False)
-    monkeypatch.setattr(api, "get_today_history", lambda *a, **k: {"output1": [_open_row()]})
+    monkeypatch.setattr(api, "get_today_history", lambda *a, **k: {"rt_cd": "0", "output1": [_open_row()]})
     monkeypatch.setattr(api, "_toss_open_orders", lambda market: [_open_row()])
 
     rows = api.orders._reconcile_rows()
@@ -206,7 +206,7 @@ def test_reconcile_does_not_double_count_the_same_order(monkeypatch):
 def test_kis_mode_does_not_call_the_toss_listing(monkeypatch):
     """게이트가 모드에 걸려 있는지 — KIS 에서 토스 조회를 부르면 예외가 난다."""
     monkeypatch.setattr(config.session, "is_toss", False, raising=False)
-    monkeypatch.setattr(api, "get_today_history", lambda *a, **k: {"output1": [_open_row()]})
+    monkeypatch.setattr(api, "get_today_history", lambda *a, **k: {"rt_cd": "0", "output1": [_open_row()]})
     monkeypatch.setattr(api, "_toss_open_orders",
                         lambda market: pytest.fail("KIS 모드에서 토스 미체결을 조회했다"))
 

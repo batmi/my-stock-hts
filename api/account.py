@@ -85,6 +85,7 @@ def get_overseas_balance(cano=None, acnt_prdt_cd=None, retries=None):
     cano, acnt_prdt_cd = _api()._prepare_account_params(cano, acnt_prdt_cd)
     target_exchanges = ["NASD", "NYSE", "AMEX"]
     all_holdings = []
+    failed_exchanges = []
     
     for exc in target_exchanges:
         params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "OVRS_EXCG_CD": exc, "TR_CRCY_CD": "USD", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "", "CTX_AREA_FK200": "", "CTX_AREA_NK200": ""}
@@ -99,7 +100,25 @@ def get_overseas_balance(cano=None, acnt_prdt_cd=None, retries=None):
             for item in data.get('output1', []):
                 if '_exchange' not in item: item['_exchange'] = exc
                 all_holdings.append(item)
-                
+        else:
+            failed_exchanges.append(exc)
+
+    # [중요] 조회 실패와 '해외 보유 없음'을 가른다 — 국내 형제(get_domestic_balance)와 같은 계약이다.
+    #  종전에는 세 거래소가 모두 실패해도 빈 목록을 돌려줬고, 그것을 받은 쪽은 '안 들고 있다'로
+    #  읽었다. 실제로 그 결론에 기대는 자리가 있다:
+    #   · auto_trade.common.current_holding_qty → 못 찾으면 0(=전량 매도)으로 답해,
+    #     아직 들고 있는 수동 매수 종목의 **매수 제한이 풀린다**.
+    #   · reserved_order_monitor._holding_exit_result → 실패를 보유분석 캐시에 굳힌다.
+    #  두 곳 다 `is None` 팔을 이미 갖고 있었지만, 여기가 None 을 만들지 않아 죽은 코드였다.
+    #  한 거래소라도 실패하면 목록의 **완전성**을 주장할 수 없다. 반쪽 목록으로 '없음'을
+    #  결론짓지 않도록 실패는 실패로 답한다.
+    if failed_exchanges:
+        msg = f"해외 잔고 조회 실패: {', '.join(failed_exchanges)} (조회된 {len(all_holdings)}건은 완전하지 않아 버립니다)"
+        logger.debug(msg)
+        if hasattr(context, 'SYSTEM_LOGGER') and context.SYSTEM_LOGGER:
+            context.SYSTEM_LOGGER(f"[API] {msg}")
+        return None
+
     return all_holdings
 
 def get_today_profit_summary(cano=None, acnt_prdt_cd=None, target_date=None):

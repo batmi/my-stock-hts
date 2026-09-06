@@ -260,6 +260,11 @@ def sync_account(cano=None, acnt_prdt_cd=None, months=12, register_restrictions=
     try:
         if holdings is None:
             holdings, _ = api.get_domestic_balance(cano, acnt_prdt_cd)
+        #  plan() 은 체결 내역 조회 실패를 RuntimeError 로 올린다(그쪽 독스트링) — 빈 계획을
+        #  '복원할 것이 없다'로 읽히지 않게 하려는 것이다. 그런데 **잔고** 조회 실패는 그 앞에서
+        #  None 으로 들어와 `holdings or []` 에 삼켜져, 똑같이 빈 계획이 됐다. 같은 규칙을 세운다.
+        if holdings is None:
+            raise RuntimeError("보유 잔고를 조회하지 못했습니다 — '복원할 종목이 없다'가 아닙니다")
         plans = plan(holdings, cano=cano, acnt_prdt_cd=acnt_prdt_cd, months=months)
         if not plans:
             return summary

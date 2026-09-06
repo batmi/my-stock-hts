@@ -96,7 +96,7 @@ def no_db_records(monkeypatch):
 
 def test_a_landed_order_is_adopted_not_resent(monkeypatch, no_db_records):
     """거래소에 있으면 그 주문을 이어받는다 — 두 번째 주문을 내지 않는다."""
-    monkeypatch.setattr(api, 'get_today_history', lambda *a, **k: {"output1": [_row()]})
+    monkeypatch.setattr(api, 'get_today_history', lambda *a, **k: {"rt_cd": "0", "output1": [_row()]})
     res = api._reconcile_unknown_order("buy", "005930", 10, "ReadTimeout")
     assert res['rt_cd'] == '0'
     assert res['msg_cd'] == 'ORDER_RECOVERED'
@@ -104,7 +104,7 @@ def test_a_landed_order_is_adopted_not_resent(monkeypatch, no_db_records):
 
 
 def test_no_trace_means_the_order_never_landed(monkeypatch, no_db_records):
-    monkeypatch.setattr(api, 'get_today_history', lambda *a, **k: {"output1": []})
+    monkeypatch.setattr(api, 'get_today_history', lambda *a, **k: {"rt_cd": "0", "output1": []})
     res = api._reconcile_unknown_order("buy", "005930", 10, "ReadTimeout")
     assert res['rt_cd'] == '1'
     assert res['msg_cd'] == 'ORDER_NOT_PLACED'
@@ -114,7 +114,7 @@ def test_ambiguity_is_handed_to_the_operator(monkeypatch, no_db_records):
     """후보가 둘이면 어느 것이 이번 주문인지 단정할 수 없다 — 잘못 고르면 남의 주문을
     '내 것'으로 알고 관리하게 된다. 자동으로 정하지 않는다."""
     rows = [_row(odno="0000111111"), _row(odno="0000222222")]
-    monkeypatch.setattr(api, 'get_today_history', lambda *a, **k: {"output1": rows})
+    monkeypatch.setattr(api, 'get_today_history', lambda *a, **k: {"rt_cd": "0", "output1": rows})
     with patch.object(api, 'send_telegram_message') as tg:
         res = api._reconcile_unknown_order("buy", "005930", 10, "ReadTimeout")
     assert res['msg_cd'] == 'ORDER_UNKNOWN'
@@ -124,7 +124,7 @@ def test_ambiguity_is_handed_to_the_operator(monkeypatch, no_db_records):
 
 def test_orders_already_in_db_are_not_adopted(monkeypatch):
     """응답을 받아 기록된 주문은 이번 건이 아니다 — 그걸 이어받으면 남의 주문을 훔친다."""
-    monkeypatch.setattr(api, 'get_today_history', lambda *a, **k: {"output1": [_row()]})
+    monkeypatch.setattr(api, 'get_today_history', lambda *a, **k: {"rt_cd": "0", "output1": [_row()]})
     monkeypatch.setattr(api, '_odno_known_to_db', lambda odno: True)
     res = api._reconcile_unknown_order("buy", "005930", 10, "ReadTimeout")
     assert res['msg_cd'] == 'ORDER_NOT_PLACED'
@@ -137,9 +137,43 @@ def test_orders_already_in_db_are_not_adopted(monkeypatch):
     (_row(minutes_ago=30), "시간 창 밖(직전 주기의 주문)"),
 ])
 def test_only_a_matching_order_counts(monkeypatch, no_db_records, row, label):
-    monkeypatch.setattr(api, 'get_today_history', lambda *a, **k: {"output1": [row]})
+    monkeypatch.setattr(api, 'get_today_history', lambda *a, **k: {"rt_cd": "0", "output1": [row]})
     res = api._reconcile_unknown_order("buy", "005930", 10, "ReadTimeout")
     assert res['msg_cd'] == 'ORDER_NOT_PLACED', f"{label}인데 이번 주문으로 봤다"
+
+
+def test_대사_조회가_실패하면_미접수로_단정하지_않는다(monkeypatch, no_db_records):
+    """조회 **실패**와 '주문 없음'은 다르다.
+
+    [무엇을 지키는가] 종전에는 `(get_today_history() or {}).get('output1') or []` 라,
+     rt_cd != '0' 인 실패 응답이 그대로 빈 목록이 됐다. 그러면 대사는
+     "접수 흔적 없음 → 미접수로 봅니다"(ORDER_NOT_PLACED)로 끝난다 — 이 계층이
+     존재하는 이유와 정반대 결론이다. 다음 주기가 같은 주문을 다시 내고, 게다가
+     ORDER_NOT_PLACED 는 운용자에게 알리지도 않아 이중 주문이 조용히 난다.
+     실측(2026-09-06): rt_cd='9999' 응답 → msg_cd=ORDER_NOT_PLACED, '대사 확인'이라 적힌 채.
+    """
+    monkeypatch.setattr(api, 'get_today_history',
+                        lambda *a, **k: {"rt_cd": "9999", "msg_cd": "NETERR", "msg1": "타임아웃"})
+    sent = []
+    monkeypatch.setattr(api, 'send_telegram_message', lambda m, **k: sent.append(m))
+
+    res = api._reconcile_unknown_order("buy", "005930", 10, "응답 유실")
+
+    assert res['msg_cd'] == 'ORDER_UNKNOWN', (
+        f"조회 실패를 '{res['msg_cd']}' 로 단정했다 — 재전송 금지 규칙이 뒤집힌다")
+
+
+def test_토스_미체결_조회가_실패해도_미접수로_단정하지_않는다(monkeypatch, no_db_records):
+    """토스 당일 이력은 CLOSED 만 준다 — 미체결을 합쳐야 KIS 와 같은 범위가 된다.
+    그 조회가 실패하면 범위가 반쪽이고, 반쪽으로 '미접수'를 결론지을 수 없다."""
+    import config
+    monkeypatch.setattr(config.session, 'is_toss', True, raising=False)
+    monkeypatch.setattr(api, 'get_today_history', lambda *a, **k: {"rt_cd": "0", "output1": []})
+    monkeypatch.setattr(api, '_toss_open_orders', lambda market: None)   # 조회 실패
+    monkeypatch.setattr(api, 'send_telegram_message', lambda m, **k: None)
+
+    res = api._reconcile_unknown_order("buy", "005930", 10, "응답 유실")
+    assert res['msg_cd'] == 'ORDER_UNKNOWN'
 
 
 def test_a_failed_lookup_leaves_it_unknown(monkeypatch, no_db_records):
@@ -172,7 +206,7 @@ def test_place_order_does_not_resend_on_lost_response(monkeypatch):
     monkeypatch.setattr(api, 'call_api', fake_call_api)
     monkeypatch.setattr(api, '_paper_active', lambda: False)
     monkeypatch.setattr(api, '_prepare_account_params', lambda a, b: ("12345678", "01"))
-    monkeypatch.setattr(api, 'get_today_history', lambda *a, **k: {"output1": [_row()]})
+    monkeypatch.setattr(api, 'get_today_history', lambda *a, **k: {"rt_cd": "0", "output1": [_row()]})
     monkeypatch.setattr(api, '_odno_known_to_db', lambda odno: False)
     monkeypatch.setattr(api.config.session, 'is_toss', False, raising=False)
 

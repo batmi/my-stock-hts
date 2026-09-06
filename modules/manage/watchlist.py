@@ -592,16 +592,24 @@ def get_current_price(mode='add'):
                     config.console.print("[yellow]종목 추가가 취소되었습니다.[/yellow]")
                     return False
                 
+                insert_idx = None
                 if pos_input.isdigit() and 1 <= int(pos_input) <= len(target_list) + 1:
                     insert_idx = int(pos_input) - 1
+                #  성공 문구는 **저장이 끝난 뒤에** 낸다. 종전에는 먼저 찍어 두고 저장했다.
+                if insert_idx is not None:
                     config.session.stock_data[target_list_key].insert(insert_idx, new_item)
-                    config.console.print(f"\n[green]'{input_name}' 종목이 {insert_idx + 1}번 위치에 추가되었습니다.[/green]")
+                    where = f"{insert_idx + 1}번 위치에"
                 else:
                     config.session.stock_data[target_list_key].append(new_item)
-                    config.console.print(f"\n[green]'{input_name}' 종목이 맨 끝에 추가되었습니다.[/green]")
-                    
-                config.session.save_stock_config(config.session.stock_data)
+                    where = "맨 끝에"
+
+                saved = config.session.save_stock_config(config.session.stock_data)
                 config.session.load_stock_config()
+                if saved:
+                    config.console.print(f"\n[green]'{input_name}' 종목이 {where} 추가되었습니다.[/green]")
+                else:
+                    config.console.print(
+                        f"\n[bold red]'{input_name}' 종목을 저장하지 못했습니다 — 추가되지 않았습니다.[/bold red]")
             else:
                 config.console.print("\n[yellow]이미 등록된 종목입니다.[/yellow]")
     else:
@@ -643,9 +651,16 @@ def delete_stock():
     if ans == "y":
         logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
         del config.session.stock_data[target_key][idx]
-        config.session.save_stock_config(config.session.stock_data)
+        saved = config.session.save_stock_config(config.session.stock_data)
         config.session.load_stock_config()
-        
+        if not saved:
+            #  load_stock_config 가 파일을 다시 읽어 옛 목록을 되살렸다 — 그 종목은
+            #  여전히 매매 대상이다. '삭제되었습니다'로 끝내면 안 된다.
+            config.console.print(
+                f"\n[bold red]'{item_to_del['name']}'을(를) 삭제하지 못했습니다 — "
+                f"목록에 그대로 남아 있습니다.[/bold red]")
+            return False
+
         if item_to_del['code'] in m_codes:
             if Prompt.ask("이 종목에 작성된 메모도 모두 삭제하시겠습니까?", choices=["y", "n"], default="n") == 'y':
                 utils.delete_all_stock_memos(item_to_del['code'])
@@ -719,9 +734,12 @@ def modify_stock_info():
     item['name'] = new_name
     target_list.insert(to_idx, item)
     
-    config.session.save_stock_config(config.session.stock_data)
+    saved = config.session.save_stock_config(config.session.stock_data)
     config.session.load_stock_config()
-    
+
+    if not saved:
+        config.console.print(f"\n[bold red]'{new_name}' 종목 정보를 저장하지 못했습니다 — 변경되지 않았습니다.[/bold red]")
+        return False
     config.console.print(f"\n[bold green]'{new_name}' 종목 정보가 성공적으로 변경되었습니다. (위치: {to_idx + 1}번)[/bold green]")
 
 def _manage_specific_stock_memos(code, name, mode='view'):

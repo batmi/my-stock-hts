@@ -242,9 +242,13 @@ def test_mixed_pending_cancels_only_the_buy(mock_chart, mock_restricted, mock_tg
 # ---------------------------------------------------------------------------
 # ④ [보완 나] 취소가 계속 실패하면 경보한다 (자동 복구되지 않는 상태)
 # ---------------------------------------------------------------------------
-@patch('modules.auto_trade.api.send_telegram_message')
-def test_repeated_cancel_failure_raises_alert(mock_tg, trader):
-    """취소 연속 실패가 한도에 닿으면 1회 경보한다 — 매 주기 스팸은 내지 않는다."""
+@patch('modules.auto_trade.alert_delivered', return_value=True)
+def test_repeated_cancel_failure_raises_alert(mock_alert, trader):
+    """취소 연속 실패가 한도에 닿으면 1회 경보한다 — 매 주기 스팸은 내지 않는다.
+
+    [2026-09-06] 경보는 alert_delivered 를 지난다 — api.send_telegram_message 는 기본이
+     비동기라 전송 실패에도 예외가 오지 않아, 그것만 보면 '보냈다'가 늘 참이 된다.
+    """
     om = trader.order_manager
     fail = {'rt_cd': '1', 'msg1': '취소 불가 종목'}
     trade = {'type': '매수', 'name': NAME}
@@ -256,9 +260,30 @@ def test_repeated_cancel_failure_raises_alert(mock_tg, trader):
         for _ in range(om.CANCEL_FAILURE_ALERT_THRESHOLD + 2):
             om.manage_unfilled_orders()
 
-    alerts = [c for c in mock_tg.call_args_list if '미체결 취소 실패' in str(c)]
+    alerts = [c for c in mock_alert.call_args_list if '미체결 취소 실패' in str(c)]
     assert len(alerts) == 1, f"경보가 {len(alerts)}회 발송됐다 (한도 도달 시 1회여야 한다)"
     assert om.cancel_failures.get(ODNO) == om.CANCEL_FAILURE_ALERT_THRESHOLD + 2
+
+
+@patch('modules.auto_trade.alert_delivered', return_value=False)
+def test_경보를_전달하지_못하면_다음_실패에_다시_알린다(mock_alert, trader):
+    """[왜] 이 경보는 '이 종목의 손절이 멈췄으니 사람이 HTS 에서 직접 취소하라'는 뜻이고,
+    그 상태는 스스로 낫지 않는다. 한 번만 나가는 알림이 조용히 사라지면 포지션이
+    무방비로 방치된다 — 전달을 확인하고, 못 닿았으면 누적 수를 되돌려 다시 알린다."""
+    om = trader.order_manager
+    fail = {'rt_cd': '1', 'msg1': '취소 불가 종목'}
+    trade = {'type': '매수', 'name': NAME}
+
+    with patch('modules.auto_trade.api.get_unfilled_orders', return_value=_stale_unfilled()), \
+         patch('modules.auto_trade.db_manager.db.get_trade_by_odno', return_value=trade), \
+         patch('modules.auto_trade.api.revise_cancel_order', return_value=fail), \
+         patch.object(trader, 'is_market_open', return_value=True):
+        for _ in range(om.CANCEL_FAILURE_ALERT_THRESHOLD + 2):
+            om.manage_unfilled_orders()
+
+    alerts = [c for c in mock_alert.call_args_list if '미체결 취소 실패' in str(c)]
+    assert len(alerts) >= 2, (
+        f"전달 실패인데 경보가 {len(alerts)}회뿐이다 — 한 번 놓치면 영영 알리지 않는다")
 
 
 @patch('modules.auto_trade.api.send_telegram_message')

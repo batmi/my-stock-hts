@@ -125,7 +125,10 @@ def _item(qty, avg, pchs_amt=None):
 
 
 def _apply(trader, qty, avg, highest, pchs_amt=None):
-    with patch('modules.auto_trade.api.send_telegram_message') as tg:
+    #  [2026-09-06] 권리 조정 알림은 alert_delivered 를 지난다 — 취소는 되돌릴 수 없고
+    #   본문이 "조정 후 가격 기준으로 다시 설정해 주세요"라고 사람의 조치를 요구하므로,
+    #   전달 여부를 확인해야 한다(api.send_telegram_message 는 비동기라 실패해도 조용하다).
+    with patch('modules.auto_trade.alert_delivered', return_value=True) as tg:
         out = trader._apply_corporate_action(CODE, NAME, _item(qty, avg, pchs_amt),
                                              float(avg), float(highest))
     return out, tg
@@ -365,6 +368,7 @@ def test_sell_path_feeds_corrected_highest_into_analysis(trader):
     df = pd.DataFrame({'close': [20000], 'high': [20000], 'low': [20000],
                        'open': [20000], 'volume': [1000]})
     with patch('modules.auto_trade.api.send_telegram_message'), \
+         patch('modules.auto_trade.alert_delivered', return_value=True), \
          patch('modules.auto_trade.load_restricted_stocks', return_value={}), \
          patch('modules.auto_trade.api.fetch_sellable_quantity', return_value=50), \
          patch('modules.auto_trade.api.get_chart_data', return_value=df), \

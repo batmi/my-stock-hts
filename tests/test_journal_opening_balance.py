@@ -39,7 +39,14 @@ class _Res:
 
 
 def _balance(*items):
-    return {'rt_cd': '0', 'output1': list(items), 'output2': [{}]}
+    """api.get_domestic_balance 의 **실제** 반환 계약: (output1, output2) 튜플.
+
+    [2026-09-06] 종전 이 헬퍼는 dict 를 돌려줬다 — 그래서 `_current_positions` 가
+     `res.get('rt_cd')` 로 dict 를 기대하는 착오를 이 파일 전체가 덮어 주었고,
+     운영에서는 매 백필 주기마다 AttributeError 가 났다(사흘간 32건 실측).
+     스텁은 실제 계약과 같은 모양이어야 한다.
+    """
+    return (list(items), [{}])
 
 
 def _holding(code, qty=10, avg=70000.0, name='종목'):
@@ -49,7 +56,8 @@ def _holding(code, qty=10, avg=70000.0, name='종목'):
 
 @pytest.fixture
 def stub_balances(monkeypatch):
-    monkeypatch.setattr(api, 'get_overseas_balance', lambda *a, **k: {'rt_cd': '0', 'output1': []})
+    #  api.get_overseas_balance 의 실제 계약은 **보유 항목의 list**(실패는 None)다.
+    monkeypatch.setattr(api, 'get_overseas_balance', lambda *a, **k: [])
 
 
 def test_holdings_without_local_buys_are_seeded(journal_on, stub_balances, monkeypatch):
@@ -114,8 +122,7 @@ def test_failed_send_is_retried_next_time(journal_on, stub_balances, monkeypatch
 
 def test_balance_query_failure_does_not_mark_done(journal_on, stub_balances, monkeypatch):
     """조회 실패와 '보유 없음'을 구분해야 한다 — 섞으면 빈 계좌로 오인해 표시가 박힌다."""
-    monkeypatch.setattr(api, 'get_domestic_balance',
-                        lambda *a, **k: {'rt_cd': '1', 'msg1': '조회 실패'})
+    monkeypatch.setattr(api, 'get_domestic_balance', lambda *a, **k: (None, None))
     monkeypatch.setattr(journal_sync, '_request',
                         lambda *a, **k: pytest.fail("조회 실패인데 전송했다"))
     assert journal_sync.opening_once() == 0
@@ -149,3 +156,44 @@ def test_disabled_journal_sends_nothing(monkeypatch):
     monkeypatch.setattr(journal_sync, '_request',
                         lambda *a, **k: pytest.fail("연동이 꺼져 있는데 전송했다"))
     assert journal_sync.opening_once() == 0
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 반환 계약 — 스텁이 아니라 **실제 api 함수의 모양**을 기준으로 삼는다
+# ══════════════════════════════════════════════════════════════════════
+
+def test_기초잔고는_잔고API의_실제_반환계약으로_동작한다(journal_on, monkeypatch):
+    """get_domestic_balance=(output1,output2) 튜플 · get_overseas_balance=list.
+
+    [왜 이 시험이 있는가] 2026-09-03~05 운영 로그에 사흘간 32건 찍혔다:
+      "[Journal] 동기화 루프 오류(계속 진행): 'tuple' object has no attribute 'get'"
+    `_current_positions` 가 두 함수의 반환을 dict 로 다뤘기 때문이다. 예외는 동기화
+    루프의 포괄 except 에 잡혀 **기초잔고가 한 번도 심기지 않았고, 같은 블록의
+    backfill_once() 도 매 주기 함께 건너뛰어졌다**. 이 파일의 스텁이 dict 였던 탓에
+    시험은 내내 초록이었다 — 스텁을 실제 계약에 맞춘 뒤의 잠금이다.
+    """
+    monkeypatch.setattr(api, 'get_domestic_balance',
+                        lambda *a, **k: ([_holding('005930', 30, 70000.0, '삼성전자')], [{}]))
+    monkeypatch.setattr(api, 'get_overseas_balance',
+                        lambda *a, **k: [{'ovrs_pdno': 'AAPL', 'ovrs_item_name': 'Apple',
+                                          'ovrs_cblc_qty': '5', 'pchs_avg_pric': '200'}])
+    sent = []
+    monkeypatch.setattr(journal_sync, '_request',
+                        lambda m, p, **kw: sent.append(kw.get('json_body')) or _Res(payload={'inserted': 2}))
+
+    assert journal_sync.opening_once() == 2
+    symbols = [p['symbol'] for p in sent[0]['positions']]
+    assert symbols == ['005930', 'AAPL'], f"국내·해외가 모두 실려야 한다: {symbols}"
+
+
+def test_해외잔고_조회실패는_국내분_전송을_막지_않는다(journal_on, monkeypatch):
+    """해외 실패는 None(빈 list='해외 보유 없음'과 구분) — 국내분은 그대로 보낸다."""
+    monkeypatch.setattr(api, 'get_domestic_balance',
+                        lambda *a, **k: ([_holding('005930')], [{}]))
+    monkeypatch.setattr(api, 'get_overseas_balance', lambda *a, **k: None)
+    sent = []
+    monkeypatch.setattr(journal_sync, '_request',
+                        lambda m, p, **kw: sent.append(kw.get('json_body')) or _Res())
+
+    assert journal_sync.opening_once() == 1
+    assert [p['symbol'] for p in sent[0]['positions']] == ['005930']

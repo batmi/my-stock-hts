@@ -1053,16 +1053,22 @@ def _current_positions():
     import api
 
     positions = []
+    #  [Fix] 종전에는 이 반환값을 dict 로 다뤘다(`res.get('rt_cd')`). 실제 계약은
+    #   **(output1, output2) 튜플**이다 — 성공이든 실패든 매번 AttributeError 가 났고,
+    #   그 예외는 이 함수 밖(opening_once)으로 나가 동기화 루프의 포괄 except 에 잡혔다.
+    #   결과: 기초잔고 심기가 한 번도 성공하지 못했고, 같은 블록의 backfill_once() 도
+    #   매 주기 함께 건너뛰어졌다. 운영 로그 실측 — 2026-09-03~05 사흘간 32건:
+    #     "[Journal] 동기화 루프 오류(계속 진행): 'tuple' object has no attribute 'get'"
     try:
-        res = api.get_domestic_balance() or {}
+        output1, _ = api.get_domestic_balance()
     except Exception as e:
         logger.warning(f"[Journal] 기초잔고 — 국내 잔고 조회 실패: {e}")
         return None
-    if str(res.get('rt_cd', '1')) != '0':
-        logger.warning(f"[Journal] 기초잔고 — 국내 잔고 조회 실패: {res.get('msg1')}")
+    if output1 is None:
+        logger.warning("[Journal] 기초잔고 — 국내 잔고 조회 실패(빈 계좌가 아닙니다)")
         return None
 
-    for item in (res.get('output1') or []):
+    for item in output1:
         try:
             qty = float(item.get('hldg_qty') or 0)
         except (TypeError, ValueError):
@@ -1079,10 +1085,14 @@ def _current_positions():
         })
 
     # 해외는 조회 실패해도 국내분은 보낸다 — 해외 계좌가 없는 설치가 대부분이다.
+    #  국내와 같은 모양 착오가 있었다: 반환은 dict 가 아니라 **보유 항목의 list** 이고,
+    #  실패는 None 이다(빈 list = 진짜 해외 보유 없음).
     try:
-        res = api.get_overseas_balance() or {}
-        if str(res.get('rt_cd', '1')) == '0':
-            for item in (res.get('output1') or []):
+        ovrs = api.get_overseas_balance()
+        if ovrs is None:
+            logger.warning("[Journal] 기초잔고 — 해외 잔고 조회 실패(국내분만 보냅니다)")
+        else:
+            for item in ovrs:
                 qty = float(item.get('ovrs_cblc_qty') or 0)
                 if qty <= 0:
                     continue

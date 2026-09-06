@@ -133,3 +133,72 @@ def test_계좌_컨텍스트가_워커로_전달된다():
     finally:
         w.stop()
         w.join(timeout=5)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 워커가 없으면 기다리지 않는다 (감사 2026-09-06)
+# ══════════════════════════════════════════════════════════════════════
+
+class _PingDB:
+    def ping(self):
+        return "pong"
+
+    def boom(self):
+        raise RuntimeError("db error")
+
+
+def test_워커가_죽었으면_30초_기다리지_않고_즉시_실패한다():
+    """[왜] 종전에는 워커 생사와 무관하게 큐에 넣고 결과를 기다렸다. 아무도 꺼내지
+    않으므로 호출부는 **30초를 꼬박 기다린 뒤에야** 실패를 안다(실측 30.0초).
+
+    매매 루프에서 30초는 치명적이다 — 보유 종목마다 이 대기가 붙으면 한 주기가 분
+    단위로 늘어나 손절·트레일링 판정이 통째로 밀린다. 워커는 종료(shutdown) 뒤에도
+    이 상태가 되므로 가정이 아니다.
+    """
+    proxy = db_queue.DBProxy(_PingDB())
+    assert proxy.ping() == "pong"
+
+    proxy.stop(timeout=2.0)
+    assert not proxy._worker.is_alive()
+
+    t0 = time.time()
+    try:
+        proxy.ping()
+        raised = None
+    except Exception as e:      # noqa: BLE001
+        raised = e
+    elapsed = time.time() - t0
+
+    assert raised is not None, "워커가 없는데 호출이 성공한 것처럼 돌아왔다"
+    assert elapsed < 1.0, f"즉시 실패해야 하는데 {elapsed:.1f}초를 기다렸다"
+    assert "워커" in str(raised)
+
+
+def test_execute_custom도_같은_규칙을_따른다():
+    proxy = db_queue.DBProxy(_PingDB())
+    proxy.stop(timeout=2.0)
+
+    t0 = time.time()
+    try:
+        proxy.execute_custom(lambda: 1)
+        raised = None
+    except Exception as e:      # noqa: BLE001
+        raised = e
+    assert raised is not None and time.time() - t0 < 1.0
+
+
+def test_살아있는_워커의_정상_경로는_그대로다():
+    """빠르게 실패하려다 정상 경로를 막으면 안 된다."""
+    proxy = db_queue.DBProxy(_PingDB())
+    try:
+        assert proxy.ping() == "pong"
+        assert proxy.execute_custom(lambda x: x * 2, 21) == 42
+        # 워커 안에서 난 예외는 종전대로 호출부로 올라온다.
+        try:
+            proxy.boom()
+            raised = None
+        except Exception as e:      # noqa: BLE001
+            raised = e
+        assert isinstance(raised, RuntimeError) and "db error" in str(raised)
+    finally:
+        proxy.stop(timeout=2.0)

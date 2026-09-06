@@ -1989,8 +1989,13 @@ class DBManager:
                            (account, start_date))
             rows = cursor.fetchall()
         except Exception as e:
+            #  [Fix 2026-09-06] 조회 실패를 **'이력 없음'과 같은 None 으로** 돌려주면
+            #   호출부가 둘을 구분할 수 없다. 그 결과 실패한 날의 고점이 0 으로 잡혀
+            #   드로다운이 과소 계산되고(=리스크 스케일링이 풀리고), 게다가 하루치
+            #   캐시에 굳었다. 실패는 올린다 — 유일한 호출부(trader._get_account_drawdown_pct)가
+            #   받아 '이번 주기만 보류'로 다룬다. '이력 없음'(rows 없음)은 그대로 None 이다.
             _swallowed("get_max_daily_asset", e)
-            return None
+            raise
         if not rows:
             return None
 

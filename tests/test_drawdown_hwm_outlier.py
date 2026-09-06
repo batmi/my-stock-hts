@@ -169,7 +169,7 @@ def test_a_deep_drawdown_alerts_once_a_day():
     with patch.object(config, 'RISK_SCALING_PARAMS', params), \
          patch.object(t, '_get_account_drawdown_pct', return_value=50.1), \
          patch.object(t, 'log'), \
-         patch('modules.auto_trade.api.send_telegram_message') as tg:
+         patch('modules.auto_trade.alert_delivered', return_value=True) as tg:
         t._update_risk_scale()
         t._update_risk_scale()                # 같은 날 두 번째 — 도배하지 않는다
 
@@ -194,7 +194,7 @@ def test_a_shallow_drawdown_does_not_alert():
     with patch.object(config, 'RISK_SCALING_PARAMS', params), \
          patch.object(t, '_get_account_drawdown_pct', return_value=6.0), \
          patch.object(t, 'log'), \
-         patch('modules.auto_trade.api.send_telegram_message') as tg:
+         patch('modules.auto_trade.alert_delivered', return_value=True) as tg:
         t._update_risk_scale()
     tg.assert_not_called()
 
@@ -281,3 +281,76 @@ def test_the_outlier_guard_still_applies_after_adjustment(db):
     """환산 뒤에도 고립 이상치 방어가 살아 있어야 한다(두 방어가 서로를 무력화하면 안 된다)."""
     _fill(db, REAL_INCIDENT)
     assert db.get_max_daily_asset("2026-05-30", ACC) == 10_084_924.0
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 조회 실패와 '이력 없음'을 가른다 (감사 2026-09-06)
+# ══════════════════════════════════════════════════════════════════════
+
+def test_고점_조회_실패는_이력없음과_구분된다(monkeypatch):
+    """둘 다 None 이면 호출부가 실패를 '고점 0'으로 읽는다.
+
+    고점이 0이면 드로다운은 오늘 기준선까지만 계산돼 **실제보다 작아지고**, 그만큼
+    리스크 스케일링(방어)이 풀린다. 고점을 깎는 것은 한도가 열리는 방향이라 위험하다는
+    것이 이 함수 독스트링의 판단인데, 조회 실패가 그 방향으로 새고 있었다.
+    """
+    from modules import db_manager as dbm
+
+    def _boom(*a, **k):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(dbm.db, '_get_conn', _boom)
+    with pytest.raises(Exception):
+        dbm.db.get_max_daily_asset("2026-05-30", ACC)
+
+
+def test_고점_조회_실패는_하루치_캐시에_굳지_않는다(monkeypatch):
+    """종전에는 실패해도 _hwm_cache_date 를 오늘로 박아, 그날 첫 조회 한 번만
+    실패해도 **하루 종일** 드로다운 방어가 느슨한 채로 남았다."""
+    from datetime import datetime
+    from modules.auto_trade import trader as trader_mod
+
+    t = trader_mod.AutoTrader.__new__(trader_mod.AutoTrader)
+    t.current_total_asset = 8_000_000
+    t.initial_asset = 10_000_000
+    t.net_transfer_today = 0
+    t.baseline_principal = 0
+
+    calls = []
+
+    def _fail(*a, **k):
+        calls.append(1)
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(trader_mod.db_manager.db, 'get_max_daily_asset', _fail)
+    monkeypatch.setattr(trader_mod, '_get_trade_account', lambda: ("11111111", "01"))
+
+    t._get_account_drawdown_pct()
+    assert getattr(t, '_hwm_cache_date', None) != datetime.now().strftime("%Y-%m-%d"), \
+        "조회 실패가 오늘 자 캐시로 굳었다 — 하루 종일 다시 재지 않는다"
+
+    t._get_account_drawdown_pct()
+    assert len(calls) == 2, "실패 뒤 다음 주기에 다시 재지 않았다"
+
+
+def test_이력이_없으면_그_결론은_캐시한다(monkeypatch):
+    """신규 계좌는 '고점 이력 없음'이 결론이다 — 매 주기 DB 를 다시 뒤지면
+    라즈베리파이에서 순수 낭비다."""
+    from datetime import datetime
+    from modules.auto_trade import trader as trader_mod
+
+    t = trader_mod.AutoTrader.__new__(trader_mod.AutoTrader)
+    t.current_total_asset = 10_000_000
+    t.initial_asset = 10_000_000
+    t.net_transfer_today = 0
+    t.baseline_principal = 0
+
+    calls = []
+    monkeypatch.setattr(trader_mod.db_manager.db, 'get_max_daily_asset',
+                        lambda *a, **k: calls.append(1) or None)
+    monkeypatch.setattr(trader_mod, '_get_trade_account', lambda: ("11111111", "01"))
+
+    t._get_account_drawdown_pct()
+    t._get_account_drawdown_pct()
+    assert getattr(t, '_hwm_cache_date', None) == datetime.now().strftime("%Y-%m-%d")
+    assert len(calls) == 1, "'이력 없음' 결론을 캐시하지 않아 매 주기 다시 물었다"

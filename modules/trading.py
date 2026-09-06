@@ -78,6 +78,8 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
 
     is_overseas = (market_choice == "2")
     candidates = []
+    overseas_query_failed = False
+    domestic_query_failed = False
 
     # ---------------------------
     # 1. 국내 잔고 조회
@@ -92,6 +94,10 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
         ) as progress:
             progress.add_task("[cyan]국내 잔고 조회 중...[/cyan]", total=None)
             holdings, _ = account.fetch_domestic_balance(cano, acnt_prdt_cd)
+            #  None = 조회 실패다(빈 목록 = 진짜 보유 없음). 아래에서 함께 밝힌다.
+            if holdings is None:
+                domestic_query_failed = True
+                holdings = []
             for item in holdings:
                 qty = int(item.get('hldg_qty', 0))
                 buy_price = float(item.get('pchs_avg_pric', 0))
@@ -126,6 +132,11 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
         ) as progress:
             progress.add_task("[cyan]해외 잔고 조회 중...[/cyan]", total=None)
             holdings = account.fetch_overseas_balance(cano, acnt_prdt_cd)
+            #  None = 조회 실패다. 아래의 '매도 가능한 잔고가 없습니다'로 흘려보내면, 손으로
+            #  손절하러 들어온 운영자가 **팔 것이 없다고 믿고 나간다**. 실패는 실패로 밝힌다.
+            if holdings is None:
+                overseas_query_failed = True
+                holdings = []
             for item in holdings:
                 qty = float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0))
                 if qty > 0:
@@ -155,6 +166,15 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
     # ---------------------------
     # 3. 상세 리스트 출력 및 선택
     # ---------------------------
+    if overseas_query_failed or domestic_query_failed:
+        #  조회가 실패했는데 '잔고 없음'으로 안내하면, 손으로 손절하러 들어온 운영자가
+        #  **팔 것이 없다고 믿고 나간다**. 목록이 반쪽인지 통째로 빈 것인지 밝힌다.
+        market = "해외" if overseas_query_failed else "국내"
+        config.console.print(f"\n[bold red]{market} 잔고를 조회하지 못했습니다 — '보유 없음'이 아닙니다.[/bold red]")
+        config.console.print("[dim]잠시 후 다시 시도하거나 증권사 HTS에서 직접 확인하세요.[/dim]")
+        utils.pause()
+        return None, None, False, None, None
+
     if not candidates:
         config.console.print("\n[yellow]매도 가능한 잔고가 없습니다.[/yellow]")
         utils.pause()
@@ -2537,8 +2557,12 @@ def _print_reserved_orders_table(orders=None, fetch_price=True):
 
     multi_account = len({(o.get('cano'), o.get('acnt')) for o in orders}) > 1
 
+    #  [2026-09-06] 한 종목이 세 칸에서 줄바꿈(\n)을 써 두 줄을 차지했다 — 예약이 몇 건만
+    #  쌓여도 화면이 두 배로 길어지고 눈으로 훑기 어렵다. 정보는 그대로 두고 가로로 편다.
+    #  폭이 늘어나므로 안쪽 여백을 접는다(표 폭 상한 135열).
     table = Table(title=f"예약 주문 대기 목록 ({len(orders)}건)", box=box.HORIZONTALS,
-                  header_style="dim", border_style="dim")
+                  header_style="dim", border_style="dim",
+                  collapse_padding=True, pad_edge=False)
     table.add_column("ID", justify="center", style="cyan")
     table.add_column("종목", justify="left")
     table.add_column("구분", justify="center")
@@ -2579,11 +2603,18 @@ def _print_reserved_orders_table(orders=None, fetch_price=True):
         else:
             exp_str = f"{exp[4:6]}-{exp[6:8]}"
 
-        row = [str(o['id']), f"{o['name']}\n[dim]{o['code']}[/dim]", t_type,
-               f"{o['condition_type'].replace('_UP', '').replace('_DOWN', '')}\n[dim]{cond_str}[/dim]",
-               curr_str, gap_str, f"{o['qty']}주\n[dim]@{op_disp}[/dim]", exp_str]
+        #  조건 종류를 앞에 붙이는 것은 _condition_text 가 **값만** 돌려줄 때뿐이다.
+        #  STOP 은 "10,000원"이라 방향을 알 수 없어 종류가 필요하지만, 나머지는 이미
+        #  문장이라("고점 대비 3.5% 하락") 앞에 붙이면 "EMA EMA 60일선…"처럼 겹친다.
+        ct_short = o['condition_type'].replace('_UP', '').replace('_DOWN', '')
+        cond_cell = (f"{ct_short} [dim]{cond_str}[/dim]"
+                     if cond_str == _fmt_price(o.get('target_price', 0), is_ovs)
+                     else cond_str)
+        row = [str(o['id']), f"{o['name']} [dim]{o['code']}[/dim]", t_type,
+               cond_cell,
+               curr_str, gap_str, f"{o['qty']}주 [dim]@{op_disp}[/dim]", exp_str]
         if multi_account:
-            row.append(f"{_reserved_account_label(o)}\n[dim]{o.get('cano', '')}[/dim]")
+            row.append(f"{_reserved_account_label(o)} [dim]{o.get('cano', '')}[/dim]")
         table.add_row(*row)
 
     config.console.print(table)

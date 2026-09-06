@@ -1965,16 +1965,22 @@ class OrderManager:
         self.trader.log(
             f"⚠️ [미체결 취소 실패 누적] {name}({code}) 주문 {odno} — {cnt}회 연속 실패. "
             f"주문이 열려 있는 동안 이 종목은 매도·손절 판정에서 제외됩니다.")
-        try:
-            api.send_telegram_message(
+        #  [Fix 2026-09-06] 이 경보는 **한 번만** 나간다(cnt == THRESHOLD 인 순간).
+        #   내용은 "이 종목의 손절이 멈췄으니 사람이 HTS 에서 직접 취소하라"이고,
+        #   그 상태는 스스로 낫지 않는다. 그런데 종전에는 api.send_telegram_message 를
+        #   try/except: pass 로 감쌌다 — 그 함수는 기본이 비동기라 전송이 실패해도 예외조차
+        #   오지 않으므로(telegram_notify.alert_delivered 주석) 경보는 흔적 없이 사라졌다.
+        #   전달을 확인하고, 못 닿았으면 누적 수를 되돌려 **다음 실패에 다시 알린다.**
+        if not _pkg().alert_delivered(
                 f"⚠️ [미체결 취소 실패] {name}({code})\n"
                 f"주문번호: {utils.format_order_no(odno)}\n"
                 f"{cnt}회 연속 취소에 실패했습니다 (경과 {int(elapsed)}초)\n"
                 f"사유: {msg1}\n\n"
                 f"주문이 열려 있는 동안 이 종목은 손절 판정에서 제외됩니다. "
-                f"HTS/MTS에서 직접 취소해 주세요.")
-        except Exception:
-            pass
+                f"HTS/MTS에서 직접 취소해 주세요.", urgent=True):
+            self.cancel_failures[key] = cnt - 1
+            self.trader.log(f"[미체결 취소 실패] {name}({code}) 경보를 전달하지 못했습니다 "
+                            f"— 다음 실패에 다시 알립니다.")
 
     def manage_unfilled_orders(self):
         """오래된 미체결 주문 확인 및 취소"""

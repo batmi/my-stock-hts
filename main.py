@@ -331,9 +331,13 @@ def preflight_check():
                 needs_update = True
 
     if needs_update:
-        config.session.save_stock_config(config.session.stock_data)
+        saved = config.session.save_stock_config(config.session.stock_data)
         config.session.load_stock_config() # 갱신된 데이터를 메모리 캐시에 다시 로드
-        config.console.print("  - 성공: 누락/오류 시장(exchange) 정보 교정 및 업데이트 완료.")
+        if saved:
+            config.console.print("  - 성공: 누락/오류 시장(exchange) 정보 교정 및 업데이트 완료.")
+        else:
+            config.console.print("  - [bold red]실패: 시장(exchange) 정보 교정을 저장하지 못했습니다 "
+                                 "— 다음 기동에 다시 시도합니다.[/bold red]")
     if unresolved:
         config.console.print(
             f"  - [yellow]주의: 시장 구분을 판정하지 못한 종목 {len(unresolved)}개"

@@ -104,11 +104,27 @@ class DBProxy:
         self._worker = DBWorker(self._queue, self._real_db)
         self._worker.start()
 
+    def _require_worker(self, what):
+        """워커가 살아 있는지 먼저 본다. 죽었으면 **곧바로** 실패한다.
+
+        [왜 필요한가 · 2026-09-06] 종전에는 워커 생사와 무관하게 큐에 넣고 결과를
+         기다렸다. 워커가 없으면 아무도 꺼내지 않으므로 호출부는 **30초를 꼬박 기다린
+         뒤에야** 실패를 안다(실측: 30.0초). 매매 루프에서 30초는 치명적이다 — 보유
+         종목마다 이 대기가 붙으면 한 주기가 분 단위로 늘어나 손절·트레일링 판정이
+         통째로 밀린다. 게다가 그 사이 큐에는 실행되지 않을 작업이 쌓인다.
+         워커는 종료(shutdown) 뒤에도 이 상태가 되므로 가정이 아니다.
+        """
+        if not self._worker.is_alive():
+            raise RuntimeError(
+                f"DB 워커가 살아 있지 않습니다 — '{what}' 를 수행할 수 없습니다"
+                f"(종료 중이거나 워커 스레드가 죽었습니다). 대기하지 않고 즉시 알립니다.")
+
     def execute_custom(self, func, *args, **kwargs):
         """
         임의의 함수를 DB 전담 워커 스레드에서 실행하도록 위임합니다.
         직접 sqlite3 연결이 필요하거나 여러 쿼리를 하나의 트랜잭션으로 묶어야 할 때 사용합니다.
         """
+        self._require_worker("__CUSTOM__")
         result_queue = queue.Queue()
         # 특수 메서드명 __CUSTOM__을 사용하여 메인 큐에 적재
         self._queue.put(("__CUSTOM__", (func, args, kwargs), {}, result_queue,
@@ -133,6 +149,7 @@ class DBProxy:
         
         if callable(attr):
             def wrapper(*args, **kwargs):
+                self._require_worker(name)
                 # 호출한 스레드가 결과를 돌려받을 1회용 큐 생성
                 result_queue = queue.Queue()
                 # (메서드명, 인자, 키워드인자, 결과큐, 계좌컨텍스트)를 메인 작업 큐에 전달.

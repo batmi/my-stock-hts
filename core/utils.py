@@ -14,6 +14,7 @@ from rich import box
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
 import os
 import sqlite3
+import time
 from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
@@ -87,39 +88,85 @@ def get_tr_id(market, category, action):
     except KeyError:
         return ""
 
+# 원/달러 환율의 타당 범위. 이 밖의 값은 '조회에 성공한 척하는 실패'로 본다.
+#  넉넉히 잡는다 — 좁게 잡아 정상 환율을 거르면 그것이 더 나쁘다.
+EXCHANGE_RATE_MIN = 500.0
+EXCHANGE_RATE_MAX = 5000.0
+
+# 기본값 폴백을 알리는 로그의 중복 억제(초). 이 함수는 화면·자산집계에서 자주 불린다.
+_FX_FALLBACK_LOG_INTERVAL = 600.0
+_fx_fallback_last_log = 0.0
+
+
+def _plausible_fx(value):
+    """환율로 쓸 수 있는 값인가. 못 쓰면 None.
+
+    [왜 범위를 보는가] 종전에는 조회가 값을 돌려주기만 하면 그대로 썼다. 0·음수·NaN 이
+     와도 통과하는데, 이 값은 해외 평가액을 원화로 환산하는 계수다 — 0 이면 해외 자산이
+     **통째로 사라진 것처럼** 보이고, 그 총자산은 일일 손실 차단기의 분모이자 포지션
+     사이징의 기준이며 드로다운 고점(HWM)의 재료다. 자산이 갑자기 준 것으로 읽히면
+     가짜 드로다운·가짜 출금 감지까지 연쇄한다([[daily-asset-baseline-transfers]]).
+    """
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if v != v:                      # NaN
+        return None
+    if not (EXCHANGE_RATE_MIN <= v <= EXCHANGE_RATE_MAX):
+        return None
+    return v
+
+
 def get_exchange_rate():
+    """실시간 원/달러 환율. 못 구하면 config.DEFAULT_EXCHANGE_RATE.
+
+    [왜 폴백을 알리는가] 이 값은 화면 숫자가 아니라 **판정의 계수**다(위 _plausible_fx 참조).
+     종전에는 두 경로가 모두 실패해도 두 except 가 조용히 pass 하고 기본값이 나갔다 —
+     DEBUG/TRACE 를 켜지 않으면 아무 흔적도 없었다. 고정 환율로 자산을 재고 있다는 사실은
+     운영자가 알아야 한다. 다만 이 함수는 자주 불리므로 로그는 10분에 한 번으로 묶는다.
     """
-    실시간 원/달러 환율을 조회합니다. (yfinance: KRW=X)
-    실패 시 config.DEFAULT_EXCHANGE_RATE를 반환합니다.
-    """
-    rate = config.DEFAULT_EXCHANGE_RATE
+    global _fx_fallback_last_log
+
     try:
         # 1. TradingView 기반 환율 조회 (가장 빠르고 Lock 없음)
         from tradingview_screener import get_all_indicators
         tv_data = get_all_indicators("FX_IDC:USDKRW")
         if tv_data and 'close' in tv_data:
-            rate = float(tv_data['close'])
-            if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
-                config.console.print(f"[dim magenta][TRACE] RES (TradingView) | Rate: {rate:.2f}[/dim magenta]")
-            return rate
-    except Exception as e:
+            rate = _plausible_fx(tv_data['close'])
+            if rate is not None:
+                if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
+                    config.console.print(f"[dim magenta][TRACE] RES (TradingView) | Rate: {rate:.2f}[/dim magenta]")
+                return rate
+            logger.warning(f"[환율] TradingView 응답이 환율로 쓸 수 없는 값입니다: "
+                           f"{tv_data.get('close')!r} — 다음 경로로 넘어갑니다")
+    except Exception:
         pass
-        
+
     try:
         # 2. yfinance Fallback
         ticker = yf.Ticker("KRW=X")
-        if getattr(ticker.fast_info, 'last_price', None):
-            rate = float(ticker.fast_info.last_price)
-            if config.SCREEN_DEBUG_LEVEL == "TRACE":
-                config.console.print(f"[dim magenta][TRACE] RES (yfinance) | Rate: {rate:.2f}[/dim magenta]")
-            elif config.SCREEN_DEBUG_LEVEL == "DEBUG":
-                config.console.print(f"[dim magenta][DEBUG] RES (yfinance) | Rate: {rate} | Raw: {ticker.fast_info.last_price}[/dim magenta]")
+        raw = getattr(ticker.fast_info, 'last_price', None)
+        if raw:
+            rate = _plausible_fx(raw)
+            if rate is not None:
+                if config.SCREEN_DEBUG_LEVEL == "TRACE":
+                    config.console.print(f"[dim magenta][TRACE] RES (yfinance) | Rate: {rate:.2f}[/dim magenta]")
+                elif config.SCREEN_DEBUG_LEVEL == "DEBUG":
+                    config.console.print(f"[dim magenta][DEBUG] RES (yfinance) | Rate: {rate} | Raw: {raw}[/dim magenta]")
+                return rate
+            logger.warning(f"[환율] yfinance 응답이 환율로 쓸 수 없는 값입니다: {raw!r}")
     except Exception as e:
         if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
             config.console.print(f"[dim red][TRACE] RES (yfinance) | Error: {e}[/dim red]")
-        pass
-    
-    return rate
+
+    now = time.time()
+    if now - _fx_fallback_last_log > _FX_FALLBACK_LOG_INTERVAL:
+        _fx_fallback_last_log = now
+        logger.warning(
+            f"[환율] 원/달러 환율을 조회하지 못해 기본값 {config.DEFAULT_EXCHANGE_RATE:,.2f}원으로 "
+            f"해외 자산을 환산합니다 — 실제 환율과 벌어지면 총자산·손실률·드로다운이 함께 어긋납니다.")
+    return config.DEFAULT_EXCHANGE_RATE
 
 # ==========================================================
 # [추가] 종목 메모 DB 관리 기능

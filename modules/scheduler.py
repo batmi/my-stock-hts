@@ -298,6 +298,13 @@ class SystemScheduler:
                 res = api.get_deposit_balance(target_cano, acnt, skip_balance_check=True)
                 deposit = res['d2_deposit'] if res else 0
                 
+                #  holdings is None = 조회 실패다. '보유 없음'이라고 알리면 운영자는
+                #  포지션이 정리된 줄 안다 — 마감 후 갭 전에 가장 비싼 오해다([[unknown-vs-empty]]).
+                if holdings is None:
+                    api.send_telegram_message(
+                        "⚠️ 잔고를 조회하지 못해 장 마감 브리핑을 만들지 못했습니다.\n"
+                        "(보유 종목이 없다는 뜻이 아닙니다 — 증권사 API 응답 실패)")
+                    return
                 valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
                 if not valid_holdings:
                     api.send_telegram_message("📭 보유 종목이 없어 장 마감 브리핑을 수행할 수 없습니다.")

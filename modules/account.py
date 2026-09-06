@@ -86,29 +86,47 @@ def fetch_today_history(cano=None, acnt_prdt_cd=None, target_date=None):
     return summary
 
 def fetch_domestic_balance(cano=None, acnt_prdt_cd=None):
-    """국내 주식 잔고 데이터를 조회하여 반환"""
+    """국내 주식 잔고 데이터를 조회하여 반환. **조회 실패는 (None, None)**.
+
+    [왜 실패를 빈 목록으로 접으면 안 되는가] api.get_domestic_balance 는 실패를
+     (None, None) 으로 정확히 알려 주는데, 종전에는 여기서 그것을 [] 로 접었다.
+     그 목록을 받는 곳은 손으로 손절하러 들어온 매도 화면(trading.select_stock_from_balance)
+     이고, 거기서 빈 목록은 "매도 가능한 잔고가 없습니다"로 나온다 — 운영자가 **팔 것이
+     없다고 믿고 나간다**. 모른다는 것을 없다고 답하지 않는다([[unknown-vs-empty]]).
+
+    [한 줄이 깨져도 목록 전체를 잃지 않는다] 종전에는 int(item['hldg_qty']) 가
+     루프 밖의 except 로 튀어, 이상한 한 줄 때문에 **나머지 종목이 통째로 사라졌다**.
+     읽을 수 없는 줄은 그 줄만 건너뛰고 남긴다.
+    """
     holdings = []
     summary = None
-    
+
     try:
         # api.py의 함수 사용 (내부에서 OPSQ2001 재시도 및 토큰 처리)
         output1, output2 = api.get_domestic_balance(cano, acnt_prdt_cd)
-        
-        if output1:
-            for item in output1:
-                qty = int(item['hldg_qty'])
-                if qty > 0:
-                    holdings.append(item)
-        if output2:
-            summary = output2[0]
-            
     except Exception as e:
         logger.error(f"국내 잔고 조회 실패: {e}")
-        
+        return None, None
+
+    if output1 is None:
+        return None, None
+
+    for item in output1:
+        try:
+            qty = int(float(str(item.get('hldg_qty', '')).strip() or 0))
+        except (TypeError, ValueError):
+            logger.warning(f"국내 잔고 보유수량을 읽을 수 없습니다: "
+                           f"{item.get('pdno')} {item.get('hldg_qty')!r} — 이 줄만 건너뜁니다")
+            continue
+        if qty > 0:
+            holdings.append(item)
+    if output2:
+        summary = output2[0]
+
     return holdings, summary
 
 def fetch_overseas_balance(cano=None, acnt_prdt_cd=None):
-    """해외 주식 잔고 데이터를 조회하여 반환"""
+    """해외 주식 잔고 데이터를 조회하여 반환. **조회 실패는 None**(빈 목록과 구분)."""
     return api.get_overseas_balance(cano, acnt_prdt_cd)
 
 def sync_today_trades():
@@ -1194,9 +1212,14 @@ def _display_balance_details(cano, acnt_prdt_cd):
         progress.update(task, description="[cyan]해외 잔고 조회 중...[/cyan]")
         # [수정] api.get_overseas_balance 직접 호출
         with utils.AccountContext(cano):
-            all_overseas_holdings = api.get_overseas_balance(cano, acnt_prdt_cd) or []
-        ovrs_output = [item for item in all_overseas_holdings
+            all_overseas_holdings = api.get_overseas_balance(cano, acnt_prdt_cd)
+        #  None = 조회 실패. 종전의 `or []` 는 실패를 '해외 보유 없음'으로 접어, 화면에서
+        #  해외분이 조용히 사라졌다(합계도 그만큼 적게 나온다). 사실을 밝히고 비운다.
+        overseas_failed = all_overseas_holdings is None
+        ovrs_output = [item for item in (all_overseas_holdings or [])
                        if float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0)) > 0]
+        if overseas_failed:
+            config.console.print("[yellow]해외 잔고를 조회하지 못했습니다 — 아래 표에 해외분이 빠져 있습니다.[/yellow]")
 
         # [추가] 보유 분석 — 자동매매가 실제로 쓰는 매도 판단(analyze_sell)을 그대로 적용
         progress.update(task, description="[cyan]보유 종목 분석 중 (시스템 매도 기준)...[/cyan]")
@@ -1423,6 +1446,11 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
     try:
         with utils.AccountContext(cano):
             ovrs_holdings = fetch_overseas_balance(cano, acnt_prdt_cd)
+        #  None = 조회 실패. 그대로 순회하면 TypeError 가 바깥 except 로 튀어 **국내분
+        #  집계까지 함께 사라진다**. 해외만 비우고 실패 사실을 남긴다.
+        if ovrs_holdings is None:
+            logger.warning("자산 현황 — 해외 잔고 조회 실패(해외분 제외하고 계산합니다)")
+            ovrs_holdings = []
         ovrs_buy_usd = 0.0
         ovrs_eval_usd = 0.0
         ovrs_pl_usd = 0.0
@@ -1792,6 +1820,9 @@ def offer_holdings_backfill():
 
     cano, acnt = config.session.cano, config.session.acnt_prdt_cd
     holdings, _ = fetch_domestic_balance(cano, acnt)
+    if holdings is None:
+        logger.debug("[백필제안] 국내 잔고 조회 실패 — 제안을 건너뜁니다('보유 없음'이 아닙니다)")
+        return
     if not holdings:
         return
 

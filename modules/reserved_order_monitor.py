@@ -8,6 +8,7 @@ from core import utils
 from modules import analysis
 from core import indicators
 from modules import db_manager
+from modules.telegram_notify import alert_delivered
 import config
 
 
@@ -167,10 +168,9 @@ class ReservedOrderMonitor:
         lines.append("→ 조정 후 가격 기준으로 다시 설정해 주세요.")
 
         logger.warning(f"[Reserve] 권리 조정 {code} ratio={ratio:.4f} 취소 {len(canceled)}건")
-        try:
-            api.send_telegram_message("\n".join(lines))
-        except Exception:
-            pass
+        if not alert_delivered("\n".join(lines)):
+            logger.error(f"[Reserve] 권리 조정 취소 알림을 전달하지 못했습니다 — {code} "
+                         f"{len(canceled)}건이 취소된 사실이 운영자에게 닿지 않았습니다.")
 
     def _check_orders(self):
         try:
@@ -451,7 +451,13 @@ class ReservedOrderMonitor:
                 with utils.AccountContext(cano):
                     raw_dom, _ = api.get_domestic_balance(cano, acnt)
                     raw_ovs = api.get_overseas_balance(cano, acnt)
-                    if raw_dom is None and raw_ovs is None:
+                    #  [Fix] 종전에는 `and` 였다. 그때 get_overseas_balance 는 실패해도
+                    #   빈 목록을 돌려줬으므로 raw_ovs 는 **결코 None 이 되지 않았고**,
+                    #   이 가드는 통째로 죽어 있었다. 국내 조회가 실패해도 보유분석 결과
+                    #   {} 가 캐시에 굳어, API 가 복구된 뒤에도 HOLDING_ANALYSIS_INTERVAL
+                    #   동안 HOLDING_EXIT 예약이 판정 불가로 남았다([[unknown-vs-empty]]).
+                    #   한쪽만 실패해도 보유 목록은 반쪽이다 — 반쪽으로 전량 청산을 판단하지 않는다.
+                    if raw_dom is None or raw_ovs is None:
                         return None  # 조회 실패 — 캐시에 남기지 않는다(다음 주기 재시도)
                     dom = [i for i in (raw_dom or []) if api.safe_int(i.get('hldg_qty', 0)) > 0]
                     ovs = [i for i in (raw_ovs or [])
@@ -641,14 +647,14 @@ class ReservedOrderMonitor:
             order['id'], 'CANCELED', fail_reason="보유 수량 없음(외부 매도 추정)")
 
         logger.warning(f"[Reserve] {code} 보유 0 — 예약 {len(canceled) + 1}건 취소")
-        try:
-            api.send_telegram_message(
+        #  취소는 되돌릴 수 없다. 전달을 확인하고, 못 닿았으면 그 사실을 남긴다.
+        if not alert_delivered(
                 f"🗑 [예약 취소] {name}({code})\n"
                 f"사유: 보유 수량이 없습니다 (HTS 등 외부 매도 추정)\n"
                 f"조건: {order.get('condition_type')}\n"
-                f"→ 같은 종목의 대기 예약 {len(canceled) + 1}건을 함께 취소했습니다.")
-        except Exception:
-            pass
+                f"→ 같은 종목의 대기 예약 {len(canceled) + 1}건을 함께 취소했습니다."):
+            logger.error(f"[Reserve] 예약 취소 알림을 전달하지 못했습니다 — {name}({code}) "
+                         f"{len(canceled) + 1}건이 취소된 사실이 운영자에게 닿지 않았습니다.")
 
     def _abort_execution(self, order, exc, sent):
         """발주 도중 예외로 빠져나갈 때 예약을 **읽을 수 있는 상태**로 남긴다.
@@ -670,17 +676,24 @@ class ReservedOrderMonitor:
         db_manager.db.update_reserved_order_status(
             order['id'], 'FAILED', fail_reason=f"발주 중 오류(결과 불명): {exc}")
         logger.error(f"[Reserve] 발주 중 오류 — 결과 불명: {name} {exc}", exc_info=True)
-        try:
-            api.send_telegram_message(
-                f"⚠️ [예약 주문 결과 불명] {name}({order.get('code')})\n"
-                f"조건: {order.get('condition_type')} "
-                f"({'매수' if order.get('order_type') == 'buy' else '매도'} "
-                f"{api.safe_int(order.get('qty')):,}주)\n"
-                f"오류: {exc}\n\n"
-                f"주문이 거래소에 들어갔는지 알 수 없어 **재시도하지 않습니다**.\n"
-                f"HTS/MTS에서 주문 내역을 확인해 주세요. 이 예약은 다시 발동하지 않습니다.")
-        except Exception:
-            pass
+        #  [Fix 2026-09-06] 이 파일에서 가장 중요한 알림이다 — 주문이 거래소에 들어갔는지
+        #   모르는 채 예약은 FAILED 로 닫히고 **다시 발동하지 않는다**. 사람이 HTS 를 열어
+        #   확인해야만 끝나는 상태인데, 종전에는 전송 실패를 except: pass 로 삼켰다.
+        #   게다가 api.send_telegram_message 는 기본이 비동기라 예외조차 오지 않는다
+        #   (telegram_notify.alert_delivered 주석). 전달 여부를 확인하고, 못 닿았으면
+        #   그 사실 자체를 ERROR 로 남긴다 — 알림이 사라진 것을 로그로라도 알 수 있어야 한다.
+        msg = (f"⚠️ [예약 주문 결과 불명] {name}({order.get('code')})\n"
+               f"조건: {order.get('condition_type')} "
+               f"({'매수' if order.get('order_type') == 'buy' else '매도'} "
+               f"{api.safe_int(order.get('qty')):,}주)\n"
+               f"오류: {exc}\n\n"
+               f"주문이 거래소에 들어갔는지 알 수 없어 **재시도하지 않습니다**.\n"
+               f"HTS/MTS에서 주문 내역을 확인해 주세요. 이 예약은 다시 발동하지 않습니다.")
+        if not alert_delivered(msg, urgent=True):
+            logger.error(
+                f"[Reserve] ‼️ 결과 불명 경보를 전달하지 못했습니다 — {name}({order.get('code')}) "
+                f"{order.get('order_type')} {api.safe_int(order.get('qty')):,}주. "
+                f"운영자가 HTS 주문 내역을 직접 확인해야 합니다(이 예약은 다시 발동하지 않습니다).")
 
     def _execute_order(self, order, reason):
         # [수량 대사] 매도는 발주 직전에 실제 매도가능수량과 맞춘다. 등록 시점과 발동 시점

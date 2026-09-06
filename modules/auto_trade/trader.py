@@ -3651,10 +3651,11 @@ class AutoTrader:
         if res['partial']:
             msg += ("\n\n⚠️ 조회 구간보다 과거에 진입해 일부만 복원된 종목:\n· "
                     + "\n· ".join(f"{n}({c}) {m}주" for c, n, m in res['partial']))
-        try:
-            api.send_telegram_message(msg)
-        except Exception:
-            pass
+        #  본문에 "제한을 풀어야 손절·트레일링이 다시 돕니다"가 들어 있다 — 기동 시
+        #  한 번만 나가는 안내이므로, 놓치면 그 종목이 무방비로 남은 것을 아무도 모른다.
+        if not _pkg().alert_delivered(msg):
+            logger.error("[보유분 복원] 결과 알림을 전달하지 못했습니다 — "
+                         "제한 등록으로 손절이 멈춘 종목이 있어도 운영자가 알 수 없습니다.")
 
     def _get_holdings_message(self, target_cano):
         """보유 종목 현황 메시지 생성 (장 시작/마감 알림용)"""
@@ -4333,10 +4334,14 @@ class AutoTrader:
                                             f"계좌 차단기(일일 손실 한도)가 그때까지 동작하지 "
                                             f"않습니다 — 시세가 정상화되면 스스로 잡습니다.")
                                     self.log(warn)
-                                    try:
-                                        api.send_telegram_message(warn)
-                                    except Exception:
-                                        pass
+                                    #  [Fix 2026-09-06] 이 경보는 **하루 한 번**만 나간다
+                                    #   (_baseline_reject_date 스로틀). 내용은 "계좌 차단기가
+                                    #   동작하지 않는다"이므로 놓치면 그 사실을 온종일 모른다.
+                                    #   전달을 확인한 뒤에 스로틀을 찍는다 — 못 닿았으면
+                                    #   표식을 남기지 않아 다음 주기에 다시 시도한다
+                                    #   (market_halt 의 '상태는 전달을 확인한 뒤에 뒤집는다'와 같은 규칙).
+                                    if not _pkg().alert_delivered(warn, urgent=True):
+                                        self._baseline_reject_date = None
 
                             # [추가] DB에 기록
                             if self.initial_asset > 0:
@@ -4563,7 +4568,15 @@ class AutoTrader:
         주문 상태와 무관하게 안정적인 값이 된다.
         """
         reserved = 0
-        open_orders = api.get_domestic_open_orders(cano, acnt) or []
+        #  [Fix 2026-09-06] `or []` 가 **조회 실패를 '미체결 없음'으로** 만들었다.
+        #   그러면 보정액이 0이 되어 자산이 예약 현금만큼 낮게 잡히는데, 호출부는 그것을
+        #   정상 값으로 믿는다(toss_cash_reliable 이 True 로 남는다) — 위 독스트링이 막으려던
+        #   바로 그 실패다: 가짜 입출금 감지, 손실률 왜곡, 그리고 그 왜곡이
+        #   daily_asset_history 에 net_transfer 로 굳는다([[daily-asset-baseline-transfers]]).
+        #   호출부에는 이미 예외를 받아 '이번 주기 입금 감지 스킵'으로 가는 팔이 있다.
+        open_orders = api.get_domestic_open_orders(cano, acnt)
+        if open_orders is None:
+            raise RuntimeError("미체결 주문을 조회하지 못했습니다 — '미체결 없음'이 아닙니다")
         for o in open_orders:
             # KIS 형식: 02=매수, 01=매도
             if o.get('sll_buy_dvsn_cd') != '02':
@@ -4797,10 +4810,11 @@ class AutoTrader:
                          f"· 예약 취소 {len(canceled)}건")
                 logger.warning(f"[권리 조정] {code} {reason} ratio={ratio:.4f} "
                                f"high={new_high} canceled={len(canceled)}")
-                try:
-                    api.send_telegram_message("\n".join(lines))
-                except Exception:
-                    pass
+                #  취소는 되돌릴 수 없고 본문이 "조정 후 가격 기준으로 다시 설정해 주세요"라고
+                #  사람의 조치를 요구한다. 못 닿았으면 그 사실 자체를 남긴다.
+                if not _pkg().alert_delivered("\n".join(lines)):
+                    logger.error(f"[권리 조정] 알림을 전달하지 못했습니다 — {name}({code}) "
+                                 f"예약 {len(canceled)}건이 취소된 사실이 운영자에게 닿지 않았습니다.")
 
             # 배율이 1이어도 기준값은 항상 최신으로 옮겨야 다음 주기 비교가 성립한다.
             #  [Fix 2026-09-05] **다만 환산에 실패했으면 옮기지 않는다.** 기준값을 조정 후
@@ -7051,10 +7065,11 @@ class AutoTrader:
                                    f"있을 수 있습니다 — 그대로 두면 "
                                    f"{int(params.get('DD_LOOKBACK_DAYS', 90))}일간 한도가 묶입니다.")
                             self.log(f"[리스크 스케일링] 계좌 드로다운 {dd:.1f}% — 한도 x{dd_scale:g} 축소")
-                            try:
-                                api.send_telegram_message(msg)
-                            except Exception:
-                                pass
+                            #  하루 한 번만 나가는 경보다. 본문이 "잘못된 고점이 남아 있으면
+                            #  90일간 한도가 묶인다"고 사람의 확인을 요구하므로, 놓치면 그
+                            #  90일이 그대로 흐른다. 전달을 확인한 뒤에 스로틀을 찍는다.
+                            if not _pkg().alert_delivered(msg, urgent=True):
+                                self._dd_alert_date = None
                     for m_type in market_scales:
                         market_scales[m_type] *= dd_scale
                         market_reasons[m_type] = " ".join(
@@ -7094,7 +7109,15 @@ class AutoTrader:
 
         today = datetime.now().strftime("%Y-%m-%d")
         if getattr(self, '_hwm_cache_date', None) != today:
+            #  [Fix 2026-09-06] **조회 실패를 하루치 캐시에 굳히지 않는다.**
+            #   종전에는 조회 실패도 '이력 없음'도 똑같이 None 이었고 `or 0.0` 이 그것을
+            #   0 으로 접었다. 그러면 hwm 은 오늘 기준선까지만 올라간다 — 90일 고점이 사라져
+            #   **드로다운이 실제보다 작게 계산된다**. 그러면 DD_SCALE 이 안 걸려 리스크
+            #   스케일링(방어)이 그만큼 풀린다. 게다가 종전에는 실패해도 _hwm_cache_date 를
+            #   오늘로 박아, 그날 첫 조회 한 번만 실패해도 **하루 종일** 그 상태로 남았다.
+            #   못 구했으면 캐시하지 않는다 — 다음 주기에 다시 잰다.
             hwm = 0.0
+            hwm_ok = False
             try:
                 lookback = int(params.get("DD_LOOKBACK_DAYS", 90))
                 if lookback <= 0:
@@ -7102,11 +7125,20 @@ class AutoTrader:
                 start_date = (datetime.now() - timedelta(days=lookback)).strftime("%Y-%m-%d")
                 cano, acnt = _get_trade_account()
                 account_key = f"{cano}-{acnt}"
-                hwm = float(db_manager.db.get_max_daily_asset(start_date, account_key) or 0.0)
-            except Exception:
-                hwm = 0.0
-            self._hwm_cache = hwm
-            self._hwm_cache_date = today
+                #  None = **이력 없음**(신규 계좌)이다. 그것은 결론이므로 캐시한다.
+                #  조회 **실패**는 예외로 올라온다(get_max_daily_asset 주석) — 아래에서 받는다.
+                raw_hwm = db_manager.db.get_max_daily_asset(start_date, account_key)
+                hwm = float(raw_hwm or 0.0)
+                hwm_ok = True
+            except Exception as e:
+                logger.warning(
+                    f"[리스크] 자산 고점(HWM)을 조회하지 못했습니다 — 이번 주기 드로다운은 "
+                    f"오늘 기준선까지만 봅니다(캐시하지 않고 다음 주기 재시도): {e}")
+            if hwm_ok:
+                self._hwm_cache = hwm
+                self._hwm_cache_date = today
+            #  실패했으면 직전에 알던 고점을 지우지 않는다. 0 으로 덮으면 드로다운이
+            #  더 작아져(=방어가 더 풀려) 실패가 이득처럼 작동한다.
 
         # [Fix 2026-09-01] 바닥값은 원본 시작 자산이 아니라 **오늘 입출금까지 반영한**
         #  기준선이다. 원본을 쓰면 오늘 나간 출금이 그대로 고점으로 남아, 정상적인 출금

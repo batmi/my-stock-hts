@@ -150,6 +150,10 @@ class MarketHaltMonitor:
             cano, acnt = utils.system_trading_account()
             with utils.AccountContext(cano):
                 holdings, _ = api.get_domestic_balance(cano, acnt)
+            #  None = 조회 실패. `holdings or []` 로 흘리면 **보유 종목이 통째로 VI 감시에서
+            #  빠진 사실이 아무 데도 남지 않는다**(관심종목만 남아 표면상 정상으로 보인다).
+            if holdings is None:
+                logger.warning("[MarketHalt] 보유종목 조회 실패 — 이번 주기 VI 감시 대상에서 보유분이 빠집니다")
             for h in holdings or []:
                 c = h.get("pdno")
                 if _is_kr_domestic_code(c) and int(h.get("hldg_qty", 0) or 0) > 0:

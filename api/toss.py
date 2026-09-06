@@ -684,8 +684,10 @@ def _toss_overseas_balance():
     try:
         ov = toss_api.get_holdings()
     except toss_api.TossApiError as e:
+        #  실패는 None 이다 — 빈 목록('해외 보유 없음')과 구분한다. 바로 위 국내 형제
+        #  (_toss_domestic_balance)가 이미 (None, None)을 돌려주는데 여기만 []였다.
         logger.error(f"[Toss] 해외 보유주식 조회 실패: {e}")
-        return []
+        return None
 
     items = (ov or {}).get('items', []) or []
     out = []

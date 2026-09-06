@@ -67,8 +67,8 @@ def _run(monitor, rec, boom_at, msgs):
          patch.object(ReservedOrderMonitor, '_reconcile_sell_qty', lambda s, o: (10, "")), \
          patch('modules.reserved_order_monitor.api.get_current_price', bad_price), \
          patch('modules.reserved_order_monitor.api.place_order', bad_order), \
-         patch('modules.reserved_order_monitor.api.send_telegram_message',
-               lambda m, *a, **k: msgs.append(m)):
+         patch('modules.reserved_order_monitor.alert_delivered',
+               lambda m, *a, **k: msgs.append(m) or True):
         monitor._execute_order(dict(ORDER), "테스트 발동")
 
 

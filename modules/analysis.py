@@ -5600,16 +5600,26 @@ def _probe_investor_data(data_list):
     if ent and now - ent[1] < _INV_PROBE_TTL_SEC:
         return ent[0]
     use = False
+    answered = False           # 세 번 중 한 번이라도 **답을 받았는가**(실패가 아니라)
     for _, code in data_list[:3]:
         try:
             test_data = api.get_investor_trend(code)
         except Exception:
             continue
+        #  get_investor_trend 의 계약: 실패=None, 없음=[] . 실패를 '수급 없음'으로 세면
+        #  그것이 아래에서 5분간 캐시에 굳어, API 가 회복돼도 그동안 표가 OBV 로 폴백한다.
+        if test_data is None:
+            continue
+        answered = True
         if test_data:
             sample = test_data[0]
             if any(api.safe_int(sample.get(k)) != 0 for k in ['prsn_ntby_qty', 'frgn_ntby_qty', 'orgn_ntby_qty']):
                 use = True
                 break
+    if not answered:
+        #  세 종목 모두 조회 실패 — 아무것도 배우지 못했다. 캐시에 굳히지 않는다.
+        logger.debug(f"[수급프로브] {key} 표본 전부 조회 실패 — 판정을 캐시하지 않는다")
+        return bool(ent[0]) if ent else False
     _INV_PROBE_CACHE[key] = (use, now)
     return use
 

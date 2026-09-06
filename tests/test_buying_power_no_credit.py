@@ -75,3 +75,50 @@ def test_buyable_quantity_is_still_capped_by_actual_cash(real_mode, monkeypatch)
     })
     qty = api.fetch_buyable_quantity("005930", 70000)
     assert qty == 5, f"현금 350,000원 / 70,000원 = 5주여야 하는데 {qty}주가 나왔다"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 0원과 '필드 없음'은 다르다 — `A or B` 는 하필 위험한 쪽에서 뒤집힌다
+# ══════════════════════════════════════════════════════════════════════
+
+def test_미수없는금액이_0원이면_신용금액으로_넘어가지_않는다(real_mode, monkeypatch):
+    """`A or B` 는 A 가 **진짜 0원일 때** B 로 넘어간다.
+
+    그런데 미수 없는 매수금액이 0원이라는 것은 **현금이 없다**는 뜻이고, 그것이야말로
+    신용·대용 여력을 끌어 쓰면 미수가 나는 유일한 상황이다. 폴백의 방향이 정확히
+    거꾸로였다. safe_int 는 '필드 없음'과 '0원'을 똑같이 0으로 만들어 둘을 구분할 수
+    없으므로, 값을 읽었는지(safe_float(..., default=None))로 가른다.
+
+    실측(2026-09-06): nrcvb_buy_amt='0', ord_psbl_amt='9,000,000' → 매수여력 9,000,000원.
+    """
+    monkeypatch.setattr(api, 'get_deposit', lambda *a, **k: {
+        'rt_cd': '0',
+        'output': {'ord_psbl_amt': '9000000',     # 신용·대용 포함
+                   'nrcvb_buy_amt': '0'},          # 미수 없이는 한 주도 못 산다
+    })
+    monkeypatch.setattr(api, 'get_domestic_balance', lambda *a, **k: ([], []))
+
+    res = api.get_deposit_balance("11111111", "01")
+    assert res['order_possible'] == 0, (
+        f"매수여력이 {res['order_possible']:,}원으로 잡혔다 — 현금이 0인데 "
+        "신용 여력으로 매수하면 미수·반대매매가 손절 규칙 바깥에서 포지션을 정리한다")
+
+
+def test_미수없는수량이_0주면_신용수량으로_넘어가지_않는다(real_mode, monkeypatch):
+    """수량 경로도 같다. 실측: nrcvb_buy_qty='0' → 900주."""
+    monkeypatch.setattr(api, 'call_api', lambda *a, **k: {
+        'rt_cd': '0',
+        'output': {'ord_psbl_qty': '900', 'nrcvb_buy_qty': '0',
+                   'max_buy_qty': '900', 'ord_psbl_cash': '99999999'},
+    })
+    assert api.fetch_buyable_quantity("005930", 10000) == 0
+
+
+def test_미수없는수량_필드가_없으면_폴백은_그대로_산다(real_mode, monkeypatch):
+    """'0'과 '없음'을 가른 뒤에도 폴백 자체는 살아 있어야 한다(거래 중단 방지)."""
+    monkeypatch.setattr(api, 'call_api', lambda *a, **k: {
+        'rt_cd': '0',
+        'output': {'ord_psbl_qty': '900', 'max_buy_qty': '900',
+                   'ord_psbl_cash': '99999999'},
+    })
+    assert api.fetch_buyable_quantity("005930", 10000) == 900
