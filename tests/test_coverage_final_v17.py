@@ -103,20 +103,26 @@ def test_telegram_memo_various_commands(mock_name, mock_del_all, mock_del_id, mo
     """텔레그램 /memo 명령어의 상세 파싱 및 예외 분기 커버리지"""
     cmd = TelegramCommander()
     
-    # 1. /memo d [ID] (삭제 - 정상 ID)
-    mock_del_id.return_value = True
+    # 1. /memo d [ID] (삭제 - 정상 ID) — 지운 행 수가 돌아온다
+    mock_del_id.return_value = 1
     res1 = cmd._cmd_memo(["d", "5"])
     assert "삭제되었습니다" in res1
     
-    # 2. /memo d [ID] (삭제 - 존재하지 않는 ID)
-    mock_del_id.return_value = False
+    # 2. /memo d [ID] (삭제 - 존재하지 않는 ID) — 0행이지 실패가 아니다
+    mock_del_id.return_value = 0
     res2 = cmd._cmd_memo(["d", "99"])
-    assert "실패" in res2
+    assert "찾을 수 없습니다" in res2
+    
+    # 2-b. DB 오류(None)는 '없는 ID'와 다른 답이어야 한다
+    mock_del_id.return_value = None
+    res2b = cmd._cmd_memo(["d", "99"])
+    assert "DB 오류" in res2b
     
     # 3. /memo d [종목명] (전체 삭제)
     config.session.stock_data = {"stocks_us": [{"code": "AAPL", "name": "Apple"}]}
+    mock_del_all.return_value = 4
     res3 = cmd._cmd_memo(["d", "Apple"])
-    assert "모든 메모가 삭제" in res3
+    assert "4건이 삭제되었습니다" in res3
     mock_del_all.assert_called_with("AAPL")
     
     # 4. /memo (특정 종목 상세 조회 - 메모 존재)

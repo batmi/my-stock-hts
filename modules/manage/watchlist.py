@@ -663,8 +663,12 @@ def delete_stock():
 
         if item_to_del['code'] in m_codes:
             if Prompt.ask("이 종목에 작성된 메모도 모두 삭제하시겠습니까?", choices=["y", "n"], default="n") == 'y':
-                utils.delete_all_stock_memos(item_to_del['code'])
-                config.console.print("[dim]관련 메모가 모두 삭제되었습니다.[/dim]")
+                #  반환을 보고 말한다 — DB 오류에도 "모두 삭제되었습니다"라고 답하던 자리다.
+                if utils.delete_all_stock_memos(item_to_del['code']) is None:
+                    config.console.print("[red]메모 DB 오류로 관련 메모를 삭제하지 못했습니다 "
+                                         "— 메모는 그대로 남아 있습니다.[/red]")
+                else:
+                    config.console.print("[dim]관련 메모가 모두 삭제되었습니다.[/dim]")
                 
         config.console.print(f"\n[green]삭제되었습니다.[/green]")
     else:

@@ -129,7 +129,9 @@ def main():
         col = rolling_trend_quality(df["close"], lb)
         tq_map[c] = dict(zip((str(d) for d in df["date"]), col))
 
-    seg_of = {d: name for name, wd in audit_windows(dates, args.subperiods) for d in wd}
+    _wins = audit_windows(dates, args.subperiods)
+    seg_of = {d: name for name, wd in _wins for d in wd}
+    seg_names = [name for name, _ in _wins]
 
     print(f"[준비] {len(dfs)}종목(폐지 {len(dead_c)}) · 표본 크기 {size} · 거래일 {len(dates)} · "
           f"TQ 룩백 {lb}일 · 슬롯 {slots}", flush=True)
@@ -191,7 +193,12 @@ def main():
         print(f"  60+ 표본 {len(strong)}건 — 4등분 불가")
 
     # ── ③ 구간별 (전체창 평균이 가린 것이 있는지)
-    segs = [f"구간{i + 1}" for i in range(k)]
+    #  [Fix 2026-09-07] 종전에는 `range(k)` 였는데 이 함수에 `k` 는 없다 — 절 [3] 이
+    #   NameError 로 죽었다. 긴 백테스트가 **다 끝난 뒤**에 죽으므로 대가가 크고,
+    #   절 [1]·[2] 는 이미 찍힌 뒤라 출력만 보면 정상 종료처럼 보인다.
+    #   구간 수를 다시 세지 말고 audit_windows 가 실제로 만든 이름을 그대로 쓴다
+    #   (k<=1 이면 이름이 "전체" 하나라 '구간N' 가정 자체가 틀린다).
+    segs = seg_names
     print("\n[3] 구간별 — 전체창의 그림이 구간마다 유지되는가")
     for sg in segs:
         sub = [r for r in recs if r[0] == sg]

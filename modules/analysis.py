@@ -6053,12 +6053,21 @@ def show_stock_analysis():
 
         # [추가] 최초 클론 등으로 stock.json이 없으면 기본 관심종목(삼성전자)으로 자동 생성
         if not os.path.exists(config.STOCK_DATA_FILE):
-            config.session.save_stock_config({
-                "stocks_kr": [{"name": "삼성전자", "code": "005930", "exchange": "KOSPI"}],
-                "etfs_kr": [], "stocks_us": [], "etfs_us": []
-            })
-            config.session.load_stock_config()  # exchange 캐시 재구성
-            config.console.print("[yellow]관심종목 파일(json/stock.json)이 없어 기본 종목(삼성전자)으로 새로 생성했습니다.[/yellow]\n")
+            #  [Fix 2026-09-07] 저장 결과를 보고 말한다. 2026-09-06 에 save_stock_config 가
+            #   성공 여부를 돌려주게 하고 호출부 여섯 곳을 고쳤는데, 이 부트스트랩 자리가
+            #   남아 있었다. 저장이 실패하면 바로 뒤의 load_stock_config() 가 없는 파일을
+            #   읽어 목록을 **빈 채로** 되돌리는데, 화면에는 "새로 생성했습니다"가 뜬다
+            #   (실측: 종목 0건인데 생성 완료 문구). 운영기는 램 1GB·SD 카드 라즈베리파이라
+            #   쓰기 실패가 실재한다 — 사용자는 빈 관심종목을 보고 자기가 지운 줄 안다.
+            if config.session.save_stock_config({
+                    "stocks_kr": [{"name": "삼성전자", "code": "005930", "exchange": "KOSPI"}],
+                    "etfs_kr": [], "stocks_us": [], "etfs_us": []
+            }):
+                config.session.load_stock_config()  # exchange 캐시 재구성
+                config.console.print("[yellow]관심종목 파일(json/stock.json)이 없어 기본 종목(삼성전자)으로 새로 생성했습니다.[/yellow]\n")
+            else:
+                config.console.print("[red]관심종목 파일(json/stock.json)을 만들지 못했습니다 — 관심종목이 비어 있습니다.[/red]")
+                config.console.print("[dim]디스크 여유 공간과 json/ 디렉터리 쓰기 권한을 확인하세요.[/dim]\n")
 
         target_list = []
         order_map = [

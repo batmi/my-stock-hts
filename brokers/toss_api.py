@@ -527,9 +527,17 @@ def get_stock(symbol):
 
 
 def get_warnings(symbol):
-    """매매 주의사항/VI. [{warningType,exchange,startDate,endDate}]"""
+    """매매 주의사항/VI. [{warningType,exchange,startDate,endDate}]
+
+    **조회 실패·해석 불가는 None(=모름)**이고, 빈 리스트는 '주의사항이 없다'는 답이다.
+    종전의 `or []` 는 둘을 하나로 접었다 — _request 는 2xx 인데 본문이 JSON 이 아니거나
+    result 키가 없으면(비공식 API라 스키마가 바뀐다) None 을 돌려준다. 그것이 [] 가 되면
+    유일한 호출부(market_halt)가 '봤는데 VI 가 없다'로 읽어 발동 중인 종목에 해제 오보를
+    낸다([[unknown-vs-empty]]). 실패를 예외로 올리는 경로만 막아 두고 이쪽을 열어 두면
+    같은 구멍이다.
+    """
     return _request("GET", f"/api/v1/stocks/{symbol}/warnings", group="STOCK",
-                    account=False) or []
+                    account=False)
 
 
 # =========================================================================

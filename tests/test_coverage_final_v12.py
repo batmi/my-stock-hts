@@ -62,11 +62,13 @@ def test_utils_memo_db():
         mock_cursor.fetchone.return_value = [1]
         assert utils.add_stock_memo('005930', '삼성전자', '새로운 메모') is True
         
-        # delete_stock_memo_by_id
-        assert utils.delete_stock_memo_by_id(1) is True
+        # delete_stock_memo_by_id — 지운 행 수를 돌려준다(0=없었다, None=DB 오류)
+        mock_cursor.rowcount = 1
+        assert utils.delete_stock_memo_by_id(1) == 1
         
         # delete_all_stock_memos
-        assert utils.delete_all_stock_memos('005930') is True
+        mock_cursor.rowcount = 3
+        assert utils.delete_all_stock_memos('005930') == 3
         
         # get_memo_codes
         mock_cursor.fetchall.return_value = [('005930',)]

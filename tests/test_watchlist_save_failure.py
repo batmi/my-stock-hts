@@ -96,7 +96,8 @@ def test_탐색_추가는_저장을_확인한_뒤에만_성공으로_본다(stoc
     fake_console = type('C', (), {'print': lambda self, *a, **k: printed.append(str(a[0]) if a else "")})()
 
     cands = [{"code": "035420", "name": "NAVER", "exchange": "KOSPI"}]
-    assert discover._commit_additions(cands, console=fake_console) is False
+    #  실패는 None(=넣었는지 모른다). 0(이미 다 있었다)과 구분해야 한다.
+    assert discover._commit_additions(cands, console=fake_console) is None
 
     body = "\n".join(printed)
     assert "저장하지 못했습니다" in body
@@ -111,7 +112,7 @@ def test_탐색_추가_저장이_성공하면_실제로_들어간다(stock_file,
     printed = []
     fake_console = type('C', (), {'print': lambda self, *a, **k: printed.append(str(a[0]) if a else "")})()
     cands = [{"code": "035420", "name": "NAVER", "exchange": "KOSPI"}]
-    assert discover._commit_additions(cands, console=fake_console) is True
+    assert discover._commit_additions(cands, console=fake_console) == 1
 
     codes = [i['code'] for i in config.session.stock_data['stocks_kr']]
     assert '035420' in codes

@@ -251,29 +251,42 @@ def update_stock_memo(memo_id, memo_text):
         logger.error(f"메모 DB 수정 오류: {e}")
         return False
 
+#  [Fix 2026-09-07] 두 함수의 반환은 **세 가지**를 구분해야 한다: 지웠다 / 지울 것이
+#   없었다 / 지웠는지 모른다. 종전 계약은 True·False 둘뿐이었고, 그 둘이 실제 의미와
+#   어긋나 있었다(셋 다 실측 재현):
+#     · 없는 ID 를 지워도 DELETE 는 0행에 성공하므로 True → "🗑 메모(ID: 999999)가
+#       삭제되었습니다" (없던 것을 지웠다고 답한다)
+#     · DB 오류면 False → "⚠️ 메모 삭제 실패. (존재하지 않는 ID)" (ID 는 실재하는데
+#       엉뚱한 이유를 댄다 — 사용자는 ID 를 다시 찾아 헤맨다)
+#     · 전체 삭제는 아예 반환을 보지 않아 DB 오류에도 "모든 메모가 삭제되었습니다"
+#       (실측: 메모 1건이 그대로 남아 있는데 그렇게 답한다)
+#   지운 행 수를 돌려주고, 실패는 None(=모른다)으로 올린다. 0 과 None 은 다르다
+#   ([[unknown-vs-empty]]).
 def delete_stock_memo_by_id(memo_id):
+    """지운 행 수를 돌려준다. 0 = 그런 메모가 없었다, None = DB 오류(지웠는지 모른다)."""
     try:
         init_memo_db()
         with closing(sqlite3.connect(config.DB_FILE_PATH)) as conn, conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM stock_memo_entries WHERE id = ?", (memo_id,))
             conn.commit()
-            return True
+            return cursor.rowcount
     except Exception as e:
         logger.error(f"메모 DB 삭제 오류: {e}")
-    return False
+    return None
 
 def delete_all_stock_memos(code):
+    """지운 행 수를 돌려준다. 0 = 메모가 없었다, None = DB 오류(지웠는지 모른다)."""
     try:
         init_memo_db()
         with closing(sqlite3.connect(config.DB_FILE_PATH)) as conn, conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM stock_memo_entries WHERE code = ?", (code,))
             conn.commit()
-            return True
+            return cursor.rowcount
     except Exception as e:
         logger.error(f"메모 DB 전체 삭제 오류: {e}")
-    return False
+    return None
 
 def get_memo_codes():
     """메모가 존재하는 종목 코드 목록 반환 (마킹용)"""

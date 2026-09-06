@@ -210,17 +210,17 @@ def test_telegram_cmd_memo():
             assert "추가되었습니다" in res
             
     # 3. ID로 삭제
-    with patch('core.utils.delete_stock_memo_by_id', return_value=True):
+    with patch('core.utils.delete_stock_memo_by_id', return_value=1):
         res = cmd._cmd_memo(["d", "5"])
         assert "삭제되었습니다" in res
         
     # 4. 종목 코드로 전체 삭제
     # 한글 종목명 해석을 위해 세션 데이터 주입
     config.session.stock_data = {"stocks_kr": [{"code": "005930", "name": "삼성전자"}]}
-    with patch('core.utils.delete_all_stock_memos'):
+    with patch('core.utils.delete_all_stock_memos', return_value=2):
         with patch('api.get_stock_name_by_code', return_value="삼성전자"):
             res = cmd._cmd_memo(["d", "삼성전자"])
-            assert "모든 메모가 삭제" in res
+            assert "2건이 삭제되었습니다" in res
 
 @patch('modules.telegram_bot.api.get_yf_fast_info')
 @patch('modules.telegram_bot.analysis.get_domestic_index_data')

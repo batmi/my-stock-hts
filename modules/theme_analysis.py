@@ -978,6 +978,23 @@ def verify_stock_codes(text, min_marcap=_CURATION_MIN_MARCAP):
     return marked + "\n" + "\n".join(lines)
 
 
+def _verified(result):
+    """AI 응답에 종목 표기가 있으면 KRX 상장목록과 대조한 결과를 돌려준다.
+
+    [왜 전부에 거는가 · 2026-09-07] 종전에는 '종목명(6자리코드)'를 **요구하는**
+     두 프롬프트(장전 브리핑·큐레이션)와 시황 분석에만 걸려 있었다. 그런데 이 방어선이
+     막으려는 것은 프롬프트가 무엇을 요구했는가가 아니라 **AI 가 코드를 지어내는 것**이다.
+     프롬프트가 요구하지 않아도 AI 는 종목을 코드와 함께 적는다 — /ask 로 "추천 종목"을
+     묻거나, 종목 뉴스 검색이 그 종목 코드를 되받아 적거나, 마감 브리핑이 보유 종목을
+     열거할 때가 그렇다. 셋 다 텔레그램으로 사람에게 그대로 나간다.
+     비용은 사실상 0 이다: verify_stock_codes 는 코드 표기가 하나도 없으면 상장목록을
+     부르지 않고 바로 돌아온다.
+    """
+    if not result or not isinstance(result, str) or result.startswith("⚠️"):
+        return result
+    return verify_stock_codes(result)
+
+
 def analyze_stock_with_gemini(code, name, tech_info_str):
     """특정 종목의 기술적 지표와 모멘텀을 결합하여 심층 진단"""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1087,8 +1104,8 @@ def generate_daily_closing_report(portfolio_str):
     macro_context = _get_macro_context_str()
     today_trades_str = _get_today_trades_str()
     prompt = prompts.DAILY_CLOSING_PROMPT.format(portfolio_str=portfolio_str, macro_context=macro_context, today_trades_str=today_trades_str)
-    return _run_gemini_report(prompt, label="장 마감 브리핑", default=None,
-                              error_style="plain", error_prefix="장 마감 브리핑 생성")
+    return _verified(_run_gemini_report(prompt, label="장 마감 브리핑", default=None,
+                                        error_style="plain", error_prefix="장 마감 브리핑 생성"))
 
 def generate_morning_briefing(market_data_str):
     """밤사이 글로벌 지수를 바탕으로 장전 시황 브리핑 생성"""
@@ -1096,7 +1113,7 @@ def generate_morning_briefing(market_data_str):
     prompt = prompts.MORNING_BRIEFING_PROMPT.format(now=now, market_data_str=market_data_str)
     result = _run_gemini_report(prompt, label="장전 브리핑", default=None, error_style="silent")
     # 주도주를 '종목명(코드)'로 추천하므로 발송 전에 KRX 상장목록과 대조한다.
-    return verify_stock_codes(result) if result else result
+    return _verified(result)
 
 def generate_stock_curation():
     """현재 시점 매크로 지표 및 뉴스를 기반으로 관심 종목 큐레이션 (수동 추가용)"""
@@ -1110,16 +1127,15 @@ def generate_stock_curation():
                                 generation_config={"temperature": 0.3},
                                 error_style="plain", error_prefix="종목 큐레이션")
     # 관심종목으로 바로 편입될 후보이므로 코드 존재·이름 일치·시총을 반드시 대조한다.
-    if not result or result.startswith("⚠️"):
-        return result
-    return verify_stock_codes(result)
+    return _verified(result)
 
 def ask_gemini(question):
     """사용자의 자유 질문에 대해 Gemini API로 답변 생성"""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     prompt = prompts.ASK_GEMINI_PROMPT.format(now=now, question=question)
-    return _run_gemini_report(prompt, label="Q&A", default="검색 결과가 없거나 답변을 생성하지 못했습니다.",
-                              error_prefix="AI 답변 생성")
+    return _verified(_run_gemini_report(prompt, label="Q&A",
+                                        default="검색 결과가 없거나 답변을 생성하지 못했습니다.",
+                                        error_prefix="AI 답변 생성"))
 
 def summarize_disclosures_with_gemini(items_text):
     """관심종목 공시 목록을 받아 호재/악재로 분류·요약."""
@@ -1154,10 +1170,10 @@ def get_latest_news_with_gemini(keyword, code=None):
 
     # [리팩토링] 함수 내 인라인 중복 프롬프트 제거 → prompts.NEWS_SEARCH_PROMPT 템플릿 사용
     prompt = prompts.NEWS_SEARCH_PROMPT.format(now=now, crawled_news=crawled_news, keyword=keyword)
-    return _run_gemini_report(prompt, label=f"[{keyword}] 뉴스 검색",
-                              default="검색 결과가 없거나 응답을 생성하지 못했습니다.",
-                              generation_config={"temperature": 0.1},
-                              error_style="plain", error_prefix="뉴스 검색")
+    return _verified(_run_gemini_report(prompt, label=f"[{keyword}] 뉴스 검색",
+                                        default="검색 결과가 없거나 응답을 생성하지 못했습니다.",
+                                        generation_config={"temperature": 0.1},
+                                        error_style="plain", error_prefix="뉴스 검색"))
 
 def _show_naver_themes():
     """네이버 금융 테마 순위 출력"""

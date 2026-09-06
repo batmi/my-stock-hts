@@ -952,15 +952,26 @@ class TelegramCommander:
         elif subcmd == "d":
             if len(args) < 2: return "⚠️ 사용법: /memo d [메모ID 또는 종목명]"
             target = args[1]
+            #  [Fix 2026-09-07] 지웠다·없었다·모른다를 갈라 답한다. 종전에는 두 답이
+            #   서로 뒤바뀌어 있었다 — 없는 ID 는 DELETE 가 0행에 성공하므로 "삭제되었습니다",
+            #   DB 오류는 "(존재하지 않는 ID)". 아래 갈래는 반환을 아예 보지 않아 메모가
+            #   그대로 남아 있어도 "모두 삭제되었습니다"였다(셋 다 실측 재현).
             if target.isdigit():
-                if utils.delete_stock_memo_by_id(int(target)):
-                    return f"🗑 메모(ID: {target})가 삭제되었습니다."
-                return "⚠️ 메모 삭제 실패. (존재하지 않는 ID)"
+                n = utils.delete_stock_memo_by_id(int(target))
+                if n is None:
+                    return "⚠️ 메모 DB 오류로 삭제하지 못했습니다. (로그를 확인하세요)"
+                if n == 0:
+                    return f"⚠️ 메모(ID: {target})를 찾을 수 없습니다."
+                return f"🗑 메모(ID: {target})가 삭제되었습니다."
             else:
                 code, name, _ = self._resolve_stock(" ".join(args[1:]))
                 if not code: return f"⚠️ '{target}' 종목을 찾을 수 없습니다."
-                utils.delete_all_stock_memos(code)
-                return f"🗑 '{name}' 종목에 작성된 모든 메모가 삭제되었습니다."
+                n = utils.delete_all_stock_memos(code)
+                if n is None:
+                    return f"⚠️ 메모 DB 오류로 '{name}' 종목의 메모를 삭제하지 못했습니다. (로그를 확인하세요)"
+                if n == 0:
+                    return f"📭 '{name}' 종목에 삭제할 메모가 없습니다."
+                return f"🗑 '{name}' 종목에 작성된 메모 {n}건이 삭제되었습니다."
                 
         else:
             # 특정 종목 상세 조회

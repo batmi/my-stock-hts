@@ -387,8 +387,10 @@ def _commit_additions(chosen, console=None):
     if not saved:
         logger.error(f"관심 종목 탐색 결과({added}종목) 저장 실패 — 추가되지 않았습니다")
         console.print(f"\n[bold red]{added}종목을 저장하지 못했습니다 — 관심종목은 그대로입니다.[/bold red]")
-        return False
-    return True
+        return None
+    #  실제로 새로 넣은 종목 수를 돌려준다. 0(고른 것이 전부 이미 있었다)과
+    #   None(저장 실패)은 다른 답이므로 호출부는 `is None` 으로만 실패를 가른다.
+    return added
 
 
 def discover_candidates():
@@ -502,11 +504,21 @@ def discover_candidates():
         console.print("\n[dim]취소했습니다.[/dim]")
         return False
 
-    if not _commit_additions(chosen, console):
+    #  [Fix 2026-09-07] added 는 _commit_additions 의 지역 변수다. 2026-09-06 에 저장
+    #   실패 처리를 그 함수로 떼어내면서 이 아래 두 줄이 남겨졌고, 그때부터 메뉴 7-5 의
+    #   **성공 경로가 NameError 로 죽었다**(실측: name 'added' is not defined).
+    #   종목은 이미 저장된 뒤라 실제로는 추가에 성공했는데, 사람은 실패로 보고 다시 돌린다.
+    #   함수가 넣은 수를 돌려주게 해서 그 수를 여기서 쓴다.
+    added = _commit_additions(chosen, console)
+    if added is None:
         return False
 
     total = len(config.session.stock_data.get("stocks_kr", []))
     logger.info(f"관심 종목 탐색으로 {added}종목 추가 (총 {total}종목)")
+    if added == 0:
+        console.print(f"\n[yellow]고른 종목이 모두 이미 관심종목에 있습니다. "
+                      f"국내 주식 관심종목 {total}개.[/yellow]")
+        return True
     console.print(f"\n[green]{added}종목을 추가했습니다. 국내 주식 관심종목 {total}개.[/green]")
     if total < 60:
         console.print("[dim]감사 기준으로 60종목부터 뚜렷한 개선이 나타납니다.[/dim]")

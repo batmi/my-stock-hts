@@ -132,15 +132,16 @@ class MarketHaltMonitor:
         return True
 
     def _domestic_targets(self):
-        """VI 감시 대상(보유+관심종목) dict(code->name). 국내 종목만."""
-        targets = {}
-        # 관심종목 (국내 주식/ETF)
-        sd = getattr(config.session, "stock_data", None) or {}
-        for key in ("stocks_kr", "etfs_kr"):
-            for it in sd.get(key, []) or []:
-                c = it.get("code")
-                if _is_kr_domestic_code(c):
-                    targets[c] = it.get("name", c)
+        """VI 감시 대상(보유+관심종목) dict(code->name). 국내 종목만.
+
+        **보유 종목이 먼저다.** 상한(MARKET_HALT_VI_MAX_CODES)은 뒤에서 자르는데
+        종전에는 관심종목을 먼저 채워 넣어, 관심종목만으로 상한을 넘으면 보유분이
+        한 종목도 남지 않았다 — 조용히. 실제 설정(국내 관심 64개 > 상한 40)에서 이미
+        그랬다: 2026-09-04 에 '보유 종목이 통째로 VI 감시에서 빠지는' 결함을 계좌
+        컨텍스트 쪽에서 고쳐 놓고, 열 줄 아래 상한이 같은 일을 계속하고 있었다.
+        VI 는 돈이 들어가 있는 종목에서 알아야 하는 신호다. 관심종목은 후보일 뿐이다.
+        """
+        held = {}
         # 보유종목 (시스템 트레이딩 계좌)
         #  [Fix 2026-09-04] 종전에는 계좌 컨텍스트 없이 잔고를 물었다. 이 코드는
         #   스케줄러 스레드에서 도는데 context.trade_context 는 threading.local 이라
@@ -157,14 +158,31 @@ class MarketHaltMonitor:
             for h in holdings or []:
                 c = h.get("pdno")
                 if _is_kr_domestic_code(c) and int(h.get("hldg_qty", 0) or 0) > 0:
-                    targets[c] = h.get("prdt_name", c)
+                    held[c] = h.get("prdt_name", c)
         except Exception as e:
             logger.debug(f"[MarketHalt] 보유종목 조회 실패: {e}")
 
+        targets = dict(held)
+        # 관심종목 (국내 주식/ETF) — 남은 자리만 채운다.
+        sd = getattr(config.session, "stock_data", None) or {}
+        for key in ("stocks_kr", "etfs_kr"):
+            for it in sd.get(key, []) or []:
+                c = it.get("code")
+                if _is_kr_domestic_code(c):
+                    targets.setdefault(c, it.get("name", c))
+
         cap = getattr(config, "MARKET_HALT_VI_MAX_CODES", 40)
         if len(targets) > cap:
-            # 상한 초과 시 일부만 감시 (Pi 부하 방어)
+            # 상한 초과 시 일부만 감시 (Pi 부하 방어). 무엇이 잘렸는지 남긴다 —
+            #  조용히 자르면 '감시 중'과 '감시 대상에서 빠졌다'를 구분할 수 없다.
+            total = len(targets)
             targets = dict(list(targets.items())[:cap])
+            missing_held = [c for c in held if c not in targets]
+            logger.warning(
+                f"[MarketHalt] VI 감시 대상 {total}건 중 상한({cap})을 넘는 "
+                f"{total - cap}건이 제외됩니다"
+                + (f" — 보유 종목 {len(missing_held)}건 포함({', '.join(missing_held[:5])})"
+                   if missing_held else " (보유 종목은 모두 포함)"))
         return targets
 
     # ---- 서킷브레이커(CB) : KIS ----
@@ -177,8 +195,16 @@ class MarketHaltMonitor:
                     res = api.get_current_price_data(code, is_overseas=False)
                     if res and res.get("rt_cd") == "0":
                         out = res.get("output", {}) or {}
+                        #  [Fix 2026-09-07] 필드가 없으면 이 종목의 정지 여부를 **모른다**.
+                        #   종전에는 `out.get("temp_stop_yn", "N")` 로 누락을 '정상'으로 접고
+                        #   조회 성공으로 세었다 — 응답에서 필드가 빠지거나 이름이 바뀌면
+                        #   바스켓 전체가 '정지 아님'이 되어, 정지 중이던 시장에 해제 오보가
+                        #   나간다(실측: 세 종목 모두 필드 누락 → "✅ 서킷브레이커 해제").
+                        #   같은 가드가 VI 경로(vi_cls_code)에는 이미 있었고 여기만 없었다.
+                        if "temp_stop_yn" not in out:
+                            continue
                         checked += 1
-                        if str(out.get("temp_stop_yn", "N")).upper() == "Y":
+                        if str(out.get("temp_stop_yn")).upper() == "Y":
                             halted += 1
                 except Exception:
                     pass
@@ -285,8 +311,12 @@ class MarketHaltMonitor:
             return current, checked
         for code, name in self._domestic_targets().items():
             try:
-                warnings = toss_api.get_warnings(code) or []
+                warnings = toss_api.get_warnings(code)
             except Exception:
+                continue
+            #  None = 조회 실패/해석 불가(=모름). 빈 리스트만이 '주의사항 없음'이다.
+            #   모르는 것을 checked 에 넣으면 _diff_vi_alerts 가 해제로 읽는다.
+            if warnings is None:
                 continue
             checked.add(code)
             if any(_toss_warning_is_vi(w) for w in warnings):
