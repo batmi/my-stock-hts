@@ -29,9 +29,14 @@ def test_scheduler_start_stop(scheduler):
 @patch('modules.scheduler.api.is_holiday_today')
 @patch('modules.scheduler.api.is_us_holiday_today')
 @patch('modules.scheduler.api.get_holiday_name')
-@patch('modules.scheduler.api.send_telegram_message')
+@patch('modules.scheduler.alert_delivered')
 def test_check_holiday_notification_both_closed(mock_tg, mock_name, mock_us_holiday, mock_kr_holiday, scheduler):
-    """국내 및 미국 시장 모두 휴장 시 알림 테스트"""
+    """국내 및 미국 시장 모두 휴장 시 알림 테스트.
+
+    [2026-09-07] 발송은 alert_delivered 를 거친다 — 하루 표식을 **전달을 확인한 뒤**
+     찍기 때문이다(send_telegram_message 는 비동기 기본이라 실패를 알려 주지 않는다).
+    """
+    mock_tg.return_value = True
     mock_kr_holiday.return_value = True
     mock_us_holiday.return_value = True
     mock_name.side_effect = ["어린이날", "독립기념일"]
@@ -99,20 +104,27 @@ def _calendar_scheduler(scheduler):
 
 @patch('modules.scheduler.threading.Thread')
 def test_check_calendar_alerts_fires_once_a_day(mock_thread, scheduler):
-    """발송 시각 이후 첫 순회에 한 번만 트리거되고, 같은 날 재호출은 무시된다."""
+    """발송 시각 이후 첫 순회에 한 번만 트리거되고, 같은 날 재호출은 무시된다.
+
+    [2026-09-07] 하루 표식은 워커가 **끝난 뒤** 찍힌다(전달 실패면 같은 날 재시도).
+     그래서 스레드를 띄우기만 하고 돌리지 않으면 아직 표식이 없다 — 여기서 직접 돌린다.
+    """
     _calendar_scheduler(scheduler)
     config.settings.AUTO_CALENDAR_ALERT_TIME = "0820"
 
-    with patch('modules.scheduler.datetime') as mock_dt:
+    from modules.manage import events as calendar_events
+    with patch('modules.scheduler.datetime') as mock_dt, \
+         patch.object(calendar_events, 'check_and_alert_calendar', return_value=1) as worker:
         mock_dt.now.return_value = datetime(2026, 7, 29, 8, 30)
         mock_dt.strptime = datetime.strptime
         scheduler._check_calendar_alerts()
+        assert mock_thread.call_count == 1
+        mock_thread.call_args.kwargs["target"]()      # 워커를 그 자리에서 돌린다
         scheduler._check_calendar_alerts()
 
     assert scheduler.last_calendar_alert_date == "2026-07-29"
     assert mock_thread.call_count == 1
-    from modules.manage import events as calendar_events
-    assert mock_thread.call_args.kwargs["target"] is calendar_events.check_and_alert_calendar
+    assert worker.call_count == 1
 
 
 @patch('modules.scheduler.threading.Thread')

@@ -87,7 +87,13 @@ def test_the_scheduler_raises_the_alarm(trader, monkeypatch):
     import modules.scheduler as sch
 
     sent = []
-    s = sch.SystemScheduler.__new__(sch.SystemScheduler)
+    #  [격리 · 2026-09-07] object.__new__ 를 쓴다. SystemScheduler.__new__ 는 **싱글톤**이라
+    #   그대로 부르면 프로세스 전역 인스턴스가 돌아오고, 아래 대입들이 그 객체의 trader 를
+    #   스텁으로 **덮어쓴다**. 그러면 뒤에 SystemScheduler() 를 부르는 다른 파일의 테스트가
+    #   (`_initialized` 가 True 라 __init__ 이 곧바로 돌아온다) 그 스텁을 완성품으로 받아
+    #   실행 순서에 따라 성공/실패가 갈린다 — 실측: test_scheduler_module·test_loop_stall_detection
+    #   3건이 xdist 배분에 따라 붙었다 떨어졌다 했다. 계측기가 순서에 따라 말을 바꾸면 안 된다.
+    s = object.__new__(sch.SystemScheduler)
     s.trader = trader
     s.last_heartbeat_time = 0.0
     s._last_problem_msg = ""
@@ -111,7 +117,7 @@ def test_the_scheduler_stays_quiet_when_healthy(trader, monkeypatch):
     import modules.scheduler as sch
 
     sent = []
-    s = sch.SystemScheduler.__new__(sch.SystemScheduler)
+    s = object.__new__(sch.SystemScheduler)
     s.trader = trader
     s.last_heartbeat_time = 0.0
     s._last_problem_msg = ""

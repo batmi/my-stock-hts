@@ -58,7 +58,9 @@ def test_db_proxy_timeout():
         # queue.Queue.get을 모킹하여 즉시 Empty 예외 발생 (타임아웃 시뮬레이션)
         # 이렇게 하면 30초를 기다리지 않고 바로 타임아웃 예외 발생 경로를 테스트할 수 있음
         with patch('queue.Queue.get', side_effect=queue.Empty):
-            with pytest.raises(Exception, match="DB Method 'dummy_method' Timeout"):
+            #  [2026-09-07] 시한 초과는 '실패'가 아니라 '결과 불명'이다 — 작업을 취소하지
+            #   않으므로 나중에 반영될 수 있다. 예외 종류로 그것을 구분한다.
+            with pytest.raises(db_queue.DBOperationUnknown, match="결과 불명"):
                 proxy.dummy_method()
     finally:
         proxy.stop()
@@ -69,7 +71,7 @@ def test_execute_custom_timeout():
     proxy = db_queue.DBProxy(real_db)
     try:
         with patch('queue.Queue.get', side_effect=queue.Empty):
-            with pytest.raises(Exception, match="DB Operation Timeout"):
+            with pytest.raises(db_queue.DBOperationUnknown, match="결과 불명"):
                 proxy.execute_custom(lambda: None)
     finally:
         proxy.stop()

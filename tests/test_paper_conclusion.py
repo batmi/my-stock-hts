@@ -206,8 +206,12 @@ def _run_backfill_with_trade_type(paper, monitor, monkeypatch, trade_type):
     monkeypatch.setattr(db_manager.db, 'insert_trade', lambda *a, **k: None)
     monkeypatch.setattr(api, 'send_telegram_message', lambda msg, **k: None)
     # 재기동하면 시스템 ODNO 메모리 세트는 비어 있다 — 그 상태를 그대로 재현한다.
-    monkeypatch.setattr('modules.auto_trade.common.is_system_odno', lambda odno: False)
-    monkeypatch.setattr('modules.auto_trade.conclusion.is_system_odno', lambda odno: False)
+    #  [2026-09-07] 판정이 날짜를 함께 받는다(on_date) — 주문번호는 당일 채번이라
+    #   번호만으로는 유일하지 않다([[odno-daily-reset]]). 스텁도 그것을 받아야 한다.
+    monkeypatch.setattr('modules.auto_trade.common.is_system_odno',
+                        lambda odno, **_k: False)
+    monkeypatch.setattr('modules.auto_trade.conclusion.is_system_odno',
+                        lambda odno, **_k: False)
 
     restricted = []
     monkeypatch.setattr('modules.auto_trade.conclusion.add_restricted_stock',

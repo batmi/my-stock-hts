@@ -435,6 +435,21 @@ def _input_and_save_rule(code, name):
                 console.print("[red]잘못된 입력입니다. 숫자를 입력해주세요.[/red]")
                 continue
 
+            #  [개별 값도 본다 · 2026-09-07] 종전 검사는 **합계 10.0 하나뿐**이었다.
+            #   각 가중치는 그 팩터의 배수라(analysis.calculate_score 의 r_* = 가중치/기본배점)
+            #   음수면 가점이 감점이 되고, 추세가 강한 종목일수록 점수가 낮아진다.
+            #   실측(합계는 똑같이 10.0, TREND -4.0 / MOMENTUM 10.5):
+            #     추세 강한 A 5.50 → 4.30 / 모멘텀만 강한 B 5.00 → 6.90 (1순위가 뒤집힌다).
+            #   전역 설정 쪽에도 같은 구멍이 있었다 — 규칙은 한 곳에서만 정한다.
+            #   개별 룰은 그 종목에만 적용돼 더 눈에 안 띄므로, 여기가 오히려 더 조용하다.
+            from modules import settings as _settings
+            _bad = next((_settings._range_error(k, v) for k, v in entered.items()
+                         if _settings._range_error(k, v)), None)
+            if _bad:
+                console.print(f"\n[bold red]{_bad}[/bold red]")
+                curr_weights = entered
+                continue
+
             total_score = round(sum(entered.values()), 2)
             if abs(total_score - 10.0) > 0.01:
                 console.print(f"\n[bold red]경고: 가중치 합계가 {total_score:.1f}점입니다. (합계 10.0점)[/bold red]")

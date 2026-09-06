@@ -474,7 +474,12 @@ def check_and_alert_calendar(lead_days=ALERT_LEAD_DAYS):
 
     공시 알림과 같은 방식이지만 건당이 아니라 하루 한 통의 요약으로 보낸다 —
     같은 날 FOMC·CPI·배당락이 겹치면 알림이 세 통 오는 게 오히려 묻히기 때문.
-    중복방지는 DB(notified_disclosures)에 'CAL:' 접두 키로 기록. 반환: 발송 건수(0/1).
+    중복방지는 DB(notified_disclosures)에 'CAL:' 접두 키로 기록.
+
+    반환: 1 = 보냈다 / 0 = 보낼 것이 없었다 / -1 = **보내려 했으나 전달을 확인하지 못했다**.
+     0 과 -1 을 가르는 이유가 있다 — 호출부(스케줄러)는 하루 한 번만 이 함수를 부른다.
+     둘을 같은 0 으로 답하면 아래 '전달 확인 뒤 표시' 재시도가 한 층 위에서 무력해진다
+     (그 날의 D-1 알림은 다음 날 보내 봐야 소용이 없다).
     """
     from modules import db_manager
     from modules.manage import econ_events
@@ -561,10 +566,10 @@ def check_and_alert_calendar(lead_days=ALERT_LEAD_DAYS):
         delivered = api.send_telegram_message("\n".join(lines), sync=True)
     except Exception as e:
         logger.error(f"[Calendar] 알림 전송 오류: {e}")
-        return 0
+        return -1
     if not delivered:
         logger.warning("[Calendar] 알림 전송 실패 — 표시하지 않는다(다음 기회에 다시 시도)")
-        return 0
+        return -1
 
     for key in keys:
         db_manager.db.mark_disclosure_notified(key)

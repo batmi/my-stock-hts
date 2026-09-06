@@ -18,6 +18,9 @@ from modules.auto_trade import engine as _atr_engine  # [추가] 지수 변동�
 from modules.auto_trade import trader as _atr_trader  # [추가] 개장 보류 게이트 전역 격리
 from modules.telegram_bot import TelegramCommander
 from modules.reserved_order_monitor import ReservedOrderMonitor as _ReservedOrderMonitor
+from modules.journal_sync import JournalSyncWorker as _JournalSyncWorker
+from modules.market_halt import MarketHaltMonitor as _MarketHaltMonitor
+from modules.scheduler import SystemScheduler as _SystemScheduler
 
 PRODUCTION_DB_PATH = os.path.abspath(config.DB_FILE_PATH)
 
@@ -470,6 +473,21 @@ def reset_all_singletons():
     #  발동 판정에 그대로 쓰인다. 목록에서 빠져 있어 오래 조용했고, 예약 경로를 새로
     #  태우는 테스트가 늘자 전체 실행에서만 12건이 한꺼번에 깨졌다(파일 단독은 통과).
     _ReservedOrderMonitor._instance = None
+    #  [격리 2026-09-07] 스케줄러·매매일지 워커도 싱글톤인데 목록에 없었다. 둘 다
+    #   하트비트 점검이 읽는 상태를 들고 있다(SystemScheduler.trader,
+    #   JournalSyncWorker.is_running/thread). 한 테스트가 '실행 중인데 스레드는 죽음'을
+    #   심어 두면 뒤에 도는 **다른 파일**의 하트비트 테스트가 그것을 감시 스레드 사망으로
+    #   읽는다. 파일 단독으로는 늘 통과하고 xdist 배분에 따라서만 깨져서 오래 조용했다
+    #   (실측: test_scheduler_module 1건 · test_loop_stall_detection 2건).
+    #   SystemScheduler 는 __init__ 에서 AutoTrader() 를 만들므로 위 두 줄보다 **뒤에**
+    #   지워야 방금 지운 트레이더를 다시 붙들지 않는다.
+    _SystemScheduler._instance = None
+    _JournalSyncWorker._instance = None
+    #  [격리 2026-09-07] 시장정지 감시기도 싱글톤이다. VI 발동 집합(vi_active)과 폴링
+    #   쿨다운(last_cb_check/last_vi_check)을 들고 있어, 앞 테스트가 남긴 '발동 중'을
+    #   다음 테스트가 물려받으면 있지도 않은 VI 해제 알림이 나가고, 남은 쿨다운(20초)이
+    #   다음 테스트의 CB 폴링을 통째로 건너뛴다 — 어느 쪽이든 계측기가 거짓말을 한다.
+    _MarketHaltMonitor._instance = None
     # [격리] 시장 국면 TTL 캐시 초기화 (테스트별 모킹 데이터가 캐시로 새지 않도록)
     analysis._MARKET_REGIME_CACHE.clear()
     # [격리 2026-08-19] tvDatafeed 회로차단. 한 테스트가 '전 재시도 실패'를 만들면 그 신호가
@@ -511,6 +529,31 @@ def reset_all_singletons():
         except Exception:
             pass
 
+    #  [격리 2026-09-07] 매매일지 워커도 같은 이유로 **먼저 세운다.** 참조만 끊으면
+    #   이미 떠 있는 스레드는 계속 돌고, 그 스레드는 옛 self 를 붙들고 있다 — monkeypatch 가
+    #   원복된 구간에서 깨어나 다음 테스트의 mock 을 건드리거나 워커 프로세스를 통째로
+    #   떨어뜨린다(실측: 전체 실행 3회 중 1회에서 xdist 워커 크래시).
+    #   위 ConclusionMonitor 주석이 같은 사고를 이미 적어 뒀다.
+    _journal = _JournalSyncWorker._instance
+    if _journal is not None:
+        try:
+            _journal.is_running = False
+            _journal._wake.set()
+            if _journal.thread is not None and _journal.thread.is_alive():
+                _journal.thread.join(timeout=2)
+        except Exception:
+            pass
+
+    #  스케줄러도 마찬가지 — start() 가 띄운 루프 스레드가 남아 있으면 안 된다.
+    _sched = _SystemScheduler._instance
+    if _sched is not None:
+        try:
+            _sched.is_running = False
+            if getattr(_sched, 'thread', None) is not None and _sched.thread.is_alive():
+                _sched.thread.join(timeout=2)
+        except Exception:
+            pass
+
     AutoTrader._instance = None
     ConclusionMonitor._instance = None
     TelegramCommander._instance = None
@@ -519,6 +562,9 @@ def reset_all_singletons():
     #  발동 판정에 그대로 쓰인다. 목록에서 빠져 있어 오래 조용했고, 예약 경로를 새로
     #  태우는 테스트가 늘자 전체 실행에서만 12건이 한꺼번에 깨졌다(파일 단독은 통과).
     _ReservedOrderMonitor._instance = None
+    _SystemScheduler._instance = None
+    _JournalSyncWorker._instance = None
+    _MarketHaltMonitor._instance = None
     analysis._MARKET_REGIME_CACHE.clear()
     analysis.reset_tvdatafeed_circuit()
     _atr_engine.set_vol_regime_ratio(1.0)

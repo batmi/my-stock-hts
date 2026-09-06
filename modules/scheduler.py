@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import config
 import api
 from modules import theme_analysis, account, heartbeat
+from modules.telegram_notify import alert_delivered
 from modules.auto_trade import AutoTrader
 from core import utils
 
@@ -14,6 +15,14 @@ logger = logging.getLogger(__name__)
 
 class SystemScheduler:
     """백그라운드 스케줄링 및 타이머 작업을 전담하는 클래스"""
+    #  하루 한 번짜리 알림이 전달에 실패했을 때 같은 날 다시 거는 간격(초).
+    #  수집이 무거워서(DART·yfinance 전종목) 짧게 두면 파이가 견디지 못한다.
+    CALENDAR_RETRY_SEC = 600
+    #  휴장 안내·장전 브리핑처럼 조회가 가벼운 하루 1회 알림의 재시도 간격(초).
+    NOTICE_RETRY_SEC = 120
+    #  생존 신호 쓰기가 연속 몇 번 실패하면 알릴 것인가. 도장 주기가 60초이므로
+    #  3회면 약 3분 — 밖의 감시자가 사망으로 판정하기(약속 시각 = 3주기 + 60초) 직전이다.
+    BEAT_FAIL_ALERT_STREAK = 3
     _instance = None
     _instance_lock = threading.RLock()
 
@@ -111,10 +120,23 @@ class SystemScheduler:
         공시(30분 폴링)와 달리 하루 한 번이면 충분한 일정 정보다. 수집이 DART·yfinance
         전종목 조회라 무거워서 별도 스레드로 돌리고, 발송 여부와 무관하게 하루 한 번만 시도한다.
         주말도 거른다 — 월요일 일정의 D-1(일요일) 알림까지 챙기기 위해서다.
+
+        [하루 표식은 **일이 끝난 뒤** 찍는다 · 2026-09-07] 종전에는 워커를 띄우기 전에
+         날짜를 찍고 결과를 보지 않았다. events.check_and_alert_calendar 는 2026-09-04 에
+         '전달을 확인한 뒤에만 표시한다 — 실패하면 다음 기회에 다시 시도'로 고쳤는데,
+         그 **다음 기회를 여기서 없애고 있었다**(실측: 워커가 실패해도 같은 날 재시도 0회).
+         D-1 알림은 다음 날 보내 봐야 소용이 없으므로 그 날 안에 다시 걸어야 한다.
+         다만 무한 재시도는 안 된다 — 수집이 DART·yfinance 전종목 조회라 파이에서 무겁다.
+         발송 창(3시간) 안에서 CALENDAR_RETRY_SEC 간격으로만 다시 본다.
         """
         now = datetime.now()
         today_str = now.strftime("%Y-%m-%d")
         if getattr(self, 'last_calendar_alert_date', None) == today_str:
+            return
+        if getattr(self, '_calendar_worker_running', False):
+            return          # 앞 주기 워커가 아직 돌고 있다 — 겹쳐 띄우지 않는다
+        last_try = getattr(self, '_last_calendar_attempt', None)
+        if last_try and (now - last_try).total_seconds() < self.CALENDAR_RETRY_SEC:
             return
 
         target_str = getattr(config.settings, 'AUTO_CALENDAR_ALERT_TIME', "0820")
@@ -127,13 +149,30 @@ class SystemScheduler:
         if not (target.time() <= now.time() <= end):
             return
 
-        self.last_calendar_alert_date = today_str
+        self._last_calendar_attempt = now
+
+        def _run():
+            try:
+                from modules.manage import events as calendar_events
+                #  1 = 보냈다 / 0 = 보낼 것이 없었다 / -1 = 전달 확인 실패.
+                #  앞의 둘만 '오늘 할 일은 끝'이다.
+                if calendar_events.check_and_alert_calendar() >= 0:
+                    self.last_calendar_alert_date = today_str
+                else:
+                    logger.warning("[Scheduler] 캘린더 알림 전달 미확인 — "
+                                   f"{self.CALENDAR_RETRY_SEC}초 뒤 오늘 안에 다시 시도합니다")
+            except Exception as e:      # noqa: BLE001
+                logger.error(f"[Scheduler] 캘린더 알림 체크 오류 — 다시 시도합니다: {e}",
+                             exc_info=True)
+            finally:
+                self._calendar_worker_running = False
+
+        self._calendar_worker_running = True
         try:
-            from modules.manage import events as calendar_events
-            threading.Thread(target=calendar_events.check_and_alert_calendar,
-                             daemon=True, name="CalendarAlert").start()
-        except Exception as e:
-            logger.error(f"[Scheduler] 캘린더 알림 체크 오류: {e}")
+            threading.Thread(target=_run, daemon=True, name="CalendarAlert").start()
+        except Exception as e:      # noqa: BLE001
+            self._calendar_worker_running = False
+            logger.error(f"[Scheduler] 캘린더 알림 스레드 기동 실패: {e}")
 
     def _check_market_halt(self):
         """서킷브레이커(CB)/VI 시장정지 감지 및 알림 (KIS:CB+VI, 토스:VI)."""
@@ -144,59 +183,108 @@ class SystemScheduler:
             logger.error(f"[Scheduler] 시장정지 점검 오류: {e}")
 
     def _check_holiday_notification(self):
-        """평일 공휴일(휴장일) 아침 안내 메시지 전송 스케줄러"""
+        """평일 공휴일(휴장일) 아침 안내 메시지 전송 스케줄러.
+
+        [하루 표식은 일이 끝난 뒤 · 2026-09-07] 종전에는 창에 들어서자마자 날짜를 찍고
+         그 뒤에 조회·발송을 했다. 그래서 api.is_holiday_today() 가 던지거나 텔레그램이
+         끊겨 있으면 **그날 안내는 영영 나가지 않았다** — 예외는 로그로만 남고, 하루가
+         이미 소비된 뒤라 남은 창(1시간) 동안 다시 시도하지 않는다.
+         보낼 것이 없는 날(평일 정상 개장·주말)은 그대로 찍고, 보낼 것이 있는 날은
+         **전달을 확인한 뒤에** 찍는다([[unknown-vs-empty]] 와 같은 계열 —
+         '못 보냈다'가 '보냈다'로 굳지 않게).
+        """
         now = datetime.now()
         today_str = now.strftime("%Y-%m-%d")
-        
+
         if getattr(self, 'last_holiday_notified_date', None) == today_str:
             return
-            
+        last_try = getattr(self, '_last_holiday_attempt', None)
+        if last_try and (now - last_try).total_seconds() < self.NOTICE_RETRY_SEC:
+            return
+
         try:
             target_dt = datetime.strptime("0830", "%H%M").time()
             now_time = now.time()
             end_dt = (datetime.combine(datetime.today(), target_dt) + timedelta(hours=1)).time()
-            
-            if target_dt <= now_time <= end_dt:
-                self.last_holiday_notified_date = today_str 
-                if now.weekday() < 5:
-                    is_kr_holiday = api.is_holiday_today()
-                    is_us_holiday = api.is_us_holiday_today()
-                    
-                    kr_name = api.get_holiday_name(today_str.replace("-", ""), 'KR')
-                    us_name = api.get_holiday_name(today_str.replace("-", ""), 'US')
-                    
-                    kr_str = f" '{kr_name}'" if kr_name else " 공휴일"
-                    us_str = f" '{us_name}'" if us_name else " 공휴일"
-                    
-                    if is_kr_holiday and is_us_holiday:
-                        api.send_telegram_message(f"🏖️ [시스템 알림] 오늘은{kr_str}로 인해 국내 및 미국 주식 시장이 모두 휴장합니다.\n자동매매 시스템은 매매 없이 대기 모드를 유지합니다.")
-                    elif is_kr_holiday:
-                        api.send_telegram_message(f"🏖️ [시스템 알림] 오늘은 한국{kr_str}로 '국내 주식 시장'이 휴장합니다.\n(단, 미국 주식 시장은 정상적으로 개장합니다.)\n자동매매 시스템은 국내장 시간 동안 대기 모드를 유지합니다.")
-                    elif is_us_holiday:
-                        api.send_telegram_message(f"🏖️ [시스템 알림] 오늘은 미국{us_str}로 '미국 주식 시장'이 휴장합니다.\n(국내 주식 시장은 정상 개장합니다.)")
-        except Exception as e:
-            logger.error(f"Holiday notification check error: {e}")
+
+            if not (target_dt <= now_time <= end_dt):
+                return
+            self._last_holiday_attempt = now
+            if now.weekday() >= 5:
+                self.last_holiday_notified_date = today_str    # 보낼 것이 없는 날
+                return
+
+            is_kr_holiday = api.is_holiday_today()
+            is_us_holiday = api.is_us_holiday_today()
+
+            kr_name = api.get_holiday_name(today_str.replace("-", ""), 'KR')
+            us_name = api.get_holiday_name(today_str.replace("-", ""), 'US')
+
+            kr_str = f" '{kr_name}'" if kr_name else " 공휴일"
+            us_str = f" '{us_name}'" if us_name else " 공휴일"
+
+            if is_kr_holiday and is_us_holiday:
+                msg = (f"🏖️ [시스템 알림] 오늘은{kr_str}로 인해 국내 및 미국 주식 시장이 "
+                       f"모두 휴장합니다.\n자동매매 시스템은 매매 없이 대기 모드를 유지합니다.")
+            elif is_kr_holiday:
+                msg = (f"🏖️ [시스템 알림] 오늘은 한국{kr_str}로 '국내 주식 시장'이 휴장합니다.\n"
+                       f"(단, 미국 주식 시장은 정상적으로 개장합니다.)\n"
+                       f"자동매매 시스템은 국내장 시간 동안 대기 모드를 유지합니다.")
+            elif is_us_holiday:
+                msg = (f"🏖️ [시스템 알림] 오늘은 미국{us_str}로 '미국 주식 시장'이 휴장합니다.\n"
+                       f"(국내 주식 시장은 정상 개장합니다.)")
+            else:
+                self.last_holiday_notified_date = today_str    # 정상 개장 — 보낼 것이 없다
+                return
+
+            if alert_delivered(msg):
+                self.last_holiday_notified_date = today_str
+            else:
+                logger.warning(f"[Scheduler] 휴장 안내 전달 미확인 — "
+                               f"{self.NOTICE_RETRY_SEC}초 뒤 오늘 안에 다시 시도합니다")
+        except Exception as e:      # noqa: BLE001
+            logger.error(f"Holiday notification check error — 다시 시도합니다: {e}")
 
     def _check_morning_briefing(self):
-        """장전 브리핑 발송 시간 확인 및 트리거"""
+        """장전 브리핑 발송 시간 확인 및 트리거.
+
+        [하루 표식은 일이 끝난 뒤 · 2026-09-07] 휴장 안내와 같은 자리다 — 창에 들어서자마자
+         날짜를 찍었으므로, 예고 메시지 전송이 실패하거나 브리핑 스레드가 뜨지 못해도
+         그날은 이미 소비됐다. 예고가 전달된 것을 확인한 뒤 찍는다(브리핑 본문 생성 실패는
+         execute_briefing 이 스스로 알린다 — 그건 '보낼 것이 없는' 경우가 아니라 결과다).
+        """
         now = datetime.now()
         target_time_str = getattr(config, 'AUTO_MORNING_BRIEFING_TIME', "0830")
         today_str = now.strftime("%Y-%m-%d")
-        
-        if getattr(self, 'last_briefing_date', None) == today_str: return
-            
+
+        if getattr(self, 'last_briefing_date', None) == today_str:
+            return
+        last_try = getattr(self, '_last_briefing_attempt', None)
+        if last_try and (now - last_try).total_seconds() < self.NOTICE_RETRY_SEC:
+            return
+
         try:
             target_dt = datetime.strptime(target_time_str, "%H%M").time()
             now_time = now.time()
             end_dt = (datetime.combine(datetime.today(), target_dt) + timedelta(hours=1)).time()
-            
-            if target_dt <= now_time <= end_dt:
-                self.last_briefing_date = today_str 
-                if now.weekday() < 5:
-                    api.send_telegram_message("⏳ [시스템 알림] 간밤의 글로벌 마켓 데이터를 수집하고 AI 장전 브리핑을 작성 중입니다...")
-                    threading.Thread(target=self.execute_briefing, daemon=True).start()
-        except Exception as e:
-            logger.error(f"Morning briefing check error: {e}")
+
+            if not (target_dt <= now_time <= end_dt):
+                return
+            self._last_briefing_attempt = now
+            if now.weekday() >= 5:
+                self.last_briefing_date = today_str    # 주말 — 보낼 것이 없다
+                return
+
+            if not alert_delivered("⏳ [시스템 알림] 간밤의 글로벌 마켓 데이터를 수집하고 "
+                                   "AI 장전 브리핑을 작성 중입니다..."):
+                logger.warning(f"[Scheduler] 장전 브리핑 예고 전달 미확인 — "
+                               f"{self.NOTICE_RETRY_SEC}초 뒤 오늘 안에 다시 시도합니다")
+                return
+            threading.Thread(target=self.execute_briefing, daemon=True,
+                             name="MorningBriefing").start()
+            self.last_briefing_date = today_str
+        except Exception as e:      # noqa: BLE001
+            logger.error(f"Morning briefing check error — 다시 시도합니다: {e}")
 
     def _heartbeat_context(self):
         """사망 알림에 실을 상황 정보. 조회 비용이 있는 것은 넣지 않는다
@@ -236,10 +324,24 @@ class SystemScheduler:
         if now - self.last_heartbeat_time > 60:
             self.last_heartbeat_time = now
             ctx = self._heartbeat_context()
-            heartbeat.beat(interval_sec=60, running=ctx["running"], mode=ctx["mode"],
-                           instance=ctx["instance"], holdings=ctx["holdings"])
+            beat_ok = heartbeat.beat(interval_sec=60, running=ctx["running"], mode=ctx["mode"],
+                                     instance=ctx["instance"], holdings=ctx["holdings"])
             is_problem = False
             msg = ""
+
+            #  [추가 2026-09-07] **감시 장치 자신이 고장 났다.** 도장을 못 찍으면 밖의
+            #   감시자(cron)는 곧 살아 있는 이 프로세스를 사망으로 판정한다. 그 알림을
+            #   받은 운영자는 접속해서 프로세스가 멀쩡한 것을 보고 '감시자가 이상하다'고
+            #   결론짓는다 — 진짜 원인(SD 카드 가득참·IO 오류)은 어디에도 안 보인다.
+            #   프로세스는 아직 살아 있으니 여기서는 텔레그램이 나간다. 그때 말해 준다.
+            #   한 번의 실패로 울리지는 않는다(순간 IO 지연) — 연속으로 이어질 때만.
+            if beat_ok is False:
+                streak = heartbeat.beat_failure_streak(mode=ctx["mode"])
+                if streak >= self.BEAT_FAIL_ALERT_STREAK:
+                    is_problem = True
+                    msg = (f"생존 신호 파일을 {streak}회 연속 쓰지 못했습니다. 프로세스는 "
+                           f"살아 있지만 밖의 감시자는 곧 '사망'으로 알립니다 — 그 알림은 "
+                           f"거짓입니다. 디스크 여유 공간과 logs/ 쓰기 권한을 확인하세요.")
             
             if self.trader.is_running and self.trader.thread and not self.trader.thread.is_alive():
                 is_problem = True

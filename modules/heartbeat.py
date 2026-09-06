@@ -153,12 +153,31 @@ def instance_paths(base=None):
     return sorted(found)
 
 
+#  도장 찍기가 연속으로 실패한 횟수(경로별). 0 이면 마지막 시도가 성공했다는 뜻이다.
+_BEAT_FAILURES = {}
+
+
+def beat_failure_streak(mode=None, path=None):
+    """이 인스턴스의 도장 찍기가 연속 몇 번 실패했는가. 0 이면 정상."""
+    return int(_BEAT_FAILURES.get(path or path_for(mode), 0))
+
+
 def beat(interval_sec=60, running=None, mode=None, instance=None, holdings=None, path=None):
-    """살아 있다는 도장을 찍는다. 실패해도 절대 호출부를 깨뜨리지 않는다.
+    """살아 있다는 도장을 찍는다. 실패해도 절대 호출부를 깨뜨리지 않는다. **성공 여부를 돌려준다.**
 
     interval_sec: 다음 도장까지의 예정 간격(초). 약속 시각이 여기서 나온다.
     running/mode/instance/holdings: 알림 본문에 쓸 상황 정보. 값을 만들어 내지 않고
       호출부가 넘겨준 것만 적는다(이 모듈이 config·session 을 모르게 두기 위해서다).
+
+    [실패가 보여야 하는 이유 · 2026-09-07] 종전에는 실패를 debug 로만 남기고 아무것도
+     돌려주지 않았다. 그런데 이 파일이 안 써지면 밖의 감시자는 약속 시각이 지나는 순간
+     **살아 있는 프로세스를 사망으로 판정한다**. 운영자는 사망 알림을 받고 접속해서
+     프로세스가 멀쩡한 것을 보고는 '감시자가 이상하다'고 결론짓는다 — 진짜 원인(SD 카드
+     가득참·IO 오류, 램 1GB 파이에서 실재한다)은 어디에도 안 보인다. 실측: 5회 연속
+     실패에도 운영 로그(기본 FILE_DEBUG_LEVEL=INFO)에 한 줄도 남지 않았고, 400초 뒤
+     감시자 판정은 dead 였다.
+     거짓 사망 경보는 안전한 방향이지만, 반복되면 운영자가 진짜 한 건을 흘려보낸다.
+     실패를 실패로 남기고, 프로세스 안의 하트비트 점검이 그것을 알리게 한다.
     """
     path = path or path_for(mode)
     if mode:
@@ -179,7 +198,15 @@ def beat(interval_sec=60, running=None, mode=None, instance=None, holdings=None,
             "holdings": holdings,
         })
     except Exception as e:
-        logger.debug(f"[Heartbeat] 기록 실패(무시): {e}")
+        streak = _BEAT_FAILURES.get(path, 0) + 1
+        _BEAT_FAILURES[path] = streak
+        logger.warning(
+            f"[Heartbeat] 생존 신호를 쓰지 못했습니다({streak}회 연속) — {path}: "
+            f"{type(e).__name__}: {e}. 이대로면 밖의 감시자가 살아 있는 이 프로세스를 "
+            f"**사망으로 판정**합니다(디스크 가득참·IO 오류를 먼저 보십시오).")
+        return False
+    _BEAT_FAILURES[path] = 0
+    return True
 
 
 def stopped(reason="정상 종료", path=None, mode=None):
@@ -203,7 +230,13 @@ def stopped(reason="정상 종료", path=None, mode=None):
             "reason": reason,
         })
     except Exception as e:
-        logger.debug(f"[Heartbeat] 종료 표식 기록 실패(무시): {e}")
+        #  이것이 실패하면 정상 종료가 사고사로 보인다 — 밖의 감시자가 곧 사망을 알린다.
+        #  울리는 쪽이 안전하지만, 왜 울렸는지는 남아야 한다.
+        logger.warning(f"[Heartbeat] 종료 표식을 쓰지 못했습니다 — {path}: "
+                       f"{type(e).__name__}: {e}. 밖의 감시자가 이 정상 종료를 "
+                       f"사망으로 알릴 수 있습니다.")
+        return False
+    return True
 
 
 def read(path=None):
@@ -344,6 +377,12 @@ def check_and_notify(now=None, path=None, notify=True):
     if state == "dead":
         if mine.get("notified_ts") == data.get("ts"):
             return state, False           # 이미 알린 사망 건
+        if not notify:
+            #  [2026-09-07] 알리지 않는 호출은 **표식도 남기지 않는다.** 종전에는 남겼다 —
+            #   그러면 판정만 해 보는 실행(dry-run·상태 조회)이 그 사망 건을 '이미 알린 것'
+            #   으로 굳혀, 뒤이어 도는 진짜 감시자가 영영 침묵한다. 지금은 운영 경로에
+            #   notify=False 호출이 없지만, 알림을 삼키는 함정을 남겨 둘 이유가 없다.
+            return state, False
         if notify:
             label = data.get("instance") or "MyStock HTS"
             lines = [

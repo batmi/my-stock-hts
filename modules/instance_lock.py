@@ -171,9 +171,9 @@ def guard_appkey(app_key, label="수동"):
         if lock.acquire():
             _APPKEY_LOCKS.append(lock)
             return True
-    except Exception as e:
-        # 잠금 장치가 고장 났다고 프로그램을 막지는 않는다(보조 진단 장치다).
-        logger.debug(f"[AppKeyLock] 검사 실패 — 건너뜁니다: {e}")
+    except Exception as e:      # noqa: BLE001
+        # 잠금 장치가 고장 났다고 프로그램을 막지는 않는다(보조 진단 장치다) — 그래도 남긴다.
+        _note_guard_failure(f"{label} 앱키 중복", e)
         return True
 
     APPKEY_DUPLICATE, APPKEY_HOLDER = True, (lock.holder or "unknown")
@@ -224,6 +224,32 @@ def appkey_duplicate_note():
 MODE_HOLDER = ""     # 선점자 정보(pid=… mode=… started=…)
 _MODE_LOCKS = {}     # 모드 → 잠금 객체. 프로세스 수명 동안 fd 를 살려 둔다.
 
+#  잠금 장치 자체가 고장 나서 검사를 못 한 사유(없으면 "").
+#  [왜 남기나 · 2026-09-07] 세 guard 함수는 예외를 잡고 **True(=기동 허용)** 를 돌려준다.
+#   "잠금 장치가 고장 났다고 프로그램을 못 뜨게 하지는 않는다"는 의도된 선택이다. 그런데
+#   그 사실을 debug 로만 남겼다 — 기본 설정(FILE_DEBUG_LEVEL=INFO)에서는 파일에도 안 남는다.
+#   즉 locks/ 디렉토리 권한이 틀어지거나 디스크가 가득 차면, 중복 실행 차단이 통째로
+#   꺼진 채로 조용히 돈다. 이 모듈 머리 주석이 그때 깨지는 것을 적어 뒀다 —
+#   텔레그램 409(명령이 무작위로 갈린다) · KIS TPS/웹소켓/토큰 제약 공유 ·
+#   trade_history.db 를 두 프로세스가 함께 쓰기 · 램 1GB 파이의 OOM.
+#   막지는 않되, **검사를 못 했다는 사실**은 반드시 보이게 한다.
+GUARD_FAILURE = ""
+
+
+def _note_guard_failure(what, exc):
+    global GUARD_FAILURE
+    GUARD_FAILURE = f"{what}: {type(exc).__name__}: {exc}"
+    logger.error(
+        f"[InstanceLock] {what} 검사를 하지 못했습니다 — {type(exc).__name__}: {exc}. "
+        f"중복 실행 차단이 꺼진 채로 기동합니다(같은 모드가 둘 뜨면 텔레그램 명령이 "
+        f"무작위로 갈리고, KIS 유량·DB 파일을 나눠 쓰며, 램 1GB 파이에서는 OOM 입니다). "
+        f"locks/ 디렉토리 권한과 디스크 여유를 확인하세요.")
+
+
+def guard_failure_note():
+    """기동 안내에 붙일 한 줄. 검사를 못 했으면 그 사유, 정상이면 ""."""
+    return GUARD_FAILURE
+
 
 class ModeLock(InstanceLock):
     """모드 단위 배타 잠금. 계좌·앱키 잠금과 파일이 겹치지 않게 접두어만 다르다."""
@@ -254,9 +280,9 @@ def guard_mode(mode, allow_duplicate=False):
         if lock.acquire():
             _MODE_LOCKS[key] = lock
             return True
-    except Exception as e:
-        # 잠금 장치가 고장 났다고 프로그램을 못 뜨게 하지는 않는다.
-        logger.debug(f"[ModeLock] 검사 실패 — 건너뜁니다: {e}")
+    except Exception as e:      # noqa: BLE001
+        # 잠금 장치가 고장 났다고 프로그램을 못 뜨게 하지는 않는다 — 다만 조용히 넘기지도 않는다.
+        _note_guard_failure(f"모드({key}) 중복 실행", e)
         return True
 
     MODE_HOLDER = lock.holder or "unknown"

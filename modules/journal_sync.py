@@ -555,17 +555,38 @@ def build_payload(trade):
 _ENTRY_STATUS = ('접수', '정정')
 
 
+#  자정을 넘겨 찾을 때 거슬러 올라가는 폭(시간). 이 값 하나가 두 가지를 동시에 정한다.
+#   · 몇 시까지의 체결을 '어제 접수의 체결일 수 있다'로 볼 것인가 (= 자정 + 이 폭)
+#   · 얼마나 오래된 접수까지 인정할 것인가
+#  6시간이면 새벽 06시 이전 체결만 해당하고, 거슬러 닿는 곳은 어제 18시 이후다 —
+#  KRX 마감(15:30)보다 뒤라 같은 번호를 쓴 **어제 국내 주문**이 끼어들 여지가 없다.
+#  (별도의 '몇 시 이전' 검사를 두었다가 지웠다 — 이 폭이 이미 정하는 경계라 절대 발동하지
+#   않는 죽은 검사였고, 되돌려도 아무 테스트가 물지 않았다.)
+MIDNIGHT_LOOKBACK_HOURS = 6
+
+
 def _lookup_entry_reason(cursor, trade):
     """이 체결을 낳은 원 주문의 사유를 찾는다. 호출자의 커서를 그대로 쓴다.
 
-    같은 주문번호(odno)라도 **영업일마다 재사용**되므로 날짜로 반드시 좁혀야 한다.
-    좁히지 않으면 다른 날 같은 번호였던 주문의 근거가 엉뚱하게 따라붙는다.
+    같은 주문번호(odno)라도 **영업일마다 재사용**되므로 날짜로 반드시 좁혀야 한다
+    ([[odno-daily-reset]]). 좁히지 않으면 다른 날 같은 번호였던 주문의 근거가 엉뚱하게
+    따라붙는다.
 
     정정 주문은 '정정' 행의 사유가 "사용자 정정" 같은 확인 문구뿐이라 근거가 되지
     못한다. 그 경우 원주문번호(org_odno)로 한 단계만 거슬러 올라가 진짜 근거를 찾는다.
+
+    [자정을 넘긴 체결 · 2026-09-07] 날짜를 **체결 행의 날짜 하나로만** 좁히면 해외 야간
+     세션이 빠진다. 미국 정규장은 한국 시각 22:30~06:00 이라 접수와 체결이 한국 날짜
+     자정을 사이에 두고 갈린다([[order-age-midnight]] 와 같은 이유).
+     실측(접수 23:57 / 체결 00:02, 같은 odno·같은 계좌): 같은 날 체결은 근거를 찾고,
+     자정을 넘긴 체결은 빈 문자열이 나온다. 그러면 웹 일지에 "체결 확인"만 남아
+     **왜 샀는지가 통째로 빠진다** — 이 파일이 없애려던 바로 그 상태다(_compose_memo 주석).
+     새벽 체결에 한해 직전 몇 시간까지만 거슬러 본다. 창을 KRX 마감(15:30) 뒤로 묶어
+     두므로 같은 번호를 쓴 어제 국내 주문이 끼어들 수 없다.
     """
     odno = (trade.get('odno') or '').strip()
-    day = str(trade.get('time') or '')[:10]
+    when = str(trade.get('time') or '')
+    day = when[:10]
     account = trade.get('account') or ''
     if not odno or not day:
         return ''
@@ -582,9 +603,34 @@ def _lookup_entry_reason(cursor, trade):
         row = cursor.fetchone()
         return (row[0] or '').strip() if row else ''
 
-    reason = _fetch(odno)
+    def _fetch_across_midnight(order_no):
+        """새벽 체결일 때만, 자정 직전 몇 시간의 접수까지 본다."""
+        from datetime import datetime, timedelta
+        try:
+            filled = datetime.strptime(when[:19], '%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            return ''
+        lower = filled - timedelta(hours=MIDNIGHT_LOOKBACK_HOURS)
+        if lower.date() == filled.date():
+            #  자정을 넘지 않는 체결이다. 위의 같은-날 조회가 이 창을 이미 통째로 덮으므로
+            #  여기서 더 볼 것이 없다 — **판정을 바꾸는 검사가 아니라 쿼리 한 번을 아끼는
+            #  단축**이다(되돌려도 결과는 같다. 그래서 이것을 무는 테스트는 없다).
+            return ''
+        cursor.execute(
+            f"SELECT reason FROM trades "
+            f"WHERE odno = ? AND account = ? AND time >= ? AND time < ? "
+            f"  AND order_status IN ({placeholders}) AND reason IS NOT NULL AND reason != '' "
+            f"ORDER BY id DESC LIMIT 1",
+            (order_no, account, lower.strftime('%Y-%m-%d %H:%M:%S'), when[:19]) + _ENTRY_STATUS)
+        row = cursor.fetchone()
+        return (row[0] or '').strip() if row else ''
+
+    def _find(order_no):
+        return _fetch(order_no) or _fetch_across_midnight(order_no)
+
+    reason = _find(odno)
     if not reason and trade.get('org_odno'):
-        reason = _fetch(str(trade['org_odno']).strip())
+        reason = _find(str(trade['org_odno']).strip())
     return reason
 
 

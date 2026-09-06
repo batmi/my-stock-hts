@@ -16,6 +16,33 @@ def _editable():
     return {it['name']: it for b in builders for it in b()}
 
 
+#  [사각지대 · 2026-09-07] 위 다섯 빌더가 편집 항목의 전부가 아니다. 몇몇 메뉴는 항목
+#   리스트를 **함수 몸통에서 인라인으로** 만들어 _edit_config_table 에 바로 넘긴다.
+#   그 항목들도 똑같이 _range_error 를 거치는데, 아래 커버리지 검사는 다섯 빌더만 보고
+#   있어 **아무도 검사하지 않는 다이얼**이 생겼다.
+#   실측: modify_telegram_settings 의 TELEGRAM_POLLING_TIMEOUT(int) 이 그 상태였다 —
+#   0·-1·100000 이 전부 그대로 통과했다. 0 이면 롱폴링이 아니라 무한 재요청이 되고,
+#   크게 잡으면 session.get(timeout=N+5) 가 그만큼 붙잡히는데 그동안 스레드는
+#   is_alive() 가 참이라 어느 감시층도 못 본다(긴급 정지를 포함한 모든 명령이 멎는다).
+#   목록이 갈라지는 자리를 없앤다 — 인라인 메뉴도 여기서 함께 센다.
+INLINE_MENUS = ("modify_telegram_settings", "modify_log_settings",
+                "modify_market_regime_params")
+
+
+def _inline_editable(monkeypatch):
+    """인라인 항목을 만드는 메뉴들을 실행해 항목만 가로챈다(프롬프트에 닿지 않는다)."""
+    out = {}
+    for fname in INLINE_MENUS:
+        cap = {}
+        monkeypatch.setattr(S, '_edit_config_table',
+                            lambda t, i, **k: cap.setdefault('items', i() if callable(i) else i),
+                            raising=False)
+        getattr(S, fname)()
+        for it in cap.get('items', []):
+            out[it['name']] = it
+    return out
+
+
 # ==========================================================
 # D. 봉인 — 실측상 추세추종을 훼손하거나 무효인 다이얼
 # ==========================================================
@@ -112,6 +139,30 @@ def test_every_numeric_editable_item_has_a_range():
                if it.get('type') in ('int', 'float')
                and n not in S._RANGE_RULES and 'validator' not in it]
     assert not missing, f"범위 검증이 없는 숫자 항목: {missing}"
+
+
+def test_인라인_메뉴의_숫자_항목도_범위를_가진다(monkeypatch):
+    """빌더 함수를 안 쓰는 메뉴도 같은 검사를 받아야 한다(위 INLINE_MENUS 주석 참조)."""
+    missing = [n for n, it in _inline_editable(monkeypatch).items()
+               if it.get('type') in ('int', 'float')
+               and n not in S._RANGE_RULES and 'validator' not in it]
+    assert not missing, f"아무도 검사하지 않는 다이얼: {missing}"
+
+
+def test_커버리지_검사가_인라인_메뉴를_실제로_본다(monkeypatch):
+    """탐지기 자가 점검 — 인라인 목록을 하나도 못 읽으면 위 검사는 조용히 통과한다."""
+    found = _inline_editable(monkeypatch)
+    assert len(found) >= 8, f"인라인 항목을 못 읽었다: {sorted(found)}"
+    assert "TELEGRAM_POLLING_TIMEOUT" in found, \
+        f"알려진 인라인 다이얼을 못 찾았다: {sorted(found)}"
+
+
+def test_폴링_시한은_봇을_멎게_하는_값을_거부한다():
+    """0 = 무한 재요청(429·CPU), 너무 큰 값 = 살아 있는 척 멎은 스레드."""
+    assert S._range_error("TELEGRAM_POLLING_TIMEOUT", 0)
+    assert S._range_error("TELEGRAM_POLLING_TIMEOUT", -1)
+    assert S._range_error("TELEGRAM_POLLING_TIMEOUT", 100000)
+    assert S._range_error("TELEGRAM_POLLING_TIMEOUT", 10) is None      # 현재 기본값
 
 
 def test_range_error_message_names_the_bound():

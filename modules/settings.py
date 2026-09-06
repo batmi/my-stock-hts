@@ -1032,6 +1032,27 @@ _RANGE_RULES = {
     "CONCLUSION_CHECK_ACTIVE_DURATION": (1, 3600, None),
     "CONCLUSION_CHECK_IDLE_INTERVAL":   (1, 3600, None),
     "UNFILLED_ORDER_CANCEL_SECONDS":    (1, 3600, None),
+    #  [추가 2026-09-07] 텔레그램 롱폴링 대기(초). 이 값 하나가 봇 스레드의 응답성을 정한다.
+    #   0 이면 롱폴링이 아니라 단축 폴링이 되어 getUpdates 를 쉼 없이 두드린다(429 ·
+    #   램 1GB 파이의 CPU 낭비). 반대로 크게 잡으면 session.get(timeout=N+5) 가 그만큼
+    #   붙잡히는데, 그동안 스레드는 is_alive() 가 참이라 **어느 감시층도 이상을 못 본다**
+    #   (하트비트의 _dead_monitor_threads 도 '죽은 스레드'만 본다). 긴급 정지를 포함한
+    #   모든 텔레그램 명령이 조용히 멎는다. 상한 120초는 stop() 의 join(2초)과도 맞물린다 —
+    #   더 길게 두면 종료가 매번 그 시간만큼 늘어진다.
+    #  [추가 2026-09-07] 스코어링 팩터 가중치. 이 넷은 `r_* = 가중치 / 기본배점` 으로
+    #   각 팩터의 **배수**가 된다(analysis.calculate_score). 음수면 그 팩터가 가점이 아니라
+    #   감점이 되어, 추세가 강한 종목일수록 점수가 낮아진다 — 이 시스템의 핵심이
+    #   추세추종이고([[strategy-trend-following-core]]) 점수가 진입 1순위이므로
+    #   ([[entry-rank-score-first]]) 그대로 진입 순위가 뒤집힌다.
+    #   실측(합계는 똑같이 10.0): TREND -4.0 / MOMENTUM 10.5 로 두면
+    #     추세 강한 A 5.50 → 4.30, 모멘텀만 강한 B 5.00 → 6.90 (1순위가 A → B).
+    #   0 은 '그 팩터를 끈다'는 뜻이라 허용한다. 음수만 막는다.
+    "TREND":                            (0, 10, "가중치가 음수면 그 팩터가 감점이 됩니다"),
+    "MOMENTUM":                         (0, 10, "가중치가 음수면 그 팩터가 감점이 됩니다"),
+    "STRENGTH":                         (0, 10, "가중치가 음수면 그 팩터가 감점이 됩니다"),
+    "SYNERGY":                          (0, 10, "가중치가 음수면 그 팩터가 감점이 됩니다"),
+    "TELEGRAM_POLLING_TIMEOUT":         (1, 120,
+        "0은 롱폴링이 아니라 무한 재요청이 되고, 너무 크면 봇이 멎어도 살아 있는 것처럼 보입니다"),
 }
 
 
@@ -1420,6 +1441,18 @@ def modify_scoring_weights():
                         raise ValueError("canceled")
                     new_weights[key] = float(val)
                 
+                #  [개별 값도 본다 · 2026-09-07] 종전 검사는 **합계 10.0 하나뿐**이었다.
+                #   그래서 TREND -4.0 / MOMENTUM 10.5 처럼 합계만 맞춘 값이 그대로
+                #   저장됐다. 각 가중치는 그 팩터의 배수라 음수면 가점이 감점이 되고,
+                #   추세가 강한 종목일수록 점수가 낮아진다(실측: 1순위가 뒤집힌다).
+                #   이 경로는 _edit_config_table 을 타지 않아 중앙 규칙표를 지나치고
+                #   있었다 — 규칙표를 여기서 직접 부른다(검증 규칙이 갈라지지 않게).
+                bad = next((_range_error(k, v) for k, v in new_weights.items()
+                            if _range_error(k, v)), None)
+                if bad:
+                    console.print(f"\n[bold red]{bad}[/bold red]")
+                    continue
+
                 new_total = round(sum(new_weights.values()), 2)
 
                 # 합계는 정확히 10.0점이어야 한다(자동 재계산하지 않음). 미달/초과 시 재입력 안내.

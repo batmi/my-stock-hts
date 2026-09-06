@@ -1255,10 +1255,29 @@ def test_retention_outlives_the_backfill_window():
 
 # ── 백필 (큐에 들어가지 못한 체결 회수) ───────────────────────────────
 
+#  이 파일이 쓰는 가장 먼 과거(분). 기준 시각을 정할 때 이만큼은 자정을 넘지 않아야 한다.
+_RECENT_MAX_MINUTES = 60
+
+
 def _recent(minutes_ago):
+    """지금으로부터 N분 전의 KST 시각 문자열.
+
+    [기준 시각을 자정에서 떼어 놓는 이유 · 2026-09-07] 그대로 now 를 쓰면 자정 직후
+     30~35분 사이에 `_recent(35)`(어제)와 `_recent(30)`(오늘)이 **다른 날짜**로 갈린다.
+     그러면 접수 행과 체결 행이 다른 날에 놓여 `_lookup_entry_reason` 의 날짜 조건에
+     걸리지 않고, 진입 근거가 빠진 메모가 만들어져 두 테스트가 빨개진다.
+     코드가 아니라 **실행 시각**이 만드는 실패다 — 실측으로 00:30~00:35 창에서만 재현된다
+     ([[test-suite-open-delay-clock]] 과 같은 계열). 계측기가 시각에 따라 말을 바꾸면 안 된다.
+
+     자정을 넘길 창에 있으면 기준을 오늘 00:00+최대오프셋+1분 으로 당긴다. 값이 real now
+     보다 조금 앞설 수 있지만, 이 파일의 검사는 전부 '최근 N시간 이내'라는 하한만 본다.
+    """
     from datetime import datetime, timedelta
-    return (datetime.now(journal_sync.KST)
-            - timedelta(minutes=minutes_ago)).strftime('%Y-%m-%d %H:%M:%S')
+    base = datetime.now(journal_sync.KST)
+    if (base - timedelta(minutes=_RECENT_MAX_MINUTES)).date() != base.date():
+        base = base.replace(hour=0, minute=0, second=0, microsecond=0) \
+                   + timedelta(minutes=_RECENT_MAX_MINUTES + 1)
+    return (base - timedelta(minutes=minutes_ago)).strftime('%Y-%m-%d %H:%M:%S')
 
 
 def _patch_backfill_transport(monkeypatch, last_sync=None):

@@ -256,7 +256,12 @@ def test_calendar_alert_ignores_far_events():
 
 
 def test_calendar_alert_does_not_mark_when_send_fails():
-    """발송이 실패하면 '보냄'으로 기록하지 않는다 (다음 순회에 재시도)."""
+    """발송이 실패하면 '보냄'으로 기록하지 않는다 (다음 순회에 재시도).
+
+    [반환값 계약 · 2026-09-07] 실패는 -1 이다. 0(보낼 것이 없었다)과 **달라야 한다** —
+     호출부(스케줄러)는 하루 한 번만 부르므로, 둘을 같은 0 으로 답하면 여기서 지킨
+     재시도가 한 층 위에서 사라진다(그 날의 D-1 알림은 다음 날 보내 봐야 소용없다).
+    """
     _set_watchlist([], [])
     today = datetime.now().date()
     econ = [{"date": today.strftime("%Y-%m-%d"), "name": "미국 CPI", "weight": 1, "source": "FRED"}]
@@ -264,8 +269,42 @@ def test_calendar_alert_does_not_mark_when_send_fails():
     p1, p2, p3, p4, p5 = _alert_env(econ)
     with p1, p2, p3, p4 as mark, p5 as send:
         send.side_effect = RuntimeError("network down")
-        assert calendar_events.check_and_alert_calendar() == 0
+        assert calendar_events.check_and_alert_calendar() == -1
     mark.assert_not_called()
+
+
+def test_calendar_alert_returns_minus_one_when_delivery_unconfirmed():
+    """예외가 아니라 '전달 미확인'(falsy 반환)도 -1 이다.
+
+    send_telegram_message 는 비동기 기본이라 던지지 않는다 — 실패는 반환값으로만 온다.
+    """
+    _set_watchlist([], [])
+    today = datetime.now().date()
+    econ = [{"date": today.strftime("%Y-%m-%d"), "name": "미국 CPI", "weight": 1, "source": "FRED"}]
+
+    p1, p2, p3, p4, p5 = _alert_env(econ)
+    with p1, p2, p3, p4 as mark, p5 as send:
+        send.return_value = False
+        assert calendar_events.check_and_alert_calendar() == -1
+    mark.assert_not_called()
+
+
+def test_calendar_alert_separates_nothing_to_send_from_failure():
+    """'보낼 것이 없음'(0)과 '전달 실패'(-1)가 같은 값이면 안 된다."""
+    _set_watchlist([], [])
+    today = datetime.now().date()
+    econ = [{"date": today.strftime("%Y-%m-%d"), "name": "미국 CPI", "weight": 1, "source": "FRED"}]
+
+    p1, p2, p3, p4, p5 = _alert_env([])          # 일정 자체가 없다
+    with p1, p2, p3, p4, p5:
+        nothing = calendar_events.check_and_alert_calendar()
+
+    p1, p2, p3, p4, p5 = _alert_env(econ)
+    with p1, p2, p3, p4, p5 as send:
+        send.return_value = False
+        failed = calendar_events.check_and_alert_calendar()
+
+    assert nothing == 0 and failed == -1 and nothing != failed
 
 
 def test_calendar_alert_labels_prev_trading_day_when_gap_widens():

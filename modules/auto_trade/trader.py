@@ -5217,11 +5217,17 @@ class AutoTrader:
                 return
             if self.after_hours_scan_date == today:
                 return
-            self.after_hours_scan_date = today
 
             acnt = config.session.auto_acnt_prdt_cd
             holdings, _summary = api.get_domestic_balance(target_cano, acnt)
+            #  [2026-09-07] holdings is None 은 **조회 실패**다. 빈 목록(보유 없음)과
+            #   같은 자리에서 걸러 내면 '오늘 볼 것이 없었다'로 굳는다([[unknown-vs-empty]]).
+            if holdings is None:
+                logger.warning("[장마감 청산 신호 스캔] 잔고를 읽지 못했습니다 — "
+                               "다음 주기에 다시 봅니다(보유 없음이 아닙니다)")
+                return
             if not holdings:
+                self.after_hours_scan_date = today      # 정말로 볼 것이 없는 날
                 return
 
             self.log("[장마감] 청산 신호 점검 (주문 없음 · 알림 전용)")
@@ -5230,9 +5236,17 @@ class AutoTrader:
                 holdings, is_market_open=False,
                 rules_map={r['code']: r for r in rules},
                 restricted_stocks=get_restricted_stocks(*_get_trade_account()))
-        except Exception as e:
-            # 알림 전용 경로다. 실패해도 매매 루프를 흔들면 안 된다.
-            logger.debug(f"[장마감 청산 신호 스캔] 실패: {e}")
+            #  [표식은 끝난 뒤 · 2026-09-07] 종전에는 잔고 조회 **전에** 찍었다. 그래서
+            #   조회가 실패하거나 판정이 도중에 던지면 그 거래일의 마감 후 점검이 통째로
+            #   사라졌고, 하필 _alert_after_hours_sell 이 '전달을 확인한 뒤 기록한다 —
+            #   실패하면 다음 주기에 다시 시도'로 고쳐 둔 재시도까지 여기서 막혔다.
+            #   이 스캔은 종가 확정 뒤 손절·트레일링 이탈을 알리는 유일한 경로이고,
+            #   놓치면 하룻밤 갭이 그대로 손실이 된다.
+            self.after_hours_scan_date = today
+        except Exception as e:      # noqa: BLE001
+            # 알림 전용 경로다. 실패해도 매매 루프를 흔들면 안 된다 — 다만 조용하지는 않다.
+            logger.warning(f"[장마감 청산 신호 스캔] 실패 — 다음 주기에 다시 봅니다: "
+                           f"{type(e).__name__}: {e}")
 
     def _alert_after_hours_sell(self, code, name, item, reason, current_price, order_price, qty):
         """[관측성] 장 마감 후 감지된 매도 신호를 알린다.

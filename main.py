@@ -1153,6 +1153,18 @@ def _enforce_single_instance(mode, allow_duplicate=False):
             holder = dup_holder
             reason = f"같은 {'·'.join(dup_labels)} 앱키"
 
+    #  [2026-09-07] 잠금 장치 자체가 고장 났으면 위 판정은 '중복 없음'이 아니라
+    #   **'검사를 못 했다'** 이다. 막지는 않되(의도된 fail-open) 그 사실은 화면에 띄운다 —
+    #   로그는 사고가 난 뒤에야 열어 보고, 그때는 이미 두 인스턴스가 돌고 있다.
+    guard_note = instance_lock.guard_failure_note()
+    if guard_note:
+        config.console.print(
+            f"\n[bold yellow]⚠️ 중복 실행 검사를 하지 못했습니다 ({guard_note}).[/bold yellow]")
+        config.console.print(
+            "[dim]  같은 모드가 둘 뜨면 텔레그램 명령이 무작위로 갈리고, KIS 유량·DB 파일을 "
+            "나눠 쓰며, 램 1GB 파이에서는 OOM 입니다.\n"
+            "  다른 인스턴스가 떠 있지 않은지 직접 확인하세요(ps · 잠금 파일 권한/디스크 여유).[/dim]")
+
     if not reason:
         return
 

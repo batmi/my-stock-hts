@@ -196,24 +196,47 @@ _RESTRICTED_LOCK = threading.RLock()
 # [추가] 시스템(자동매매)이 직접 발주한 주문번호(ODNO) 추적 세트.
 # DB insert가 큐를 경유(비동기)하므로 체결 모니터가 원주문을 못 읽어 '외부 주문'으로 오판하는
 # 레이스를 막기 위해, 발주 즉시 메모리에 ODNO를 기록하고 외부주문 판정 시 우선 확인한다.
-_SYSTEM_ODNOS = set()
+#
+#  [날짜로 묶는다 · 2026-09-07] 종전에는 날짜 없는 순수 문자열 집합이었고 **한 번도
+#   비워지지 않았다**. 증권사 주문번호는 당일 채번이라 매일 순번이 0부터 다시 올라간다
+#   ([[odno-daily-reset]]) — 즉 어제의 시스템 주문번호가 오늘 **다른 사람의 다른 주문**을
+#   가리킨다. 운용은 무중단(파이 상시 가동)이라 이 집합은 며칠치가 쌓인 채 남는다.
+#   그러면 운용자가 HTS 로 직접 산 주문이 '시스템 주문'으로 읽혀 **수동매매 제한 등록이
+#   건너뛰어지고**(conclusion 의 두 판정), 자동매매가 같은 종목을 다시 산다. 제한 등록이
+#   막으려던 바로 그 상황이다. 순번은 작은 값부터 채워지므로 초반 번호는 사실상 매일
+#   재사용된다 — 드문 우연이 아니다.
+#   날짜와 짝지어 담고, 날짜가 바뀌면 지난 날짜를 버린다.
+_SYSTEM_ODNOS = set()          # {(YYYY-MM-DD, odno)}
 _SYSTEM_ODNOS_LOCK = threading.Lock()
 
-def register_system_odno(odno):
-    """자동매매가 발주한 주문번호를 시스템 주문으로 등록한다."""
+def _prune_system_odnos(today):
+    """오늘이 아닌 날짜의 항목을 버린다. 호출부는 락을 쥐고 있어야 한다."""
+    stale = {e for e in _SYSTEM_ODNOS if e[0] != today}
+    if stale:
+        _SYSTEM_ODNOS.difference_update(stale)
+
+def register_system_odno(odno, on_date=None):
+    """자동매매가 발주한 주문번호를 **그 날짜와 함께** 시스템 주문으로 등록한다."""
     if not odno:
         return
+    today = on_date or utils.odno_scope_date()
     with _SYSTEM_ODNOS_LOCK:
-        _SYSTEM_ODNOS.add(str(odno))
+        _prune_system_odnos(today)
+        _SYSTEM_ODNOS.add((today, str(odno)))
 
-def is_system_odno(odno):
-    """해당 주문번호가 시스템(자동매매)이 낸 주문인지 여부."""
+def is_system_odno(odno, on_date=None):
+    """해당 주문번호가 **그 날짜에** 시스템(자동매매)이 낸 주문인지 여부.
+
+    날짜를 주지 않으면 오늘로 본다 — 판정은 언제나 당일 체결에 대해 일어난다.
+    """
     if not odno:
         return False
+    today = on_date or utils.odno_scope_date()
     with _SYSTEM_ODNOS_LOCK:
-        return str(odno) in _SYSTEM_ODNOS
+        _prune_system_odnos(today)
+        return (today, str(odno)) in _SYSTEM_ODNOS
 
-def is_system_trade(trade_type, odno=None):
+def is_system_trade(trade_type, odno=None, on_date=None):
     """이 체결이 **시스템(자동매매)이 낸 주문**인가. 거래 기록의 주문 종류로 판정한다.
 
     [왜 ODNO만으로는 안 되나] _SYSTEM_ODNOS는 프로세스 메모리라 재기동하면 비어 버린다.
@@ -227,7 +250,8 @@ def is_system_trade(trade_type, odno=None):
     """
     if "(AUTO)" in str(trade_type or "").upper():
         return True
-    return is_system_odno(odno) if odno else False
+    #  odno 폴백도 날짜와 짝지어 본다 — 번호만으로는 유일하지 않다([[odno-daily-reset]]).
+    return is_system_odno(odno, on_date=on_date) if odno else False
 
 def _norm_odno(odno):
     """주문번호 정규화(매칭용). 발주 API의 ODNO와 WS 체결통보의 주문번호는 앞자리 0 패딩이

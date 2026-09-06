@@ -831,8 +831,13 @@ class ConclusionMonitor:
                                     # [추가] 수동매매 제한 종목 자동 연동 (initial 동기화 포함 → 재시작 시 당일 수동 매수 복원)
                                     #        알림 발송 여부(initial)와 무관하게 항상 수행한다.
                                     # 매수: 외부(앱/HTS) 주문이고 시스템이 낸 주문(ODNO)이 아닐 때만 제한 등록
+                                    #  [2026-09-07] 주문번호는 당일 채번이라 날짜와 짝지어야
+                                    #   유일하다([[odno-daily-reset]]). 날짜를 안 주면 무중단
+                                    #   운용에서 어제의 시스템 주문번호가 오늘 외부 주문을
+                                    #   가리켜, 수동매매 제한 등록이 조용히 건너뛰어진다.
                                     if actual_reason == "앱(MTS)/HTS 외부 주문 감지" and type_name and "매수" in type_name \
-                                            and not is_system_odno(odno):
+                                            and not is_system_odno(
+                                                odno, on_date=_odno_scope_date(item, trade_time_str)):
                                         try:
                                             add_restricted_stock(code, name, "수동매매", is_overseas=is_overseas_trade, cano=cano, acnt=acnt, account_type=_current_account_type(cano, acnt))
                                         except Exception as e:

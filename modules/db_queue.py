@@ -4,6 +4,29 @@ import threading
 import logging
 import time
 
+#  한 건의 DB 작업을 기다리는 시한(초).
+OP_TIMEOUT_SEC = 30
+
+
+class DBOperationUnknown(Exception):
+    """시한 안에 결과를 받지 못했다 — **실패가 아니라 '모른다'** 다.
+
+    [왜 별도 예외인가 · 2026-09-07] 종전에는 그냥 `Exception("... Timeout")` 이었다.
+     읽는 사람도 잡는 코드도 그것을 '기록되지 않았다'로 읽는다. 그런데 시한이 지나도
+     **작업은 큐에 그대로 남아 곧 실행된다** — 취소하지 않기 때문이다.
+     실측(시한 0.2초 · 작업 1초): 호출부는 예외를 받았고, 1.5초 뒤 원장에는 그 행이
+     들어가 있었다. 즉 '실패했다'는 말이 사실이 아니다.
+
+     이 시스템은 주문 응답 유실에 대해 이미 같은 규칙을 세워 뒀다 — 재전송하지 말고
+     당일 주문내역으로 대사하라([[order-timeout-no-resend]], api/http.py 의 '결과 불명').
+     DB 한 층 아래에서 그 규칙이 깨져 있었다. 보상 조치(수동 재입력·재삽입)는
+     **중복 원장**을 만들고, 원장의 중복은 손익·평단·트레일링 기준을 통째로 흔든다.
+
+     취소하지 않는 이유: 쓰기를 버리는 쪽이 더 비싸다. 체결 기록·트레일링 최고가 갱신이
+     사라지면 그 종목의 손절 기준이 붙을 자리를 잃는다. 늦더라도 반영되는 편이 낫다 —
+     대신 늦게 끝났다는 사실을 로그로 남긴다(DBWorker 의 지각 완료 경고).
+    """
+
 from core import context
 
 logger = logging.getLogger(__name__)
@@ -38,6 +61,7 @@ class DBWorker(threading.Thread):
                     break
 
                 method_name, args, kwargs, result_queue, use_auto = task
+                _queued_at = getattr(result_queue, '_dbq_queued_at', None)
                 
                 # 큐에 작업이 많이 쌓이면 병목 현상 경고 로깅
                 q_size = self._queue.qsize()
@@ -62,6 +86,15 @@ class DBWorker(threading.Thread):
                         method = getattr(self._real_db, method_name)
                         result = method(*args, **kwargs)
                     
+                    #  [지각 완료 · 2026-09-07] 호출부는 OP_TIMEOUT_SEC 이 지나면 '모른다'로
+                    #   돌아간다. 그 뒤에 이 작업이 끝나면 아무 데도 흔적이 없어, 호출부가
+                    #   받은 예외만 남고 실제로는 반영된 상태가 된다. 지각을 로그로 남긴다.
+                    if _queued_at is not None and (time.time() - _queued_at) > OP_TIMEOUT_SEC:
+                        logger.warning(
+                            f"[DBQueue] '{method_name}' 가 시한({OP_TIMEOUT_SEC}s)을 넘겨 "
+                            f"{time.time() - _queued_at:.1f}초 만에 완료됐습니다 — 호출부는 "
+                            f"이미 '결과 불명'으로 돌아갔습니다. **이 작업은 반영됐습니다** "
+                            f"(같은 내용을 다시 넣으면 중복이 됩니다).")
                     # 작업 결과를 호출자(Proxy)의 1회용 결과 큐로 전달하여 대기 해제
                     if result_queue:
                         result_queue.put(("OK", result))
@@ -126,19 +159,23 @@ class DBProxy:
         """
         self._require_worker("__CUSTOM__")
         result_queue = queue.Queue()
+        result_queue._dbq_queued_at = time.time()
         # 특수 메서드명 __CUSTOM__을 사용하여 메인 큐에 적재
         self._queue.put(("__CUSTOM__", (func, args, kwargs), {}, result_queue,
                          getattr(context.trade_context, 'use_auto_account', False)))
         
         try:
             # 워커 스레드가 작업을 마치고 결과를 돌려줄 때까지 대기 (최대 30초)
-            status, res = result_queue.get(timeout=30)
+            status, res = result_queue.get(timeout=OP_TIMEOUT_SEC)
             if status == "ERROR":
                 raise res
             return res
         except queue.Empty:
-            logger.error("[DBQueue] Custom operation timed out (30s)")
-            raise Exception("DB Operation Timeout")
+            logger.error(f"[DBQueue] 트랜잭션 작업이 시한({OP_TIMEOUT_SEC}s) 안에 끝나지 "
+                         f"않았습니다 — 취소하지 않으므로 **나중에 반영될 수 있습니다**")
+            raise DBOperationUnknown(
+                f"DB 트랜잭션 결과 불명 — 시한 {OP_TIMEOUT_SEC}s 초과. 작업은 취소되지 "
+                f"않아 곧 반영될 수 있습니다. 같은 내용을 다시 넣지 마십시오(중복).")
 
     def __getattr__(self, name):
         """
@@ -152,6 +189,7 @@ class DBProxy:
                 self._require_worker(name)
                 # 호출한 스레드가 결과를 돌려받을 1회용 큐 생성
                 result_queue = queue.Queue()
+                result_queue._dbq_queued_at = time.time()
                 # (메서드명, 인자, 키워드인자, 결과큐, 계좌컨텍스트)를 메인 작업 큐에 전달.
                 #  계좌 컨텍스트는 **호출 스레드에서** 읽어야 한다 — 워커 스레드에서 읽으면
                 #  항상 기본값(수동 계좌)이다(DBWorker.run 주석 참조).
@@ -160,13 +198,17 @@ class DBProxy:
                 
                 try:
                     # 30초 타임아웃 설정 (무한 대기 방지)
-                    status, res = result_queue.get(timeout=30)
+                    status, res = result_queue.get(timeout=OP_TIMEOUT_SEC)
                     if status == "ERROR":
                         raise res
                     return res
                 except queue.Empty:
-                    logger.error(f"[DBQueue] Method '{name}' timed out (30s)")
-                    raise Exception(f"DB Method '{name}' Timeout")
+                    logger.error(f"[DBQueue] '{name}' 이 시한({OP_TIMEOUT_SEC}s) 안에 끝나지 "
+                                 f"않았습니다 — 취소하지 않으므로 **나중에 반영될 수 있습니다**")
+                    raise DBOperationUnknown(
+                        f"DB '{name}' 결과 불명 — 시한 {OP_TIMEOUT_SEC}s 초과. 작업은 "
+                        f"취소되지 않아 곧 반영될 수 있습니다. 같은 내용을 다시 넣지 "
+                        f"마십시오(중복).")
             return wrapper
         return attr
 

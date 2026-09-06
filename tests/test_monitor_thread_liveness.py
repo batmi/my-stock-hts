@@ -157,20 +157,35 @@ def test_죽은_스레드를_실행중으로_읽어_재기동을_거절하지_�
     obj = factory()
     dead = threading.Thread(target=lambda: None)
     dead.start(); dead.join()
+    #  [격리 · 2026-09-07] 이 셋은 **프로세스 전역 싱글톤**이다. is_running=True + 죽은
+    #   스레드를 심어 두고 나가면, 뒤에 도는 다른 파일의 하트비트 테스트가 그 상태를
+    #   '감시 스레드 사망'으로 읽는다(실측: test_loop_stall_detection 2건이 스톨 경보
+    #   대신 사망 경보를 받았다). 심은 것은 반드시 되돌린다.
+    prev_running = getattr(obj, 'is_running', False)
+    prev_thread = getattr(obj, attr, None)
     obj.is_running = True
     setattr(obj, attr, dead)
-
-    import inspect
-    src = inspect.getsource(type(obj).start)
-    assert "is_alive()" in src, \
-        f"{type(obj).__name__}.start() 가 스레드에게 묻지 않는다 — 죽어도 되살릴 수 없다"
+    try:
+        import inspect
+        src = inspect.getsource(type(obj).start)
+        assert "is_alive()" in src, \
+            f"{type(obj).__name__}.start() 가 스레드에게 묻지 않는다 — 죽어도 되살릴 수 없다"
+    finally:
+        obj.is_running = prev_running
+        setattr(obj, attr, prev_thread)
 
 
 # ─────────────────────────── ④ 밖에서 보이는가 ───────────────────────────
 
 def _bare_scheduler(monkeypatch, trader_thread=None):
     sent = []
-    s = sch.SystemScheduler.__new__(sch.SystemScheduler)
+    #  [격리 · 2026-09-07] object.__new__ 를 쓴다. SystemScheduler.__new__ 는 **싱글톤**이라
+    #   그대로 부르면 프로세스 전역 인스턴스가 돌아오고, 아래 대입들이 그 객체의 trader 를
+    #   스텁으로 **덮어쓴다**. 그러면 뒤에 SystemScheduler() 를 부르는 다른 파일의 테스트가
+    #   (`_initialized` 가 True 라 __init__ 이 곧바로 돌아온다) 그 스텁을 완성품으로 받아
+    #   실행 순서에 따라 성공/실패가 갈린다 — 실측: test_scheduler_module·test_loop_stall_detection
+    #   3건이 xdist 배분에 따라 붙었다 떨어졌다 했다. 계측기가 순서에 따라 말을 바꾸면 안 된다.
+    s = object.__new__(sch.SystemScheduler)
     s.trader = type("T", (), {"is_running": False, "thread": trader_thread,
                               "consecutive_errors": 0,
                               "loop_stall_seconds": staticmethod(lambda: None),
@@ -233,7 +248,7 @@ def test_점검_목록이_실재하는_속성을_가리킨다():
     getattr 기본값이 False/None 이라, 속성 이름이 어긋나면 점검은 에러 없이 '항상 정상'
     이 된다 — 가드가 고장 나면 늘 초록이다. 실제 객체에 그 이름이 있는지 못 박는다.
     """
-    s = sch.SystemScheduler.__new__(sch.SystemScheduler)
+    s = object.__new__(sch.SystemScheduler)
     specs = s._monitor_threads()
     assert len(specs) >= 3, f"점검 대상이 사라졌다: {[n for n, *_ in specs]}"
     for name, what_is_lost, obj, attr in specs:

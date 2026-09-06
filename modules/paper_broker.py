@@ -98,18 +98,48 @@ def init_tables():
     conn.commit()
 
     seed = int(getattr(config, 'PAPER_SEED_CAPITAL', 10_000_000))
-    if _get_state('seed') is None:
+    #  strict — '못 읽었다'가 '계좌가 아직 없다'로 읽히면 운용 중인 계좌를 다시 연다.
+    #  여기서 던지면 관찰 모드 기동이 멈춘다. 그게 맞다 — 기동 실패는 외부 감시자가
+    #  알리지만([[process-death-watchdog]]), 조용히 초기화된 원장은 아무도 모른다.
+    if _get_state('seed', strict=True) is None:
         _set_state('seed', seed)
         _set_state('cash', seed)
         _set_state('started_at', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
         logger.info(f"[PAPER] 가상 계좌 개설: 시드 {seed:,}원")
 
 
-def _get_state(key, default=None):
+def _get_state(key, default=None, strict=False):
+    """가상 계좌 상태값 하나를 읽는다.
+
+    [왜 strict 가 필요한가 · 2026-09-06] 종전에는 예외를 통째로 삼키고 default 를
+     돌려줬다. 그래서 **조회 실패가 '그 값이 없다'로 읽혔고**, 그 값이 곧바로 원장에
+     다시 써졌다([[unknown-vs-empty]]).
+       · 매도 : new_cash = get_cash() + 매도대금 → 읽기가 실패하면 0 + 매도대금.
+                예수금 잔액 전체가 이 한 건의 매도대금으로 **덮인다**.
+                실측(50주 매수 후 매도, DB 잠금 1회): 6,499,381 → 3,841,619
+                (정상 10,349,381, 차이 -6,507,762). 그런데 주문 응답은 rt_cd '0' 이다.
+       · 개설 : init_tables 의 `_get_state('seed') is None` 이 참이 되어 **계좌를 다시
+                연다** — 포지션은 그대로 남은 채 현금만 시드로 복구된다.
+                실측(재기동 시 잠금 1회): 예수금 6,499,381 → 10,000,000,
+                50주 포지션 유지 = 없던 자산 3.5백만이 생긴다.
+       · 입출금 : adjust_seed 도 cash·seed 를 읽어 더한 값을 쓴다(같은 자리).
+
+     가상 계좌의 자산곡선은 드로다운 → 리스크 한도 → 매매 강도로 이어진다. 어긋난
+     원장은 관찰 결과 자체를 못 쓰게 만든다([[daily-asset-baseline-transfers]] 와 같은 계열).
+
+     표시 경로(성과 화면·상태 요약)는 못 읽어도 화면이 죽으면 안 되므로 종전대로
+     default 로 넘어간다 — 다만 이제는 **조용하지 않다**. 원장을 고쳐 쓰는 자리만
+     strict=True 로 받아 실패를 실패로 다룬다.
+    """
     try:
         row = _db().execute_query("SELECT value FROM paper_state WHERE key=?", (key,), fetch='one')
         return json.loads(row[0]) if row else default
-    except Exception:
+    except Exception as e:      # noqa: BLE001
+        logger.error(f"[PAPER] 가상 계좌 상태 '{key}' 조회 실패 — "
+                     f"{'주문/기록을 보류합니다' if strict else f'표시에 기본값({default!r})을 씁니다'}: "
+                     f"{type(e).__name__}: {e}")
+        if strict:
+            raise
         return default
 
 
@@ -118,12 +148,15 @@ def _set_state(key, value):
                         (key, json.dumps(value)))
 
 
-def get_cash():
-    return float(_get_state('cash', 0) or 0)
+def get_cash(strict=False):
+    """가상 예수금. strict=True 면 조회 실패를 0원으로 답하지 않고 던진다."""
+    return float(_get_state('cash', 0, strict=strict) or 0)
 
 
-def get_seed():
-    return float(_get_state('seed', getattr(config, 'PAPER_SEED_CAPITAL', 10_000_000)))
+def get_seed(strict=False):
+    """가상 시드(누적 투입원금). strict=True 면 조회 실패를 설정 기본값으로 덮지 않는다."""
+    return float(_get_state('seed', getattr(config, 'PAPER_SEED_CAPITAL', 10_000_000),
+                            strict=strict))
 
 
 def get_positions():
@@ -274,7 +307,11 @@ def get_domestic_balance():
     """api.get_domestic_balance 대체. (output1 보유목록, output2 요약) 형태."""
     with _lock:
         positions = get_positions()
-        cash = get_cash()
+        #  strict — 예수금을 못 읽으면 현금이 통째로 빠진 총자산이 '정상 숫자'로 나간다.
+        #  실측(주식 3,500,000 · 현금 6,499,381, 잠금 1회): 총자산 9,999,381 → 3,500,000(-65.0%).
+        #  실계좌 경로는 구간별 예외를 잡아 degraded 로 표시한다(account.get_asset_status_data).
+        #  가상 계좌도 같은 기계를 타야 한다 — 그러려면 실패가 **예외로** 올라가야 한다.
+        cash = get_cash(strict=True)
         output1, total_eval, total_pchs = [], 0.0, 0.0
         for p in positions:
             price, price_stale = _price_with_status(p['code'], p['avg_price'])
@@ -313,8 +350,11 @@ def get_domestic_balance():
 
 
 def get_deposit_balance():
-    """api.get_deposit_balance 대체. 가상 현금은 즉시 결제로 본다(D+2 구분 없음)."""
-    cash = int(get_cash())
+    """api.get_deposit_balance 대체. 가상 현금은 즉시 결제로 본다(D+2 구분 없음).
+
+    조회 실패는 '예수금 0원'이 아니다 — 던져서 호출부가 구간 실패로 다루게 한다.
+    """
+    cash = int(get_cash(strict=True))
     return {"deposit": cash, "foreign_deposit": 0, "withdraw": cash,
             "d2_deposit": cash, "order_possible": cash, "d2_real": cash}
 
@@ -394,7 +434,10 @@ def place_order(action, code, qty, price, name=None):
         if action.lower() == 'buy':
             amount = price * qty
             fee = trading_cost.buy_fee(amount)
-            cash = get_cash()
+            try:
+                cash = get_cash(strict=True)
+            except Exception as e:      # noqa: BLE001
+                return _fail(f"가상 예수금을 읽지 못했습니다 — 주문하지 않습니다: {e}")
             if cash < amount + fee:
                 return _fail(f"가상 예수금 부족 (필요 {int(amount+fee):,} / 보유 {int(cash):,})")
             if pos and int(pos[1]) > 0:
@@ -428,7 +471,11 @@ def place_order(action, code, qty, price, name=None):
             # 보고 손익은 왕복 비용을 모두 뺀다(매수 수수료는 진입 시 현금에서 이미 나갔지만,
             # '이 거래로 얼마를 벌었나'는 양쪽을 다 뺀 값이어야 한다 — trading_cost 주석 참조).
             profit_amt, profit_rate = trading_cost.net_realized_profit(avg, price, qty)
-            new_cash = get_cash() + amount - fee
+            #  strict — 여기서 0으로 떨어지면 매도대금이 예수금 잔액을 **덮는다**.
+            try:
+                new_cash = get_cash(strict=True) + amount - fee
+            except Exception as e:      # noqa: BLE001
+                return _fail(f"가상 예수금을 읽지 못했습니다 — 주문하지 않습니다: {e}")
             remain = int(pos[1]) - qty
             if remain > 0:
                 pos_sql, pos_args = "UPDATE paper_positions SET qty=? WHERE code=?", (remain, code)
@@ -494,11 +541,17 @@ def snapshot_equity():
         _db().execute_query(
             "INSERT OR REPLACE INTO paper_equity (date, cash, stock_value, total, seed) "
             "VALUES (?,?,?,?,?)",
-            (datetime.now().strftime('%Y-%m-%d'), cash, stock, cash + stock, get_seed()))
+            (datetime.now().strftime('%Y-%m-%d'), cash, stock, cash + stock,
+             get_seed(strict=True)))
         # 값 조회는 확정일 단위로 캐시돼 있어 추가 조회가 아니다.
         return all(_krx_settled_close(p['code']) > 0 for p in get_positions())
-    except Exception as e:
-        logger.debug(f"[PAPER] 자산 스냅샷 실패: {e}")
+    except Exception as e:      # noqa: BLE001
+        #  [2026-09-06] 종전에는 debug 였다. 이 표는 자산곡선·MDD의 원본이고 MDD 는
+        #   리스크 한도로 이어진다 — 행이 빈 것도, 틀린 채 굳는 것도 조용히 지나가면 안 된다.
+        #   INSERT 인자를 만드는 조회가 strict 라, 값을 못 만들면 **쓰지 않고** 여기로 온다
+        #   (같은 날 행은 INSERT OR REPLACE 라 덮어썼을 값이다).
+        logger.error(f"[PAPER] 자산 스냅샷 실패 — 오늘 행을 남기지 못했습니다: "
+                     f"{type(e).__name__}: {e}")
         return False
 
 
@@ -669,10 +722,13 @@ def adjust_seed(amount):
     """
     with _lock:
         amount = int(amount)
-        cash = get_cash()
+        try:
+            cash = get_cash(strict=True)
+            new_seed = get_seed(strict=True) + amount
+        except Exception as e:      # noqa: BLE001
+            return False, f"가상 계좌 잔액을 읽지 못했습니다 — 반영하지 않았습니다: {e}"
         if amount < 0 and cash + amount < 0:
             return False, f"출금액이 가상 현금({int(cash):,}원)을 초과합니다"
-        new_seed = get_seed() + amount
         if new_seed <= 0:
             return False, "시드가 0 이하가 됩니다"
         #  [원자성 · 2026-09-05] 위 독스트링이 불변식을 적어 뒀다 — "시드와 현금을
