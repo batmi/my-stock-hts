@@ -1706,13 +1706,14 @@ class OrderManager:
                         # [추가] 사후 주문 거부(REJECTED) 시 텔레그램 알림 발송
                         elif status == OrderStatus.REJECTED:
                             try:
-                                trade = db_manager.db.get_trade_by_odno(odno)
+                                trade = db_manager.db.get_trade_by_odno(
+                                    odno, on_date=utils.odno_scope_date())
                                 if trade:
                                     t_str = trade.get('type', '')
                                     t_type = "매수" if "buy" in t_str.lower() or "매수" in t_str else ("매도" if "sell" in t_str.lower() or "매도" in t_str else "주문")
                                     name = trade.get('name', code)
                                     qty = trade.get('qty', 0)
-                                    price = float(trade.get('price', 0))
+                                    price = api.safe_float(trade.get('price'), default=0.0)
                                     
                                     is_overseas = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
                                     price_str = f"${price:,.2f}" if is_overseas else f"{price:,.0f}원"
@@ -2022,7 +2023,11 @@ class OrderManager:
                     api_checked_odnos.add(odno)
                     
                     # [추가] 외부 앱(MTS/HTS)에서 들어온 신규 미체결 주문 감지 및 DB 등록
-                    trade = db_manager.db.get_trade_by_odno(odno)
+                    #  [Fix 2026-09-06] 날짜 없이 찾으면 **몇 달 전 같은 번호**의 행이
+                    #   잡혀 이 주문이 '이미 아는 주문'으로 읽힌다 — 거래소에 살아 있는
+                    #   외부 주문이 원장에도 안 남고 알림도 안 나간다([[odno-daily-reset]]).
+                    _scope = utils.odno_scope_date(item)
+                    trade = db_manager.db.get_trade_by_odno(odno, on_date=_scope)
                     if not trade:
                         sll_buy_name = item.get('sll_buy_dvsn_cd_name')
                         if not sll_buy_name:
@@ -2042,7 +2047,7 @@ class OrderManager:
                         msg = f"📡 [{sll_buy_name} 외부접수] {name}({code})\n수량: {qty}주\n단가: {int(price):,}원\n주문번호: {utils.format_order_no(odno)}\n사유: 앱(MTS)/HTS 등 외부 주문 감지"
                         api.send_telegram_message(msg)
 
-                        trade = db_manager.db.get_trade_by_odno(odno)
+                        trade = db_manager.db.get_trade_by_odno(odno, on_date=_scope)
 
                     # [안전장치] 거래소에 살아 있는 주문은 **DB에 기록이 있든 없든** 메모리
                     #  추적에 올린다. 종전에는 이 등록이 '외부 주문'(DB에 없는 주문) 분기
@@ -2078,7 +2083,8 @@ class OrderManager:
                                        'msg1': f'{type(_ce).__name__}: {_ce}', 'output': {}}
                             
                             if res.get('rt_cd') == '0':
-                                trade = db_manager.db.get_trade_by_odno(odno)
+                                trade = db_manager.db.get_trade_by_odno(
+                                    odno, on_date=utils.odno_scope_date())
                                 t_type = ""
                                 if trade:
                                     t_str = trade.get('type', '')
@@ -2238,7 +2244,10 @@ class OrderManager:
                     if str(odno) in self.orphan_alerted:
                         continue
 
-                    trade = db_manager.db.get_trade_by_odno(odno)
+                    #  옛 행이 잡히면 경과 시간이 몇 달로 계산돼 **가짜 고아 경보**가
+                    #  즉시 나간다. 오늘 낸 주문은 오늘 행이 있으므로 좁혀도 잃는 게 없다.
+                    trade = db_manager.db.get_trade_by_odno(
+                        odno, on_date=utils.odno_scope_date())
                     if not trade or not trade.get('time'):
                         continue
                     try:

@@ -193,6 +193,9 @@ def our_order_row(odno):
     if not odno:
         return None
     try:
+        #  [의도적으로 날짜를 주지 않는다] 여기는 **과거를 채워 넣는** 경로라 애초에
+        #  옛 행을 찾는 것이 목적이다. 날짜로 좁히면 백필이 아무것도 못 찾는다
+        #  (check_trade_exists 가 같은 이유로 on_date=None 을 남겨 둔 것과 같다).
         row = db_manager.db.get_trade_by_odno(odno)
     except Exception:
         return None

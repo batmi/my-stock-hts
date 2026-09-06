@@ -488,7 +488,13 @@ def get_deposit_balance(cano=None, acnt_prdt_cd=None, skip_balance_check=False, 
     data_foreign = get_foreign_deposit(cano, acnt_prdt_cd, retries=retries)
     if data_foreign.get('rt_cd') == '0' and data_foreign.get('output2'):
         out2 = data_foreign['output2'][0] if isinstance(data_foreign['output2'], list) else data_foreign['output2']
-        res['foreign_deposit'] = int(float(out2.get('frcr_evlu_tota', 0)))
+        #  [Fix 2026-09-06] 이 함수의 다른 필드는 전부 safe_* 로 받는데 여기만 맨
+        #   캐스팅이었다. 증권사는 외화 보유가 없으면 빈 문자열을 준다 —
+        #   int(float('')) 는 ValueError 이고, dict.get 의 기본값 0 은 **키가 없을
+        #   때만** 쓰인다. 게다가 이 3단계는 '보조' 조회다: 여기서 던지면 위에서
+        #   이미 받아 둔 **주문가능금액·예수금까지 함께 버려진다**. 매수 여력을
+        #   모르는 채로 그 주기가 지나간다.
+        res['foreign_deposit'] = int(_api().safe_float(out2.get('frcr_evlu_tota'), default=0.0))
             
         # [추가] 계좌잔고평가 API의 D+2 가수도금(prvs_rcdl_excc_amt)이 더 정확할 수 있음 (매도 대금 반영 등)
         d2_account_val = int(_api().safe_float(out2.get('prvs_rcdl_excc_amt'), default=0.0))

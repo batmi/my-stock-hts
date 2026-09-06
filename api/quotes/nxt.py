@@ -141,7 +141,7 @@ def _nxt_recalled_close(code):
         d = datetime.strptime(e.get('date', ''), '%Y%m%d')
         if (datetime.now() - d).days > _NXT_RECALL_MAX_AGE_DAYS:
             return 0
-        return int(e.get('price', 0))
+        return _api().safe_int(e.get('price'))
     except Exception:
         return 0
 

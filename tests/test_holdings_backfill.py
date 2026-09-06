@@ -328,7 +328,7 @@ def test_an_order_we_placed_is_not_external_even_without_a_fill_record(monkeypat
     """[핵심] 접수 기록만 남은 자기 주문 — 제한을 걸면 그 포지션의 손절이 멈춘다."""
     monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: False)
     monkeypatch.setattr(hb.db_manager.db, 'get_trade_by_odno',
-                        lambda odno: _own_accept_row())
+                        lambda odno, **_k: _own_accept_row())
     calls = _stub_sync(monkeypatch, _plan_with_buy())
 
     res = hb.sync_account(holdings=[_holding()], register_restrictions=True)
@@ -340,7 +340,7 @@ def test_an_external_app_order_is_still_external(monkeypatch):
     """[대조군] 외부 앱(MTS/HTS) 주문도 접수 기록이 생긴다 — 그건 우리 주문이 아니다."""
     monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: False)
     monkeypatch.setattr(hb.db_manager.db, 'get_trade_by_odno',
-                        lambda odno: _own_accept_row(type_str="매수(외부)"))
+                        lambda odno, **_k: _own_accept_row(type_str="매수(외부)"))
     calls = _stub_sync(monkeypatch, _plan_with_buy())
 
     res = hb.sync_account(holdings=[_holding()], register_restrictions=True)
@@ -350,7 +350,7 @@ def test_an_external_app_order_is_still_external(monkeypatch):
 def test_an_unknown_order_is_external(monkeypatch):
     """[대조군] 주문 기록이 아예 없으면 외부다(종전 판정과 같다)."""
     monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: False)
-    monkeypatch.setattr(hb.db_manager.db, 'get_trade_by_odno', lambda odno: None)
+    monkeypatch.setattr(hb.db_manager.db, 'get_trade_by_odno', lambda odno, **_k: None)
     calls = _stub_sync(monkeypatch, _plan_with_buy())
 
     assert hb.sync_account(holdings=[_holding()], register_restrictions=True)['restricted'] == ["005930"]
@@ -361,7 +361,7 @@ def test_recovered_own_fill_keeps_its_stop_loss_rate(monkeypatch):
     written = []
     monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: False)
     monkeypatch.setattr(hb.db_manager.db, 'get_trade_by_odno',
-                        lambda odno: _own_accept_row(stop_loss_rate=-9.5))
+                        lambda odno, **_k: _own_accept_row(stop_loss_rate=-9.5))
     monkeypatch.setattr(hb.db_manager.db, 'insert_trade',
                         lambda *a, **k: written.append((a, k)) or True)
 
@@ -378,7 +378,7 @@ def test_recovered_external_fill_stays_labelled_external(monkeypatch):
     """[대조군] 진짜 외부 체결은 '(외부)' 딱지와 복원 사유를 그대로 유지한다."""
     written = []
     monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: False)
-    monkeypatch.setattr(hb.db_manager.db, 'get_trade_by_odno', lambda odno: None)
+    monkeypatch.setattr(hb.db_manager.db, 'get_trade_by_odno', lambda odno, **_k: None)
     monkeypatch.setattr(hb.db_manager.db, 'insert_trade',
                         lambda *a, **k: written.append((a, k)) or True)
 

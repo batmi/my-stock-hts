@@ -230,7 +230,7 @@ def test_mixed_pending_cancels_only_the_buy(mock_chart, mock_restricted, mock_tg
 
     types = {ODNO: {'type': '매수', 'name': NAME}, SELL_ODNO: {'type': '매도', 'name': NAME}}
     with patch('modules.auto_trade.db_manager.db.get_trade_by_odno',
-               side_effect=lambda o: types.get(o)), \
+               side_effect=lambda o, **_k: types.get(o)), \
          patch('modules.auto_trade.api.revise_cancel_order',
                return_value={'rt_cd': '0', 'output': {}}) as mock_cancel:
         trader._check_sell_conditions(_holding(profit_rate=-14.3), is_market_open=True)

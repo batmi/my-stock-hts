@@ -75,8 +75,8 @@ def get_current_price_data(code, is_overseas, include_nxt=True, cache_ttl=3.0, f
             # [추가] 액면분할 종목의 52주 고가/저가가 KIS API에서 원주가로 반환되는 스펙 한계 보정
             try:
                 out = res['output']
-                curr = float(out.get('stck_prpr', 0))
-                w52h = float(out.get('w52_hgpr', 0))
+                curr = _api().safe_float(out.get('stck_prpr'), default=0.0)
+                w52h = _api().safe_float(out.get('w52_hgpr'), default=0.0)
                 # 52주 고점과 현재가가 2.5배 이상 차이나면(액면분할 의심), 
                 # 차트 데이터를 조회하여 52주 최고/최저가를 수정주가 기준으로 덮어씌움
                 if curr > 0 and w52h > 0 and (w52h / curr) > 2.5:
@@ -187,7 +187,7 @@ def get_current_price(code, is_overseas):
         output = data.get('output', {})
         if is_overseas:
             try:
-                return float(output.get('last', 0))
+                return _api().safe_float(output.get('last'), default=0.0)
             except Exception as e:
                 logger.debug(f"get_current_price float cast error: {e}")
                 return 0.0
@@ -705,7 +705,7 @@ def fetch_overseas_detail_price(code, excd):
         data = _api().call_api(constants.API_URLS["OVERSEAS"]["QUOTATIONS"]["DETAIL"], "overseas", "quotations", "detail", params=params, timeout=3)
         if data.get('rt_cd') == '0':
             output = data.get('output', {})
-            if output.get('h52p') and float(output.get('h52p')) > 0:
+            if _api().safe_float(output.get('h52p'), default=0.0) > 0:
                 # [주간거래] 캐시·stock.json에는 항상 '정규장' 코드를 저장한다(주간 코드가 박히면
                 #  정규장 시간대 조회·주문 경로가 깨진다). update_cache_and_save는 파일에 영속된다.
                 reg_excd = _api().US_REGULAR_EXCD.get(target_excd, target_excd)

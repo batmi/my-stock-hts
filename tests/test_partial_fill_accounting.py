@@ -12,6 +12,7 @@
 판단 근거의 오차가 된다.
 """
 import pytest
+from datetime import datetime
 from unittest.mock import patch
 
 import config
@@ -23,6 +24,13 @@ CODE = "005930"
 NAME = "삼성전자"
 
 
+#  [주문 일자 · 2026-09-06] 응답의 ord_dt 는 **접수 행이 실제로 심긴 날**과 같아야 한다.
+#   odno 는 당일 채번이라 갱신·중복 판정이 (주문번호, 날짜)로 이뤄지는데([[odno-daily-reset]]),
+#   여기만 과거 날짜를 하드코딩하면 접수 행(오늘)과 응답(과거)이 갈려 실매매에는 없는
+#   조합이 된다. 하루가 지나도 뜻이 변하지 않도록 오늘로 만든다.
+_ORD_DT = datetime.now().strftime("%Y%m%d")
+
+
 def _history(ord_qty, ccld_qty, rmn_qty, avg_price=70000):
     """KIS 일별주문체결(국내) 응답 한 건. tot_ccld_qty는 누적 체결수량이다."""
     return {
@@ -32,7 +40,7 @@ def _history(ord_qty, ccld_qty, rmn_qty, avg_price=70000):
             "ord_qty": str(ord_qty), "tot_ccld_qty": str(ccld_qty),
             "cncl_cfrm_qty": "0", "rmn_qty": str(rmn_qty),
             "avg_prvs": str(avg_price), "sll_buy_dvsn_cd_name": "매수",
-            "sll_buy_dvsn_cd": "02", "ord_dt": "20260804", "ord_tmd": "091500",
+            "sll_buy_dvsn_cd": "02", "ord_dt": _ORD_DT, "ord_tmd": "091500",
         }],
         "output2": {},
     }
@@ -160,7 +168,7 @@ def _sell_history(ord_qty, ccld_qty, rmn_qty, avg_price=SELL_PRICE):
             "ord_qty": str(ord_qty), "tot_ccld_qty": str(ccld_qty),
             "cncl_cfrm_qty": "0", "rmn_qty": str(rmn_qty),
             "avg_prvs": str(avg_price), "sll_buy_dvsn_cd_name": "매도",
-            "sll_buy_dvsn_cd": "01", "ord_dt": "20260903", "ord_tmd": "091500",
+            "sll_buy_dvsn_cd": "01", "ord_dt": _ORD_DT, "ord_tmd": "091500",
         }],
         "output2": {},
     }

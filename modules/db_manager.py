@@ -388,8 +388,10 @@ class DBManager:
                         try:
                             cursor.execute(f"ALTER TABLE journal_outbox ADD COLUMN {col} {dtype}")
                         except Exception as e:
-                            config.console.print(
-                                f"[red][DB] journal_outbox 컬럼 추가 실패({col}): {e}[/red]")
+                            #  화면에만 찍으면 헤드리스 운영(라즈베리파이)에서는 아무도 못 본다.
+                            #  컬럼이 없으면 그 컬럼을 읽는 조회가 **영영** 실패하므로 반드시 남긴다.
+                            logger.error(f"[DB] journal_outbox 컬럼 추가 실패({col}): {e}")
+                            config.console.print(f"[red][DB] journal_outbox 컬럼 추가 실패({col}): {e}[/red]")
                 # 전송 대기 행 조회는 synced_at·dead_at 이 모두 NULL 인 것만 보고,
                 # is_backlog 순으로 실시간 체결을 먼저 집는다.
                 #  CREATE INDEX IF NOT EXISTS 는 '이름'만 보므로, 정의를 바꿀 때는
@@ -429,6 +431,7 @@ class DBManager:
                         lowest_price REAL DEFAULT 0.0,
                         highest_price REAL DEFAULT 0.0,
                         composite_json TEXT,
+                        triggered_at TIMESTAMP,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 ''')
@@ -582,6 +585,9 @@ class DBManager:
                             if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                                 config.console.print(f"[dim green][DB] 컬럼 추가됨: {col}[/dim green]")
                         except Exception as e:
+                            #  화면에만 찍으면 헤드리스 운영(라즈베리파이)에서는 아무도 못 본다.
+                            #  컬럼이 없으면 그 컬럼을 읽는 조회가 **영영** 실패하므로 반드시 남긴다.
+                            logger.error(f"[DB] 컬럼 추가 실패({col}): {e}")
                             config.console.print(f"[red][DB] 컬럼 추가 실패({col}): {e}[/red]")
 
                 # stock_strategies 테이블 컬럼 확장 (memo 추가)
@@ -601,6 +607,9 @@ class DBManager:
                             if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                                 config.console.print(f"[dim green][DB] stock_strategies 테이블에 {col} 컬럼 추가 완료[/dim green]")
                         except Exception as e:
+                            #  화면에만 찍으면 헤드리스 운영(라즈베리파이)에서는 아무도 못 본다.
+                            #  컬럼이 없으면 그 컬럼을 읽는 조회가 **영영** 실패하므로 반드시 남긴다.
+                            logger.error(f"[DB] stock_strategies 컬럼 추가 실패({col}): {e}")
                             config.console.print(f"[red][DB] stock_strategies 컬럼 추가 실패({col}): {e}[/red]")
 
                 # [추가] trailing_stops 컬럼 확장 — 코퍼레이트 액션(액면분할·무상증자) 탐지용.
@@ -617,6 +626,9 @@ class DBManager:
                         if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                             config.console.print("[dim green][DB] trailing_stops 테이블에 pyramid_count 컬럼 추가 완료[/dim green]")
                     except Exception as e:
+                        #  화면에만 찍으면 헤드리스 운영(라즈베리파이)에서는 아무도 못 본다.
+                        #  컬럼이 없으면 그 컬럼을 읽는 조회가 **영영** 실패하므로 반드시 남긴다.
+                        logger.error(f"[DB] trailing_stops 컬럼 추가 실패(pyramid_count): {e}")
                         config.console.print(f"[red][DB] trailing_stops 컬럼 추가 실패(pyramid_count): {e}[/red]")
                 for col in ("ref_avg_price", "ref_pchs_amt"):
                     if col not in ts_columns:
@@ -625,6 +637,9 @@ class DBManager:
                             if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                                 config.console.print(f"[dim green][DB] trailing_stops 테이블에 {col} 컬럼 추가 완료[/dim green]")
                         except Exception as e:
+                            #  화면에만 찍으면 헤드리스 운영(라즈베리파이)에서는 아무도 못 본다.
+                            #  컬럼이 없으면 그 컬럼을 읽는 조회가 **영영** 실패하므로 반드시 남긴다.
+                            logger.error(f"[DB] trailing_stops 컬럼 추가 실패({col}): {e}")
                             config.console.print(f"[red][DB] trailing_stops 컬럼 추가 실패({col}): {e}[/red]")
 
                 # reserved_orders 테이블 컬럼 확장 (fail_reason 추가)
@@ -636,6 +651,9 @@ class DBManager:
                         if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                             config.console.print("[dim green][DB] reserved_orders 테이블에 fail_reason 컬럼 추가 완료[/dim green]")
                     except Exception as e:
+                        #  화면에만 찍으면 헤드리스 운영(라즈베리파이)에서는 아무도 못 본다.
+                        #  컬럼이 없으면 그 컬럼을 읽는 조회가 **영영** 실패하므로 반드시 남긴다.
+                        logger.error(f"[DB] reserved_orders 컬럼 추가 실패(fail_reason): {e}")
                         config.console.print(f"[red][DB] reserved_orders 컬럼 추가 실패(fail_reason): {e}[/red]")
 
                 if "expire_dt" not in ro_columns:
@@ -644,7 +662,26 @@ class DBManager:
                         if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                             config.console.print("[dim green][DB] reserved_orders 테이블에 expire_dt 컬럼 추가 완료[/dim green]")
                     except Exception as e:
+                        #  화면에만 찍으면 헤드리스 운영(라즈베리파이)에서는 아무도 못 본다.
+                        #  컬럼이 없으면 그 컬럼을 읽는 조회가 **영영** 실패하므로 반드시 남긴다.
+                        logger.error(f"[DB] reserved_orders 컬럼 추가 실패(expire_dt): {e}")
                         config.console.print(f"[red][DB] reserved_orders 컬럼 추가 실패(expire_dt): {e}[/red]")
+
+                #  [추가 2026-09-06] 발동 시각. odno 는 **당일 채번**이라 그 값만으로는
+                #   유일하지 않은데([[odno-daily-reset]]), 예약 주문 행은 발동 뒤에도 계속
+                #   남아 있어 몇 주 전 TRIGGERED 행이 오늘 체결의 '예약 주문'으로 잡혔다.
+                #   created_at 으로는 가를 수 없다 — 지난주에 걸어 둔 예약이 오늘 발동할
+                #   수 있어 생성일과 발동일이 다르다. 발동한 날을 따로 적는다.
+                if "triggered_at" not in ro_columns:
+                    try:
+                        cursor.execute("ALTER TABLE reserved_orders ADD COLUMN triggered_at TIMESTAMP")
+                        if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
+                            config.console.print("[dim green][DB] reserved_orders 테이블에 triggered_at 컬럼 추가 완료[/dim green]")
+                    except Exception as e:
+                        #  화면에만 찍으면 헤드리스 운영(라즈베리파이)에서는 아무도 못 본다.
+                        #  컬럼이 없으면 그 컬럼을 읽는 조회가 **영영** 실패하므로 반드시 남긴다.
+                        logger.error(f"[DB] reserved_orders 컬럼 추가 실패(triggered_at): {e}")
+                        config.console.print(f"[red][DB] reserved_orders 컬럼 추가 실패(triggered_at): {e}[/red]")
 
                 if "lowest_price" not in ro_columns:
                     try:
@@ -652,6 +689,9 @@ class DBManager:
                         if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                             config.console.print("[dim green][DB] reserved_orders 테이블에 lowest_price 컬럼 추가 완료[/dim green]")
                     except Exception as e:
+                        #  화면에만 찍으면 헤드리스 운영(라즈베리파이)에서는 아무도 못 본다.
+                        #  컬럼이 없으면 그 컬럼을 읽는 조회가 **영영** 실패하므로 반드시 남긴다.
+                        logger.error(f"[DB] reserved_orders 컬럼 추가 실패(lowest_price): {e}")
                         config.console.print(f"[red][DB] reserved_orders 컬럼 추가 실패(lowest_price): {e}[/red]")
 
                 if "highest_price" not in ro_columns:
@@ -660,6 +700,9 @@ class DBManager:
                         if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                             config.console.print("[dim green][DB] reserved_orders 테이블에 highest_price 컬럼 추가 완료[/dim green]")
                     except Exception as e:
+                        #  화면에만 찍으면 헤드리스 운영(라즈베리파이)에서는 아무도 못 본다.
+                        #  컬럼이 없으면 그 컬럼을 읽는 조회가 **영영** 실패하므로 반드시 남긴다.
+                        logger.error(f"[DB] reserved_orders 컬럼 추가 실패(highest_price): {e}")
                         config.console.print(f"[red][DB] reserved_orders 컬럼 추가 실패(highest_price): {e}[/red]")
 
                 # [추가] 복합(AND) 조건 예약 주문용 컬럼 (서브 조건 리스트를 JSON으로 저장)
@@ -669,6 +712,9 @@ class DBManager:
                         if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                             config.console.print("[dim green][DB] reserved_orders 테이블에 composite_json 컬럼 추가 완료[/dim green]")
                     except Exception as e:
+                        #  화면에만 찍으면 헤드리스 운영(라즈베리파이)에서는 아무도 못 본다.
+                        #  컬럼이 없으면 그 컬럼을 읽는 조회가 **영영** 실패하므로 반드시 남긴다.
+                        logger.error(f"[DB] reserved_orders 컬럼 추가 실패(composite_json): {e}")
                         config.console.print(f"[red][DB] reserved_orders 컬럼 추가 실패(composite_json): {e}[/red]")
 
                 conn.commit()
@@ -705,7 +751,7 @@ class DBManager:
             # 조용히 넘기면 나중에 누락 원인을 못 찾으므로 반드시 남긴다.
             logger.warning(f"[Journal] 전송 대기열 적재 실패 (거래 기록은 정상 저장됨): {e}")
 
-    def _requeue_journal_after_update(self, cursor, odno, where_status):
+    def _requeue_journal_after_update(self, cursor, odno, where_status, on_date=None):
         """정정된 체결 기록을 매매일지 대기열에 **다시 반영**한다.
 
         outbox 의 payload 는 적재 시점 스냅샷이다. 그래서 뒤늦은 정정 — 부분체결이
@@ -728,6 +774,9 @@ class DBManager:
                 return
             q = "SELECT * FROM trades WHERE odno = ?"
             params = [odno]
+            if on_date:
+                q += " AND substr(time, 1, 10) = ?"
+                params.append(on_date)
             if where_status is not None:
                 q += " AND order_status = ?"
                 params.append(where_status)
@@ -873,13 +922,29 @@ class DBManager:
                     return False
     
     def update_trade(self, odno, price=None, qty=None, profit_amt=None, profit_rate=None,
-                     order_status=None, where_status=None):
+                     order_status=None, where_status=None, on_date=None):
         """주문번호(odno)를 기준으로 거래 내역 업데이트
 
         where_status: 지정하면 그 상태의 행만 갱신한다. 같은 odno로 '접수'와 '체결' 행이
           함께 존재하므로, 체결 수량 누적 갱신처럼 한쪽만 고쳐야 할 때 쓴다.
           (지정하지 않으면 종전대로 해당 odno의 모든 행을 갱신한다)
+
+        [on_date · 2026-09-06] **주문번호는 당일 채번이라 그 값 하나로는 유일하지 않다**
+         ([[odno-daily-reset]]). check_trade_exists 는 2026-09-04 에 날짜를 받았는데,
+         같은 열쇠를 쓰는 이 **쓰기**는 그대로였다. 실측 — 두 달 전 '매도' 접수 행이 오늘
+         체결 한 건에 통째로 덮였다:
+             {'time': '2026-07-08 10:00:00', 'type': '매도', 'price': '99999',
+              'qty': '3', 'profit_amt': 0, 'order_status': '체결'}
+             → 그 날의 실현손익 -50,000 이 0 으로 사라진다.
+         읽기의 오판은 다음 주기가 바로잡을 수 있지만 이 덮어쓰기는 **되돌릴 수 없고**,
+         바로 아래 _requeue_journal_after_update 가 그 훼손된 과거 행을 웹 매매일지로
+         다시 밀어 올린다. 그래서 이 쓰기는 **기본이 '오늘'이다** — 과거 날짜의 행을
+         고치려는 호출만 그 날짜를 명시한다(해외 야간 체결은 ord_dt 가 어제일 수 있다).
         """
+        #  None 은 '전체'가 아니라 '오늘'이다. 쓰기에서 범위를 넓히는 쪽으로 틀리면
+        #  남의 날 기록이 사라지고, 좁히는 쪽으로 틀리면 갱신이 한 번 안 될 뿐이다.
+        if on_date is None:
+            on_date = datetime.now().strftime('%Y-%m-%d')
         with self.lock:
             for attempt in range(5):
                 try:
@@ -898,6 +963,9 @@ class DBManager:
                     if updates:
                         params.append(odno)
                         where = "odno = ?"
+                        if on_date:
+                            where += " AND substr(time, 1, 10) = ?"
+                            params.append(on_date)
                         if where_status is not None:
                             where += " AND order_status = ?"
                             params.append(where_status)
@@ -906,7 +974,7 @@ class DBManager:
                         # 체결 내용이 바뀌었으면 매매일지 대기열의 스냅샷도 같이 고친다.
                         #  같은 트랜잭션에서 해야 '로컬은 고쳐졌는데 큐엔 옛 값'인 틈이 없다.
                         if any(v is not None for v in (price, qty, profit_amt, profit_rate)):
-                            self._requeue_journal_after_update(cursor, odno, where_status)
+                            self._requeue_journal_after_update(cursor, odno, where_status, on_date)
 
                         conn.commit()
                     break
@@ -914,12 +982,15 @@ class DBManager:
                     if "locked" in str(e) and attempt < 4:
                         time.sleep(0.5)
                         continue
-                    if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
-                        config.console.print(f"[red][DB] Update Error: {e}[/red]")
+                    #  [Fix 2026-09-06] 종전에는 화면에 한 줄 찍는 것이 전부였다. 헤드리스
+                    #   운영(라즈베리파이)에서는 보는 사람이 없고 로그 파일에도 남지 않아,
+                    #   체결 수량·실현손익 갱신이 통째로 유실돼도 사후 추적이 불가능했다.
+                    #   실제로 이 침묵이 개발 중 한 번 물었다 — 내부 호출이 TypeError 를
+                    #   내는 바람에 UPDATE 가 커밋 전에 끊겼는데 아무 흔적도 없었다.
+                    self._note_write_failure("거래내역 갱신", str(odno), e)
                     break
                 except Exception as e:
-                    if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
-                        config.console.print(f"[red][DB] Update Error: {e}[/red]")
+                    self._note_write_failure("거래내역 갱신", str(odno), e)
                     break
     
     def check_trade_exists(self, odno, order_status, on_date=None):
@@ -955,34 +1026,67 @@ class DBManager:
             _swallowed("check_trade_exists", e)
             raise
             
-    def get_original_order_type(self, odno):
-        """주문번호로 원 주문(접수 상태)의 유형 조회"""
+    def get_original_order_type(self, odno, on_date=None):
+        """주문번호로 원 주문(접수 상태)의 유형 조회.
+
+        [주의] 현재 **운영 코드에서 부르는 곳이 없다**(테스트만 쓴다). get_trade_by_odno
+         가 같은 행을 통째로 돌려주므로 그쪽이 정본이다. 남겨 두되 날짜 범위는 같이
+         받는다 — 당일 채번 문제를 모르는 채 되살아나면 그 순간 같은 사고가 난다.
+        """
         try:
             conn = self._get_conn()
             cursor = conn.cursor()
             # [수정] 원본 주문 조회 시 '접수'뿐만 아니라 '정정', '취소' 상태도 조회 허용
-            cursor.execute("SELECT type FROM trades WHERE odno = ? AND order_status IN ('접수', '정정', '취소') ORDER BY id DESC LIMIT 1", (odno,))
+            q = ("SELECT type FROM trades WHERE odno = ? "
+                 "AND order_status IN ('접수', '정정', '취소')")
+            params = [odno]
+            if on_date:
+                q += " AND substr(time, 1, 10) = ?"
+                params.append(on_date)
+            cursor.execute(q + " ORDER BY id DESC LIMIT 1", params)
             row = cursor.fetchone()
             return row[0] if row else None
         except Exception as e:
             _swallowed("get_original_order_type", e)
             return None
 
-    def get_trade_by_odno(self, odno):
-        """주문번호로 원 주문(접수) 내역 조회"""
+    def get_trade_by_odno(self, odno, on_date=None):
+        """주문번호로 원 주문(접수) 내역 조회.
+
+        [on_date · 2026-09-06] 주문번호는 **당일 채번**이라 이 값 하나로는 유일하지 않다
+         ([[odno-daily-reset]]). 날짜를 주지 않으면 전체 이력에서 가장 최근 행을 집어
+         오는데, 오늘 그 번호의 접수 행이 없는 경우(= 앱/HTS 외부 주문)에는 **몇 달 전
+         같은 번호의 주문**이 잡힌다. 호출부는 그것을 '원 주문'으로 믿고 type·profit_amt·
+         score·stop_loss_rate 를 물려주므로, 오늘 낸 매수가 두 달 전 매도의 손익을 달고
+         원장에 남는다(실측: 2026-07-08 '매도' 행이 오늘 체결의 원 주문으로 잡혔다).
+
+         체결 대사처럼 '오늘 것'을 찾는 경로는 반드시 날짜를 준다. 과거를 채워 넣는
+         경로(holdings_backfill)만 None 으로 전체를 본다 — 그쪽은 애초에 옛 행을 찾는다.
+        """
         try:
             conn = self._get_conn()
             cursor = conn.cursor()
             # [수정] 정정 주문에 의해 새로 생성된 odno도 찾을 수 있도록 상태 범위 확장
-            cursor.execute("SELECT * FROM trades WHERE odno = ? AND order_status IN ('접수', '정정', '취소') ORDER BY id DESC LIMIT 1", (odno,))
+            q = ("SELECT * FROM trades WHERE odno = ? "
+                 "AND order_status IN ('접수', '정정', '취소')")
+            params = [odno]
+            if on_date:
+                q += " AND substr(time, 1, 10) = ?"
+                params.append(on_date)
+            cursor.execute(q + " ORDER BY id DESC LIMIT 1", params)
             row = cursor.fetchone()
             return dict(row) if row else None
         except Exception as e:
             _swallowed("get_trade_by_odno", e)
             return None
 
-    def get_cancel_record_by_org_odno(self, odno):
+    def get_cancel_record_by_org_odno(self, odno, on_date=None):
         """원주문번호(org_odno)로 가장 최근 취소 이력 1건 조회 (외부/사후 취소 중복 판별용)
+
+        [on_date · 2026-09-06] org_odno 도 당일 채번이다([[odno-daily-reset]]). 날짜가
+        없으면 **몇 달 전 취소 이력**이 오늘 취소의 짝으로 잡히고, 호출부는 그것을
+        "우리가 낸 취소"로 읽어 외부 취소 알림을 **삼킨다** — 누군가 휴대폰으로 우리
+        주문을 취소해도 운영자가 끝내 모른다. 조회 실패(예외)와 방향이 반대인 오답이다.
 
         **조회 실패는 올린다.** 이력 없음(None)과 갈라야 한다 — 유일한 호출부
         (ConclusionMonitor)는 None 을 "우리가 낸 취소가 아니다"로 읽어 운영자에게
@@ -993,22 +1097,42 @@ class DBManager:
         try:
             conn = self._get_conn()
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT id, reason FROM trades WHERE org_odno = ? AND order_status IN ('취소', '취소(추정)') ORDER BY id DESC LIMIT 1",
-                (odno,)
-            )
+            q = ("SELECT id, reason FROM trades WHERE org_odno = ? "
+                 "AND order_status IN ('취소', '취소(추정)')")
+            params = [odno]
+            if on_date:
+                q += " AND substr(time, 1, 10) = ?"
+                params.append(on_date)
+            cursor.execute(q + " ORDER BY id DESC LIMIT 1", params)
             row = cursor.fetchone()
             return dict(row) if row else None
         except Exception as e:
             _swallowed("get_cancel_record_by_org_odno", e)
             raise
 
-    def get_reserved_order_by_odno(self, odno):
-        """주문번호(odno)로 발동된 예약 주문 1건 조회"""
+    def get_reserved_order_by_odno(self, odno, on_date=None):
+        """주문번호(odno)로 발동된 예약 주문 1건 조회.
+
+        [on_date · 2026-09-06] 예약 주문 행은 발동한 **뒤에도 남는다**. 주문번호는 당일
+         채번이므로([[odno-daily-reset]]) 날짜를 주지 않으면 몇 주 전 TRIGGERED 행이
+         오늘 체결의 '예약 주문'으로 잡힌다 — 호출부는 그것으로 체결 사유·조건을
+         라벨링하므로 원장에 남는 이유가 통째로 남의 것이 된다.
+         발동일(triggered_at)로 가른다. created_at 으로는 가를 수 없다 — 지난주에 걸어
+         둔 예약이 오늘 발동할 수 있다.
+
+        [옛 행] triggered_at 이 비어 있는 행(이 컬럼이 생기기 전 발동분)은 날짜를
+         물으면 걸리지 않는다. 그 편이 옳다 — 날짜를 모르는 행을 오늘 것으로 볼 근거가
+         없고, 여기서 못 찾으면 호출부는 '예약 주문이 아니다'로 읽어 라벨만 덜 붙인다.
+        """
         try:
             conn = self._get_conn()
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM reserved_orders WHERE odno = ?", (str(odno),))
+            q = "SELECT * FROM reserved_orders WHERE odno = ?"
+            params = [str(odno)]
+            if on_date:
+                q += " AND substr(triggered_at, 1, 10) = ?"
+                params.append(on_date)
+            cursor.execute(q, params)
             row = cursor.fetchone()
             return dict(row) if row else None
         except Exception as e:
@@ -1750,6 +1874,9 @@ class DBManager:
             if self._is_screen_output_allowed() and deleted_count > 0 and config.SCREEN_DEBUG_LEVEL != "OFF":
                 config.console.print(f"[dim yellow][DB] 오래된 거래 내역 {deleted_count}건을 정리했습니다. ({days_to_keep}일 이전)[/dim yellow]")
         except Exception as e:
+            #  화면 출력은 기록이 아니다 — 정리가 계속 실패하면 DB 가 무한히 커져
+            #  1GB 파이에서 결국 쓰기가 막힌다. 조용히 커지는 것이 가장 나쁘다.
+            logger.error(f"[DB] 오래된 데이터 정리 실패: {e}")
             if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
                 config.console.print(f"[red][DB] Cleanup Error: {e}[/red]")
 
@@ -2206,7 +2333,12 @@ class DBManager:
                 try:
                     conn = self._get_conn()
                     cursor = conn.cursor()
-                    if odno: cursor.execute("UPDATE reserved_orders SET status=?, odno=? WHERE id=?", (status, odno, order_id))
+                    if odno:
+                        #  odno 와 발동 시각은 **함께** 적는다. 시각 없이 주문번호만 남으면
+                        #  그 행은 날짜 없는 열쇠가 되어 다음 달 같은 번호의 체결에 잡힌다.
+                        cursor.execute(
+                            "UPDATE reserved_orders SET status=?, odno=?, triggered_at=? WHERE id=?",
+                            (status, odno, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), order_id))
                     elif fail_reason: cursor.execute("UPDATE reserved_orders SET status=?, fail_reason=? WHERE id=?", (status, fail_reason, order_id))
                     else: cursor.execute("UPDATE reserved_orders SET status=? WHERE id=?", (status, order_id))
                     conn.commit()

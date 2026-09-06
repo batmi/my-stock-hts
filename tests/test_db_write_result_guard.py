@@ -39,14 +39,53 @@ _ALLOWED: dict[str, str] = {
 _WRITE_SQL = ("INSERT", "UPDATE", "DELETE", "REPLACE")
 
 
+def _sql_head(node):
+    """execute() 에 넘긴 SQL 의 앞부분. 못 읽으면 None.
+
+    [넓힘 2026-09-06] 종전에는 ast.Constant 만 봤다. 그래서 **f-string 으로 조립한
+     SQL 은 검사에서 통째로 빠졌다** — update_trade 가 정확히 그 모양이라
+     (`f"UPDATE trades SET {...} WHERE {where}"`), 그 함수의 침묵한 핸들러가 이 가드를
+     그냥 통과했다. 실제로 그 침묵이 물었다: 내부 호출 하나가 TypeError 를 내며 커밋
+     전에 끊겼는데 화면에도 로그에도 아무 흔적이 없었다.
+    """
+    if not node.args:
+        return None
+    a = node.args[0]
+    if isinstance(a, ast.Constant) and isinstance(a.value, str):
+        return a.value
+    if isinstance(a, ast.JoinedStr):
+        for part in a.values:          # f-string 은 조각의 나열이다
+            if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                return part.value
+            return None                # 첫 조각부터 값이면 무엇으로 시작할지 모른다
+    return None
+
+
 def _writes(fn):
     for n in ast.walk(fn):
         if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                and n.func.attr == "execute" and n.args
-                and isinstance(n.args[0], ast.Constant)
-                and isinstance(n.args[0].value, str)
-                and n.args[0].value.strip().upper().startswith(_WRITE_SQL)):
-            return True
+                and n.func.attr == "execute"):
+            head = _sql_head(n)
+            if head and head.strip().upper().startswith(_WRITE_SQL):
+                return True
+    return False
+
+
+#  '말했다'로 인정하는 호출. **화면 출력은 기록이 아니다** — 운영기는 헤드리스라
+#  보는 사람이 없고, config.SCREEN_DEBUG_LEVEL 이 OFF 면 그마저도 안 찍힌다.
+_SPEAKS = ("logger", "_note_write_failure", "_swallowed", "send_telegram_message",
+           "alert_delivered", "warning", "error", "exception", "critical")
+
+
+def _speaks(node):
+    """이 문장이 흔적을 남기는가(로그·경보). 화면 출력은 세지 않는다."""
+    for n in ast.walk(node):
+        if isinstance(n, ast.Call):
+            f = n.func
+            name = getattr(f, "attr", None) or getattr(f, "id", None) or ""
+            owner = getattr(getattr(f, "value", None), "id", "") or ""
+            if name in _SPEAKS or owner in _SPEAKS:
+                return True
     return False
 
 
@@ -54,10 +93,13 @@ def _is_silent(handler):
     """이 핸들러가 아무 말 없이 넘어가는가.
 
     재시도로 넘어가는 `continue` 는 침묵이 아니다 — 아직 포기하지 않았다는 뜻이다.
+    결과를 돌려주거나(return) 올리면(raise) 호출부가 안다. 그 셋 다 아니면 **흔적을
+    남겨야** 한다 — 화면에만 찍는 것은 남긴 것이 아니다(위 _SPEAKS 주석).
     """
     for stmt in handler.body:
-        if isinstance(stmt, (ast.Return, ast.Raise, ast.Expr, ast.Continue,
-                             ast.If, ast.Assign, ast.AugAssign)):
+        if isinstance(stmt, (ast.Return, ast.Raise, ast.Continue)):
+            return False
+        if _speaks(stmt):
             return False
     return True
 
@@ -138,3 +180,42 @@ def test_the_detector_treats_a_retry_as_not_silent():
         "            continue\n")
     handlers = [h for h in ast.walk(retry.body[0]) if isinstance(h, ast.ExceptHandler)]
     assert not _is_silent(handlers[0])
+
+
+def test_f_string_으로_조립한_SQL도_검사_대상이다(tmp_path):
+    """[넓힘 자체 점검 · 2026-09-06] 이 구멍으로 update_trade 가 통째로 빠져 있었다.
+
+    쓰기 SQL 을 f-string 으로 만드는 것은 흔한 일이고(SET 절을 조건부로 붙인다),
+    그 함수들이야말로 갱신 대상이 많아 실패의 대가가 크다.
+    """
+    import ast as _ast
+    src = ("def f(cursor, updates, where):\n"
+           "    try:\n"
+           "        cursor.execute(f\"UPDATE t SET {updates} WHERE {where}\", [])\n"
+           "    except Exception as e:\n"
+           "        break_it = 1\n")
+    fn = _ast.parse(src).body[0]
+    assert _writes(fn), "f-string 으로 조립한 UPDATE 를 쓰기로 보지 않는다"
+
+
+def test_화면_출력만으로는_말했다고_보지_않는다():
+    """운영기는 헤드리스라 보는 사람이 없고, SCREEN_DEBUG_LEVEL 이 OFF 면 그마저 없다.
+
+    실제로 이 구멍이 물었다 — update_trade 안의 TypeError 로 UPDATE 가 커밋 전에
+    끊겼는데 화면에도 로그에도 아무 흔적이 없었다.
+    """
+    import ast as _ast
+    screen_only = _ast.parse(
+        "try:\n"
+        "    pass\n"
+        "except Exception as e:\n"
+        "    config.console.print(f'error {e}')\n").body[0].handlers[0]
+    assert _is_silent(screen_only), "화면에만 찍는 핸들러를 '말했다'로 본다"
+
+    logged = _ast.parse(
+        "try:\n"
+        "    pass\n"
+        "except Exception as e:\n"
+        "    logger.error(f'error {e}')\n"
+        "    config.console.print('x')\n").body[0].handlers[0]
+    assert not _is_silent(logged), "로그를 남기는데도 침묵으로 본다"

@@ -1399,8 +1399,8 @@ class TelegramCommander:
         gross_loss = 0
         
         for t in sell_trades:
-            qty = int(float(t.get('qty', 0)))
-            price = float(t.get('price', 0))
+            qty = api.safe_int(t.get('qty'))
+            price = api.safe_float(t.get('price'), default=0.0)
             profit = int(t.get('profit_amt') or 0)
             
             if profit > 0: gross_profit += profit

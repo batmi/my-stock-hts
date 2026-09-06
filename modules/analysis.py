@@ -5293,7 +5293,7 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                     pbr_str = detail.get('pbrx', '[dim]-[/dim]') if detail.get('pbrx') != '-' else '[dim]-[/dim]'
                 if is_us_etf_context:
                     try:
-                        shar_val = float(detail.get('shar', 0))
+                        shar_val = api.safe_float(detail.get('shar'), default=0.0)
                         shar_str = f"{shar_val/1_000_000:.1f}M" if shar_val >= 1_000_000 else f"{shar_val:,.0f}"
                     except Exception: pass
                 try:
@@ -5340,9 +5340,9 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                     diff = curr - base_price
                     rate = (diff / base_price) * 100
                 else:
-                    try: rate = float(out.get('prdy_ctrt', 0))
+                    try: rate = api.safe_float(out.get('prdy_ctrt'), default=0.0)
                     except Exception: rate = 0.0
-                    try: diff = int(out.get('prdy_vrss', 0))
+                    try: diff = api.safe_int(out.get('prdy_vrss'))
                     except Exception: diff = 0
 
                 # [장전 폴백] 장전(NXT 개장 08:00 전)엔 무체결로 현재가=기준가 → 등락률 0%가 된다.

@@ -77,7 +77,7 @@ def test_paper_fill_closes_pending_order(paper, monitor, monkeypatch):
     trader.order_manager.pending_orders['005930'] = {odno: OrderStatus.ORDER_SENT}
     monkeypatch.setattr(auto_trade, 'AutoTrader', lambda: trader)
     monkeypatch.setattr(db_manager.db, 'get_trade_by_odno',
-                        lambda o: {'type': 'buy(AUTO)', 'name': '삼성전자', 'qty': 2,
+                        lambda o, **_k: {'type': 'buy(AUTO)', 'name': '삼성전자', 'qty': 2,
                                    'price': 70000, 'reason': '조건 만족'})
     monkeypatch.setattr(db_manager.db, 'check_trade_exists', lambda *a, **k: False)
 
@@ -105,7 +105,7 @@ def test_paper_fill_uses_ledger_price(paper, monitor, monkeypatch):
     trader.order_manager.pending_orders['005930'] = {odno: OrderStatus.ORDER_SENT}
     monkeypatch.setattr(auto_trade, 'AutoTrader', lambda: trader)
     monkeypatch.setattr(db_manager.db, 'get_trade_by_odno',
-                        lambda o: {'type': 'buy(AUTO)', 'name': '삼성전자', 'qty': 1,
+                        lambda o, **_k: {'type': 'buy(AUTO)', 'name': '삼성전자', 'qty': 1,
                                    'price': 0, 'reason': '조건 만족'})
     monkeypatch.setattr(db_manager.db, 'check_trade_exists', lambda *a, **k: False)
     inserted = []
@@ -139,7 +139,7 @@ def test_paper_fill_updates_order_row_price(paper, monitor, monkeypatch):
     trader.order_manager.pending_orders['005930'] = {odno: OrderStatus.ORDER_SENT}
     monkeypatch.setattr(auto_trade, 'AutoTrader', lambda: trader)
     monkeypatch.setattr(db_manager.db, 'get_trade_by_odno',
-                        lambda o: {'type': 'buy(AUTO)', 'name': '삼성전자', 'qty': 1,
+                        lambda o, **_k: {'type': 'buy(AUTO)', 'name': '삼성전자', 'qty': 1,
                                    'price': 0, 'reason': '조건 만족'})
     monkeypatch.setattr(db_manager.db, 'check_trade_exists', lambda *a, **k: False)
     monkeypatch.setattr(db_manager.db, 'insert_trade', lambda *a, **k: None)
@@ -176,7 +176,7 @@ def test_paper_restart_backfills_today_ledger(paper, monitor, monkeypatch):
     trader = _FakeTrader()  # pending 비어 있음 = 재기동 직후
     monkeypatch.setattr(auto_trade, 'AutoTrader', lambda: trader)
     monkeypatch.setattr(db_manager.db, 'get_trade_by_odno',
-                        lambda o: {'type': 'buy(AUTO)', 'name': '삼성전자', 'qty': 2,
+                        lambda o, **_k: {'type': 'buy(AUTO)', 'name': '삼성전자', 'qty': 2,
                                    'price': 70000, 'reason': '조건 만족'})
     monkeypatch.setattr(db_manager.db, 'check_trade_exists', lambda *a, **k: False)
     inserted = []
@@ -200,7 +200,7 @@ def _run_backfill_with_trade_type(paper, monitor, monkeypatch, trade_type):
     trader = _FakeTrader()  # pending 비어 있음 = 재기동 직후
     monkeypatch.setattr(auto_trade, 'AutoTrader', lambda: trader)
     monkeypatch.setattr(db_manager.db, 'get_trade_by_odno',
-                        lambda o: {'type': trade_type, 'name': '삼성전자', 'qty': 2,
+                        lambda o, **_k: {'type': trade_type, 'name': '삼성전자', 'qty': 2,
                                    'price': 70000, 'reason': '조건 만족'})
     monkeypatch.setattr(db_manager.db, 'check_trade_exists', lambda *a, **k: False)
     monkeypatch.setattr(db_manager.db, 'insert_trade', lambda *a, **k: None)

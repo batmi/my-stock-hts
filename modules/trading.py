@@ -275,8 +275,8 @@ def _create_fill_history(db_order, reason_msg):
             type_str = db_order.get('type', '')
             code = db_order.get('code')
             name = db_order.get('name')
-            qty = int(float(db_order.get('qty', 0)))
-            price = float(db_order.get('price', 0))
+            qty = api.safe_int(db_order.get('qty'))
+            price = api.safe_float(db_order.get('price'), default=0.0)
             
             # [추가] 시장가(0)인 경우 현재가 조회하여 대체
             if price <= 0:
@@ -289,9 +289,9 @@ def _create_fill_history(db_order, reason_msg):
                         cp_data = api.get_current_price_data(code, is_overseas=is_overseas)
                         if cp_data and cp_data.get('rt_cd') == '0':
                             if is_overseas:
-                                price = float(cp_data['output'].get('last', 0))
+                                price = api.safe_float(cp_data['output'].get('last'), default=0.0)
                             else:
-                                price = float(cp_data['output'].get('stck_prpr', 0))
+                                price = api.safe_float(cp_data['output'].get('stck_prpr'), default=0.0)
                 except Exception: pass
             
             # [추가] None 값 안전 처리 (DB 저장 실패 방지)
@@ -323,7 +323,7 @@ def _create_fill_history(db_order, reason_msg):
                 score=db_order.get('strategy_score', 0),
                 profit_amt=profit_amt,
                 profit_rate=profit_rate,
-                stop_loss_rate=float(db_order.get('stop_loss_rate', 0.0))
+                stop_loss_rate=api.safe_float(db_order.get('stop_loss_rate'), default=0.0)
             )
             if config.FILE_DEBUG_LEVEL == "DEBUG":
                 logger.debug(f"[ORDER_DEBUG] 체결 히스토리 생성 완료: {odno} (체결(추정))")
@@ -331,10 +331,10 @@ def _create_fill_history(db_order, reason_msg):
         else:
             if config.FILE_DEBUG_LEVEL == "DEBUG":
                 logger.debug(f"[ORDER_DEBUG] 이미 체결 내역 존재하여 생성 스킵: {odno}")
-            return float(db_order.get('price', 0))
+            return api.safe_float(db_order.get('price'), default=0.0)
     except Exception as e:
         logger.error(f"[ORDER_DEBUG] 체결 히스토리 생성 실패: {e}", exc_info=True)
-        return float(db_order.get('price', 0)) if db_order else 0.0
+        return api.safe_float(db_order.get('price'), default=0.0) if db_order else 0.0
             
 def _show_order_book(code, name, is_overseas, levels=5):
     """간단한 호가창 출력 (5호가)"""
@@ -356,20 +356,23 @@ def _show_order_book(code, name, is_overseas, levels=5):
     ask_prices, ask_vols = [], []
     bid_prices, bid_vols = [], []
     
+    #  [Fix 2026-09-06] 빈 호가 단계는 증권사가 **빈 문자열**을 준다(특히 상한·하한가
+    #   근처와 시간외). float('') 는 ValueError 라 호가창 메뉴가 통째로 터졌다 —
+    #   이 함수는 try 밖이다. 값이 없으면 0 으로 보여 주는 편이 옳다.
     if is_overseas:
         for i in range(levels, 0, -1):
-            ask_prices.append(float(out1.get(f'pask{i}', 0)))
-            ask_vols.append(int(float(out1.get(f'vask{i}', 0))))
+            ask_prices.append(api.safe_float(out1.get(f'pask{i}'), default=0.0))
+            ask_vols.append(api.safe_int(out1.get(f'vask{i}')))
         for i in range(1, levels + 1):
-            bid_prices.append(float(out1.get(f'pbid{i}', 0)))
-            bid_vols.append(int(float(out1.get(f'vbid{i}', 0))))
+            bid_prices.append(api.safe_float(out1.get(f'pbid{i}'), default=0.0))
+            bid_vols.append(api.safe_int(out1.get(f'vbid{i}')))
     else:
         for i in range(levels, 0, -1):
-            ask_prices.append(float(out1.get(f'askp{i}', 0)))
-            ask_vols.append(int(float(out1.get(f'askp_rsqn{i}', 0))))
+            ask_prices.append(api.safe_float(out1.get(f'askp{i}'), default=0.0))
+            ask_vols.append(api.safe_int(out1.get(f'askp_rsqn{i}')))
         for i in range(1, levels + 1):
-            bid_prices.append(float(out1.get(f'bidp{i}', 0)))
-            bid_vols.append(int(float(out1.get(f'bidp_rsqn{i}', 0))))
+            bid_prices.append(api.safe_float(out1.get(f'bidp{i}'), default=0.0))
+            bid_vols.append(api.safe_int(out1.get(f'bidp_rsqn{i}')))
 
     table = Table(title=f"📊 {name} 호가창 (상하 {levels}호가)", box=box.SIMPLE_HEAD, header_style="dim", border_style="dim")
     table.add_column("매도잔량", justify="right", style="blue", width=15)
@@ -511,8 +514,11 @@ def show_open_orders():
 
                     ord_unpr = 0.0
                     for key in ['ft_ord_unpr3', 'ft_ord_unpr', 'ord_unpr', 'ord_init_unpr', 'ovrs_ord_unpr']:
-                        if order.get(key) and float(order.get(key)) > 0:
-                            ord_unpr = float(order.get(key))
+                        #  빈 문자열은 거짓이라 종전에도 닿지 않았지만, '0.00' 처럼 숫자가
+                        #  아닌 문자열이 오면 그대로 터진다(이 화면은 try 밖이다).
+                        _v = api.safe_float(order.get(key), default=0.0)
+                        if _v > 0:
+                            ord_unpr = _v
                             break
                     
                     cur_price_str = "-"
@@ -1156,7 +1162,10 @@ def modify_order():
     action_name = "정정" if action == "1" else "취소"
     
     # [수정] 매수/매도 구분 식별: API에 의존하지 않고 DB의 원본 주문에서 우선 추출
-    org_trade_info = db_manager.db.get_trade_by_odno(org_odno)
+    #  odno 는 당일 채번이라 날짜와 짝지어야 유일하다([[odno-daily-reset]]).
+    #  정정·취소 대상은 거래소에 살아 있는 **오늘의** 주문이다.
+    org_trade_info = db_manager.db.get_trade_by_odno(
+        org_odno, on_date=utils.odno_scope_date(target_order))
     sb_label = ""
     if org_trade_info:
         t_type = org_trade_info.get('type', '')
@@ -1321,7 +1330,8 @@ def modify_order():
                 odno = str((res_json.get('output') or {}).get('ODNO') or '').strip()
                 
                 # [수정] DB 저장을 가장 최우선으로 실행하여 Race Condition 원천 차단
-                org_trade = db_manager.db.get_trade_by_odno(org_odno)
+                org_trade = db_manager.db.get_trade_by_odno(
+                    org_odno, on_date=utils.odno_scope_date(target_order))
                 profit_amt = 0
                 profit_rate = 0.0
                 inherited_score = 0
@@ -1374,7 +1384,11 @@ def modify_order():
                                 profit_amt = int(est_sell_amt - est_buy_amt)
                                 profit_rate = ((c_price - buy_price) / buy_price) * 100
                                 # [추가] 재계산된 손익을 DB에 업데이트
-                                db_manager.db.update_trade(odno, profit_amt=profit_amt, profit_rate=profit_rate)
+                                #  방금 INSERT 한 오늘 행만 고친다 — 날짜를 주지 않으면
+                                #  같은 번호의 과거 행이 함께 덮인다(되돌릴 수 없다).
+                                db_manager.db.update_trade(odno, profit_amt=profit_amt,
+                                                           profit_rate=profit_rate,
+                                                           on_date=utils.odno_scope_date())
                                 msg += f"\n예상손익: {int(profit_amt):+,}원 ({profit_rate:+.2f}%)"
                     except Exception: pass
 

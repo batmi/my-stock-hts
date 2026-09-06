@@ -319,7 +319,8 @@ class AutoTrader:
                 existing = unique_records[key]
                 
                 # 새 레코드(r)가 더 최신 정보(체결 등)를 담고 있을 때 병합
-                if float(r.get('price', 0)) > 0 and float(existing.get('price', 0)) <= 0:
+                if (api.safe_float(r.get('price'), default=0.0) > 0
+                            and api.safe_float(existing.get('price'), default=0.0) <= 0):
                     existing['price'] = r['price']
                     
                 if r.get('profit_amt'):
@@ -3209,8 +3210,8 @@ class AutoTrader:
             total_profit += profit
             total_profit_rate += rate
             
-            qty = int(float(t.get('qty', 0)))
-            price = float(t.get('price', 0))
+            qty = api.safe_int(t.get('qty'))
+            price = api.safe_float(t.get('price'), default=0.0)
             sell_amt = qty * price
             buy_amt = sell_amt - profit
             total_buy_amt_for_sell += buy_amt
@@ -4753,7 +4754,10 @@ class AutoTrader:
             for odno in odnos:
                 t_type = ""
                 try:
-                    tr = db_manager.db.get_trade_by_odno(odno)
+                    #  미체결 매수는 당일 주문이다. 날짜로 좁히지 않으면 옛 '매도' 행이
+                    #  잡혀 이 매수가 취소 대상에서 빠진다 — 손절 중인 종목에 매수가
+                    #  열린 채 남는다. 못 찾으면 아래 unknown 분기가 보수적으로 처리한다.
+                    tr = db_manager.db.get_trade_by_odno(odno, on_date=utils.odno_scope_date())
                     t_type = str((tr or {}).get('type', ''))
                 except Exception as e:
                     #  [모름은 말한다 · 2026-09-05] 매수/매도는 여기서만 갈린다

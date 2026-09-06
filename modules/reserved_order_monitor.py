@@ -364,7 +364,7 @@ class ReservedOrderMonitor:
                             trigger, reason = self._eval_composite(order, ctx)
 
                     elif condition_type == 'TRAILING_BUY':
-                        lowest = float(order.get('lowest_price', 0.0))
+                        lowest = api.safe_float(order.get('lowest_price'), default=0.0)
                         if lowest <= 0.0 or curr_price < lowest:
                             db_manager.db.update_reserved_order_lowest(order['id'], curr_price)
                             lowest = curr_price
@@ -375,7 +375,7 @@ class ReservedOrderMonitor:
                                 trigger, reason = True, f"바닥({lowest:,.0f}) 대비 {rebound_rate:.1f}% 반등 매수"
                             
                     elif condition_type == 'TRAILING_SELL':
-                        highest = float(order.get('highest_price', 0.0))
+                        highest = api.safe_float(order.get('highest_price'), default=0.0)
                         if highest <= 0.0 or curr_price > highest:
                             db_manager.db.update_reserved_order_highest(order['id'], curr_price)
                             highest = curr_price

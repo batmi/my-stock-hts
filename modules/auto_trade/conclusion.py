@@ -73,19 +73,11 @@ def _recalc_realized(origin_trade, fill_price, fill_qty, is_overseas, fallback_a
 def _odno_scope_date(item, trade_time_str=None):
     """이 체결 행이 저장될 날짜('YYYY-MM-DD').
 
-    증권사 주문번호는 **당일 채번**이라 날짜와 짝지어야 유일하다(ConclusionMonitor
-    `_purge_stale_order_keys` 주석 참조). 중복 판정은 그날 안에서만 해야 한다.
-
-    [주의] 저장 일자는 `ord_dt` 가 아니라 **실제로 쓰는 시각**을 따른다 — 체결 시각이
-     원 주문 접수 시각보다 과거로 오면(거래소 서버 시간 역전) 접수 시각으로 당겨서
-     저장하기 때문이다. 판정 일자와 저장 일자가 어긋나면 같은 체결이 두 번 적재된다.
+    [SSOT · 2026-09-06] 같은 계산이 account.sync_today_trades 에도 손으로 적혀 있었다.
+     주문번호가 당일 채번이라는 사실은 이 파일만의 사정이 아니므로 utils 로 올렸다 —
+     한쪽만 고치면 두 경로가 다른 날짜로 같은 체결을 판정한다.
     """
-    if trade_time_str and len(str(trade_time_str)) >= 10:
-        return str(trade_time_str)[:10]
-    ord_dt = str((item or {}).get('ord_dt') or '')
-    if len(ord_dt) == 8 and ord_dt.isdigit():
-        return f"{ord_dt[:4]}-{ord_dt[4:6]}-{ord_dt[6:]}"
-    return datetime.now().strftime('%Y-%m-%d')
+    return utils.odno_scope_date(item, trade_time_str)
 
 
 def _pkg():
@@ -453,481 +445,515 @@ class ConclusionMonitor:
                     if trades:
 
                         for item in trades:
-                            odno = item.get('odno')
-                            if not odno: continue
+                            #  [Fix 2026-09-06] 주문 **하나**의 오류가 그 계좌의 체결
+                            #   대사를 통째로 끊던 자리. 예약 주문 감시에서 같은 모양을
+                            #   2026-09-06 에 고쳤는데 체결 쪽이 남아 있었다. 실측 — 응답
+                            #   한 건의 avg_prvs 가 빈 문자열이면:
+                            #     깨진 건(005930) 기록됐나   : False
+                            #     멀쩡한 건(000660) 기록됐나 : False   ← 남의 종목이다
+                            #   그 매수는 원장에 없으니 손절선·진입일·트레일링 앵커가
+                            #   붙을 근거가 없고, 매도였다면 실현손익이 빠져 입출금
+                            #   판정까지 어긋난다([[daily-asset-baseline-transfers]]).
+                            #   같은 응답이 매 주기 다시 오므로 **영구히** 반복된다.
+                            try:
+                                odno = item.get('odno')
+                                if not odno: continue
                             
-                            is_overseas_trade = 'ft_ord_qty' in item or 'ft_ccld_qty' in item
+                                is_overseas_trade = 'ft_ord_qty' in item or 'ft_ccld_qty' in item
                             
-                            # [추가] 주문 상태 파악 및 업데이트 (State Machine)
-                            # API 필드: ord_qty(주문), tot_ccld_qty(체결), cncl_cfrm_qty(취소), rmn_qty(잔량)
-                            if is_overseas_trade:
-                                ord_qty = api.safe_int(item.get('ft_ord_qty'))
-                                ccld_qty = api.safe_int(item.get('ft_ccld_qty'))
-                                rmn_qty = api.safe_int(item.get('nccs_qty'))
-                                # [수정] 해외주식 취소 수량 필드(cncl_cfrm_qty) 누락 대비 계산식 적용
-                                cncl_qty = api.safe_int(item.get('cncl_cfrm_qty', ord_qty - ccld_qty - rmn_qty))
-                                if cncl_qty < 0: cncl_qty = 0
-                                avg_price = float(item.get('ft_ccld_unpr3', 0))
-                                type_name = item.get('sll_buy_dvsn_cd_name')
-                                if not type_name:
-                                    sll_buy_cd = item.get('sll_buy_dvsn_cd', '')
-                                    type_name = "매수" if sll_buy_cd == "02" else ("매도" if sll_buy_cd == "01" else "")
-                            else:
-                                ord_qty = api.safe_int(item.get('ord_qty'))
-                                ccld_qty = api.safe_int(item.get('tot_ccld_qty'))
-                                cncl_qty = api.safe_int(item.get('cncl_cfrm_qty'))
-                                rmn_qty = api.safe_int(item.get('rmn_qty'))
-                                avg_price = float(item.get('avg_prvs', 0))
-                                type_name = item.get('sll_buy_dvsn_cd_name')
-
-                            code_chk = item.get('pdno')
-                            
-                            new_status = OrderStatus.ACCEPTED
-                            if ord_qty > 0:
-                                if ccld_qty == ord_qty: new_status = OrderStatus.FILLED
-                                elif cncl_qty == ord_qty or (cncl_qty > 0 and rmn_qty == 0): new_status = OrderStatus.CANCELED
-                                elif ccld_qty > 0 and rmn_qty > 0: new_status = OrderStatus.PARTIAL_FILLED
-                            
-                            # AutoTrader 상태 업데이트 (싱글톤 인스턴스 접근)
-                            if code_chk and odno:
-                                if new_status == OrderStatus.FILLED: logger.debug(f"[ORDER_DEBUG] API 체결 확인: {code_chk} (No.{odno})")
-                                _pkg().AutoTrader().update_order_status(code_chk, odno, new_status)
-                            
-                            tot_ccld_qty = ccld_qty
-                            tot_cncl_qty = cncl_qty  # [추가] 취소 수량 누적치
-                            
-                            # [주문번호는 날짜와 함께여야 유일하다 · 2026-09-04]
-                            #  KIS 주문번호(odno)는 **당일 채번**이라 매일 0부터 다시 올라간다
-                            #  (실거래 기록 실측: 날짜순으로 정렬해도 번호가 19번 중 7번 작아지고,
-                            #   하루 안에서는 단조 증가한다). 종전 키 `cano-odno` 는 날짜가 없어
-                            #  어제 100주 체결된 번호가 오늘 10주짜리 새 주문으로 재등장하면
-                            #  `10 > 100` 이 거짓이 되어 **오늘 체결이 통째로 누락**된다
-                            #  (DB 기록·텔레그램·수동매매 제한 등록·제한 해제까지 전부).
-                            #  캐시가 프로세스 수명 내내 커지던 것도 함께 없앤다 — 운영기는 램 1GB다.
-                            key_date = str(item.get('ord_dt') or '') or datetime.now().strftime('%Y%m%d')
-                            #  튜플 키다 — 토스 주문번호에는 '-' 가 들어 있어 문자열로 이으면
-                            #  날짜 자리를 다시 갈라낼 수 없다.
-                            order_key = (cano, key_date, odno)
-                            self._purge_stale_order_keys(key_date)
-                            prev_qty = self.order_status.get(order_key, 0)
-
-                            if not hasattr(self, 'cancel_status'): self.cancel_status = {}
-                            prev_cncl_qty = self.cancel_status.get(order_key, 0)
-                            
-                            # [추가] 부분/전량 취소 감지 (수동 취소, 외부 앱 취소, 사후 강제 취소 등)
-                            if tot_cncl_qty > prev_cncl_qty:
-                                new_cncl_qty = tot_cncl_qty - prev_cncl_qty
-                                name = item.get('prdt_name') or item.get('ovrs_item_name') or item.get('item_nm')
-                                code = item.get('pdno')
-                                
-                                origin_trade = db_manager.db.get_trade_by_odno(odno)
-                                db_type_name = type_name or ""
-                                price_val = avg_price
-                                if origin_trade:
-                                    db_type_name = origin_trade.get('type', type_name)
-                                    if price_val <= 0: price_val = float(origin_trade.get('price', 0))
-                                
-                                db_type_name = db_type_name or ""
-                                
-                                # 수동 취소 또는 시스템(타임아웃) 등 이미 알림/저장된 이력인지 확인
-                                # [수정] DB 큐를 경유하는 전용 메서드 사용 (워커 스레드 커넥션의 교차 스레드 사용 방지)
-                                is_external_cancel = True
-                                try:
-                                    cancel_record = db_manager.db.get_cancel_record_by_org_odno(odno)
-                                    if cancel_record:
-                                        rec_reason = cancel_record.get('reason') or ""
-                                        if "수동" in rec_reason or "초과" in rec_reason or "타임아웃" in rec_reason or "외부" in rec_reason:
-                                            # 이미 시스템에서 의도했거나 알림을 보낸 취소면 중복 알림 생략
-                                            is_external_cancel = False
-                                except Exception as _e:
-                                    #  [Fix 2026-09-06] 종전에는 `except Exception: pass` 라
-                                    #   조회가 실패해도 is_external_cancel 이 True 로 남았다.
-                                    #   그러면 시스템이 방금 자기 손으로 낸 취소를 '외부 취소'로
-                                    #   단정해 ① 사람이 하지 않은 일을 했다고 알리고
-                                    #   ② 원장에 같은 취소를 `취소(외부)` 행으로 한 번 더 남긴다.
-                                    #   모르면 단정하지 않는다 — 알림도 원장 행도 만들지 않고,
-                                    #   다음 주기에 다시 본다(cancel_status 는 아래에서 갱신되지만
-                                    #   그건 '이번 취소를 이미 보았다'는 뜻일 뿐이다).
-                                    is_external_cancel = False
-                                    logger.warning(
-                                        f"[취소 판별] {name}({code}) 주문 {odno} 의 취소 이력을 "
-                                        f"조회하지 못했습니다 — 외부 취소로 단정하지 않습니다: "
-                                        f"{type(_e).__name__}: {_e}")
-                                
-                                if not initial:
-                                    if is_external_cancel:
-                                        is_overseas_stock = not (len(code) == 6 and code[0].isdigit() and code.isalnum()) if code else False
-                                        price_str = f"${price_val:,.2f}" if is_overseas_stock else f"{price_val:,.0f}원"
-                                        if price_val <= 0: price_str = "시장가"
-                                        
-                                        cancel_title = "부분 취소" if (rmn_qty > 0 or tot_ccld_qty > 0) else "전량 취소"
-                                        t_type = "매수" if "buy" in db_type_name.lower() or "매수" in db_type_name else ("매도" if "sell" in db_type_name.lower() or "매도" in db_type_name else "주문")
-                                        
-                                        msg = f"⚠️ [{t_type} {cancel_title} 감지] {name}({code})\n취소 수량: {new_cncl_qty}주 / 단가: {price_str}\n주문번호: {utils.format_order_no(odno)}\n사유: 앱(MTS)/HTS 외부 취소 또는 사후 강제 취소"
-                                        with utils.AccountContext(cano):
-                                            api.send_telegram_message(msg)
-                                            
-                                        # 외부 취소 이력 DB 등록
-                                        db_manager.db.insert_trade(f"{t_type}취소(외부)", code, name, new_cncl_qty, price_val, f"EXT_CAN_{odno}_{tot_cncl_qty}", org_odno=odno, reason=f"외부/사후 취소 감지 ({cancel_title})", order_status="취소")
+                                # [추가] 주문 상태 파악 및 업데이트 (State Machine)
+                                # API 필드: ord_qty(주문), tot_ccld_qty(체결), cncl_cfrm_qty(취소), rmn_qty(잔량)
+                                if is_overseas_trade:
+                                    ord_qty = api.safe_int(item.get('ft_ord_qty'))
+                                    ccld_qty = api.safe_int(item.get('ft_ccld_qty'))
+                                    rmn_qty = api.safe_int(item.get('nccs_qty'))
+                                    # [수정] 해외주식 취소 수량 필드(cncl_cfrm_qty) 누락 대비 계산식 적용
+                                    cncl_qty = api.safe_int(item.get('cncl_cfrm_qty', ord_qty - ccld_qty - rmn_qty))
+                                    if cncl_qty < 0: cncl_qty = 0
+                                    #  같은 응답의 수량은 전부 safe_int 로 받는데 단가만
+                                    #  맨 float() 였다. 증권사는 빈 문자열을 준다 —
+                                    #  float('') 는 ValueError 다(기본값 0 은 **키가 없을
+                                    #  때만** 쓰인다). 형제들과 같은 방어로 맞춘다.
+                                    avg_price = api.safe_float(item.get('ft_ccld_unpr3'), default=0.0)
+                                    type_name = item.get('sll_buy_dvsn_cd_name')
+                                    if not type_name:
+                                        sll_buy_cd = item.get('sll_buy_dvsn_cd', '')
+                                        type_name = "매수" if sll_buy_cd == "02" else ("매도" if sll_buy_cd == "01" else "")
                                 else:
-                                    if config.FILE_DEBUG_LEVEL == "DEBUG":
-                                        logger.debug(f"[Init] 취소 내역 동기화: {name} {tot_cncl_qty}주 (ODNO: {odno})")
-                                
-                                with self._lock:
-                                    self.cancel_status[order_key] = tot_cncl_qty
+                                    ord_qty = api.safe_int(item.get('ord_qty'))
+                                    ccld_qty = api.safe_int(item.get('tot_ccld_qty'))
+                                    cncl_qty = api.safe_int(item.get('cncl_cfrm_qty'))
+                                    rmn_qty = api.safe_int(item.get('rmn_qty'))
+                                    avg_price = api.safe_float(item.get('avg_prvs'), default=0.0)
+                                    type_name = item.get('sll_buy_dvsn_cd_name')
 
-                            if tot_ccld_qty <= 0: continue
+                                code_chk = item.get('pdno')
                             
-                            if tot_ccld_qty > prev_qty: logger.debug(f"[ORDER_DEBUG] 신규 체결 감지: {odno} (기존:{prev_qty} -> 신규:{tot_ccld_qty}) Initial={initial}")
-                            if tot_ccld_qty > prev_qty:
-                                new_qty = tot_ccld_qty - prev_qty
-                                name = item.get('prdt_name') or item.get('ovrs_item_name') or item.get('item_nm')
-                                code = item.get('pdno')
+                                new_status = OrderStatus.ACCEPTED
+                                if ord_qty > 0:
+                                    if ccld_qty == ord_qty: new_status = OrderStatus.FILLED
+                                    elif cncl_qty == ord_qty or (cncl_qty > 0 and rmn_qty == 0): new_status = OrderStatus.CANCELED
+                                    elif ccld_qty > 0 and rmn_qty > 0: new_status = OrderStatus.PARTIAL_FILLED
+                            
+                                # AutoTrader 상태 업데이트 (싱글톤 인스턴스 접근)
+                                if code_chk and odno:
+                                    if new_status == OrderStatus.FILLED: logger.debug(f"[ORDER_DEBUG] API 체결 확인: {code_chk} (No.{odno})")
+                                    _pkg().AutoTrader().update_order_status(code_chk, odno, new_status)
+                            
+                                tot_ccld_qty = ccld_qty
+                                tot_cncl_qty = cncl_qty  # [추가] 취소 수량 누적치
+                            
+                                # [주문번호는 날짜와 함께여야 유일하다 · 2026-09-04]
+                                #  KIS 주문번호(odno)는 **당일 채번**이라 매일 0부터 다시 올라간다
+                                #  (실거래 기록 실측: 날짜순으로 정렬해도 번호가 19번 중 7번 작아지고,
+                                #   하루 안에서는 단조 증가한다). 종전 키 `cano-odno` 는 날짜가 없어
+                                #  어제 100주 체결된 번호가 오늘 10주짜리 새 주문으로 재등장하면
+                                #  `10 > 100` 이 거짓이 되어 **오늘 체결이 통째로 누락**된다
+                                #  (DB 기록·텔레그램·수동매매 제한 등록·제한 해제까지 전부).
+                                #  캐시가 프로세스 수명 내내 커지던 것도 함께 없앤다 — 운영기는 램 1GB다.
+                                key_date = str(item.get('ord_dt') or '') or datetime.now().strftime('%Y%m%d')
+                                #  튜플 키다 — 토스 주문번호에는 '-' 가 들어 있어 문자열로 이으면
+                                #  날짜 자리를 다시 갈라낼 수 없다.
+                                order_key = (cano, key_date, odno)
+                                self._purge_stale_order_keys(key_date)
+                                prev_qty = self.order_status.get(order_key, 0)
+
+                                if not hasattr(self, 'cancel_status'): self.cancel_status = {}
+                                prev_cncl_qty = self.cancel_status.get(order_key, 0)
+                            
+                                # [추가] 부분/전량 취소 감지 (수동 취소, 외부 앱 취소, 사후 강제 취소 등)
+                                if tot_cncl_qty > prev_cncl_qty:
+                                    new_cncl_qty = tot_cncl_qty - prev_cncl_qty
+                                    name = item.get('prdt_name') or item.get('ovrs_item_name') or item.get('item_nm')
+                                    code = item.get('pdno')
                                 
-                                # [추가] 매매일시 정보 추출 (DB 저장용)
-                                ord_dt = item.get('ord_dt', '')
-                                ord_tmd = item.get('ord_tmd', '')
-                                trade_time_str = None
-                                if len(ord_dt) == 8 and len(ord_tmd) == 6:
-                                    trade_time_str = f"{ord_dt[:4]}-{ord_dt[4:6]}-{ord_dt[6:]} {ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:]}"
-                                
-                                # 원 주문 유형 조회 (수동/자동 태그 반영)
-                                try:
-                                    origin_trade = db_manager.db.get_trade_by_odno(odno)
-                                    db_type_name = type_name
-                                    profit_amt = 0
-                                    profit_rate = 0.0
-                                    score = 0
-                                    stop_loss_rate = 0.0
-                                    reason_to_save = "체결 확인"
-                                    actual_reason = ""
+                                    #  odno 는 당일 채번이다 — 날짜 없이 찾으면 몇 달 전
+                                    #  같은 번호의 주문이 잡혀 그 type·단가를 물려받는다.
+                                    _scope = _odno_scope_date(item)
+                                    origin_trade = db_manager.db.get_trade_by_odno(odno, on_date=_scope)
+                                    db_type_name = type_name or ""
+                                    price_val = avg_price
                                     if origin_trade:
-                                        db_type_name = origin_trade['type']
-                                        profit_amt = origin_trade.get('profit_amt', 0)
-                                        profit_rate = origin_trade.get('profit_rate', 0.0)
-                                        # [비용] 주문 시점 추정 손익을 '실제 체결가' 기준으로 다시 계산한다.
-                                        profit_amt, profit_rate = _recalc_realized(
-                                            origin_trade, avg_price, tot_ccld_qty,
-                                            is_overseas_trade, profit_amt, profit_rate)
-                                        score = origin_trade.get('strategy_score', 0)
-                                        stop_loss_rate = float(origin_trade.get('stop_loss_rate', 0.0))
-                                        orig_reason = origin_trade.get('reason', '')
-                                        if orig_reason and "체결 확인" not in orig_reason:
-                                            reason_to_save = f"체결 확인 ({orig_reason})"
-                                            actual_reason = orig_reason
+                                        db_type_name = origin_trade.get('type', type_name)
+                                        if price_val <= 0: price_val = api.safe_float(origin_trade.get('price'), default=0.0)
+                                
+                                    db_type_name = db_type_name or ""
+                                
+                                    # 수동 취소 또는 시스템(타임아웃) 등 이미 알림/저장된 이력인지 확인
+                                    # [수정] DB 큐를 경유하는 전용 메서드 사용 (워커 스레드 커넥션의 교차 스레드 사용 방지)
+                                    is_external_cancel = True
+                                    try:
+                                        cancel_record = db_manager.db.get_cancel_record_by_org_odno(
+                                            odno, on_date=_scope)
+                                        if cancel_record:
+                                            rec_reason = cancel_record.get('reason') or ""
+                                            if "수동" in rec_reason or "초과" in rec_reason or "타임아웃" in rec_reason or "외부" in rec_reason:
+                                                # 이미 시스템에서 의도했거나 알림을 보낸 취소면 중복 알림 생략
+                                                is_external_cancel = False
+                                    except Exception as _e:
+                                        #  [Fix 2026-09-06] 종전에는 `except Exception: pass` 라
+                                        #   조회가 실패해도 is_external_cancel 이 True 로 남았다.
+                                        #   그러면 시스템이 방금 자기 손으로 낸 취소를 '외부 취소'로
+                                        #   단정해 ① 사람이 하지 않은 일을 했다고 알리고
+                                        #   ② 원장에 같은 취소를 `취소(외부)` 행으로 한 번 더 남긴다.
+                                        #   모르면 단정하지 않는다 — 알림도 원장 행도 만들지 않고,
+                                        #   다음 주기에 다시 본다(cancel_status 는 아래에서 갱신되지만
+                                        #   그건 '이번 취소를 이미 보았다'는 뜻일 뿐이다).
+                                        is_external_cancel = False
+                                        logger.warning(
+                                            f"[취소 판별] {name}({code}) 주문 {odno} 의 취소 이력을 "
+                                            f"조회하지 못했습니다 — 외부 취소로 단정하지 않습니다: "
+                                            f"{type(_e).__name__}: {_e}")
+                                
+                                    if not initial:
+                                        if is_external_cancel:
+                                            is_overseas_stock = not (len(code) == 6 and code[0].isdigit() and code.isalnum()) if code else False
+                                            price_str = f"${price_val:,.2f}" if is_overseas_stock else f"{price_val:,.0f}원"
+                                            if price_val <= 0: price_str = "시장가"
+                                        
+                                            cancel_title = "부분 취소" if (rmn_qty > 0 or tot_ccld_qty > 0) else "전량 취소"
+                                            t_type = "매수" if "buy" in db_type_name.lower() or "매수" in db_type_name else ("매도" if "sell" in db_type_name.lower() or "매도" in db_type_name else "주문")
+                                        
+                                            msg = f"⚠️ [{t_type} {cancel_title} 감지] {name}({code})\n취소 수량: {new_cncl_qty}주 / 단가: {price_str}\n주문번호: {utils.format_order_no(odno)}\n사유: 앱(MTS)/HTS 외부 취소 또는 사후 강제 취소"
+                                            with utils.AccountContext(cano):
+                                                api.send_telegram_message(msg)
                                             
-                                        # [추가] 시간 역전 방지: KIS 거래소 서버 시간이 로컬 접수 시간보다 과거인 경우 동기화 보정
-                                        if trade_time_str and origin_trade.get('time') and trade_time_str < origin_trade['time']:
-                                            trade_time_str = origin_trade['time']
+                                            # 외부 취소 이력 DB 등록
+                                            db_manager.db.insert_trade(f"{t_type}취소(외부)", code, name, new_cncl_qty, price_val, f"EXT_CAN_{odno}_{tot_cncl_qty}", org_odno=odno, reason=f"외부/사후 취소 감지 ({cancel_title})", order_status="취소")
                                     else:
-                                        # [추가] trades 테이블에 없으면 reserved_orders 테이블에서 예약 발동 주문인지 조회
-                                        # [수정] DB 큐를 경유하는 전용 메서드 사용 (워커 스레드 커넥션의 교차 스레드 사용 방지)
-                                        try:
-                                            r_row = db_manager.db.get_reserved_order_by_odno(odno)
-                                            if r_row:
-                                                t_type = "매수" if r_row['order_type'] == 'buy' else "매도"
-                                                db_type_name = f"{t_type}(예약)"
-                                                c_type = r_row['condition_type']
-                                                tp_val = r_row['target_price']
-                                                res_reason = f"조건: {c_type}"
-                                                if c_type == 'TIME': res_reason += f" ({r_row['target_time']})"
-                                                elif 'SCORE' in c_type: res_reason += f" (목표: {tp_val}점)"
-                                                elif 'RSI' in c_type: res_reason += f" (목표: {tp_val})"
-                                                elif 'EMA' in c_type: res_reason += f" (EMA {int(tp_val)} {'돌파' if 'UP' in c_type else '이탈'})"
-                                                elif c_type == 'TRAILING_BUY': res_reason += f" (바닥반등 {tp_val}%)"
-                                                elif c_type == 'TRAILING_SELL': res_reason += f" (고점하락 {tp_val}%)"
-                                                else: res_reason += f" (목표가 {tp_val})"
-                                                reason_to_save = f"체결 확인 ({res_reason})"
-                                                actual_reason = res_reason
-                                            else:
+                                        if config.FILE_DEBUG_LEVEL == "DEBUG":
+                                            logger.debug(f"[Init] 취소 내역 동기화: {name} {tot_cncl_qty}주 (ODNO: {odno})")
+                                
+                                    with self._lock:
+                                        self.cancel_status[order_key] = tot_cncl_qty
+
+                                if tot_ccld_qty <= 0: continue
+                            
+                                if tot_ccld_qty > prev_qty: logger.debug(f"[ORDER_DEBUG] 신규 체결 감지: {odno} (기존:{prev_qty} -> 신규:{tot_ccld_qty}) Initial={initial}")
+                                if tot_ccld_qty > prev_qty:
+                                    new_qty = tot_ccld_qty - prev_qty
+                                    name = item.get('prdt_name') or item.get('ovrs_item_name') or item.get('item_nm')
+                                    code = item.get('pdno')
+                                
+                                    # [추가] 매매일시 정보 추출 (DB 저장용)
+                                    ord_dt = item.get('ord_dt', '')
+                                    ord_tmd = item.get('ord_tmd', '')
+                                    trade_time_str = None
+                                    if len(ord_dt) == 8 and len(ord_tmd) == 6:
+                                        trade_time_str = f"{ord_dt[:4]}-{ord_dt[4:6]}-{ord_dt[6:]} {ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:]}"
+                                
+                                    # 원 주문 유형 조회 (수동/자동 태그 반영)
+                                    try:
+                                        origin_trade = db_manager.db.get_trade_by_odno(
+                                            odno, on_date=_odno_scope_date(item, trade_time_str))
+                                        db_type_name = type_name
+                                        profit_amt = 0
+                                        profit_rate = 0.0
+                                        score = 0
+                                        stop_loss_rate = 0.0
+                                        reason_to_save = "체결 확인"
+                                        actual_reason = ""
+                                        if origin_trade:
+                                            db_type_name = origin_trade['type']
+                                            profit_amt = origin_trade.get('profit_amt', 0)
+                                            profit_rate = origin_trade.get('profit_rate', 0.0)
+                                            # [비용] 주문 시점 추정 손익을 '실제 체결가' 기준으로 다시 계산한다.
+                                            profit_amt, profit_rate = _recalc_realized(
+                                                origin_trade, avg_price, tot_ccld_qty,
+                                                is_overseas_trade, profit_amt, profit_rate)
+                                            score = origin_trade.get('strategy_score', 0)
+                                            stop_loss_rate = api.safe_float(origin_trade.get('stop_loss_rate'), default=0.0)
+                                            orig_reason = origin_trade.get('reason', '')
+                                            if orig_reason and "체결 확인" not in orig_reason:
+                                                reason_to_save = f"체결 확인 ({orig_reason})"
+                                                actual_reason = orig_reason
+                                            
+                                            # [추가] 시간 역전 방지: KIS 거래소 서버 시간이 로컬 접수 시간보다 과거인 경우 동기화 보정
+                                            if trade_time_str and origin_trade.get('time') and trade_time_str < origin_trade['time']:
+                                                trade_time_str = origin_trade['time']
+                                        else:
+                                            # [추가] trades 테이블에 없으면 reserved_orders 테이블에서 예약 발동 주문인지 조회
+                                            # [수정] DB 큐를 경유하는 전용 메서드 사용 (워커 스레드 커넥션의 교차 스레드 사용 방지)
+                                            try:
+                                                r_row = db_manager.db.get_reserved_order_by_odno(
+                                                    odno, on_date=_odno_scope_date(item, trade_time_str))
+                                                if r_row:
+                                                    t_type = "매수" if r_row['order_type'] == 'buy' else "매도"
+                                                    db_type_name = f"{t_type}(예약)"
+                                                    c_type = r_row['condition_type']
+                                                    tp_val = r_row['target_price']
+                                                    res_reason = f"조건: {c_type}"
+                                                    if c_type == 'TIME': res_reason += f" ({r_row['target_time']})"
+                                                    elif 'SCORE' in c_type: res_reason += f" (목표: {tp_val}점)"
+                                                    elif 'RSI' in c_type: res_reason += f" (목표: {tp_val})"
+                                                    elif 'EMA' in c_type: res_reason += f" (EMA {int(tp_val)} {'돌파' if 'UP' in c_type else '이탈'})"
+                                                    elif c_type == 'TRAILING_BUY': res_reason += f" (바닥반등 {tp_val}%)"
+                                                    elif c_type == 'TRAILING_SELL': res_reason += f" (고점하락 {tp_val}%)"
+                                                    else: res_reason += f" (목표가 {tp_val})"
+                                                    reason_to_save = f"체결 확인 ({res_reason})"
+                                                    actual_reason = res_reason
+                                                else:
+                                                    db_type_name = f"{type_name}(외부)"
+                                                    reason_to_save = "체결 확인 (앱/HTS 외부 주문)"
+                                                    actual_reason = "앱(MTS)/HTS 외부 주문 감지"
+                                            except Exception as e:
+                                                logger.debug(f"[Monitor] 예약 주문 조회 실패: {e}")
                                                 db_type_name = f"{type_name}(외부)"
                                                 reason_to_save = "체결 확인 (앱/HTS 외부 주문)"
                                                 actual_reason = "앱(MTS)/HTS 외부 주문 감지"
-                                        except Exception as e:
-                                            logger.debug(f"[Monitor] 예약 주문 조회 실패: {e}")
-                                            db_type_name = f"{type_name}(외부)"
-                                            reason_to_save = "체결 확인 (앱/HTS 외부 주문)"
-                                            actual_reason = "앱(MTS)/HTS 외부 주문 감지"
-                                except Exception:
-                                    db_type_name = f"{type_name}(외부)"
-                                    stop_loss_rate = 0.0
-                                    reason_to_save = "체결 확인 (앱/HTS 외부 주문)"
-                                    actual_reason = "앱(MTS)/HTS 외부 주문 감지"
+                                    except Exception:
+                                        db_type_name = f"{type_name}(외부)"
+                                        stop_loss_rate = 0.0
+                                        reason_to_save = "체결 확인 (앱/HTS 외부 주문)"
+                                        actual_reason = "앱(MTS)/HTS 외부 주문 감지"
                                 
-                                # [추가] 매도 체결 시 실현 손익 및 사유 조회
-                                profit_msg = ""
-                                reason_msg = ""
-                                if "매도" in type_name:
-                                    try:
-                                        found_record = None
-                                        # 1. AutoTrader 메모리 검색 (클래스가 정의된 경우)
-                                        trader_cls = globals().get('AutoTrader')
-                                        if trader_cls:
-                                            trader = trader_cls()
-                                            for record in reversed(trader.trade_records):
-                                                if str(record.get('odno')) == str(odno):
-                                                    found_record = record
-                                                    break
-                                        # 2. DB 검색 (메모리에 없을 경우)
-                                        if not found_record:
-                                            trades = db_manager.db.get_trades(limit=30)
-                                            for t in trades:
-                                                if str(t.get('odno')) == str(odno):
-                                                    found_record = t
-                                                    break
-                                        if found_record:
-                                            if found_record.get('profit_amt') is not None:
-                                                profit_msg = f"\n손익: {int(found_record['profit_amt']):+,}원 ({float(found_record.get('profit_rate', 0)):+.2f}%)"
-                                            if found_record.get('reason'):
-                                                reason_msg = f"\n사유: {found_record['reason']}"
-                                    except Exception: pass
-                                
-                                # [추가] 매도 사유 조회가 안 되었거나 매수인 경우 actual_reason 활용
-                                if not reason_msg and actual_reason:
-                                    reason_msg = f"\n사유: {actual_reason}"
-
-                                # [수정] 초기화 단계가 아닐 때만 알림 및 로그 수행
-                                if not initial:
-                                    # [추가] 현재가 및 등락률 조회 (알림용)
-                                    cur_info = ""
-                                    try:
-                                        # 체결 확인은 주로 국내 주식 대상
-                                        cp_data = api.get_current_price_data(code, is_overseas=False)
-                                        cp_data = api.get_current_price_data(code, is_overseas=is_overseas_trade)
-                                        if cp_data.get('rt_cd') == '0':
-                                            if is_overseas_trade:
-                                                curr = float(cp_data['output'].get('last', 0))
-                                                rate = float(cp_data['output'].get('rate', 0))
-                                                icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
-                                                cur_info = f"\n현재가: ${curr:,.2f} ({icon} {rate:+.2f}%)"
-                                            else:
-                                                curr = float(cp_data['output']['stck_prpr'])
-                                                rate = float(cp_data['output']['prdy_ctrt'])
-                                                icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
-                                                cur_info = f"\n현재가: {int(curr):,}원 ({icon} {rate:+.2f}%)"
-                                    except Exception: pass
-                                    
-                                    # [추가] 개별 룰 조회
-                                    rule = rules_map.get(code)
-                                    
-                                    # [추가] 매수 체결 시 전략 점수 및 지표 추가
-                                    strategy_info = ""
-                                    if type_name and "매수" in type_name:
+                                    # [추가] 매도 체결 시 실현 손익 및 사유 조회
+                                    profit_msg = ""
+                                    reason_msg = ""
+                                    if "매도" in type_name:
                                         try:
-                                            is_overseas_stock = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
-                                            df = api.get_chart_data(code, is_overseas=is_overseas_stock)
-                                            if df is not None and not df.empty:
-                                                ind = indicators.calculate_indicators(df)
-                                                current_price = float(df.iloc[-1]['close'])
-                                                
-                                                # 전일 RSI (상태 분류용) — calculate_indicators가 계산한 값 재사용 (중복 계산 제거·SSOT)
-                                                prev_rsi = ind.get('prev_rsi') if len(df) >= 16 else None
-                                                
-                                                sm_flag, _ = analysis.check_smart_money_turnaround(code, is_overseas_stock)
-
-                                                thresholds = None
-                                                rule_tag = ""
-                                                if rule:
-                                                    thresholds = {
-                                                        "BUY_SCORE": rule['buy_score'],
-                                                        "BUY_RSI_MAX": rule['buy_rsi'],
-                                                        "BUY_VOL_STRENGTH": rule.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)),
-                                                        "BUY_ASK_BID_RATIO": rule.get('buy_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0)),
-                                                        "AUTO_ADJUST_ASK_BID_RATIO": bool(rule.get('auto_adjust_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get("AUTO_ADJUST_ASK_BID_RATIO", True))),
-                                                        "WEIGHTS": rule.get('weights')
-                                                    }
-                                                    rule_tag = " [개별 룰 적용]"
-                                                    
-                                                w52_pos = 0.0
-                                                if len(df) > 0:
-                                                    w52_pos = indicators.w52_position(df, current_price)
-
-                                                # [수정] 상태 및 사유 조회 (thresholds 적용)
-                                                state, _, state_reason = analysis.classify_stock_state(
-                                                    df=df, ind=ind, prev_rsi=prev_rsi, thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag
-                                                )
-
-                                                # [SSOT] 위 classify_stock_state와 같은 w52_pos를 쓴다
-                                                #  (engine.DefaultStrategy.analyze_buy 주석 참조)
-                                                score, _ = analysis.calculate_score(
-                                                    df=df, ind=ind, weights=thresholds.get('WEIGHTS') if thresholds else None,
-                                                    smart_money=sm_flag, w52_pos=w52_pos
-                                                )
-                                                score = round(score, 1)
-                                                
-                                                rsi_str = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
-                                                adx_str = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
-                                                cci_str = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
-                                                
-                                                strategy_info = f"\n\n📊 [전략 지표]{rule_tag}\n점수: {score}점 ({state})\n상태: {state_reason}\nRSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
-                                        except Exception as e:
-                                            logger.error(f"체결 지표 계산 중 오류: {e}")
-                                            
-                                    if strategy_info:
-                                        strategy_info += cur_info
-                                        cur_info = ""
-                                    elif cur_info:
-                                        strategy_info = f"\n\n📊 [현재 시장 데이터]{cur_info}"
-                                        cur_info = ""
-
-                                    # 알림 발송
-                                    title_tag = f"[{type_name} 체결]" if type_name else "[체결 알림]"
-                                    rule_info = ""
-                                    if rule:
-                                        title_tag += " [개별]"
-                                        rule_info = f"\n🔧 [개별 룰] 익절 +{rule['take_profit']}% / 손절 {rule['stop_loss']}%"
-                                        if rule.get('ts_activation'):
-                                            rule_info += f" / TS +{rule['ts_activation']}%(-{rule['ts_callback']}%)"
-                                    
-                                    exec_amt = avg_price * new_qty
-                                    if is_overseas_trade:
-                                        price_str = f"${avg_price:,.2f}"
-                                        amt_str = f"${exec_amt:,.2f}"
-                                    else:
-                                        price_str = f"{avg_price:,.0f}원"
-                                        amt_str = f"{int(exec_amt):,}원"
-
-                                    msg = f"✅ {title_tag} {name}({code})\n수량: {new_qty}주\n단가: {price_str}\n금액: {amt_str}\n주문번호: {utils.format_order_no(odno)}{profit_msg}{reason_msg}{cur_info}{strategy_info}{rule_info}"
-                                    with utils.AccountContext(cano):
-                                        api.send_telegram_message(msg)
-                                    
-                                    # 로그 기록 (시스템 로거 활용)
-                                    if context.SYSTEM_LOGGER:
-                                        context.SYSTEM_LOGGER(f"[체결 확인] {type_name} {name}({code}) {new_qty}주 (단가: {price_str})")
-                                    
-                                    # [추가] 매도 체결 시 AI 매매 복기 실행
-                                    if type_name == "매도" and found_record:
-                                        #  [Fix 2026-09-04] 계좌 컨텍스트를 제출 스레드에서
-                                        #   싸서 넘긴다. 복기는 db.get_latest_buy_trade 로
-                                        #   매수 시점·점수를 읽는데, 그 조회는 계좌로 갈린다
-                                        #   (b7fea18). 맨 스레드로 띄우면 threading.local 이
-                                        #   상속되지 않아 수동 계좌를 뒤지고, 자동매매가 산
-                                        #   종목의 매수 기록을 못 찾아 리포트가 '알 수 없음'이
-                                        #   된 채로 AI 에게 넘어간다.
-                                        #   캡처는 그 체결의 계좌(cano) 안에서 해야 한다 —
-                                        #   위의 AccountContext 는 이미 닫혔고, 감시 루프의
-                                        #   기본값을 싸 봐야 같은 실수를 반복한다.
-                                        with utils.AccountContext(cano):
-                                            _autopsy = utils.inherit_account_context(self._send_trading_autopsy)
-                                        threading.Thread(target=_autopsy, args=(code, name, found_record), daemon=True).start()
-
-                                else:
-                                    logger.debug(f"[Init] 체결 내역 동기화: {name} {tot_ccld_qty}주 (ODNO: {odno})")
-                                    if config.FILE_DEBUG_LEVEL == "DEBUG": logger.debug(f"[ORDER_DEBUG] 초기화 중이라 알림 스킵됨: {odno}")
-
-                                # [추가] 수동매매 제한 종목 자동 연동 (initial 동기화 포함 → 재시작 시 당일 수동 매수 복원)
-                                #        알림 발송 여부(initial)와 무관하게 항상 수행한다.
-                                # 매수: 외부(앱/HTS) 주문이고 시스템이 낸 주문(ODNO)이 아닐 때만 제한 등록
-                                if actual_reason == "앱(MTS)/HTS 외부 주문 감지" and type_name and "매수" in type_name \
-                                        and not is_system_odno(odno):
-                                    try:
-                                        add_restricted_stock(code, name, "수동매매", is_overseas=is_overseas_trade, cano=cano, acnt=acnt, account_type=_current_account_type(cano, acnt))
-                                    except Exception as e:
-                                        logger.error(f"수동매매 제한 종목 등록 중 오류: {e}")
-
-                                # 매도: 비동기로 잔고 재확인(재시도) 후 전량 매도 시 해당 계좌 제한 해제
-                                if type_name and "매도" in type_name:
-                                    def _check_and_remove_restriction(t_code, t_cano, t_acnt, t_is_ovrs):
-                                        # [수정] 잔고 반영 지연/일시적 조회 실패 대비 재시도 (고정 1회 → 최대 5회)
-                                        for attempt in range(5):
-                                            # 증권사 API 체결 및 잔고 반영 대기.
-                                            #  sleep이 아니라 종료 신호를 기다린다 — 감시가 멈춘 뒤에도
-                                            #  최대 15초를 더 살면서 잔고를 조회하고 제한 목록을 건드리는
-                                            #  스레드가 남는다(종료 지연·테스트 간섭의 원인).
-                                            if self.shutdown.wait(3):
-                                                return
-                                            try:
-                                                #  [계좌 컨텍스트 · 2026-09-05] 이 몸통은 새로 띄운
-                                                #   데몬 스레드에서 돈다. use_auto_account 는
-                                                #   threading.local 이라 미설정(=수동)이고, 그러면
-                                                #   자동 계좌 잔고를 **수동 앱키**로 묻는다. 실패하면
-                                                #   아래에서 qty=None → '제한 유지'로 굳어 그 종목의
-                                                #   손절·트레일링이 영영 멈춘다.
-                                                #   보유수량 판정은 common.current_holding_qty 가 정본이고
-                                                #   그쪽이 컨텍스트를 세운다 — 사본을 두지 않는다.
-                                                qty = _pkg().current_holding_qty(
-                                                    t_code, t_cano, t_acnt, t_is_ovrs)
-
-                                                if qty is None:
-                                                    continue  # 조회 실패 → 재시도
-
-                                                if qty == 0:
-                                                    remove_restricted_stock(t_code, cano=t_cano, acnt=t_acnt)
-                                                    logger.info(f"[Restriction] {t_code} 전량 매도 확인. 계좌({t_cano}-{t_acnt}) 제한 종목에서 해제되었습니다.")
-                                                return  # 잔고 확정(0 또는 보유분 잔존) → 종료
-                                            except Exception as e:
-                                                logger.error(f"수동매매 제한 해제 검사 중 오류: {e}")
-                                        logger.warning(f"[Restriction] {t_code} 잔고 확인 실패로 제한 해제를 보류합니다. (계좌 {t_cano}-{t_acnt})")
-
-                                    threading.Thread(target=_check_and_remove_restriction, args=(code, cano, acnt, is_overseas_trade), daemon=True, name=f"RestrictionCheck-{code}").start()
-
-                                # 상태 업데이트
-                                with self._lock:
-                                    self.order_status[order_key] = tot_ccld_qty
+                                            found_record = None
+                                            # 1. AutoTrader 메모리 검색 (클래스가 정의된 경우)
+                                            trader_cls = globals().get('AutoTrader')
+                                            if trader_cls:
+                                                trader = trader_cls()
+                                                for record in reversed(trader.trade_records):
+                                                    if str(record.get('odno')) == str(odno):
+                                                        found_record = record
+                                                        break
+                                            # 2. DB 검색 (메모리에 없을 경우)
+                                            if not found_record:
+                                                trades = db_manager.db.get_trades(limit=30)
+                                                for t in trades:
+                                                    if str(t.get('odno')) == str(odno):
+                                                        found_record = t
+                                                        break
+                                            if found_record:
+                                                if found_record.get('profit_amt') is not None:
+                                                    profit_msg = f"\n손익: {int(found_record['profit_amt']):+,}원 ({float(found_record.get('profit_rate', 0)):+.2f}%)"
+                                                if found_record.get('reason'):
+                                                    reason_msg = f"\n사유: {found_record['reason']}"
+                                        except Exception: pass
                                 
-                                # DB 저장
-                                #  odno 는 당일 채번이라 날짜 없이는 유일하지 않다(위 order_key 주석).
-                                #  전체 이력에서 찾으면 몇 달 전 같은 번호 때문에 오늘 체결이
-                                #  '이미 있음'으로 판정돼 DB 에 영영 남지 않는다.
-                                #  판정 일자는 **이 행이 실제로 저장될 일자**여야 한다 —
-                                #  trade_time_str 은 위에서 시간 역전 보정을 거치므로 ord_dt 와
-                                #  다를 수 있고, 어긋나면 같은 체결이 두 번 적재된다.
-                                try:
-                                    _already = db_manager.db.check_trade_exists(
-                                        odno, "체결", on_date=_odno_scope_date(item, trade_time_str))
-                                except Exception as _ce:
-                                    #  모르면 적지 않는다 — 중복 체결 행은 되돌릴 수 없고
-                                    #  실현손익을 이중 계상한다. 다음 주기가 같은 내역을
-                                    #  다시 훑으므로 스스로 낫는다.
-                                    logger.warning(f"[체결] {name}({code}) {odno} 중복 여부를 "
-                                                   f"확인하지 못해 이번 주기 기록을 미룹니다: {_ce}")
-                                    _already = True
-                                if not _already:
-                                    if config.FILE_DEBUG_LEVEL == "DEBUG":
-                                        logger.debug(f"[ORDER_DEBUG] DB 저장 시도: {odno}")
-                                        logger.debug(f"[AutoTrade] 신규 체결 DB 저장 시도: {odno} ({name})")
+                                    # [추가] 매도 사유 조회가 안 되었거나 매수인 경우 actual_reason 활용
+                                    if not reason_msg and actual_reason:
+                                        reason_msg = f"\n사유: {actual_reason}"
+
+                                    # [수정] 초기화 단계가 아닐 때만 알림 및 로그 수행
+                                    if not initial:
+                                        # [추가] 현재가 및 등락률 조회 (알림용)
+                                        cur_info = ""
+                                        try:
+                                            # 체결 확인은 주로 국내 주식 대상
+                                            cp_data = api.get_current_price_data(code, is_overseas=False)
+                                            cp_data = api.get_current_price_data(code, is_overseas=is_overseas_trade)
+                                            if cp_data.get('rt_cd') == '0':
+                                                if is_overseas_trade:
+                                                    curr = api.safe_float(cp_data['output'].get('last'), default=0.0)
+                                                    rate = api.safe_float(cp_data['output'].get('rate'), default=0.0)
+                                                    icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
+                                                    cur_info = f"\n현재가: ${curr:,.2f} ({icon} {rate:+.2f}%)"
+                                                else:
+                                                    curr = float(cp_data['output']['stck_prpr'])
+                                                    rate = float(cp_data['output']['prdy_ctrt'])
+                                                    icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
+                                                    cur_info = f"\n현재가: {int(curr):,}원 ({icon} {rate:+.2f}%)"
+                                        except Exception: pass
                                     
-                                    db_manager.db.insert_trade(db_type_name, code, name, tot_ccld_qty, avg_price, odno, order_status="체결", reason=reason_to_save, custom_time=trade_time_str, profit_amt=profit_amt, profit_rate=profit_rate, score=score, stop_loss_rate=stop_loss_rate)
+                                        # [추가] 개별 룰 조회
+                                        rule = rules_map.get(code)
+                                    
+                                        # [추가] 매수 체결 시 전략 점수 및 지표 추가
+                                        strategy_info = ""
+                                        if type_name and "매수" in type_name:
+                                            try:
+                                                is_overseas_stock = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
+                                                df = api.get_chart_data(code, is_overseas=is_overseas_stock)
+                                                if df is not None and not df.empty:
+                                                    ind = indicators.calculate_indicators(df)
+                                                    current_price = float(df.iloc[-1]['close'])
+                                                
+                                                    # 전일 RSI (상태 분류용) — calculate_indicators가 계산한 값 재사용 (중복 계산 제거·SSOT)
+                                                    prev_rsi = ind.get('prev_rsi') if len(df) >= 16 else None
+                                                
+                                                    sm_flag, _ = analysis.check_smart_money_turnaround(code, is_overseas_stock)
 
-                                    # [추가] 매매일지 웹서버로 즉시 전송을 깨운다.
-                                    #  적재 자체는 insert_trade 가 같은 트랜잭션에서 끝냈으므로
-                                    #  여기서 실패해도 워커가 다음 주기에 자동으로 보낸다.
+                                                    thresholds = None
+                                                    rule_tag = ""
+                                                    if rule:
+                                                        thresholds = {
+                                                            "BUY_SCORE": rule['buy_score'],
+                                                            "BUY_RSI_MAX": rule['buy_rsi'],
+                                                            "BUY_VOL_STRENGTH": rule.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)),
+                                                            "BUY_ASK_BID_RATIO": rule.get('buy_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0)),
+                                                            "AUTO_ADJUST_ASK_BID_RATIO": bool(rule.get('auto_adjust_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get("AUTO_ADJUST_ASK_BID_RATIO", True))),
+                                                            "WEIGHTS": rule.get('weights')
+                                                        }
+                                                        rule_tag = " [개별 룰 적용]"
+                                                    
+                                                    w52_pos = 0.0
+                                                    if len(df) > 0:
+                                                        w52_pos = indicators.w52_position(df, current_price)
+
+                                                    # [수정] 상태 및 사유 조회 (thresholds 적용)
+                                                    state, _, state_reason = analysis.classify_stock_state(
+                                                        df=df, ind=ind, prev_rsi=prev_rsi, thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag
+                                                    )
+
+                                                    # [SSOT] 위 classify_stock_state와 같은 w52_pos를 쓴다
+                                                    #  (engine.DefaultStrategy.analyze_buy 주석 참조)
+                                                    score, _ = analysis.calculate_score(
+                                                        df=df, ind=ind, weights=thresholds.get('WEIGHTS') if thresholds else None,
+                                                        smart_money=sm_flag, w52_pos=w52_pos
+                                                    )
+                                                    score = round(score, 1)
+                                                
+                                                    rsi_str = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
+                                                    adx_str = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
+                                                    cci_str = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
+                                                
+                                                    strategy_info = f"\n\n📊 [전략 지표]{rule_tag}\n점수: {score}점 ({state})\n상태: {state_reason}\nRSI: {rsi_str} / ADX: {adx_str} / CCI: {cci_str}"
+                                            except Exception as e:
+                                                logger.error(f"체결 지표 계산 중 오류: {e}")
+                                            
+                                        if strategy_info:
+                                            strategy_info += cur_info
+                                            cur_info = ""
+                                        elif cur_info:
+                                            strategy_info = f"\n\n📊 [현재 시장 데이터]{cur_info}"
+                                            cur_info = ""
+
+                                        # 알림 발송
+                                        title_tag = f"[{type_name} 체결]" if type_name else "[체결 알림]"
+                                        rule_info = ""
+                                        if rule:
+                                            title_tag += " [개별]"
+                                            rule_info = f"\n🔧 [개별 룰] 익절 +{rule['take_profit']}% / 손절 {rule['stop_loss']}%"
+                                            if rule.get('ts_activation'):
+                                                rule_info += f" / TS +{rule['ts_activation']}%(-{rule['ts_callback']}%)"
+                                    
+                                        exec_amt = avg_price * new_qty
+                                        if is_overseas_trade:
+                                            price_str = f"${avg_price:,.2f}"
+                                            amt_str = f"${exec_amt:,.2f}"
+                                        else:
+                                            price_str = f"{avg_price:,.0f}원"
+                                            amt_str = f"{int(exec_amt):,}원"
+
+                                        msg = f"✅ {title_tag} {name}({code})\n수량: {new_qty}주\n단가: {price_str}\n금액: {amt_str}\n주문번호: {utils.format_order_no(odno)}{profit_msg}{reason_msg}{cur_info}{strategy_info}{rule_info}"
+                                        with utils.AccountContext(cano):
+                                            api.send_telegram_message(msg)
+                                    
+                                        # 로그 기록 (시스템 로거 활용)
+                                        if context.SYSTEM_LOGGER:
+                                            context.SYSTEM_LOGGER(f"[체결 확인] {type_name} {name}({code}) {new_qty}주 (단가: {price_str})")
+                                    
+                                        # [추가] 매도 체결 시 AI 매매 복기 실행
+                                        if type_name == "매도" and found_record:
+                                            #  [Fix 2026-09-04] 계좌 컨텍스트를 제출 스레드에서
+                                            #   싸서 넘긴다. 복기는 db.get_latest_buy_trade 로
+                                            #   매수 시점·점수를 읽는데, 그 조회는 계좌로 갈린다
+                                            #   (b7fea18). 맨 스레드로 띄우면 threading.local 이
+                                            #   상속되지 않아 수동 계좌를 뒤지고, 자동매매가 산
+                                            #   종목의 매수 기록을 못 찾아 리포트가 '알 수 없음'이
+                                            #   된 채로 AI 에게 넘어간다.
+                                            #   캡처는 그 체결의 계좌(cano) 안에서 해야 한다 —
+                                            #   위의 AccountContext 는 이미 닫혔고, 감시 루프의
+                                            #   기본값을 싸 봐야 같은 실수를 반복한다.
+                                            with utils.AccountContext(cano):
+                                                _autopsy = utils.inherit_account_context(self._send_trading_autopsy)
+                                            threading.Thread(target=_autopsy, args=(code, name, found_record), daemon=True).start()
+
+                                    else:
+                                        logger.debug(f"[Init] 체결 내역 동기화: {name} {tot_ccld_qty}주 (ODNO: {odno})")
+                                        if config.FILE_DEBUG_LEVEL == "DEBUG": logger.debug(f"[ORDER_DEBUG] 초기화 중이라 알림 스킵됨: {odno}")
+
+                                    # [추가] 수동매매 제한 종목 자동 연동 (initial 동기화 포함 → 재시작 시 당일 수동 매수 복원)
+                                    #        알림 발송 여부(initial)와 무관하게 항상 수행한다.
+                                    # 매수: 외부(앱/HTS) 주문이고 시스템이 낸 주문(ODNO)이 아닐 때만 제한 등록
+                                    if actual_reason == "앱(MTS)/HTS 외부 주문 감지" and type_name and "매수" in type_name \
+                                            and not is_system_odno(odno):
+                                        try:
+                                            add_restricted_stock(code, name, "수동매매", is_overseas=is_overseas_trade, cano=cano, acnt=acnt, account_type=_current_account_type(cano, acnt))
+                                        except Exception as e:
+                                            logger.error(f"수동매매 제한 종목 등록 중 오류: {e}")
+
+                                    # 매도: 비동기로 잔고 재확인(재시도) 후 전량 매도 시 해당 계좌 제한 해제
+                                    if type_name and "매도" in type_name:
+                                        def _check_and_remove_restriction(t_code, t_cano, t_acnt, t_is_ovrs):
+                                            # [수정] 잔고 반영 지연/일시적 조회 실패 대비 재시도 (고정 1회 → 최대 5회)
+                                            for attempt in range(5):
+                                                # 증권사 API 체결 및 잔고 반영 대기.
+                                                #  sleep이 아니라 종료 신호를 기다린다 — 감시가 멈춘 뒤에도
+                                                #  최대 15초를 더 살면서 잔고를 조회하고 제한 목록을 건드리는
+                                                #  스레드가 남는다(종료 지연·테스트 간섭의 원인).
+                                                if self.shutdown.wait(3):
+                                                    return
+                                                try:
+                                                    #  [계좌 컨텍스트 · 2026-09-05] 이 몸통은 새로 띄운
+                                                    #   데몬 스레드에서 돈다. use_auto_account 는
+                                                    #   threading.local 이라 미설정(=수동)이고, 그러면
+                                                    #   자동 계좌 잔고를 **수동 앱키**로 묻는다. 실패하면
+                                                    #   아래에서 qty=None → '제한 유지'로 굳어 그 종목의
+                                                    #   손절·트레일링이 영영 멈춘다.
+                                                    #   보유수량 판정은 common.current_holding_qty 가 정본이고
+                                                    #   그쪽이 컨텍스트를 세운다 — 사본을 두지 않는다.
+                                                    qty = _pkg().current_holding_qty(
+                                                        t_code, t_cano, t_acnt, t_is_ovrs)
+
+                                                    if qty is None:
+                                                        continue  # 조회 실패 → 재시도
+
+                                                    if qty == 0:
+                                                        remove_restricted_stock(t_code, cano=t_cano, acnt=t_acnt)
+                                                        logger.info(f"[Restriction] {t_code} 전량 매도 확인. 계좌({t_cano}-{t_acnt}) 제한 종목에서 해제되었습니다.")
+                                                    return  # 잔고 확정(0 또는 보유분 잔존) → 종료
+                                                except Exception as e:
+                                                    logger.error(f"수동매매 제한 해제 검사 중 오류: {e}")
+                                            logger.warning(f"[Restriction] {t_code} 잔고 확인 실패로 제한 해제를 보류합니다. (계좌 {t_cano}-{t_acnt})")
+
+                                        threading.Thread(target=_check_and_remove_restriction, args=(code, cano, acnt, is_overseas_trade), daemon=True, name=f"RestrictionCheck-{code}").start()
+
+                                    # 상태 업데이트
+                                    with self._lock:
+                                        self.order_status[order_key] = tot_ccld_qty
+                                
+                                    # DB 저장
+                                    #  odno 는 당일 채번이라 날짜 없이는 유일하지 않다(위 order_key 주석).
+                                    #  전체 이력에서 찾으면 몇 달 전 같은 번호 때문에 오늘 체결이
+                                    #  '이미 있음'으로 판정돼 DB 에 영영 남지 않는다.
+                                    #  판정 일자는 **이 행이 실제로 저장될 일자**여야 한다 —
+                                    #  trade_time_str 은 위에서 시간 역전 보정을 거치므로 ord_dt 와
+                                    #  다를 수 있고, 어긋나면 같은 체결이 두 번 적재된다.
                                     try:
-                                        from modules import journal_sync
-                                        journal_sync.trigger()
-                                    except Exception as _je:
-                                        logger.debug(f"[Journal] 즉시 전송 트리거 실패(무시): {_je}")
+                                        _already = db_manager.db.check_trade_exists(
+                                            odno, "체결", on_date=_odno_scope_date(item, trade_time_str))
+                                    except Exception as _ce:
+                                        #  모르면 적지 않는다 — 중복 체결 행은 되돌릴 수 없고
+                                        #  실현손익을 이중 계상한다. 다음 주기가 같은 내역을
+                                        #  다시 훑으므로 스스로 낫는다.
+                                        logger.warning(f"[체결] {name}({code}) {odno} 중복 여부를 "
+                                                       f"확인하지 못해 이번 주기 기록을 미룹니다: {_ce}")
+                                        _already = True
+                                    if not _already:
+                                        if config.FILE_DEBUG_LEVEL == "DEBUG":
+                                            logger.debug(f"[ORDER_DEBUG] DB 저장 시도: {odno}")
+                                            logger.debug(f"[AutoTrade] 신규 체결 DB 저장 시도: {odno} ({name})")
+                                    
+                                        db_manager.db.insert_trade(db_type_name, code, name, tot_ccld_qty, avg_price, odno, order_status="체결", reason=reason_to_save, custom_time=trade_time_str, profit_amt=profit_amt, profit_rate=profit_rate, score=score, stop_loss_rate=stop_loss_rate)
+
+                                        # [추가] 매매일지 웹서버로 즉시 전송을 깨운다.
+                                        #  적재 자체는 insert_trade 가 같은 트랜잭션에서 끝냈으므로
+                                        #  여기서 실패해도 워커가 다음 주기에 자동으로 보낸다.
+                                        try:
+                                            from modules import journal_sync
+                                            journal_sync.trigger()
+                                        except Exception as _je:
+                                            logger.debug(f"[Journal] 즉시 전송 트리거 실패(무시): {_je}")
 
 
-                                    # [추가] 시장가 주문 등의 경우를 위해 원 주문(접수)의 단가도 체결가로 업데이트
-                                    # 원본 '접수' 기록을 보존하기 위해 order_status는 덮어쓰지 않음
-                                    db_manager.db.update_trade(odno, price=avg_price)
-                                else:
-                                    # [Fix] 부분체결이 여러 폴링 주기에 걸치면(30주 → 100주) 두 번째부터
-                                    #  '이미 체결 행이 있다'는 이유로 통째로 스킵되어, trades에는 첫 관측
-                                    #  수량만 남고 나머지 증분이 유실됐다. 성과 지표(PF·승률·누적손익),
-                                    #  손절률 수량가중평균, 매매일지 전송이 모두 그만큼 어긋난다.
-                                    #  tot_ccld_qty는 누적값이므로, 기존 체결 행의 수량·평균단가를 최신
-                                    #  누적으로 갱신한다(행을 늘리지 않아 odno 단위 조회는 그대로 동작).
-                                    #  '접수' 행은 주문 수량을 보존해야 하므로 where_status로 분리한다.
-                                    #  [Fix 2026-09-03] 손익도 함께 갱신한다. 종전에는 수량·단가만
-                                    #   고치고 profit_amt 는 **첫 관측 시점의 수량으로 계산된 값**
-                                    #   그대로 남았다(실측: 30주 관측 후 100주 체결 → 실현손익 70%
-                                    #   과소). 그 값은 성과 지표뿐 아니라
-                                    #   db.get_realized_profit_between 을 지나 **입출금 판정**까지
-                                    #   간다 — 실현손익을 적게 세면 그 차액이 가짜 입금으로 둔갑해
-                                    #   자산 기준선이 밀린다([[daily-asset-baseline-transfers]]).
-                                    #   profit_rate 는 수량과 무관해 값이 같지만, 산식이 바뀌어도
-                                    #   따라오도록 함께 넘긴다.
-                                    _p_amt, _p_rate = _recalc_realized(
-                                        origin_trade, avg_price, tot_ccld_qty,
-                                        is_overseas_trade, None, None)
-                                    db_manager.db.update_trade(odno, qty=tot_ccld_qty, price=avg_price,
-                                                               profit_amt=_p_amt, profit_rate=_p_rate,
-                                                               where_status="체결")
-                                    logger.debug(
-                                        f"[ORDER_DEBUG] 부분체결 누적 갱신: {odno} → {tot_ccld_qty}주 "
-                                        f"@ {avg_price} (손익 {_p_amt})")
+                                        # [추가] 시장가 주문 등의 경우를 위해 원 주문(접수)의 단가도 체결가로 업데이트
+                                        # 원본 '접수' 기록을 보존하기 위해 order_status는 덮어쓰지 않음
+                                        db_manager.db.update_trade(
+                                            odno, price=avg_price,
+                                            on_date=_odno_scope_date(item, trade_time_str))
+                                    else:
+                                        # [Fix] 부분체결이 여러 폴링 주기에 걸치면(30주 → 100주) 두 번째부터
+                                        #  '이미 체결 행이 있다'는 이유로 통째로 스킵되어, trades에는 첫 관측
+                                        #  수량만 남고 나머지 증분이 유실됐다. 성과 지표(PF·승률·누적손익),
+                                        #  손절률 수량가중평균, 매매일지 전송이 모두 그만큼 어긋난다.
+                                        #  tot_ccld_qty는 누적값이므로, 기존 체결 행의 수량·평균단가를 최신
+                                        #  누적으로 갱신한다(행을 늘리지 않아 odno 단위 조회는 그대로 동작).
+                                        #  '접수' 행은 주문 수량을 보존해야 하므로 where_status로 분리한다.
+                                        #  [Fix 2026-09-03] 손익도 함께 갱신한다. 종전에는 수량·단가만
+                                        #   고치고 profit_amt 는 **첫 관측 시점의 수량으로 계산된 값**
+                                        #   그대로 남았다(실측: 30주 관측 후 100주 체결 → 실현손익 70%
+                                        #   과소). 그 값은 성과 지표뿐 아니라
+                                        #   db.get_realized_profit_between 을 지나 **입출금 판정**까지
+                                        #   간다 — 실현손익을 적게 세면 그 차액이 가짜 입금으로 둔갑해
+                                        #   자산 기준선이 밀린다([[daily-asset-baseline-transfers]]).
+                                        #   profit_rate 는 수량과 무관해 값이 같지만, 산식이 바뀌어도
+                                        #   따라오도록 함께 넘긴다.
+                                        _p_amt, _p_rate = _recalc_realized(
+                                            origin_trade, avg_price, tot_ccld_qty,
+                                            is_overseas_trade, None, None)
+                                        db_manager.db.update_trade(odno, qty=tot_ccld_qty, price=avg_price,
+                                                                   profit_amt=_p_amt, profit_rate=_p_rate,
+                                                                   where_status="체결",
+                                                                   on_date=_odno_scope_date(item, trade_time_str))
+                                        logger.debug(
+                                            f"[ORDER_DEBUG] 부분체결 누적 갱신: {odno} → {tot_ccld_qty}주 "
+                                            f"@ {avg_price} (손익 {_p_amt})")
+                            except Exception as _ie:
+                                #  이 건만 건너뛴다. 다만 조용히 넘기지 않는다 — 연속
+                                #  에러로 세어져 Kill Switch(is_healthy)에 실린다.
+                                has_error = True
+                                logger.error(
+                                    f"[Monitor] 체결 {item.get('odno')} "
+                                    f"({item.get('prdt_name')}/{item.get('pdno')}) 처리 실패 "
+                                    f"— 이 건만 건너뜁니다: {type(_ie).__name__}: {_ie}",
+                                    exc_info=True)
+                                continue
                 except Exception as e:
                     logger.error(f"계좌({cano}) 체결 확인 중 오류: {e}")
                     has_error = True
@@ -981,7 +1007,10 @@ class ConclusionMonitor:
         """가상 체결 1건을 주문 상태기계·히스토리에 반영한다."""
         if not odno or not fill:
             return
-        trade = db_manager.db.get_trade_by_odno(odno)
+        #  가상 체결도 같은 열쇠를 쓴다 — 가상 주문번호는 자체 채번이지만 실계좌
+        #  기록과 한 테이블을 공유하므로 날짜로 갈라야 한다([[odno-daily-reset]]).
+        trade = db_manager.db.get_trade_by_odno(
+            odno, on_date=utils.odno_scope_date(None, fill.get('time')))
         if not trade:
             # 주문 기록 INSERT가 DB 큐에 아직 남아 있는 경우. 다음 주기에 다시 본다.
             return
@@ -1007,7 +1036,7 @@ class ConclusionMonitor:
                 logger.debug(f"[ORDER_DEBUG] Trade Info: {trade}")
 
             name = trade.get('name', code)
-            price = float(trade.get('price', 0))
+            price = api.safe_float(trade.get('price'), default=0.0)
             is_overseas = not (len(code) == 6 and code[0].isdigit() and code.isalnum()) if code else False
             
             # [추가] 시장가(0)인 경우 현재가 조회하여 대체
@@ -1020,9 +1049,9 @@ class ConclusionMonitor:
                         cp_data = api.get_current_price_data(code, is_overseas=is_overseas)
                         if cp_data and cp_data.get('rt_cd') == '0':
                             if is_overseas:
-                                price = float(cp_data['output'].get('last', 0))
+                                price = api.safe_float(cp_data['output'].get('last'), default=0.0)
                             else:
-                                price = float(cp_data['output'].get('stck_prpr', 0))
+                                price = api.safe_float(cp_data['output'].get('stck_prpr'), default=0.0)
                 except Exception: pass
 
             # 체결이 확정적으로 확인된 경우(가상투자 원장 대사)에는 '(추정)' 라벨을 떼고
@@ -1088,7 +1117,7 @@ class ConclusionMonitor:
                     score=trade.get('strategy_score', 0),
                     profit_amt=profit_amt,
                     profit_rate=profit_rate,
-                    stop_loss_rate=float(trade.get('stop_loss_rate', 0.0))
+                    stop_loss_rate=api.safe_float(trade.get('stop_loss_rate'), default=0.0)
                 )
                 success_db = True
                 if config.FILE_DEBUG_LEVEL == "DEBUG":
@@ -1102,7 +1131,9 @@ class ConclusionMonitor:
                 #  주문가로 굳었다(가상 브로커는 슬리피지를 얹어 체결하므로 항상 어긋난다).
                 #  손익은 체결 행에서 병합되므로 단가만 어긋나 더 눈에 띄지 않았다.
                 if price > 0:
-                    db_manager.db.update_trade(odno, price=price)
+                    #  바로 위 insert_trade 가 today 로 적은 그 날 안에서만 고친다 —
+                    #  가상 주문번호도 실계좌 기록과 한 테이블을 공유한다.
+                    db_manager.db.update_trade(odno, price=price, on_date=today)
 
                 # 3. 알림 발송 (상세 정보 포함)
                 try:

@@ -721,6 +721,31 @@ def inherit_account_context(fn):
     return _wrapped
 
 
+def odno_scope_date(item=None, trade_time_str=None, now=None):
+    """이 주문·체결을 가리키는 **날짜**('YYYY-MM-DD').
+
+    [왜 필요한가] 증권사 주문번호(odno)는 **당일 채번**이라 매일 0부터 다시 올라간다
+    ([[odno-daily-reset]]). 즉 odno 하나로는 유일한 열쇠가 아니고, 날짜와 짝지어야
+    비로소 유일해진다. odno 로 무언가를 찾거나 고치는 자리는 전부 이 날짜를 함께 줘야
+    한다 — 주지 않으면 몇 달 전 같은 번호의 행이 잡히고, 쓰기라면 그 행을 덮어쓴다
+    (되돌릴 수 없다).
+
+    [우선순위] 저장 시각(trade_time_str) → 주문 일자(ord_dt) → 오늘.
+     저장 시각을 먼저 보는 이유: 체결 시각이 원 주문 접수 시각보다 과거로 오면(거래소
+     서버 시간 역전) 접수 시각으로 당겨서 저장한다. 판정 일자와 저장 일자가 어긋나면
+     같은 체결이 두 번 적재된다.
+
+    [해외] 야간 세션은 한국 날짜로 자정을 넘기므로 ord_dt 가 '어제'일 수 있다. 그래서
+     오늘로 단정하지 않고 응답이 준 일자를 먼저 쓴다([[order-age-midnight]] 와 같은 이유).
+    """
+    if trade_time_str and len(str(trade_time_str)) >= 10:
+        return str(trade_time_str)[:10]
+    ord_dt = str((item or {}).get('ord_dt') or '') if isinstance(item, dict) else ''
+    if len(ord_dt) == 8 and ord_dt.isdigit():
+        return f"{ord_dt[:4]}-{ord_dt[4:6]}-{ord_dt[6:]}"
+    return (now or datetime.now()).strftime('%Y-%m-%d')
+
+
 def order_age_seconds(ord_tmd, now=None, ord_dt=None):
     """주문 시각으로부터 흐른 초. 시각을 못 읽으면 inf(=창 밖, 보수적).
 
