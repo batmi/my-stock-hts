@@ -4862,6 +4862,14 @@ class AutoTrader:
                 #     것처럼 보여 어느 쪽이든 즉시 오발동한다.
                 canceled = db_manager.db.cancel_reserved_orders_on_corp_action(
                     code, f"권리 조정 감지({reason})로 자동 취소")
+                if canceled is None:
+                    #  실패는 '취소할 것이 없었다'와 다르다 — 조정 전 가격의 예약이
+                    #  남으면 곧바로 오발동한다.
+                    lines.append("· ⚠️ 예약 주문을 취소하지 못했습니다 — 조정 전 가격의 "
+                                 "예약이 남아 곧 오발동할 수 있습니다. 직접 취소해 주세요.")
+                    logger.error(f"[권리 조정] {code} 예약 취소 실패 — 조정 전 가격의 "
+                                 f"예약이 남아 있습니다")
+                    canceled = []
                 for o in canceled:
                     lines.append(f"· 예약 {'매수' if o.get('order_type') == 'buy' else '매도'} 취소: "
                                  f"{o.get('condition_type')} "
@@ -5646,7 +5654,16 @@ class AutoTrader:
                         target_cano = config.session.auto_cano
                         target_acnt = config.session.auto_acnt_prdt_cd
                         canceled_cnt = db_manager.db.cancel_reserved_sell_orders(target_cano, target_acnt, code)
-                        if canceled_cnt > 0:
+                        if canceled_cnt is None:
+                            #  실패를 0('취소할 것이 없었다')으로 읽으면, 보유가 없는데
+                            #  매도 예약이 남아 나중에 오발동한다.
+                            self.log(f"[예약취소] {name} 대기 중인 매도 예약을 취소하지 "
+                                     f"못했습니다 — 보유가 없는데 예약이 남아 있습니다.")
+                            api.send_telegram_message(
+                                f"⚠️ [예약 취소 실패] {name}({code})\n"
+                                f"전량 매도 후 대기 중인 매도 예약을 취소하지 못했습니다.\n"
+                                f"예약 목록에서 확인해 주세요.")
+                        elif canceled_cnt > 0:
                             self.log(f"[예약취소] 전량 매도로 인해 대기 중이던 {name} 매도 예약 주문 {canceled_cnt}건 자동 취소")
                             api.send_telegram_message(f"🗑 [예약 취소] {name}({code}) 전량 매도로 인해 대기 중이던 매도 예약 주문 {canceled_cnt}건이 자동 취소되었습니다.")
                             
@@ -6905,8 +6922,26 @@ class AutoTrader:
                         continue
                     self.portfolio_heat_amt += new_risk_amt
 
-            db_manager.db.delete_trailing_stop(cand['code'])
-            db_manager.db.delete_half_tp(cand['code'])
+            #  [Fix 2026-09-06] 옛 앵커를 **지우지 못했으면 이 매수를 내지 않는다.**
+            #   이 삭제가 매수 직전에 도는 이유는 하나다 — 새 포지션이 이전 포지션의
+            #   고점을 물려받지 않게 하는 것. 실패해도 그 세션은 멀쩡해 보이고(아래에서
+            #   메모리 캐시를 pop 하므로) **재기동해야** 드러난다: DB 의 옛 고점이 실려
+            #   와 샹들리에 TS 가 '고점 대비 폭락'으로 읽고 즉시 시장가 청산을 때린다.
+            #   진입을 한 주기 미루는 것은 되돌릴 수 있고, 그 청산은 되돌릴 수 없다.
+            if not db_manager.db.delete_trailing_stop(cand['code']):
+                self.log(f"매수 보류: {cand['name']} - 이전 포지션의 트레일링 고점을 "
+                         f"지우지 못했습니다(재기동 시 그 고점을 물려받아 즉시 청산될 수 "
+                         f"있습니다). 다음 주기에 다시 시도합니다.")
+                if new_risk_amt > 0:
+                    with self._lock:
+                        self.portfolio_heat_amt -= new_risk_amt   # 선점분 반납
+                continue
+            if not db_manager.db.delete_half_tp(cand['code']):
+                #  이쪽은 방향이 다르다 — 남아 있으면 '이미 반익절함'으로 읽혀 반익절·
+                #  익절 분기를 거를 뿐, 없는 매도를 만들지는 않는다. 진입은 진행하고
+                #  사실만 남긴다.
+                self.log(f"[반익절] {cand['name']} 이전 기록을 지우지 못했습니다 — "
+                         f"재기동하면 이 포지션이 '이미 반익절함'으로 읽힐 수 있습니다.")
             with self._lock:
                 self.trailing_stop_cache.pop(cand['code'], None)
 
@@ -6922,7 +6957,18 @@ class AutoTrader:
                 target_cano = config.session.auto_cano
                 target_acnt = config.session.auto_acnt_prdt_cd
                 canceled_cnt = db_manager.db.cancel_reserved_buy_orders(target_cano, target_acnt, cand['code'])
-                if canceled_cnt > 0:
+                if canceled_cnt is None:
+                    #  실패를 0('취소할 것이 없었다')으로 읽으면, 남아 있는 예약 매수가
+                    #  나중에 그대로 발동해 같은 종목에 두 번째 포지션이 생긴다.
+                    self.log(f"[예약취소] {cand['name']} 대기 중인 매수 예약을 취소하지 "
+                             f"못했습니다 — 그 예약이 발동하면 같은 종목에 두 번째 "
+                             f"진입이 나갑니다. 확인해 주세요.")
+                    api.send_telegram_message(
+                        f"⚠️ [예약 취소 실패] {cand['name']}({cand['code']})\n"
+                        f"신규 매수 후 대기 중인 매수 예약을 취소하지 못했습니다.\n"
+                        f"그 예약이 발동하면 같은 종목에 두 번째 진입이 나갑니다 — "
+                        f"메뉴에서 확인해 주세요.")
+                elif canceled_cnt > 0:
                     self.log(f"[예약취소] 신규 매수로 인해 대기 중이던 {cand['name']} 매수 예약 주문 {canceled_cnt}건 자동 취소")
                     api.send_telegram_message(f"🗑 [예약 취소] {cand['name']}({cand['code']}) 신규 매수로 인해 대기 중이던 매수 예약 주문 {canceled_cnt}건이 자동 취소되었습니다.")
                 

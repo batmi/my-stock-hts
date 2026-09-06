@@ -17,6 +17,7 @@ from modules.auto_trade import AutoTrader, ConclusionMonitor
 from modules.auto_trade import engine as _atr_engine  # [추가] 지수 변동성 배율 전역 격리
 from modules.auto_trade import trader as _atr_trader  # [추가] 개장 보류 게이트 전역 격리
 from modules.telegram_bot import TelegramCommander
+from modules.reserved_order_monitor import ReservedOrderMonitor as _ReservedOrderMonitor
 
 PRODUCTION_DB_PATH = os.path.abspath(config.DB_FILE_PATH)
 
@@ -443,6 +444,11 @@ def reset_all_singletons():
     AutoTrader._instance = None
     ConclusionMonitor._instance = None
     TelegramCommander._instance = None
+    # [격리 2026-09-06] 예약 감시기도 싱글톤이다 — chart_cache·holding_cache·
+    #  corp_checked_at 을 들고 있어, 한 테스트가 채운 차트/보유분석이 **다른 파일**의
+    #  발동 판정에 그대로 쓰인다. 목록에서 빠져 있어 오래 조용했고, 예약 경로를 새로
+    #  태우는 테스트가 늘자 전체 실행에서만 12건이 한꺼번에 깨졌다(파일 단독은 통과).
+    _ReservedOrderMonitor._instance = None
     # [격리] 시장 국면 TTL 캐시 초기화 (테스트별 모킹 데이터가 캐시로 새지 않도록)
     analysis._MARKET_REGIME_CACHE.clear()
     # [격리 2026-08-19] tvDatafeed 회로차단. 한 테스트가 '전 재시도 실패'를 만들면 그 신호가
@@ -487,6 +493,11 @@ def reset_all_singletons():
     AutoTrader._instance = None
     ConclusionMonitor._instance = None
     TelegramCommander._instance = None
+    # [격리 2026-09-06] 예약 감시기도 싱글톤이다 — chart_cache·holding_cache·
+    #  corp_checked_at 을 들고 있어, 한 테스트가 채운 차트/보유분석이 **다른 파일**의
+    #  발동 판정에 그대로 쓰인다. 목록에서 빠져 있어 오래 조용했고, 예약 경로를 새로
+    #  태우는 테스트가 늘자 전체 실행에서만 12건이 한꺼번에 깨졌다(파일 단독은 통과).
+    _ReservedOrderMonitor._instance = None
     analysis._MARKET_REGIME_CACHE.clear()
     analysis.reset_tvdatafeed_circuit()
     _atr_engine.set_vol_regime_ratio(1.0)

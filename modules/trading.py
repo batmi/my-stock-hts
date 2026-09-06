@@ -1024,7 +1024,12 @@ def send_order(order_type):
                     
                     if is_full_sell:
                         canceled_cnt = db_manager.db.cancel_reserved_sell_orders(target_cano, target_acnt, stock_code)
-                        if canceled_cnt > 0:
+                        if canceled_cnt is None:
+                            config.console.print("\n[bold red]⚠️ 대기 중인 매도 예약을 취소하지 "
+                                                 "못했습니다 — 보유가 없는데 예약이 남아 "
+                                                 "있습니다. 예약 목록을 확인해 주세요.[/]")
+                            msg += "\n⚠️ [예약취소 실패] 매도 예약이 남아 있을 수 있습니다"
+                        elif canceled_cnt > 0:
                             config.console.print(f"\n[bold magenta]💡 안내: 잔고 전량 매도로 인해 대기 중이던 매도 예약 주문 {canceled_cnt}건이 자동 취소되었습니다.[/bold magenta]")
                             msg += f"\n🗑 [예약취소] 잔고 매도로 매도 예약 {canceled_cnt}건 자동 취소"
                     
@@ -1047,7 +1052,14 @@ def send_order(order_type):
 
                     # [추가] 매수 시 기존 예약 매수 주문 자동 취소 (비중 중복 방어)
                     canceled_cnt = db_manager.db.cancel_reserved_buy_orders(target_cano, target_acnt, stock_code)
-                    if canceled_cnt > 0:
+                    if canceled_cnt is None:
+                        #  실패는 0('취소할 것이 없었다')과 다르다 — 남은 예약 매수가
+                        #  나중에 발동하면 같은 종목에 두 번째 진입이 나간다.
+                        config.console.print("\n[bold red]⚠️ 대기 중인 매수 예약을 취소하지 "
+                                             "못했습니다 — 발동하면 같은 종목에 두 번째 "
+                                             "진입이 나갑니다. 예약 목록을 확인해 주세요.[/]")
+                        msg += "\n⚠️ [예약취소 실패] 대기 중인 매수 예약이 남아 있을 수 있습니다"
+                    elif canceled_cnt > 0:
                         config.console.print(f"\n[bold magenta]💡 안내: 신규 매수 진행으로 인해 대기 중이던 매수 예약 주문 {canceled_cnt}건이 자동 취소되었습니다.[/bold magenta]")
                         msg += f"\n🗑 [예약취소] 신규 매수로 매수 예약 {canceled_cnt}건 자동 취소"
 

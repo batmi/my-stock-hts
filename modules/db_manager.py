@@ -1412,7 +1412,18 @@ class DBManager:
             return {}
 
     def delete_trailing_stop(self, code):
-        """매도 후 트레일링 스탑 정보 삭제"""
+        """매도 후 트레일링 스탑 정보 삭제. **성공 여부를 돌려준다.**
+
+        [왜 반환값이 필요한가 · 2026-09-06] 같은 행을 **쓰는** update_highest_price 는
+         처음부터 bool 을 돌려주고 그 사유까지 적어 뒀다 — "재기동해야 소실이 드러난다".
+         지우는 이쪽은 그러지 않았는데, 실패의 대가는 오히려 더 크다.
+         신규 매수 직전에 이것이 도는 이유는 **새 포지션이 이전 포지션의 고점을 물려받지
+         않게** 하려는 것이다. 조용히 실패하면 그 세션은 멀쩡하고(메모리 캐시는 pop 된다)
+         **재기동해야** 드러난다 — get_all_trailing_stops 가 옛 고점을 싣고 오고,
+         update_highest_price 는 단조 증가라 그 값이 내려오지 않으며, 샹들리에 TS 가
+         '고점 대비 폭락'으로 읽어 즉시 시장가 청산을 때린다.
+         (행이 원래 없었으면 지울 것이 없는 것이지 실패가 아니다 — True 다.)
+        """
         with self.lock:
             for attempt in range(5):
                 try:
@@ -1420,16 +1431,29 @@ class DBManager:
                     cursor = conn.cursor()
                     cursor.execute("DELETE FROM trailing_stops WHERE code = ?", (code,))
                     conn.commit()
-                    break
+                    return True
                 except sqlite3.OperationalError as e:
                     if "locked" in str(e) and attempt < 4:
                         time.sleep(0.5)
                         continue
-                    break
-                except Exception: break
+                    logger.error(f"[DB] {code} 트레일링 앵커 삭제 실패 — 옛 고점이 남습니다"
+                                 f"(재기동하면 새 포지션이 그 고점을 물려받아 즉시 청산될 수 "
+                                 f"있습니다): {type(e).__name__}: {e}")
+                    return False
+                except Exception as e:
+                    logger.error(f"[DB] {code} 트레일링 앵커 삭제 실패 — 옛 고점이 남습니다"
+                                 f"(재기동하면 새 포지션이 그 고점을 물려받아 즉시 청산될 수 "
+                                 f"있습니다): {type(e).__name__}: {e}")
+                    return False
+            return False
 
     def insert_half_tp(self, code):
-        """반익절 상태 저장"""
+        """반익절 상태 저장. **성공 여부를 돌려준다.**
+
+        실패해도 그 세션은 메모리 캐시(half_tp_cache)로 정상 동작하므로 아무도 모른다 —
+        **재기동해야 드러난다.** 그때는 '반익절한 적 없음'으로 읽혀 같은 포지션을 또
+        반쪽 판다(update_highest_price 와 같은 사유·같은 규약).
+        """
         with self.lock:
             for attempt in range(5):
                 try:
@@ -1441,12 +1465,27 @@ class DBManager:
                         VALUES (?, ?)
                     ''', (code, now_str))
                     conn.commit()
-                    break
-                except sqlite3.OperationalError: time.sleep(0.5); continue
-                except Exception: break
+                    return True
+                except sqlite3.OperationalError as e:
+                    if attempt < 4:
+                        time.sleep(0.5)
+                        continue
+                    logger.error(f"[DB] {code} 반익절 기록 저장 실패 — 재기동하면 "
+                                 f"'반익절한 적 없음'으로 읽혀 같은 포지션을 또 반쪽 팝니다: {e}")
+                    return False
+                except Exception as e:
+                    logger.error(f"[DB] {code} 반익절 기록 저장 실패 — 재기동하면 "
+                                 f"'반익절한 적 없음'으로 읽혀 같은 포지션을 또 반쪽 팝니다: {e}")
+                    return False
+            return False
 
     def delete_half_tp(self, code):
-        """반익절 상태 삭제"""
+        """반익절 상태 삭제. **성공 여부를 돌려준다.**
+
+        실패하면 신규 진입한 포지션이 '이미 반익절함'으로 남아 반익절·익절 분기가
+        통째로 건너뛰어진다(analyze_sell 의 already_half_sold 체인).
+        (행이 원래 없었으면 실패가 아니다 — True 다.)
+        """
         with self.lock:
             for attempt in range(5):
                 try:
@@ -1454,9 +1493,17 @@ class DBManager:
                     cursor = conn.cursor()
                     cursor.execute("DELETE FROM half_tp_status WHERE code = ?", (code,))
                     conn.commit()
-                    break
-                except sqlite3.OperationalError: time.sleep(0.5); continue
-                except Exception: break
+                    return True
+                except sqlite3.OperationalError as e:
+                    if attempt < 4:
+                        time.sleep(0.5)
+                        continue
+                    logger.error(f"[DB] {code} 반익절 기록 삭제 실패: {e}")
+                    return False
+                except Exception as e:
+                    logger.error(f"[DB] {code} 반익절 기록 삭제 실패: {e}")
+                    return False
+            return False
 
     def get_all_half_tp(self):
         """모든 반익절 상태 종목 조회 (시스템 시작 시 캐시 로드용)"""
@@ -1493,9 +1540,19 @@ class DBManager:
                     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     cursor.execute("INSERT OR REPLACE INTO notified_disclosures (rcept_no, notified_at) VALUES (?, ?)", (rcept_no, now_str))
                     conn.commit()
-                    break
-                except sqlite3.OperationalError: time.sleep(0.5); continue
-                except Exception: break
+                    return True
+                except sqlite3.OperationalError as e:
+                    if attempt < 4:
+                        time.sleep(0.5)
+                        continue
+                    logger.warning(f"[DB] 공시 {rcept_no} 발송 기록 실패 — 같은 공시가 "
+                                   f"다시 알림될 수 있습니다: {e}")
+                    return False
+                except Exception as e:
+                    logger.warning(f"[DB] 공시 {rcept_no} 발송 기록 실패 — 같은 공시가 "
+                                   f"다시 알림될 수 있습니다: {e}")
+                    return False
+            return False
 
     def save_stock_strategy(self, code, name, strategy):
         """종목별 매매 전략 저장"""
@@ -2134,13 +2191,36 @@ class DBManager:
             return []
 
     def update_reserved_order_status(self, order_id, status, odno=None, fail_reason=None):
+        """예약 주문의 상태를 옮긴다. **성공 여부를 돌려준다.**
+
+        [Fix 2026-09-06] 이 writer 만 잠금 재시도도 예외 처리도 없었다. 발주 **뒤에**
+         'TRIGGERED' 를 적는 자리라, 여기서 던지면 감시 루프까지 예외가 올라가
+           · 주문은 거래소에 살아 있는데
+           · 상태는 PROCESSING 에 갇혀 다시는 조회되지 않고(감시는 PENDING 만 본다)
+           · **주문번호(odno)가 어디에도 남지 않는다**
+         는 상태가 된다([[order-id-invariant]] · 바로 위 '좀비 방지' 주석이 막으려던 것과
+         같은 자리다). 다른 writer 와 같은 모양(5회 잠금 재시도 + bool)으로 맞춘다.
+        """
         with self.lock:
-            conn = self._get_conn()
-            cursor = conn.cursor()
-            if odno: cursor.execute("UPDATE reserved_orders SET status=?, odno=? WHERE id=?", (status, odno, order_id))
-            elif fail_reason: cursor.execute("UPDATE reserved_orders SET status=?, fail_reason=? WHERE id=?", (status, fail_reason, order_id))
-            else: cursor.execute("UPDATE reserved_orders SET status=? WHERE id=?", (status, order_id))
-            conn.commit()
+            for attempt in range(5):
+                try:
+                    conn = self._get_conn()
+                    cursor = conn.cursor()
+                    if odno: cursor.execute("UPDATE reserved_orders SET status=?, odno=? WHERE id=?", (status, odno, order_id))
+                    elif fail_reason: cursor.execute("UPDATE reserved_orders SET status=?, fail_reason=? WHERE id=?", (status, fail_reason, order_id))
+                    else: cursor.execute("UPDATE reserved_orders SET status=? WHERE id=?", (status, order_id))
+                    conn.commit()
+                    return True
+                except sqlite3.OperationalError as e:
+                    if "locked" in str(e) and attempt < 4:
+                        time.sleep(0.5)
+                        continue
+                    logger.error(f"[DB] 예약 주문 {order_id} 상태 갱신 실패({status}): {e}")
+                    return False
+                except Exception as e:
+                    logger.error(f"[DB] 예약 주문 {order_id} 상태 갱신 실패({status}): {e}")
+                    return False
+            return False
             
     def cancel_reserved_order(self, order_id, reason=None):
         """대기 중인 예약 주문 하나를 취소한다. 실제로 취소했으면 True.
@@ -2225,7 +2305,10 @@ class DBManager:
         시스템이 임의로 환산하지 않고 취소한 뒤 다시 걸도록 알린다.
 
         계좌로 좁히지 않는다 — 권리 조정은 계좌가 아니라 종목의 사건이다.
-        반환: 취소된 주문 목록(알림 문구 구성용). 없으면 빈 리스트.
+        반환: 취소된 주문 목록(알림 문구 구성용). 없으면 빈 리스트, **실패하면 None**.
+         [Fix 2026-09-06] 빈 리스트는 '취소할 것이 없었다'로 읽힌다. 실패를 그렇게 읽으면
+         조정 전 가격에 걸린 예약이 그대로 남아 곧바로 오발동한다 — 이 함수가 존재하는
+         이유가 바로 그것을 막는 것이다.
         """
         with self.lock:
             for attempt in range(5):
@@ -2248,10 +2331,12 @@ class DBManager:
                     if "locked" in str(e) and attempt < 4:
                         time.sleep(0.5)
                         continue
-                    break
-                except Exception:
-                    break
-            return []
+                    logger.error(f"[DB] {code} 권리 조정 예약 일괄 취소 실패: {e}")
+                    return None
+                except Exception as e:
+                    logger.error(f"[DB] {code} 권리 조정 예약 일괄 취소 실패: {e}")
+                    return None
+            return None
 
     def get_pyramid_count(self, code):
         """증액(피라미딩) 횟수. 조회 실패는 -1 — '0회'와 구분해야 한다.
@@ -2350,9 +2435,13 @@ class DBManager:
                     if "locked" in str(e) and attempt < 4:
                         time.sleep(0.5)
                         continue
-                    break
-                except Exception:
-                    break
+                    logger.warning(f"[DB] {code} 권리 조정 기준점 저장 실패 — 기준점이 "
+                                   f"옛 날짜로 남습니다(다음 주기에 다시 시도): {e}")
+                    return False
+                except Exception as e:
+                    logger.warning(f"[DB] {code} 권리 조정 기준점 저장 실패 — 기준점이 "
+                                   f"옛 날짜로 남습니다(다음 주기에 다시 시도): {e}")
+                    return False
             return False
 
     def cancel_reserved_sell_orders(self, cano, acnt, code):
@@ -2374,13 +2463,22 @@ class DBManager:
                     if "locked" in str(e) and attempt < 4:
                         time.sleep(0.5)
                         continue
-                    break
-                except Exception:
-                    break
-            return 0
+                    logger.error(f"[DB] {code} 예약 매도 일괄 취소 실패: {e}")
+                    return None
+                except Exception as e:
+                    logger.error(f"[DB] {code} 예약 매도 일괄 취소 실패: {e}")
+                    return None
+            return None
             
     def cancel_reserved_buy_orders(self, cano, acnt, code):
-        """특정 계좌/종목의 대기 중인 예약 매수 주문을 일괄 취소 처리 (신규 매수 시 중복 방지)"""
+        """특정 계좌/종목의 대기 중인 예약 매수 주문을 일괄 취소 처리 (신규 매수 시 중복 방지)
+
+        반환: 취소한 건수. **실패하면 None** — 0(취소할 것이 없었다)과 갈라야 한다.
+         [Fix 2026-09-06] 종전에는 실패도 0 이었다. 이 함수의 존재 이유가 '중복 진입
+         방지'인데, 실패가 '취소할 예약이 없었다'로 읽히면 남아 있는 예약 매수가 나중에
+         그대로 발동해 **같은 종목에 두 번째 포지션**이 생긴다. 포지션이 두 배가 되면
+         손절폭·변동성 한도·포트폴리오 히트 캡이 한꺼번에 무의미해진다.
+        """
         with self.lock:
             for attempt in range(5):
                 try:
@@ -2394,9 +2492,16 @@ class DBManager:
                     updated = cursor.rowcount
                     conn.commit()
                     return updated
-                except sqlite3.OperationalError: time.sleep(0.5); continue
-                except Exception: break
-            return 0
+                except sqlite3.OperationalError as e:
+                    if attempt < 4:
+                        time.sleep(0.5)
+                        continue
+                    logger.error(f"[DB] {code} 예약 매수 일괄 취소 실패: {e}")
+                    return None
+                except Exception as e:
+                    logger.error(f"[DB] {code} 예약 매수 일괄 취소 실패: {e}")
+                    return None
+            return None
 
     def cancel_other_reserved_orders(self, triggered_id, cano, acnt, code,
                                      reason='동일 종목의 다른 예약 매매 발동으로 인한 자동 취소'):
@@ -2428,10 +2533,12 @@ class DBManager:
                     if "locked" in str(e) and attempt < 4:
                         time.sleep(0.5)
                         continue
-                    break
-                except Exception:
-                    break
-            return []
+                    logger.error(f"[DB] {code} 형제 예약 일괄 취소 실패: {e}")
+                    return None
+                except Exception as e:
+                    logger.error(f"[DB] {code} 형제 예약 일괄 취소 실패: {e}")
+                    return None
+            return None
 
 # 전역 인스턴스
 db = DBManager()

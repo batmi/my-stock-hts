@@ -152,6 +152,17 @@ class ReservedOrderMonitor:
     def _cancel_on_corp_action(self, code, ratio, reason):
         canceled = db_manager.db.cancel_reserved_orders_on_corp_action(
             code, f"권리 조정 감지({reason})로 자동 취소")
+        if canceled is None:
+            #  실패는 '취소할 것이 없었다'와 다르다 — 조정 전 가격에 걸린 예약이 그대로
+            #  남으면 목표가는 이미 도달한 것처럼, 추적 극값은 폭락한 것처럼 보여
+            #  어느 쪽이든 곧바로 오발동한다. 이 함수가 존재하는 이유가 그것이다.
+            logger.error(f"[Reserve] {code} 권리 조정 예약 취소 실패 — 조정 전 가격의 "
+                         f"예약이 남아 곧 오발동할 수 있습니다")
+            alert_delivered(
+                f"🚨 [권리 조정 · 예약 취소 실패] {code}\n{reason}\n"
+                f"조정 전 가격에 걸린 예약을 취소하지 못했습니다. 그대로 두면 곧바로 "
+                f"오발동합니다 — 예약 목록에서 직접 취소해 주세요.", urgent=True)
+            return
         if not canceled:
             return
         name = canceled[0].get('name') or code
@@ -216,164 +227,179 @@ class ReservedOrderMonitor:
             time.sleep(0.3)
         
         for order in pending_orders:
-            code, condition_type = order['code'], order['condition_type']
-            target_price = float(order.get('target_price', 0.0))
-            order_type = order['order_type']
-            is_overseas = (order['market'] == 'US')
+            #  [Fix 2026-09-06] 주문 하나의 오류가 **그 주기의 나머지 예약을 전부**
+            #   건너뛰게 하던 것을 막는다. 루프 첫 줄의 float(order.get(...)) 만 해도
+            #   target_price 는 NULL 이 가능한 컬럼이라(TIME·COMPOSITE 은 목표가가 없다)
+            #   TypeError 를 낸다 — dict.get 의 기본값은 **키가 없을 때만** 쓰이는데
+            #   SQLite 는 키를 주고 None 을 담는다. 그 한 행이 남아 있는 한 다른 종목의
+            #   손절·익절 예약이 무기한 점검되지 않는다(바깥 except 는 로그 한 줄을
+            #   남기고 다음 주기로 넘어갈 뿐, 같은 행이 또 같은 자리에서 깨진다).
+            try:
+                code, condition_type = order['code'], order['condition_type']
+                #  target_price 는 NULL 이 가능하다(TIME·COMPOSITE 조건은 목표가가 없다).
+                #  dict.get 의 기본값은 키가 없을 때만 쓰인다 — SQLite 는 키를 주고 None 을 담는다.
+                target_price = api.safe_float(order.get('target_price'), default=0.0)
+                order_type = order['order_type']
+                is_overseas = (order['market'] == 'US')
             
-            expire_dt = order.get('expire_dt')
-            if expire_dt and expire_dt != "20991231" and today_str > expire_dt:
-                db_manager.db.update_reserved_order_status(order['id'], 'EXPIRED')
-                api.send_telegram_message(f"🗑 [예약 주문 만료]\n종목: {order['name']}({order['code']})\n사유: 설정된 유효 기간({expire_dt[:4]}-{expire_dt[4:6]}-{expire_dt[6:8]}) 경과로 자동 취소되었습니다.")
+                expire_dt = order.get('expire_dt')
+                if expire_dt and expire_dt != "20991231" and today_str > expire_dt:
+                    db_manager.db.update_reserved_order_status(order['id'], 'EXPIRED')
+                    api.send_telegram_message(f"🗑 [예약 주문 만료]\n종목: {order['name']}({order['code']})\n사유: 설정된 유효 기간({expire_dt[:4]}-{expire_dt[4:6]}-{expire_dt[6:8]}) 경과로 자동 취소되었습니다.")
                 
-                # [추가] 만료(취소) 내역 거래내역에 기록
-                t_type = f"{'매수' if order['order_type'] == 'buy' else '매도'}취소(예약)"
-                db_manager.db.insert_trade(
-                    t_type, order['code'], order['name'], order['qty'], 
-                    order.get('order_price', 0), f"RES_EXP_{order['id']}", 
-                    order_status="취소", reason="유효 기간 만료로 인한 예약 자동 취소"
-                )
-                continue
+                    # [추가] 만료(취소) 내역 거래내역에 기록
+                    t_type = f"{'매수' if order['order_type'] == 'buy' else '매도'}취소(예약)"
+                    db_manager.db.insert_trade(
+                        t_type, order['code'], order['name'], order['qty'], 
+                        order.get('order_price', 0), f"RES_EXP_{order['id']}", 
+                        order_status="취소", reason="유효 기간 만료로 인한 예약 자동 취소"
+                    )
+                    continue
 
-            # [수정] 장 마감 시간대 API 자원 최적화.
-            #  종전엔 SYSTEM_TRADING_START/END_TIME(자동매매 운용시간)에 연동했으나, 그 기본값이
-            #  KRX 정규장(09:00~15:30)으로 좁아지면서 NXT 프리/애프터에 걸린 예약 주문이 발동하지
-            #  않게 된다. 예약 주문은 사용자가 직접 건 주문이므로 자동매매 운용시간과 무관하게
-            #  '국내 시장이 열려 있는 동안'(NXT 포함 08:00~20:00) 항상 감시한다.
-            #
-            # [Fix 2026-09-04] 이 게이트들이 TIME 조건에는 걸리지 않았다. TIME 은 시세를 안 보므로
-            #  자원 절약과 무관하다는 이유였는데, 판정은 `지금 >= 지정시각` 뿐이라 **지정 시각이
-            #  이미 지난 뒤 처음 도는 주기에 그대로 발동한다**. 낮 동안 프로그램이 꺼져 있다가
-            #  밤에 켜면 14:00 예약이 그 순간(예: 21:00) 발주되고, 장이 닫혀 거부되면서 FAILED 로
-            #  굳는다 — 예약 한 건이 아무것도 못 하고 소진된다. 발동은 거래 가능 시간에만 한다.
-            if not is_overseas and not api.domestic_trading_session_open():
-                continue
+                # [수정] 장 마감 시간대 API 자원 최적화.
+                #  종전엔 SYSTEM_TRADING_START/END_TIME(자동매매 운용시간)에 연동했으나, 그 기본값이
+                #  KRX 정규장(09:00~15:30)으로 좁아지면서 NXT 프리/애프터에 걸린 예약 주문이 발동하지
+                #  않게 된다. 예약 주문은 사용자가 직접 건 주문이므로 자동매매 운용시간과 무관하게
+                #  '국내 시장이 열려 있는 동안'(NXT 포함 08:00~20:00) 항상 감시한다.
+                #
+                # [Fix 2026-09-04] 이 게이트들이 TIME 조건에는 걸리지 않았다. TIME 은 시세를 안 보므로
+                #  자원 절약과 무관하다는 이유였는데, 판정은 `지금 >= 지정시각` 뿐이라 **지정 시각이
+                #  이미 지난 뒤 처음 도는 주기에 그대로 발동한다**. 낮 동안 프로그램이 꺼져 있다가
+                #  밤에 켜면 14:00 예약이 그 순간(예: 21:00) 발주되고, 장이 닫혀 거부되면서 FAILED 로
+                #  굳는다 — 예약 한 건이 아무것도 못 하고 소진된다. 발동은 거래 가능 시간에만 한다.
+                if not is_overseas and not api.domestic_trading_session_open():
+                    continue
 
-            # [추가] 단일가(동시호가) 구간은 체결가를 예측할 수 없어 발동 스킵.
-            #  경계를 직접 들지 않고 auto_trade.common 의 정본을 부른다 — 08:50~09:00(시가)
-            #  과 15:20~15:30(종가)은 자동매매가 진입·청산을 보류하는 구간과 같아야 한다.
-            if not is_overseas and _at_common().is_single_price_break():
-                continue
-            # 해외 주식은 한국 시간 기준 주간(08:00 ~ 16:00)에 감시 생략 (서머타임 넉넉히 고려)
-            if is_overseas and ("0800" <= now_time_str_short < "1600"):
-                continue
+                # [추가] 단일가(동시호가) 구간은 체결가를 예측할 수 없어 발동 스킵.
+                #  경계를 직접 들지 않고 auto_trade.common 의 정본을 부른다 — 08:50~09:00(시가)
+                #  과 15:20~15:30(종가)은 자동매매가 진입·청산을 보류하는 구간과 같아야 한다.
+                if not is_overseas and _at_common().is_single_price_break():
+                    continue
+                # 해외 주식은 한국 시간 기준 주간(08:00 ~ 16:00)에 감시 생략 (서머타임 넉넉히 고려)
+                if is_overseas and ("0800" <= now_time_str_short < "1600"):
+                    continue
 
-            trigger, reason = False, ""
+                trigger, reason = False, ""
 
-            if condition_type == 'TIME':
-                tt = order['target_time']
-                if tt:
-                    if len(tt) >= 12 and now_time_str_full >= tt[:12]:
-                        trigger, reason = True, f"지정 시간({tt}) 도달"
-                    elif len(tt) <= 4 and now_time_str_short >= tt:
-                        trigger, reason = True, f"지정 시간({tt}) 도달"
-            else:
-                if code not in current_prices:
-                    current_prices[code] = api.get_current_price(code, is_overseas)
-                curr_price = current_prices[code]
-                if curr_price <= 0: continue
+                if condition_type == 'TIME':
+                    tt = order['target_time']
+                    if tt:
+                        if len(tt) >= 12 and now_time_str_full >= tt[:12]:
+                            trigger, reason = True, f"지정 시간({tt}) 도달"
+                        elif len(tt) <= 4 and now_time_str_short >= tt:
+                            trigger, reason = True, f"지정 시간({tt}) 도달"
+                else:
+                    if code not in current_prices:
+                        current_prices[code] = api.get_current_price(code, is_overseas)
+                    curr_price = current_prices[code]
+                    if curr_price <= 0: continue
                 
-                if condition_type in ['SCORE_UP', 'SCORE_DOWN', 'RSI_UP', 'RSI_DOWN', 'EMA_UP', 'EMA_DOWN']:
-                    # [SSOT] 판정은 _eval_atomic 이 단독 보유한다. 종전에는 이 자리에 점수·RSI·
-                    #  EMA 비교가 한 벌 더 있어, 같은 조건이 단일 예약과 복합(COMPOSITE) 서브조건
-                    #  에서 각각 다른 코드로 평가됐다. 지금은 같지만 갈라져도 아무도 모른다 —
-                    #  발동은 실주문이라 조용한 불일치가 곧 오발주다.
-                    #  문구(발동 사유)만 여기서 만든다.
-                    df, ind = self._get_indicators_for(code, curr_price)
-                    ctx = {'curr_price': curr_price, 'df': df, 'ind': ind, 'code': code,
-                           'is_overseas': is_overseas, 'now_hhmm': now_time_str_short,
-                           'order_type': order_type}
-                    if self._eval_atomic(condition_type, target_price, ctx):
-                        trigger = True
-                        if 'SCORE' in condition_type:
-                            sc = ctx.get('_score')
-                            op = ">=" if condition_type == 'SCORE_UP' else "<="
-                            word = "도달" if condition_type == 'SCORE_UP' else "하락"
-                            reason = f"목표 점수 {word} ({sc}점 {op} {target_price}점)"
-                        elif 'RSI' in condition_type:
-                            rv = (ind or {}).get('rsi')
-                            op = ">=" if condition_type == 'RSI_UP' else "<="
-                            word = "도달" if condition_type == 'RSI_UP' else "하락"
-                            reason = f"RSI {word} ({rv:.1f} {op} {target_price})"
-                        else:
-                            word = "상향돌파" if condition_type == 'EMA_UP' else "하향이탈"
-                            reason = f"EMA {int(target_price)}선 {word} (현재가: {curr_price:,.2f})"
+                    if condition_type in ['SCORE_UP', 'SCORE_DOWN', 'RSI_UP', 'RSI_DOWN', 'EMA_UP', 'EMA_DOWN']:
+                        # [SSOT] 판정은 _eval_atomic 이 단독 보유한다. 종전에는 이 자리에 점수·RSI·
+                        #  EMA 비교가 한 벌 더 있어, 같은 조건이 단일 예약과 복합(COMPOSITE) 서브조건
+                        #  에서 각각 다른 코드로 평가됐다. 지금은 같지만 갈라져도 아무도 모른다 —
+                        #  발동은 실주문이라 조용한 불일치가 곧 오발주다.
+                        #  문구(발동 사유)만 여기서 만든다.
+                        df, ind = self._get_indicators_for(code, curr_price)
+                        ctx = {'curr_price': curr_price, 'df': df, 'ind': ind, 'code': code,
+                               'is_overseas': is_overseas, 'now_hhmm': now_time_str_short,
+                               'order_type': order_type}
+                        if self._eval_atomic(condition_type, target_price, ctx):
+                            trigger = True
+                            if 'SCORE' in condition_type:
+                                sc = ctx.get('_score')
+                                op = ">=" if condition_type == 'SCORE_UP' else "<="
+                                word = "도달" if condition_type == 'SCORE_UP' else "하락"
+                                reason = f"목표 점수 {word} ({sc}점 {op} {target_price}점)"
+                            elif 'RSI' in condition_type:
+                                rv = (ind or {}).get('rsi')
+                                op = ">=" if condition_type == 'RSI_UP' else "<="
+                                word = "도달" if condition_type == 'RSI_UP' else "하락"
+                                reason = f"RSI {word} ({rv:.1f} {op} {target_price})"
+                            else:
+                                word = "상향돌파" if condition_type == 'EMA_UP' else "하향이탈"
+                                reason = f"EMA {int(target_price)}선 {word} (현재가: {curr_price:,.2f})"
 
-                elif condition_type == 'HOLDING_EXIT':
-                    # [보유분석 청산] 자동매매가 실제 청산에 쓰는 판정(analyze_sell)을 그대로 쓴다.
-                    #  반익절(sell_ratio<1)은 발동시키지 않는다 — 예약 수량은 등록 시점에 고정이라
-                    #  '절반만 팔고 추세를 계속 탄다'는 반익절의 의도를 예약 수량으로 표현할 수 없다.
-                    res = self._holding_exit_result(order)
-                    if res and res.get('action') == 'sell':
-                        if float(res.get('sell_ratio', 1.0) or 1.0) >= 1.0:
-                            trigger, reason = True, f"보유분석 청산: {res.get('reason', '')}"
-                        else:
-                            logger.debug(f"[Reserve] {code} 반익절 신호는 예약 매도 대상이 아님 "
-                                         f"({res.get('reason', '')})")
+                    elif condition_type == 'HOLDING_EXIT':
+                        # [보유분석 청산] 자동매매가 실제 청산에 쓰는 판정(analyze_sell)을 그대로 쓴다.
+                        #  반익절(sell_ratio<1)은 발동시키지 않는다 — 예약 수량은 등록 시점에 고정이라
+                        #  '절반만 팔고 추세를 계속 탄다'는 반익절의 의도를 예약 수량으로 표현할 수 없다.
+                        res = self._holding_exit_result(order)
+                        if res and res.get('action') == 'sell':
+                            if float(res.get('sell_ratio', 1.0) or 1.0) >= 1.0:
+                                trigger, reason = True, f"보유분석 청산: {res.get('reason', '')}"
+                            else:
+                                logger.debug(f"[Reserve] {code} 반익절 신호는 예약 매도 대상이 아님 "
+                                             f"({res.get('reason', '')})")
 
-                elif condition_type in ('SMART_MONEY', 'STATE_STRONGBUY', 'STATE_BUY', 'STATE_MR', 'NEW_HIGH',
-                                        'COMPOSITE', 'ATR_BREAKOUT'):
-                    # [차별화 조건] 우리 시스템 고유 엔진(수급/상태/신고가/변동성/복합)을 트리거로 활용
-                    df, ind = self._get_indicators_for(code, curr_price)  # SMART_MONEY는 ind 불필요
-                    ctx = {'curr_price': curr_price, 'df': df, 'ind': ind, 'code': code,
-                           'is_overseas': is_overseas, 'now_hhmm': now_time_str_short,
-                           'order_type': order_type}
+                    elif condition_type in ('SMART_MONEY', 'STATE_STRONGBUY', 'STATE_BUY', 'STATE_MR', 'NEW_HIGH',
+                                            'COMPOSITE', 'ATR_BREAKOUT'):
+                        # [차별화 조건] 우리 시스템 고유 엔진(수급/상태/신고가/변동성/복합)을 트리거로 활용
+                        df, ind = self._get_indicators_for(code, curr_price)  # SMART_MONEY는 ind 불필요
+                        ctx = {'curr_price': curr_price, 'df': df, 'ind': ind, 'code': code,
+                               'is_overseas': is_overseas, 'now_hhmm': now_time_str_short,
+                               'order_type': order_type}
 
-                    if condition_type == 'SMART_MONEY':
-                        if self._eval_atomic('SMART_MONEY', None, ctx):
-                            trigger, reason = True, "스마트머니(외국인/기관) 순매수 전환 포착"
-                    elif condition_type.startswith('STATE_'):
-                        target_state = {'STATE_STRONGBUY': '강매수', 'STATE_BUY': '매수', 'STATE_MR': '역매수'}[condition_type]
-                        if self._eval_atomic('STATE', target_state, ctx):
-                            trigger, reason = True, f"시스템 상태 '{target_state}' 진입"
-                    elif condition_type == 'NEW_HIGH':
-                        if self._eval_atomic('NEW_HIGH', target_price, ctx):
-                            hi_label = "사상 최고가" if target_price == 0 else "52주 신고가"
-                            trigger, reason = True, f"{hi_label} 경신 (현재가: {curr_price:,.2f})"
-                    elif condition_type == 'ATR_BREAKOUT':
-                        if self._eval_atomic('ATR_BREAKOUT', target_price, ctx):
-                            side = "상단" if order_type == 'buy' else "하단"
-                            trigger, reason = True, (f"변동성 돌파 {side} (전일 종가 ± ATR×{target_price} 기준, "
-                                                     f"현재가: {curr_price:,.2f})")
-                    elif condition_type == 'COMPOSITE':
-                        trigger, reason = self._eval_composite(order, ctx)
+                        if condition_type == 'SMART_MONEY':
+                            if self._eval_atomic('SMART_MONEY', None, ctx):
+                                trigger, reason = True, "스마트머니(외국인/기관) 순매수 전환 포착"
+                        elif condition_type.startswith('STATE_'):
+                            target_state = {'STATE_STRONGBUY': '강매수', 'STATE_BUY': '매수', 'STATE_MR': '역매수'}[condition_type]
+                            if self._eval_atomic('STATE', target_state, ctx):
+                                trigger, reason = True, f"시스템 상태 '{target_state}' 진입"
+                        elif condition_type == 'NEW_HIGH':
+                            if self._eval_atomic('NEW_HIGH', target_price, ctx):
+                                hi_label = "사상 최고가" if target_price == 0 else "52주 신고가"
+                                trigger, reason = True, f"{hi_label} 경신 (현재가: {curr_price:,.2f})"
+                        elif condition_type == 'ATR_BREAKOUT':
+                            if self._eval_atomic('ATR_BREAKOUT', target_price, ctx):
+                                side = "상단" if order_type == 'buy' else "하단"
+                                trigger, reason = True, (f"변동성 돌파 {side} (전일 종가 ± ATR×{target_price} 기준, "
+                                                         f"현재가: {curr_price:,.2f})")
+                        elif condition_type == 'COMPOSITE':
+                            trigger, reason = self._eval_composite(order, ctx)
 
-                elif condition_type == 'TRAILING_BUY':
-                    lowest = float(order.get('lowest_price', 0.0))
-                    if lowest <= 0.0 or curr_price < lowest:
-                        db_manager.db.update_reserved_order_lowest(order['id'], curr_price)
-                        lowest = curr_price
+                    elif condition_type == 'TRAILING_BUY':
+                        lowest = float(order.get('lowest_price', 0.0))
+                        if lowest <= 0.0 or curr_price < lowest:
+                            db_manager.db.update_reserved_order_lowest(order['id'], curr_price)
+                            lowest = curr_price
                         
-                    if lowest > 0:
-                        rebound_rate = ((curr_price - lowest) / lowest) * 100
-                        if rebound_rate >= target_price:
-                            trigger, reason = True, f"바닥({lowest:,.0f}) 대비 {rebound_rate:.1f}% 반등 매수"
+                        if lowest > 0:
+                            rebound_rate = ((curr_price - lowest) / lowest) * 100
+                            if rebound_rate >= target_price:
+                                trigger, reason = True, f"바닥({lowest:,.0f}) 대비 {rebound_rate:.1f}% 반등 매수"
                             
-                elif condition_type == 'TRAILING_SELL':
-                    highest = float(order.get('highest_price', 0.0))
-                    if highest <= 0.0 or curr_price > highest:
-                        db_manager.db.update_reserved_order_highest(order['id'], curr_price)
-                        highest = curr_price
+                    elif condition_type == 'TRAILING_SELL':
+                        highest = float(order.get('highest_price', 0.0))
+                        if highest <= 0.0 or curr_price > highest:
+                            db_manager.db.update_reserved_order_highest(order['id'], curr_price)
+                            highest = curr_price
                         
-                    if highest > 0:
-                        drop_rate = ((highest - curr_price) / highest) * 100
-                        if drop_rate >= target_price:
-                            trigger, reason = True, f"고점({highest:,.0f}) 대비 {drop_rate:.1f}% 하락 매도"
+                        if highest > 0:
+                            drop_rate = ((highest - curr_price) / highest) * 100
+                            if drop_rate >= target_price:
+                                trigger, reason = True, f"고점({highest:,.0f}) 대비 {drop_rate:.1f}% 하락 매도"
                     
-                if condition_type == 'STOP':
-                    if curr_price <= target_price:
-                        trigger, reason = True, f"스탑/하향 이탈 (현재가: {curr_price})"
-                elif condition_type == 'BREAKOUT':
-                    if curr_price >= target_price:
-                        trigger, reason = True, f"상향 돌파 (현재가: {curr_price})"
-                elif condition_type == 'LIMIT':
-                    if (order_type == 'buy' and curr_price <= target_price) or \
-                       (order_type == 'sell' and curr_price >= target_price):
-                        trigger, reason = True, f"지정가 도달 (현재가: {curr_price})"
+                    if condition_type == 'STOP':
+                        if curr_price <= target_price:
+                            trigger, reason = True, f"스탑/하향 이탈 (현재가: {curr_price})"
+                    elif condition_type == 'BREAKOUT':
+                        if curr_price >= target_price:
+                            trigger, reason = True, f"상향 돌파 (현재가: {curr_price})"
+                    elif condition_type == 'LIMIT':
+                        if (order_type == 'buy' and curr_price <= target_price) or \
+                           (order_type == 'sell' and curr_price >= target_price):
+                            trigger, reason = True, f"지정가 도달 (현재가: {curr_price})"
                         
-            if trigger:
-                logger.info(f"[Reserve] 예약 발동: {order['name']} - {reason}")
-                self._execute_order(order, reason)
+                if trigger:
+                    logger.info(f"[Reserve] 예약 발동: {order['name']} - {reason}")
+                    self._execute_order(order, reason)
+            except Exception as _oe:
+                logger.error(f"[Reserve] 예약 {order.get('id')} "
+                             f"({order.get('name')}/{order.get('code')}) 점검 실패 — "
+                             f"이 건만 건너뜁니다: {type(_oe).__name__}: {_oe}")
+                continue
                 
     def _get_indicators_for(self, code, curr_price):
         """캐시된 차트에 현재가를 반영하여 지표 계산. (df, ind) 반환 — 캐시 없으면 (None, None)."""
@@ -642,6 +668,10 @@ class ReservedOrderMonitor:
                 reason="보유 수량 없음(외부 매도 추정)으로 자동 취소")
         except Exception as e:
             logger.warning(f"[Reserve] 보유 소멸 일괄 취소 실패({code}): {e}")
+            canceled = None
+        if canceled is None:
+            logger.error(f"[Reserve] {code} 보유 소멸에 따른 형제 예약 취소 실패 — "
+                         f"보유가 없는데 매도 예약이 남아 있을 수 있습니다")
             canceled = []
         db_manager.db.update_reserved_order_status(
             order['id'], 'CANCELED', fail_reason="보유 수량 없음(외부 매도 추정)")
@@ -774,7 +804,21 @@ class ReservedOrderMonitor:
             #  와 register_manual_order 의 추적 키로도 쓰여, 틀리면 예약 주문의 체결을
             #  영영 못 잡는다. place_order 가 rt_cd='0' 이면 ODNO 를 보장한다.
             odno = str((res.get('output') or {}).get('ODNO') or '').strip()
-            db_manager.db.update_reserved_order_status(order['id'], 'TRIGGERED', odno)
+            #  [Fix 2026-09-06] 이 한 줄이 던지면 감시 루프까지 예외가 올라가, 주문은
+            #   거래소에 살아 있는데 상태는 PROCESSING 에 갇히고 **주문번호가 어디에도
+            #   남지 않는다** — 위 '좀비 방지' 주석이 막으려던 바로 그 상태다.
+            #   이제 update_reserved_order_status 는 실패를 bool 로 알린다. 못 적었으면
+            #   사람이 대신 찾아야 하므로 주문번호를 들고 크게 알린다.
+            if not db_manager.db.update_reserved_order_status(order['id'], 'TRIGGERED', odno):
+                logger.error(f"[Reserve] 예약 {order['id']} 발주는 됐는데 상태를 "
+                             f"TRIGGERED 로 옮기지 못했습니다 (odno={odno})")
+                alert_delivered(
+                    f"🚨 [예약 주문 추적 불가]\n"
+                    f"종목: {order['name']}({order['code']})\n"
+                    f"주문번호: {odno}\n"
+                    f"주문은 나갔으나 예약 상태를 기록하지 못했습니다. 이 예약은 목록에서 "
+                    f"사라지고, 시스템은 이 주문을 추적하지 않습니다.\n"
+                    f"HTS/MTS에서 직접 확인해 주세요.", urgent=True)
             display_price = "시장가" if order_price == 0 else (f"{int(order_price):,}원" if order['market'] == 'KR' else f"${order_price:,.2f}")
             api.send_telegram_message(f"🔔 [예약 {'매수' if order['order_type']=='buy' else '매도'} 실행]\n"
                                       f"종목: {order['name']}({order['code']})\n"
@@ -810,6 +854,18 @@ class ReservedOrderMonitor:
 
             # [추가] 해당 종목의 나머지 예약 주문 일괄 취소 및 알림
             canceled_orders = db_manager.db.cancel_other_reserved_orders(order['id'], order['cano'], order['acnt'], order['code'])
+            if canceled_orders is None:
+                #  [Fix 2026-09-06] 종전에는 실패도 빈 리스트라 '취소할 형제가 없었다'로
+                #   읽혔다. OCO(손절+익절)에서 이것이 실패하면 **남은 한쪽이 그대로 살아
+                #   있어 이중 매도**가 된다 — 하나는 이미 나갔는데 다른 하나가 또 나간다.
+                logger.error(f"[Reserve] {order['code']} 형제 예약을 취소하지 못했습니다 "
+                             f"— 남은 예약이 또 발동할 수 있습니다")
+                alert_delivered(
+                    f"⚠️ [예약 형제 취소 실패] {order['name']}({order['code']})\n"
+                    f"예약 하나가 발동했으나, 같은 종목의 나머지 예약을 취소하지 "
+                    f"못했습니다.\n그 예약이 발동하면 주문이 한 번 더 나갑니다 — "
+                    f"예약 목록에서 직접 취소해 주세요.", urgent=True)
+                canceled_orders = []
             for co in canceled_orders:
                 t_type = "매수" if co['order_type'] == 'buy' else "매도"
                 cond_str = co['condition_type']

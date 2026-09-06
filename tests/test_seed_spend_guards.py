@@ -129,3 +129,50 @@ def test_pyramid_resumes_once_the_state_is_known(trader):
     assert not _pyramid(trader).called
     trader.pending_restore_ok = True
     assert _pyramid(trader).called, "복구됐는데 증액이 계속 막혀 있다"
+
+
+# ─────────── ③ 옛 앵커를 못 지웠으면 사지 않는다 (2026-09-06) ───────────
+#
+#  신규 매수 직전의 delete_trailing_stop 은 **새 포지션이 이전 포지션의 고점을
+#  물려받지 않게** 하는 장치다. 그런데 이 함수는 실패를 통째로 삼켰고 반환값도 없었다
+#  (같은 행을 쓰는 update_highest_price 는 처음부터 bool 을 돌려주고 그 사유까지 적어
+#  뒀는데도). 실패해도 그 세션은 멀쩡해 보인다 — 메모리 캐시는 pop 되므로.
+#  **재기동해야** 드러난다: DB 의 옛 고점이 실려 와 샹들리에 TS 가 '고점 대비 폭락'으로
+#  읽고 즉시 시장가 청산을 때린다. 진입을 한 주기 미루는 것은 되돌릴 수 있고,
+#  그 청산은 되돌릴 수 없다.
+
+def _buy_with_anchor_delete(trader, *, ok, half_ok=True):
+    cand = [{'code': CODE, 'name': NAME, 'price': 70_000, 'score': 9.0,
+             'rsi': 50, 'adx': 30, 'cci': 100, 'is_custom_rule': False, 'atr': 1000}]
+    with patch.dict(config.SELL_STRATEGY, ATR_STOP), \
+         patch.object(trader, '_clamp_order_price', side_effect=lambda c, p: p), \
+         patch('modules.auto_trade.api.fetch_buyable_quantity', return_value=1000), \
+         patch('modules.auto_trade.db_manager.db.delete_trailing_stop', return_value=ok), \
+         patch('modules.auto_trade.db_manager.db.delete_half_tp', return_value=half_ok), \
+         patch('modules.auto_trade.db_manager.db.cancel_reserved_buy_orders', return_value=0), \
+         patch.object(trader.order_manager, 'send_order', return_value="ODNO1") as order:
+        trader._execute_buy_orders(cand, 10_000_000, 0.25, 0, 4)
+    return order
+
+
+def test_new_buy_holds_when_the_old_anchor_cannot_be_cleared(trader):
+    assert not _buy_with_anchor_delete(trader, ok=False).called, \
+        "옛 트레일링 고점을 못 지웠는데 매수가 나갔다 — 재기동하면 즉시 청산된다"
+
+
+def test_new_buy_proceeds_when_the_anchor_is_cleared(trader):
+    """대조군 — 상시 보류로 기능이 죽은 상태도 '통과'가 되므로 반드시 함께 잰다."""
+    assert _buy_with_anchor_delete(trader, ok=True).called
+
+
+def test_a_held_buy_returns_its_heat_reservation(trader):
+    """보류하면서 선점한 히트 예산을 반납하지 않으면 그 예산이 영영 묶인다."""
+    trader.portfolio_heat_amt = 0.0
+    _buy_with_anchor_delete(trader, ok=False)
+    assert trader.portfolio_heat_amt == pytest.approx(0.0), \
+        f"선점분이 반납되지 않았다: {trader.portfolio_heat_amt}"
+
+
+def test_a_stale_half_tp_record_does_not_block_the_buy(trader):
+    """반익절 기록은 방향이 다르다 — 남아 있어도 '없는 매도'를 만들지는 않는다."""
+    assert _buy_with_anchor_delete(trader, ok=True, half_ok=False).called
