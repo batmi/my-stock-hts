@@ -649,12 +649,34 @@ class TelegramCommander:
         """외부 API 장애 때도 확인 가능한 경량 운영 관제 명령."""
         return self.trader.get_health_message()
 
+    #  [기동 실패를 성공으로 답하지 않는다 · 2026-09-07] AutoTrader.start() 는 여섯 갈래로
+    #   **조용히 되돌아간다** — 방어 모드(buy_halted), 자격증명 없음(토스/실전),
+    #   계좌 잠금 거부(같은 계좌로 다른 엔진이 이미 매매 중), DB 건강검진 실패
+    #   (손절 기준이 든 DB 손상), 초기화 실패. 반환값이 없어 호출부는 그것을 알 수 없다.
+    #   종전 응답은 그 전부에 대해 "시작했습니다" 였다.
+    #   이 명령을 쓰는 사람은 화면 앞에 없다(그래서 텔레그램이다) — 자동매매가 돌고
+    #   손절·트레일링이 감시 중이라고 믿게 만드는 거짓 확인은 가장 비싼 종류다.
+    #   결과는 상태(is_running)로 확인한다.
+    def _start_failure_reason(self):
+        """기동이 거절된 이유 중 여기서 알 수 있는 것. 모르면 ''."""
+        if getattr(self.trader, 'buy_halted', False):
+            return f"방어 모드가 켜져 있습니다({getattr(self.trader, 'buy_halt_reason', '') or '사유 미기록'})"
+        blocked = getattr(self.trader, 'start_block_reason', '')
+        if blocked:
+            return blocked
+        return ""
+
     def _cmd_start(self, args):
         if self.trader.is_running:
             return "⚠️ 이미 시스템 트레이딩이 실행 중입니다."
-        else:
-            self.trader.start(interactive=False)
+        self.trader.start(interactive=False)
+        if self.trader.is_running:
             return "🚀 시스템 트레이딩을 시작했습니다."
+        reason = self._start_failure_reason()
+        return ("❌ 시스템 트레이딩을 시작하지 못했습니다."
+                + (f"\n사유: {reason}" if reason else "")
+                + "\n\n⛔ 손절·트레일링 감시가 돌지 않습니다. 서버 로그를 확인하세요"
+                  "(계좌 잠금·DB 손상·자격증명·초기화 실패 중 하나입니다).")
 
     def _cmd_stop(self, args):
         if not self.trader.is_running:
@@ -679,9 +701,17 @@ class TelegramCommander:
             self.trader.stop(use_status=False)
             msg.append("🛑 시스템 트레이딩 중단 완료.")
             time.sleep(1)  # 상태 정리 대기
-        
+
         self.trader.start(interactive=False)
-        msg.append("🚀 시스템 트레이딩을 재시작했습니다.")
+        #  재시작은 더 나쁘다 — 멈추는 데는 성공하고 켜는 데 실패하면, 종전 응답을 믿은
+        #  운용자는 **꺼진 채로 돌고 있다고** 믿는다.
+        if self.trader.is_running:
+            msg.append("🚀 시스템 트레이딩을 재시작했습니다.")
+        else:
+            reason = self._start_failure_reason()
+            msg.append("❌ 다시 시작하지 못했습니다 — **중단된 상태로 남아 있습니다**."
+                       + (f"\n사유: {reason}" if reason else "")
+                       + "\n⛔ 손절·트레일링 감시가 돌지 않습니다. 서버 로그를 확인하세요.")
         return "\n".join(msg)
 
     def _cmd_help(self, args):

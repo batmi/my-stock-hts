@@ -1572,12 +1572,30 @@ def _toss_sellable_qty(code):
      None 을 돌려주도록 고쳐져 있었는데(api/quotes/price.fetch_sellable_quantity 주석)
      토스 어댑터만 그대로였다. 추세추종에서 못 파는 비용은 못 사는 비용보다 훨씬 크다.
      None 을 받으면 호출부가 잔고 수량으로 진행하고, 정말 못 파는 상태면 증권사가 거부한다.
+
+    [응답이 와도 값이 없을 수 있다 · 2026-09-07] 위 규칙은 **예외**에만 걸려 있었다.
+     응답은 200 인데 sellableQuantity 가 빠져 있거나 null 이거나 이름이 바뀌면
+     `_toss_int(None)` 이 0 으로 접어, 다시 '팔 수 없다'가 된다. 가정이 아니다 —
+     토스 국내 잔고에서 ord_psbl_qty 가 사라져 손절·트레일링이 전면 정지한 적이 있다
+     ([[toss-balance-sell-gate]]). 그때와 같은 모양이 한 필드 아래에 남아 있었다.
+     실측: 필드 누락·null·이름 변경·숫자 아닌 값 넷 다 0(매도 중단)으로 읽혔다.
+     **키가 없으면 모르는 것**이고, 키가 있는데 숫자가 아니어도 모르는 것이다.
+     0 은 응답이 실제로 0 이라고 말했을 때만이다([[unknown-vs-empty]]).
     """
     try:
         sq = toss_api.get_sellable_quantity(code)
     except toss_api.TossApiError as e:
         logger.debug(f"[Toss] 매도가능수량 조회 실패({code}): {e}")
         return None
-    if sq is None:
+    if not isinstance(sq, dict) or 'sellableQuantity' not in sq:
+        logger.warning(f"[Toss] 매도가능수량 응답에 sellableQuantity 가 없습니다({code}: {sq!r}) "
+                       f"— '0주'가 아니라 '모름'으로 다룹니다(매도를 막지 않습니다)")
         return None
-    return _toss_int(sq.get('sellableQuantity'))
+    raw = sq.get('sellableQuantity')
+    _SENTINEL = object()
+    val = _toss_int(raw, default=_SENTINEL)
+    if val is _SENTINEL:
+        logger.warning(f"[Toss] 매도가능수량을 숫자로 읽지 못했습니다({code}: {raw!r}) "
+                       f"— '모름'으로 다룹니다")
+        return None
+    return val

@@ -536,7 +536,7 @@ class ConclusionMonitor:
                                     if origin_trade:
                                         db_type_name = origin_trade.get('type', type_name)
                                         if price_val <= 0: price_val = api.safe_float(origin_trade.get('price'), default=0.0)
-                                
+
                                     db_type_name = db_type_name or ""
                                 
                                     # 수동 취소 또는 시스템(타임아웃) 등 이미 알림/저장된 이력인지 확인
@@ -613,13 +613,41 @@ class ConclusionMonitor:
                                         stop_loss_rate = 0.0
                                         reason_to_save = "체결 확인"
                                         actual_reason = ""
+
+                                        #  [체결가 복구 · 2026-09-07] 같은 복구가 취소 경로에는
+                                        #   있었는데(price_val) 정작 원장에 체결을 적는 쪽은
+                                        #   avg_price 를 날것 그대로 썼다. 그래서 체결 수량은
+                                        #   있는데 단가 필드가 비거나 없으면 **100주가 0원에
+                                        #   체결된 행**이 남는다.
+                                        #   실측(같은 100주 전량 체결 응답, 단가 필드만 바꿈):
+                                        #       정상 70000  → ('체결', '100', '70000.0')
+                                        #       빈 문자열   → ('체결', '100', '0.0')
+                                        #       필드 누락   → ('체결', '100', '0.0')
+                                        #       null        → ('체결', '100', '0.0')
+                                        #   0원 체결은 평단·실현손익·손절선·트레일링 앵커의 근거를
+                                        #   통째로 무너뜨리고, 아래 update_trade(price=...) 가
+                                        #   **접수 행의 주문가까지** 0으로 덮는다. 그리고 그대로
+                                        #   매매일지로 나간다.
+                                        #   가정이 아니다 — 이 파일 자신이 avg_prvs 가 빈 문자열인
+                                        #   실측을 2026-09-06 에 적어 뒀고, 토스 어댑터의
+                                        #   매도가능수량도 같은 모양이었다([[toss-balance-sell-gate]]).
+                                        #   원 주문(접수) 행의 주문가로 메운다 — 지정가라면 그것이
+                                        #   체결가와 가장 가까운 값이다([[unknown-vs-empty]]).
+                                        fill_price = avg_price
+                                        if fill_price <= 0 and origin_trade:
+                                            _op = api.safe_float(origin_trade.get('price'), default=0.0)
+                                            if _op > 0:
+                                                fill_price = _op
+                                                logger.warning(
+                                                    f"[체결] {code} {odno} 체결 단가를 응답에서 읽지 "
+                                                    f"못해 원 주문가({_op:,.4f})로 기록합니다")
                                         if origin_trade:
                                             db_type_name = origin_trade['type']
                                             profit_amt = origin_trade.get('profit_amt', 0)
                                             profit_rate = origin_trade.get('profit_rate', 0.0)
                                             # [비용] 주문 시점 추정 손익을 '실제 체결가' 기준으로 다시 계산한다.
                                             profit_amt, profit_rate = _recalc_realized(
-                                                origin_trade, avg_price, tot_ccld_qty,
+                                                origin_trade, fill_price, tot_ccld_qty,
                                                 is_overseas_trade, profit_amt, profit_rate)
                                             score = origin_trade.get('strategy_score', 0)
                                             stop_loss_rate = api.safe_float(origin_trade.get('stop_loss_rate'), default=0.0)
@@ -905,7 +933,16 @@ class ConclusionMonitor:
                                             logger.debug(f"[ORDER_DEBUG] DB 저장 시도: {odno}")
                                             logger.debug(f"[AutoTrade] 신규 체결 DB 저장 시도: {odno} ({name})")
                                     
-                                        db_manager.db.insert_trade(db_type_name, code, name, tot_ccld_qty, avg_price, odno, order_status="체결", reason=reason_to_save, custom_time=trade_time_str, profit_amt=profit_amt, profit_rate=profit_rate, score=score, stop_loss_rate=stop_loss_rate)
+                                        if fill_price <= 0 and tot_ccld_qty > 0:
+                                            #  메울 근거조차 없다(외부 주문 + 단가 없음). 그래도 행은
+                                            #  적는다 — 포지션은 실재하고, 원장에 없는 종목은 손절·
+                                            #  트레일링 감시 대상이 되지도 못한다(못 파는 쪽이 더 비싸다).
+                                            #  대신 조용히 넘기지 않는다.
+                                            logger.error(
+                                                f"[체결] {code} {odno} {tot_ccld_qty}주를 **단가 0원**으로 "
+                                                f"기록합니다 — 응답에 체결 단가가 없고 원 주문 기록도 "
+                                                f"없습니다. 평단·실현손익·손절선이 이 행을 근거로 삼습니다.")
+                                        db_manager.db.insert_trade(db_type_name, code, name, tot_ccld_qty, fill_price, odno, order_status="체결", reason=reason_to_save, custom_time=trade_time_str, profit_amt=profit_amt, profit_rate=profit_rate, score=score, stop_loss_rate=stop_loss_rate)
 
                                         # [추가] 매매일지 웹서버로 즉시 전송을 깨운다.
                                         #  적재 자체는 insert_trade 가 같은 트랜잭션에서 끝냈으므로
@@ -919,9 +956,13 @@ class ConclusionMonitor:
 
                                         # [추가] 시장가 주문 등의 경우를 위해 원 주문(접수)의 단가도 체결가로 업데이트
                                         # 원본 '접수' 기록을 보존하기 위해 order_status는 덮어쓰지 않음
-                                        db_manager.db.update_trade(
-                                            odno, price=avg_price,
-                                            on_date=_odno_scope_date(item, trade_time_str))
+                                        #  0으로는 덮지 않는다 — 이 갱신의 목적은 '시장가 주문의 접수
+                                        #  단가를 체결가로 채우는 것'이다. 모르는 값으로 아는 값을
+                                        #  지우면 그 반대가 된다.
+                                        if fill_price > 0:
+                                            db_manager.db.update_trade(
+                                                odno, price=fill_price,
+                                                on_date=_odno_scope_date(item, trade_time_str))
                                     else:
                                         # [Fix] 부분체결이 여러 폴링 주기에 걸치면(30주 → 100주) 두 번째부터
                                         #  '이미 체결 행이 있다'는 이유로 통째로 스킵되어, trades에는 첫 관측
@@ -940,9 +981,9 @@ class ConclusionMonitor:
                                         #   profit_rate 는 수량과 무관해 값이 같지만, 산식이 바뀌어도
                                         #   따라오도록 함께 넘긴다.
                                         _p_amt, _p_rate = _recalc_realized(
-                                            origin_trade, avg_price, tot_ccld_qty,
+                                            origin_trade, fill_price, tot_ccld_qty,
                                             is_overseas_trade, None, None)
-                                        db_manager.db.update_trade(odno, qty=tot_ccld_qty, price=avg_price,
+                                        db_manager.db.update_trade(odno, qty=tot_ccld_qty, price=fill_price,
                                                                    profit_amt=_p_amt, profit_rate=_p_rate,
                                                                    where_status="체결",
                                                                    on_date=_odno_scope_date(item, trade_time_str))

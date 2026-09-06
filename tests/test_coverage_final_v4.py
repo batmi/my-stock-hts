@@ -10,9 +10,14 @@ import time
 
 # --- AutoTrade ---
 @patch('modules.auto_trade.api.check_server_health')
-@patch('modules.auto_trade.api.send_telegram_message')
+@patch('modules.auto_trade.alert_delivered', return_value=True)
 def test_wait_for_server_recovery(mock_tg, mock_health):
-    """서버 복구 대기 로직 테스트"""
+    """서버 복구 대기 로직 테스트.
+
+    [2026-09-07] 복구 알림은 alert_delivered 를 거친다 — 전달을 확인한 뒤에 짝
+    (_wait_alert_sent)을 풀기 때문이다. send_telegram_message 는 비동기라 실패를
+    알려 주지 않아, 못 닿았는데 짝을 풀면 그 통보가 영영 사라진다.
+    """
     trader = auto_trade.AutoTrader()
     trader.is_running = True
     trader._wait_alert_sent = True # 진입 알림이 발송된 상태 가정 (복구 알림 짝 맞춤)
@@ -34,7 +39,7 @@ def test_wait_for_server_recovery(mock_tg, mock_health):
 
 
 @patch('modules.auto_trade.api.check_server_health', return_value=True)
-@patch('modules.auto_trade.api.send_telegram_message')
+@patch('modules.auto_trade.alert_delivered', return_value=True)
 def test_wait_for_server_recovery_alert_suppressed(mock_tg, mock_health):
     """진입 알림이 쿨타임으로 생략된 경우 복구 알림도 생략 (스팸 방지)"""
     trader = auto_trade.AutoTrader()

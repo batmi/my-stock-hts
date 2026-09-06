@@ -385,8 +385,16 @@ class SystemScheduler:
                 
             if is_problem:
                 if self._last_problem_msg != msg:
-                    api.send_telegram_message(f"🚨 [시스템 하트비트 이상 감지]\n{msg}\n서버 접속 후 시스템 상태를 확인해주세요.")
-                    self._last_problem_msg = msg
+                    #  [전달 확인 뒤 스로틀 · 2026-09-07] 종전에는 보내기 **전에** 찍었다.
+                    #   send_telegram_message 는 기본이 비동기라 실패해도 예외를 던지지
+                    #   않으므로, 네트워크가 끊겨 있으면 '보냈다'로 굳는다. 그러면 그 문제가
+                    #   **지속되는 내내** 같은 msg 라 다시 보내지 않는다 — 실측: 4주기 동안
+                    #   전송 시도 1회. 이 경보의 내용은 '매매 스레드가 죽었다 / 루프가 멈췄다 /
+                    #   감시 스레드가 종료됐다 / 생존 신호를 못 쓴다' 다. 놓치면 그 상태를
+                    #   영영 모른다([[infra-layer-audit-2026-09]] 의 '알림은 전달 확인 뒤 표시').
+                    if alert_delivered(f"🚨 [시스템 하트비트 이상 감지]\n{msg}\n"
+                                       f"서버 접속 후 시스템 상태를 확인해주세요.", urgent=True):
+                        self._last_problem_msg = msg
             else:
                 self._last_problem_msg = ""
                 

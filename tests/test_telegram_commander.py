@@ -31,21 +31,42 @@ def test_cmd_status(mock_trader_cls, commander):
 
 @patch('modules.telegram_bot.AutoTrader')
 def test_cmd_start_stop(mock_trader_cls, commander):
-    """시작/중지 명령어 테스트"""
+    """시작/중지 명령어 테스트.
+
+    [2026-09-07] 응답은 **실제로 떴는지**를 보고 정해진다. 종전 이 테스트는 mock 의
+    start() 가 아무것도 켜지 않는데도 "시작했습니다"를 기대했다 — 고친 거짓 확인을
+    그대로 못 박고 있었던 셈이다. 성공을 주장하려면 mock 도 실제로 켜야 한다.
+    """
     mock_trader = mock_trader_cls.return_value
     commander.trader = mock_trader  # Mock 객체 주입
-    
-    # Start
+
+    # Start — start() 가 정말 켰을 때만 성공 응답이다
     mock_trader.is_running = False
+    mock_trader.start.side_effect = lambda **k: setattr(mock_trader, 'is_running', True)
     response = commander._cmd_start([])
     assert "시작했습니다" in response
     mock_trader.start.assert_called_once()
-    
+
     # Stop
     mock_trader.is_running = True
     response = commander._cmd_stop([])
     assert "중단 요청" in response
     mock_trader.stop.assert_called_once()
+
+
+@patch('modules.telegram_bot.AutoTrader')
+def test_cmd_start_reports_failure(mock_trader_cls, commander):
+    """start() 가 조용히 되돌아가면(잠금 거부·DB 손상·초기화 실패) 실패라고 답한다."""
+    mock_trader = mock_trader_cls.return_value
+    commander.trader = mock_trader
+    mock_trader.is_running = False
+    mock_trader.start_block_reason = ""
+    mock_trader.buy_halted = False
+    mock_trader.start.side_effect = lambda **k: None    # 아무것도 켜지 않는다
+
+    response = commander._cmd_start([])
+    assert "시작했습니다" not in response, f"거짓 확인: {response}"
+    assert "시작하지 못했습니다" in response
 
 @patch('modules.telegram_bot.db_manager.db.get_all_stock_strategies')
 def test_cmd_rules(mock_get_rules, commander):

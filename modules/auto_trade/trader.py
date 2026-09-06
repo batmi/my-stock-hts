@@ -528,6 +528,7 @@ class AutoTrader:
         선점자가 있다는 것은 '다른 프로세스가 이미 이 계좌로 매매 중'이라는 뜻이다.
         그대로 시작하면 서로의 미체결을 모른 채 같은 종목에 각자 주문을 낸다.
         """
+        self.start_block_reason = ""
         try:
             lock = instance_lock.InstanceLock(self._trade_account_key())
             if lock.acquire():
@@ -541,6 +542,9 @@ class AutoTrader:
         holder = f" ({lock.holder})" if lock.holder else ""
         msg = (f"자동매매를 시작할 수 없습니다 — 같은 계좌({self._trade_account_key()})로 "
                f"이미 다른 프로세스가 매매 중입니다{holder}.")
+        #  [2026-09-07] 사유가 로그에만 남으면 원격(텔레그램)에서 /start 를 친 운용자는
+        #   왜 안 떴는지 알 수 없다. 그가 화면 앞에 없다는 것이 이 경로의 전제다.
+        self.start_block_reason = f"같은 계좌로 다른 프로세스가 이미 매매 중입니다{holder}"
         self.log(f"[중복 실행 차단] {msg}")
         if api._is_screen_output_allowed():
             console.print(f"\n[bold red]{msg}[/bold red]")
@@ -617,14 +621,17 @@ class AutoTrader:
         now = time.time()
         if now - getattr(self, '_db_write_fail_alerted_at', 0.0) < DB_WRITE_FAIL_ALERT_COOLDOWN:
             return
-        self._db_write_fail_alerted_at = now
 
         free_mb = db_manager.db.disk_free_mb()
         msg = (f"DB 쓰기 실패 누적 {h['count']}건 (최근: {h['last_op']} — {h['last_error']})\n"
                f"디스크 여유 {free_mb:,.0f}MB\n"
                f"트레일링 최고가가 저장되지 않으면 재기동 후 청산선이 어긋납니다.")
         self.log(f"[DB 쓰기 실패] {msg}")
-        api.send_telegram_message(f"⚠️ [DB 쓰기 실패] {msg}")
+        #  [전달 확인 뒤 쿨다운 · 2026-09-07] 종전에는 보내기 전에 쿨다운을 찍었다.
+        #   비동기 전송이라 실패가 예외로 오지 않으므로, 못 닿아도 그 쿨다운 동안 침묵한다.
+        #   내용이 '디스크가 차서 트레일링 최고가가 저장되지 않는다' 라 놓치면 비싸다.
+        if _pkg().alert_delivered(f"⚠️ [DB 쓰기 실패] {msg}", urgent=True):
+            self._db_write_fail_alerted_at = now
 
     def start(self, interactive=True):
         if self.is_running:
@@ -1105,7 +1112,14 @@ class AutoTrader:
 
         self.log(f"[방어 모드] 신규 매수 중단: {reason} (매도·손절 감시는 계속됩니다)")
         if notify_msg:
-            api.send_telegram_message(notify_msg)
+            #  [전달 확인 · 2026-09-07] 이 알림은 **하루에 한 번**만 나간다(위의
+            #   `buy_halted and buy_halt_date == today` 가 재발동을 막는다). 그래서 한 번
+            #   못 닿으면 그날은 끝이다 — 운영자는 신규 매수가 멈춘 것을 모른 채 하루를
+            #   보낸다. 상태는 이미 뒤집혔으므로 되돌리지 않고, 못 닿은 사실만 남긴다.
+            if not _pkg().alert_delivered(notify_msg, urgent=True):
+                logger.warning(f"[방어 모드] 발동 알림을 전달하지 못했습니다 — 신규 매수가 "
+                               f"멈춘 사실이 운영자에게 닿지 않았습니다(사유: {reason}). "
+                               f"상태 화면에는 표시됩니다.")
         return True
 
     def resume_buys(self, reason="수동 해제"):
@@ -4106,17 +4120,24 @@ class AutoTrader:
                     # [추가] 진입 알림 쿨타임(10분) — 대기/복구가 짧은 주기로 반복(진동)해도 스팸 방지
                     now = time.time()
                     if now - self.last_wait_alert_time > 600:
-                        self.last_wait_alert_time = now
-                        self._wait_alert_sent = True
-
                         # [추가] 에러 로그 꼬리 첨부 (1시간 쿨타임)
-                        if now - self.last_emergency_alert_time > 3600:
+                        _attach_tail = now - self.last_emergency_alert_time > 3600
+                        if _attach_tail:
                             log_tail = get_mystock_log_tail(20)
                             msg += f"\n\n📜 [최근 시스템 로그 (mystock.log)]\n```\n{log_tail}```"
-                            self.last_emergency_alert_time = now
 
-                        api.send_telegram_message(msg)
-                    
+                        #  [전달 확인 뒤 표식 · 2026-09-07] 종전에는 쿨타임(10분)과
+                        #   _wait_alert_sent 를 **보내기 전에** 찍었다. 비동기 전송이라
+                        #   실패가 예외로 오지 않으므로 못 닿아도 10분간 침묵하고,
+                        #   더 나쁜 것은 _wait_alert_sent 가 True 로 남는다는 점이다 —
+                        #   진입 알림은 못 갔는데 **복구 알림만** 나가서, 운영자는 있지도
+                        #   않았던 장애의 복구를 통보받는다(짝이 어긋난다).
+                        if _pkg().alert_delivered(msg, urgent=True):
+                            self.last_wait_alert_time = now
+                            self._wait_alert_sent = True
+                            if _attach_tail:
+                                self.last_emergency_alert_time = now
+
                     # 대기 중임을 남긴다 — 정체 감시(scheduler._check_heartbeat)가 이
                     #  '의도된 멈춤'을 장애로 오탐하면 서버 장애 때마다 가짜 경보가 나간다.
                     self.waiting_for_server = True
@@ -4156,11 +4177,15 @@ class AutoTrader:
 
         now = time.time()
         if now - getattr(self, '_code_error_alerted_at', 0.0) > CODE_ERROR_ALERT_COOLDOWN:
-            self._code_error_alerted_at = now
-            api.send_telegram_message(
-                f"⚠️ [반복 오류] 연속 에러가 한도에 닿았으나 증권사 서버는 정상입니다.\n"
-                f"코드 쪽 오류로 보고 **대기하지 않습니다**(매도·손절 감시 유지).\n"
-                f"신규 매수는 계속되므로 원인 확인이 필요합니다.\n\n원인: {err_reason}")
+            #  [전달 확인 뒤 쿨다운 · 2026-09-07] 보내기 전에 찍으면, 비동기 전송이
+            #   못 닿아도 그 쿨다운 동안 침묵한다. 본문이 "신규 매수는 계속되므로 원인
+            #   확인이 필요합니다" 라 — 그 사이 매수는 계속 나간다.
+            if _pkg().alert_delivered(
+                    f"⚠️ [반복 오류] 연속 에러가 한도에 닿았으나 증권사 서버는 정상입니다.\n"
+                    f"코드 쪽 오류로 보고 **대기하지 않습니다**(매도·손절 감시 유지).\n"
+                    f"신규 매수는 계속되므로 원인 확인이 필요합니다.\n\n원인: {err_reason}",
+                    urgent=True):
+                self._code_error_alerted_at = now
         return True
 
     def _wait_for_server_recovery(self):
@@ -4183,8 +4208,11 @@ class AutoTrader:
                     # [수정] 진입 알림을 보냈을 때만 복구 알림 발송 (쿨타임으로 진입 알림이
                     # 생략된 반복 진동 구간에서는 복구 알림도 생략해 스팸 방지)
                     if self._wait_alert_sent:
-                        self._wait_alert_sent = False
-                        api.send_telegram_message("✅ [서버 복구] KIS 서버가 정상화되었습니다.\n자동매매를 재개합니다.")
+                        #  복구 알림도 전달을 확인한 뒤에 짝을 푼다 — 못 닿았는데 풀어
+                        #  버리면 다음 장애의 진입 알림만 남고 복구 통보는 영영 없다.
+                        if _pkg().alert_delivered("✅ [서버 복구] KIS 서버가 정상화되었습니다.\n"
+                                                  "자동매매를 재개합니다."):
+                            self._wait_alert_sent = False
                     return
                 else:
                     self.log("[장애 대기] 서버 여전히 응답 없음.")

@@ -106,8 +106,8 @@ from . import orders               # noqa: E402
 
 # [리팩토링] 텔레그램 발신 계층은 modules/telegram_notify.py 로 분리되었다.
 # 기존 호출부(api.send_telegram_message 등) 호환을 위한 재수출(re-export).
-from modules.telegram_notify import (_get_telegram_footer, send_telegram_message,   # noqa: E402
-                                     send_telegram_photo)
+from modules.telegram_notify import (_get_telegram_footer, alert_delivered,          # noqa: E402
+                                     send_telegram_message, send_telegram_photo)
 
 # [리팩토링] OpenDART 연동 계층은 modules/dart_api.py 로 분리되었다. (재수출)
 from modules.dart_api import (DART_BASE_URL, call_dart, get_dart_corp_map,           # noqa: E402

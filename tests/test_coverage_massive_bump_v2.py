@@ -20,7 +20,7 @@ def cleanup_db_connection():
 # ==============================================================================
 # 1. modules/auto_trade.py - 리스크 관리 및 미체결 주문 처리 엣지 케이스
 # ==============================================================================
-@patch('modules.auto_trade.api.send_telegram_message')
+@patch('modules.auto_trade.alert_delivered', return_value=True)
 def test_risk_manager_emergency_stop(mock_tg):
     """일일 손실 한도 도달 시 방어 모드(신규 매수 중단) 작동 커버리지
 

@@ -99,9 +99,15 @@ def check_and_refresh_token_if_expired():
                 # [추가] 토큰 갱신 지연 알림이 발송된 적이 있다면, 복구 알림 전송
                 if getattr(context, 'LAST_TOKEN_REFRESH_ALERT', 0) > 0:
                     try:
-                        _api().send_telegram_message("✅ [시스템 복구] API 토큰이 정상적으로 갱신되었습니다.\n시스템을 계속 운영합니다.")
-                        # 복구 알림 후에는 다시 지연 알림을 보낼 수 있도록 초기화
-                        context.LAST_TOKEN_REFRESH_ALERT = 0
+                        #  [전달 확인 뒤 표식 · 2026-09-07] send_telegram_message 는 기본이
+                        #   비동기라 예외를 던지지 않는다 — 네트워크가 끊겨 있어도 이 try 는
+                        #   아무것도 잡지 못하고 '보냈다'로 굳었다(alert_delivered 를 만든
+                        #   바로 그 이유, 2026-09-04). 복구 알림을 못 보냈는데 표식을 지우면
+                        #   운영자는 **장애가 아직 계속되는 줄** 안다.
+                        if _api().alert_delivered("✅ [시스템 복구] API 토큰이 정상적으로 "
+                                                  "갱신되었습니다.\n시스템을 계속 운영합니다."):
+                            # 복구 알림 후에는 다시 지연 알림을 보낼 수 있도록 초기화
+                            context.LAST_TOKEN_REFRESH_ALERT = 0
                     except Exception as e:
                         logger.debug(f"Token refresh recovery telegram send error: {e}")
             else:
@@ -115,8 +121,14 @@ def check_and_refresh_token_if_expired():
             # [수정] 텔레그램 알림 전송 쿨타임 적용 (1시간당 1회 제한으로 알림 폭탄 방지)
             if now - getattr(context, 'LAST_TOKEN_REFRESH_ALERT', 0) > 3600:
                 try:
-                    _api().send_telegram_message(f"🚨 [시스템 경고] API 토큰 갱신 지연\n\n사유: {str(e)}\n\n(한국투자증권 서버 정기 점검 시간일 수 있습니다. 시스템은 멈추지 않고 1분 간격으로 토큰 발급을 계속 재시도합니다.)")
-                    context.LAST_TOKEN_REFRESH_ALERT = now
+                    #  이 경보는 **1시간에 한 번**만 나간다. 토큰이 없으면 주문도 조회도
+                    #   나가지 못하므로, 못 닿은 것을 '보냈다'로 굳히면 그 한 시간이 통째로
+                    #   침묵이 된다. 전달을 확인한 뒤에 찍는다(못 닿으면 다음 주기에 재시도).
+                    if _api().alert_delivered(
+                            f"🚨 [시스템 경고] API 토큰 갱신 지연\n\n사유: {str(e)}\n\n"
+                            f"(한국투자증권 서버 정기 점검 시간일 수 있습니다. 시스템은 멈추지 않고 "
+                            f"1분 간격으로 토큰 발급을 계속 재시도합니다.)", urgent=True):
+                        context.LAST_TOKEN_REFRESH_ALERT = now
                 except Exception: pass
 
 def _fetch_and_set_token(token_type, force_refresh=False):

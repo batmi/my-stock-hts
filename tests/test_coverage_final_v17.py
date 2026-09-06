@@ -183,7 +183,7 @@ def test_risk_manager_check_loss_limit_edge_case():
     current_total = 9_000_000 # 정확히 -10% 손실 (900만원)
 
     with patch.object(trader, 'stop') as mock_stop, \
-         patch('modules.auto_trade.api.send_telegram_message') as mock_tg, \
+         patch('modules.auto_trade.alert_delivered') as mock_tg, \
          patch('config.console.print'):
 
         rm.check_loss_limit(current_total)

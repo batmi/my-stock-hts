@@ -105,7 +105,7 @@ def test_autotrader_run_loop_exception_kill_switch(mock_bal):
     
     with patch.object(trader, 'is_market_open', return_value=True), \
          patch.object(trader, '_wait_for_server_recovery') as mock_recovery, \
-         patch('modules.auto_trade.api.send_telegram_message') as mock_tg, \
+         patch('modules.auto_trade.alert_delivered') as mock_tg, \
          patch('time.sleep', side_effect=InterruptedError): # 다음 루프 방지용
              
         try:

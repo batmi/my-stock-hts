@@ -18,7 +18,7 @@ def app_scheduler():
     # 실제 scheduler 모듈의 클래스명에 맞게 조정 (예: SystemScheduler)
     return scheduler.SystemScheduler() if hasattr(scheduler, 'SystemScheduler') else MagicMock()
 
-@patch('modules.scheduler.api.send_telegram_message')
+@patch('modules.scheduler.alert_delivered', return_value=True)
 def test_scheduler_heartbeat_trigger(mock_tg, app_scheduler):
     """스케줄러에서 독립적으로 하트비트/시스템 에러를 모니터링하는지 검증"""
     if isinstance(app_scheduler, MagicMock):

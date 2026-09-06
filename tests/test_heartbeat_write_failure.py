@@ -75,7 +75,10 @@ def _sched(monkeypatch, beat_ok, streak):
     s.last_heartbeat_time = 0.0
     s._last_problem_msg = ""
     sent = []
-    monkeypatch.setattr(scheduler.api, 'send_telegram_message', lambda m, *a, **k: sent.append(m))
+    #  [2026-09-07] 하트비트 이상 경보는 alert_delivered 를 거친다 — 전달을 확인한
+    #   뒤에 스로틀(_last_problem_msg)을 찍기 때문이다. 전송 성공(True)을 돌려준다.
+    monkeypatch.setattr(scheduler, 'alert_delivered',
+                        lambda m, urgent=False: (sent.append(m), True)[1])
     monkeypatch.setattr(scheduler.heartbeat, 'beat', lambda **k: beat_ok)
     monkeypatch.setattr(scheduler.heartbeat, 'beat_failure_streak', lambda **k: streak)
     monkeypatch.setattr(s, '_heartbeat_context',

@@ -238,7 +238,7 @@ def test_get_prev_rsi():
     assert rsi is not None
 
 @patch('modules.auto_trade.api.check_server_health')
-@patch('modules.auto_trade.api.send_telegram_message')
+@patch('modules.auto_trade.alert_delivered', return_value=True)
 def test_wait_for_server_recovery_loop(mock_tg, mock_health):
     """서버 복구 대기 루프 테스트"""
     trader = auto_trade.AutoTrader()
@@ -483,7 +483,7 @@ def test_get_deposit_balance_fail(mock_call):
 
 # --- Additional Coverage ---
 
-@patch('modules.auto_trade.api.send_telegram_message')
+@patch('modules.auto_trade.alert_delivered', return_value=True)
 @patch('modules.auto_trade.AutoTrader.stop')
 def test_risk_manager_emergency_stop(mock_stop, mock_tg):
     """일일 손실 한도 초과 시 방어 모드(신규 매수 중단) 테스트

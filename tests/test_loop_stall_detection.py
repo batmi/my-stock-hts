@@ -97,7 +97,10 @@ def test_the_scheduler_raises_the_alarm(trader, monkeypatch):
     s.trader = trader
     s.last_heartbeat_time = 0.0
     s._last_problem_msg = ""
-    monkeypatch.setattr(sch.api, 'send_telegram_message', lambda m, *a, **k: sent.append(m))
+    #  [2026-09-07] 하트비트 이상 경보는 alert_delivered 를 거친다 — 전달을 확인한
+    #   뒤에 스로틀(_last_problem_msg)을 찍기 때문이다. 전송 성공(True)을 돌려준다.
+    monkeypatch.setattr(sch, 'alert_delivered',
+                        lambda m, urgent=False: (sent.append(m), True)[1])
     monkeypatch.setattr(sch.heartbeat, 'beat', lambda *a, **k: None)
     monkeypatch.setattr(s, '_heartbeat_context',
                         lambda: {"running": True, "mode": "2", "instance": "x", "holdings": 0},
@@ -121,7 +124,10 @@ def test_the_scheduler_stays_quiet_when_healthy(trader, monkeypatch):
     s.trader = trader
     s.last_heartbeat_time = 0.0
     s._last_problem_msg = ""
-    monkeypatch.setattr(sch.api, 'send_telegram_message', lambda m, *a, **k: sent.append(m))
+    #  [2026-09-07] 하트비트 이상 경보는 alert_delivered 를 거친다 — 전달을 확인한
+    #   뒤에 스로틀(_last_problem_msg)을 찍기 때문이다. 전송 성공(True)을 돌려준다.
+    monkeypatch.setattr(sch, 'alert_delivered',
+                        lambda m, urgent=False: (sent.append(m), True)[1])
     monkeypatch.setattr(sch.heartbeat, 'beat', lambda *a, **k: None)
     monkeypatch.setattr(s, '_heartbeat_context',
                         lambda: {"running": True, "mode": "2", "instance": "x", "holdings": 0},

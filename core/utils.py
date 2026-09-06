@@ -763,6 +763,17 @@ def order_age_seconds(ord_tmd, now=None, ord_dt=None):
 
      여기서는 복원한 시각이 미래면 전날로 본다. ord_dt 를 주면 추측 자체가 필요 없다
      (토스 어댑터는 ISO 타임스탬프에서 ord_dt 를 함께 만든다).
+
+     [ord_dt 경로에도 같은 방어가 필요하다 · 2026-09-07] 위 수정은 **날짜를 추측하는
+     경로에만** 걸려 있었다. ord_dt 를 받은 쪽은 그대로 빼서 음수를 그대로 돌려준다 —
+     증권사 서버 시각이 앞서거나(운영기는 RTC 없는 라즈베리파이라 NTP 동기 전 로컬
+     시계가 뒤처진다) ord_dt 가 하루 앞이면 바로 그 상태가 된다.
+     실측(now=09:05):
+         ord_dt 로 미래 시각 → age = -300.0
+         ord_dt 가 내일     → age = -86,100.0
+     둘 다 위 두 사고를 그대로 낸다(미체결이 영원히 안 잘리고, 응답 유실 대사가 남의
+     주문을 이어받는다). **미래 주문이라는 것은 없다** — 음수는 값이 아니라 '모른다'다.
+     이 함수의 '모른다'는 inf 이고, 그것이 두 호출부 모두에서 보수적인 쪽이다.
     """
     now = now or datetime.now()
     tmd = str(ord_tmd or '').strip()
@@ -780,7 +791,15 @@ def order_age_seconds(ord_tmd, now=None, ord_dt=None):
                 placed -= timedelta(days=1)      # 자정을 넘겼다
     except ValueError:
         return float('inf')
-    return (now - placed).total_seconds()
+    age = (now - placed).total_seconds()
+    if age < 0:
+        #  시계가 어긋났다 — 초 단위 오차까지 여기로 오지만, 그 경우 inf 는 '창 밖'이라
+        #  미체결이면 취소하고 대사면 후보에서 뺀다. 둘 다 보수적인 쪽이다.
+        logger.warning(f"[주문시각] 주문 시각이 현재보다 미래입니다"
+                       f"(ord_dt={ord_dt!r} ord_tmd={ord_tmd!r}, {abs(age):.0f}초 앞) — "
+                       f"'모름'으로 다룹니다. 시스템 시계(NTP)를 확인하세요.")
+        return float('inf')
+    return age
 
 
 def get_tick_size(price, is_overseas=False, is_etf=False):

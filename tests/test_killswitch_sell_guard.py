@@ -70,7 +70,8 @@ def test_code_error_is_logged_to_the_file(trader, caplog):
 def test_code_error_alert_is_rate_limited(trader):
     """이 상태는 대기로 숨겨지지 않아 매 주기 반복된다 — 억제 없으면 도배된다."""
     with patch('modules.auto_trade.api.check_server_health', return_value=True), \
-         patch('modules.auto_trade.api.send_telegram_message') as tg:
+         patch('modules.auto_trade.alert_delivered', return_value=True) as tg:
+        # [2026-09-07] 경보는 alert_delivered 를 거친다 — 전달 확인 뒤 쿨다운을 찍는다.
         for _ in range(6):
             trader._errors_are_not_the_server("boom")
     assert tg.call_count == 1, f"같은 원인으로 {tg.call_count}건 알렸다"
@@ -80,7 +81,7 @@ def test_code_error_alert_is_rate_limited(trader):
 def test_alert_returns_after_the_cooldown(trader):
     """쿨다운이 지나면 다시 알려야 한다 — 영구 침묵이면 안 된다."""
     with patch('modules.auto_trade.api.check_server_health', return_value=True), \
-         patch('modules.auto_trade.api.send_telegram_message') as tg:
+         patch('modules.auto_trade.alert_delivered', return_value=True) as tg:
         trader._errors_are_not_the_server("boom")
         trader._code_error_alerted_at = time.time() - CODE_ERROR_ALERT_COOLDOWN - 1
         trader._errors_are_not_the_server("boom")

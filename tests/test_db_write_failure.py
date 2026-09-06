@@ -136,7 +136,7 @@ def test_new_write_failures_raise_an_alert(trader):
                                     'last_error': 'disk I/O error', 'last_at': time.time(),
                                     'recent': []}), \
          patch.object(db_manager.db, 'disk_free_mb', return_value=12.0), \
-         patch('modules.auto_trade.api.send_telegram_message') as tg:
+         patch('modules.auto_trade.alert_delivered', return_value=True) as tg:
         trader._check_db_write_failures()
     assert tg.called and "DB 쓰기 실패" in str(tg.call_args), "쓰기 실패를 알리지 않았다"
 
@@ -148,7 +148,7 @@ def test_repeat_failures_do_not_spam(trader):
                       side_effect=lambda: {'count': state['count'], 'last_op': 'x',
                                            'last_error': 'e', 'last_at': 0, 'recent': []}), \
          patch.object(db_manager.db, 'disk_free_mb', return_value=12.0), \
-         patch('modules.auto_trade.api.send_telegram_message') as tg:
+         patch('modules.auto_trade.alert_delivered', return_value=True) as tg:
         for _ in range(5):
             state['count'] += 1
             trader._check_db_write_failures()
@@ -160,7 +160,7 @@ def test_no_alert_when_nothing_failed(trader):
     with patch.object(db_manager.db, 'get_write_failures',
                       return_value={'count': 0, 'last_op': '', 'last_error': '',
                                     'last_at': None, 'recent': []}), \
-         patch('modules.auto_trade.api.send_telegram_message') as tg:
+         patch('modules.auto_trade.alert_delivered', return_value=True) as tg:
         trader._check_db_write_failures()
     assert not tg.called
 

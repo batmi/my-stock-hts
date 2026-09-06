@@ -52,7 +52,7 @@ def test_halt_buys_blocks_new_entries_only(trader):
 
 def test_halt_buys_is_idempotent_within_same_day(trader):
     """같은 날 재호출하면 False를 돌려주어 알림·로그가 반복되지 않는다."""
-    with patch('modules.auto_trade.api.send_telegram_message') as mock_tg:
+    with patch('modules.auto_trade.alert_delivered') as mock_tg:
         assert trader.halt_buys("한도 초과", notify_msg="알림") is True
         assert trader.halt_buys("한도 초과", notify_msg="알림") is False
         assert mock_tg.call_count == 1
@@ -60,7 +60,7 @@ def test_halt_buys_is_idempotent_within_same_day(trader):
 
 def test_resume_buys_clears_halt(trader):
     """방어 모드 해제 시 매수 경로가 다시 열린다."""
-    with patch('modules.auto_trade.api.send_telegram_message'):
+    with patch('modules.auto_trade.alert_delivered'):
         trader.halt_buys("한도 초과")
     assert trader.resume_buys("테스트") is True
     assert trader.buy_halted is False
@@ -69,7 +69,7 @@ def test_resume_buys_clears_halt(trader):
 
 def test_pyramiding_blocked_while_halted(trader):
     """방어 모드에서는 피라미딩(노출 확대)도 보류된다."""
-    with patch('modules.auto_trade.api.send_telegram_message'):
+    with patch('modules.auto_trade.alert_delivered'):
         trader.halt_buys("한도 초과")
 
     with patch.object(trader.strategy, 'analyze_pyramid') as mock_pyr:
@@ -85,7 +85,7 @@ def test_pyramiding_blocked_while_halted(trader):
 def test_index_status_unknown_on_fetch_failure(trader):
     """지수 조회 실패 시 is_healthy=False + unknown=True로 기록된다 (fail-closed)."""
     with patch('modules.auto_trade.analysis.get_domestic_index_data', return_value=None), \
-         patch('modules.auto_trade.api.send_telegram_message'):
+         patch('modules.auto_trade.alert_delivered'):
         trader._update_market_indices_status(notify=False)
 
     for m in ("KOSPI", "KOSDAQ"):
@@ -96,7 +96,7 @@ def test_index_status_unknown_on_fetch_failure(trader):
 def test_index_status_unknown_on_exception(trader):
     """지수 조회가 예외를 던져도 매수를 허용하지 않는다."""
     with patch('modules.auto_trade.analysis.get_domestic_index_data', side_effect=RuntimeError("네트워크 장애")), \
-         patch('modules.auto_trade.api.send_telegram_message'):
+         patch('modules.auto_trade.alert_delivered'):
         trader._update_market_indices_status(notify=False)
 
     assert trader.market_index_status["KOSPI"]['unknown'] is True
