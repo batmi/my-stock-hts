@@ -2009,7 +2009,7 @@ class OrderManager:
                     odno = item.get('odno')
                     code = item.get('pdno')
                     name = item.get('prdt_name')
-                    qty = int(item.get('rmn_qty', 0))
+                    qty = api.safe_int(item.get('rmn_qty'))
                     ord_time_str = item.get('ord_tmd')
                     
                     if not odno or qty <= 0 or not ord_time_str: continue
@@ -2023,7 +2023,7 @@ class OrderManager:
                             sll_buy_cd = item.get('sll_buy_dvsn_cd', '')
                             sll_buy_name = "매수" if sll_buy_cd == "02" else ("매도" if sll_buy_cd == "01" else "주문")
                             
-                        price = float(item.get('ord_unpr', 0))
+                        price = api.safe_float(item.get('ord_unpr'), default=0.0)
                         t_type = f"{sll_buy_name}(외부)"
                         
                         # DB에 접수 상태로 기록

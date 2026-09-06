@@ -1032,9 +1032,29 @@ def evaluate_backtest_with_gemini(code, name, backtest_info, mode='single'):
 
     return _run_gemini_report(prompt, label=f"[{name}] 백테스팅 진단", error_prefix="진단")
 
+def _fmt_autopsy_score(value):
+    """복기 프롬프트에 적을 점수 문구. **숫자로 읽히는 값만** 점수로 적는다.
+
+    읽을 수 없으면 '알 수 없음' — 0 으로 메우지 않는다. 프롬프트는 이 값을 사실로
+    제시하고 AI 가 그 위에서 프로세스를 판정하므로, 0 은 '최악의 진입'이라는 강한
+    주장이 된다(같은 프롬프트가 "없는 실패 요인을 지어내지 마세요"라고 적는다).
+    """
+    try:
+        return f"{float(value):.1f}점 (10점 만점)"
+    except (TypeError, ValueError):
+        return "알 수 없음"
+
+
 def generate_trading_autopsy(code, name, buy_time, buy_score, sell_reason, profit_rate, holding_days):
-    """건별 매도 체결 시 AI 매매 복기 리포트 작성"""
-    prompt = prompts.TRADING_AUTOPSY_PROMPT.format(name=name, code=code, buy_time=buy_time, buy_score=buy_score, holding_days=holding_days, profit_rate=profit_rate, sell_reason=sell_reason)
+    """건별 매도 체결 시 AI 매매 복기 리포트 작성.
+
+    buy_score 는 숫자(점수) 또는 문자열('알 수 없음')을 받는다. 서식은 여기서 만든다 —
+    프롬프트가 "{buy_score}점 (10점 만점)"이라고 적으면 모르는 경우가 '알 수 없음점'이
+    되고, 0 으로 메우면 **'최악의 진입'이라는 강한 주장**을 AI 에게 사실로 준다.
+    (2026-09-06: 호출부가 없는 컬럼('score')을 읽어 모든 거래가 0점으로 들어가고 있었다.)
+    """
+    score_str = _fmt_autopsy_score(buy_score)
+    prompt = prompts.TRADING_AUTOPSY_PROMPT.format(name=name, code=code, buy_time=buy_time, buy_score=score_str, holding_days=holding_days, profit_rate=profit_rate, sell_reason=sell_reason)
     return _run_gemini_report(prompt, label=f"[{name}] 매매 복기", default=None,
                               error_style="plain", error_prefix="매매 복기 분석")
 

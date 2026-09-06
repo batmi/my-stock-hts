@@ -136,20 +136,35 @@ def is_domestic_etf_etn(code, name=""):
         return _ETF_ETN_CACHE[code]
 
     result = False
+    judged = False        # 실제로 **판정 근거를 가지고** 결론에 이르렀는가
     try:
         # 1) 관심목록(국내 ETF)에 등록된 경우
         sd = getattr(config.session, 'stock_data', None) if config.session else None
         etfs = sd.get('etfs_kr', []) if sd else []
         if any(e.get('code') == code for e in etfs):
             result = True
+            judged = True
         else:
             # 2) 종목명 기반 휴리스틱 (브랜드 프리픽스 또는 ETF/ETN/레버리지 등 키워드)
             nm = (name or "").upper().replace(" ", "")
-            if nm and (any(nm.startswith(b) for b in _KR_ETF_BRANDS)
-                       or any(k in nm for k in _KR_ETF_ETN_KEYWORDS)):
-                result = True
+            if nm:
+                judged = True     # 이름이 있어야 휴리스틱이 성립한다
+                if (any(nm.startswith(b) for b in _KR_ETF_BRANDS)
+                        or any(k in nm for k in _KR_ETF_ETN_KEYWORDS)):
+                    result = True
     except Exception:
-        result = False
+        return False              # 판정 못 했다 — 캐시하지 않는다(다음 호출에 다시 본다)
 
-    _ETF_ETN_CACHE[code] = result
+    #  [Fix 2026-09-06] **이름 없이 얻은 False 를 캐시에 굳히지 않는다.**
+    #   이 함수는 name 없이도 불린다(api/toss.py 의 KRX 단독 판정). 그때 휴리스틱은
+    #   성립할 수 없어 무조건 False 가 나오는데, 종전에는 그것을 코드 단위로 캐시했다.
+    #   그 뒤 **이름을 주고 물어도 캐시된 False 가 돌아온다** — 프로세스가 살아 있는
+    #   동안 계속. 실측: is_domestic_etf_etn('069500') → False, 이어서
+    #   is_domestic_etf_etn('069500','KODEX 200') → False.
+    #   결과는 호가 격자다 — ETF·ETN 은 2,000원 이상 5원 단일인데 주권 표로 반올림하면
+    #   주문가가 어긋난다(실측: 74,321원 → 주권표 74,300 / ETF표 74,320, 20원 차이).
+    #   손절 예약이라면 그만큼 체결이 늦어진다([[etf-tick-size]]).
+    #   판정 근거가 있었을 때만 기억한다.
+    if judged:
+        _ETF_ETN_CACHE[code] = result
     return result

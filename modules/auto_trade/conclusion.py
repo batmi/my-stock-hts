@@ -1121,7 +1121,14 @@ class ConclusionMonitor:
         try:
             last_buy = db_manager.db.get_latest_buy_trade(code)
             buy_time = last_buy.get('time') if last_buy else "알 수 없음"
-            buy_score = last_buy.get('score', 0) if last_buy else 0
+            #  [Fix 2026-09-06] 종전 키는 'score' 였는데 trades 테이블의 컬럼은
+            #   **strategy_score** 다(get_latest_buy_trade 는 SELECT * 다). .get 은 예외를
+            #   내지 않으므로 **모든 거래가 0점으로** AI 에 들어갔다 — 프롬프트가
+            #   "진입 당시 퀀트 점수: 0점 (10점 만점)"이라고 단정하고, 같은 프롬프트가
+            #   "없는 실패 요인을 지어내지 마세요"라고 적는다. 지어낸 사실을 준 셈이다.
+            #   모르면 모른다고 적는다 — 0점은 '최악의 진입'이라는 강한 주장이다.
+            #  서식은 generate_trading_autopsy 가 만든다(모르면 '알 수 없음').
+            buy_score = last_buy.get('strategy_score') if last_buy else None
             
             sell_reason = sell_trade.get('reason', '알 수 없음')
             profit_rate = sell_trade.get('profit_rate', 0.0)

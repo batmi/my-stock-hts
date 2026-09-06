@@ -94,7 +94,7 @@ def fetch_domestic_balance(cano=None, acnt_prdt_cd=None):
      이고, 거기서 빈 목록은 "매도 가능한 잔고가 없습니다"로 나온다 — 운영자가 **팔 것이
      없다고 믿고 나간다**. 모른다는 것을 없다고 답하지 않는다([[unknown-vs-empty]]).
 
-    [한 줄이 깨져도 목록 전체를 잃지 않는다] 종전에는 int(item['hldg_qty']) 가
+    [한 줄이 깨져도 목록 전체를 잃지 않는다] 종전에는 api.safe_int(item.get('hldg_qty')) 가
      루프 밖의 except 로 튀어, 이상한 한 줄 때문에 **나머지 종목이 통째로 사라졌다**.
      읽을 수 없는 줄은 그 줄만 건너뛰고 남긴다.
     """
@@ -614,12 +614,12 @@ def build_domestic_holdings_table(items, holding_analysis, marks_ctx=None, title
         raw_name = item['prdt_name']
         res = holding_analysis.get(code)
 
-        qty = int(item['hldg_qty'])
-        buy_price = float(item['pchs_avg_pric'])
-        cur_price = int(item['prpr'])
-        eval_amt = int(item['evlu_amt'])
-        profit = int(item['evlu_pfls_amt'])
-        rate = float(item['evlu_pfls_rt'])
+        qty = api.safe_int(item.get('hldg_qty'))
+        buy_price = api.safe_float(item.get('pchs_avg_pric'), default=0.0)
+        cur_price = api.safe_int(item.get('prpr'))
+        eval_amt = api.safe_int(item.get('evlu_amt'))
+        profit = api.safe_int(item.get('evlu_pfls_amt'))
+        rate = api.safe_float(item.get('evlu_pfls_rt'), default=0.0)
         pchs_amt = int(qty * buy_price)
 
         totals['pchs'] += pchs_amt
@@ -684,11 +684,11 @@ def build_overseas_holdings_table(items, holding_analysis, marks_ctx=None, title
         raw_name = item.get('ovrs_item_name', '-')
         res = holding_analysis.get(code)
 
-        pchs_avg = float(item.get('pchs_avg_pric', 0))
-        profit = float(item.get('frcr_evlu_pfls_amt', 0))
-        rate = float(item.get('evlu_pfls_rt', 0))
+        pchs_avg = api.safe_float(item.get('pchs_avg_pric'), default=0.0)
+        profit = api.safe_float(item.get('frcr_evlu_pfls_amt'), default=0.0)
+        rate = api.safe_float(item.get('evlu_pfls_rt'), default=0.0)
         exc_name = item.get('_exchange', '')
-        cur_price = float(item.get('ovrs_now_pric', 0))
+        cur_price = api.safe_float(item.get('ovrs_now_pric'), default=0.0)
         item_pchs = qty * pchs_avg
         item_eval = item_pchs + profit
         if cur_price == 0 and qty > 0: cur_price = item_eval / qty
@@ -1206,7 +1206,7 @@ def _display_balance_details(cano, acnt_prdt_cd):
             return
 
         # 보유수량 0 이상인 종목만 필터링
-        output1 = [item for item in raw_holdings if int(item.get('hldg_qty', 0)) > 0]
+        output1 = [item for item in raw_holdings if api.safe_int(item.get('hldg_qty')) > 0]
         summary = raw_summary[0] if raw_summary else None
 
         progress.update(task, description="[cyan]해외 잔고 조회 중...[/cyan]")
@@ -1400,14 +1400,26 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
 
         if output1 is not None:
             # [수정] 보유 중인 종목만 필터링
-            holdings = [h for h in output1 if int(h.get('hldg_qty', 0)) > 0]
+            holdings = [h for h in output1 if api.safe_int(h.get('hldg_qty')) > 0]
             calc_buy = 0; calc_eval = 0; calc_pl = 0
+            degraded = []
             for item in holdings:
-                qty = int(item['hldg_qty'])
-                avg_pric = float(item['pchs_avg_pric'])
+                #  [Fix 2026-09-06] 바로 아래 두 줄은 이미 safe_int 를 쓰는데 이 둘만
+                #   하드 서브스크립트였다. KIS 는 값이 없을 때 키를 주고 **빈 문자열**을
+                #   담으므로 int('')/float('') 가 ValueError 를 낸다 — 그러면 이 블록의
+                #   바깥 except 로 튀어 **주식 평가액이 통째로 빠진 총자산**이 만들어진다
+                #   (트레이더가 '통합 자산 조회 이상'으로 읽는 바로 그 상태다).
+                #   한 종목이 이상해도 나머지 집계는 살린다 — 대신 빠진 사실을 남긴다.
+                qty = api.safe_int(item.get('hldg_qty'))
+                avg_pric = api.safe_float(item.get('pchs_avg_pric'), default=0.0)
+                if qty <= 0 or avg_pric <= 0:
+                    degraded.append(str(item.get('pdno') or '?'))
                 calc_buy += int(qty * avg_pric) # 매입금액 직접 계산 (API 누락 방지)
                 calc_eval += api.safe_int(item.get('evlu_amt'))
                 calc_pl += api.safe_int(item.get('evlu_pfls_amt'))
+            if degraded:
+                logger.warning(f"자산 집계 — 수량·평단을 읽을 수 없는 종목 {len(degraded)}건이 "
+                               f"매입금액에서 빠졌습니다: {', '.join(degraded[:5])}")
             summary_data['sec_buy'] = calc_buy
             summary_data['sec_eval'] = calc_eval
             summary_data['sec_pl'] = calc_pl
@@ -1458,8 +1470,8 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
         for item in ovrs_holdings:
             qty = float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0))
             if qty > 0:
-                pchs = float(item.get('pchs_avg_pric', 0))
-                profit = float(item.get('frcr_evlu_pfls_amt', 0))
+                pchs = api.safe_float(item.get('pchs_avg_pric'), default=0.0)
+                profit = api.safe_float(item.get('frcr_evlu_pfls_amt'), default=0.0)
                 buy_amt = qty * pchs
                 eval_amt = buy_amt + profit
                 

@@ -740,7 +740,7 @@ class AutoTrader:
                 
                 tot_pchs = api.safe_int(s_data.get('pchs_amt_smtl'))
                 if tot_pchs == 0 and holdings:
-                    tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
+                    tot_pchs = sum(int(api.safe_int(h.get('hldg_qty')) * api.safe_float(h.get('pchs_avg_pric'), default=0.0)) for h in holdings if api.safe_int(h.get('hldg_qty')) > 0)
                 
                 rate = (total_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
                 msg += f"\n증권 평가 자산: {stock_eval_amt:,}원"
@@ -798,7 +798,7 @@ class AutoTrader:
             msg += f"\n• 비중: 종목당 {invest_ratio_str}"
                 
             # [복원] 보유 종목 현황 추가
-            valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
+            valid_holdings = [h for h in holdings if api.safe_int(h.get('hldg_qty')) > 0] if holdings else []
 
             if valid_holdings:
                 from modules import account
@@ -915,11 +915,11 @@ class AutoTrader:
                     unmanaged_count = 0     # 정지로 감시가 끊기는 포지션 수
 
                     if holdings:
-                        valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
+                        valid_holdings = [h for h in holdings if api.safe_int(h.get('hldg_qty')) > 0]
                         unmanaged_count = len(valid_holdings)
-                        stock_eval = sum(int(h['evlu_amt']) for h in valid_holdings)
-                        tot_profit = sum(int(h['evlu_pfls_amt']) for h in valid_holdings)
-                        tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in valid_holdings)
+                        stock_eval = sum(api.safe_int(h.get('evlu_amt')) for h in valid_holdings)
+                        tot_profit = sum(api.safe_int(h.get('evlu_pfls_amt')) for h in valid_holdings)
+                        tot_pchs = sum(int(api.safe_int(h.get('hldg_qty')) * api.safe_float(h.get('pchs_avg_pric'), default=0.0)) for h in valid_holdings)
                     elif summary and len(summary) > 0:
                         stock_eval = api.safe_int(summary[0].get('scts_evlu_amt', 0))
                         tot_profit = api.safe_int(summary[0].get('evlu_pfls_smtl_amt', 0))
@@ -1006,7 +1006,7 @@ class AutoTrader:
                         msg += f"\n최대 손실: {worst_stock['name']} ({min_p:,}원)"
 
                     # [수정] 보유수량 0 초과인 종목만 필터링
-                    valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
+                    valid_holdings = [h for h in holdings if api.safe_int(h.get('hldg_qty')) > 0] if holdings else []
 
                     if valid_holdings:
                         from modules import account
@@ -1308,7 +1308,7 @@ class AutoTrader:
             
             with utils.AccountContext(target_cano):
                 holdings, _ = api.get_domestic_balance(target_cano, acnt)
-                valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
+                valid_holdings = [h for h in holdings if api.safe_int(h.get('hldg_qty')) > 0]
                 
                 def get_display_width(s):
                     return len(s) + sum(1 for c in s if ord(c) > 127)
@@ -1352,15 +1352,15 @@ class AutoTrader:
                 else:
                     for item in valid_holdings:
                         name = f"{item['prdt_name']} ({item['pdno']})"
-                        qty = int(item['hldg_qty'])
-                        buy_price = float(item['pchs_avg_pric'])
-                        cur_price = int(item['prpr'])
+                        qty = api.safe_int(item.get('hldg_qty'))
+                        buy_price = api.safe_float(item.get('pchs_avg_pric'), default=0.0)
+                        cur_price = api.safe_int(item.get('prpr'))
                         # 매입금액: 실전 잔고(INQR_DVSN=01)·토스 어댑터는 pchs_amt가 0/누락으로 오므로
                         # 합계 줄·잔고 화면과 동일하게 평단×수량으로 복원한다.
                         pchs_amt = api.safe_int(item.get('pchs_amt')) or int(qty * buy_price)
-                        eval_amt = int(item.get('evlu_amt', 0))
-                        profit = int(item['evlu_pfls_amt'])
-                        rate = float(item['evlu_pfls_rt'])
+                        eval_amt = api.safe_int(item.get('evlu_amt'))
+                        profit = api.safe_int(item.get('evlu_pfls_amt'))
+                        rate = api.safe_float(item.get('evlu_pfls_rt'), default=0.0)
 
                         row_str = f"{pad(name, name_col_width, '<')} {pad(f'{qty:,}주', 10, '>')} {pad(f'{buy_price:,.0f}원', 12, '>')} {pad(f'{cur_price:,.0f}원', 12, '>')} {pad(f'{pchs_amt:,}원', 15, '>')} {pad(f'{eval_amt:,}원', 15, '>')} {pad(f'{profit:+,}원', 14, '>')} {pad(f'{rate:.2f}%', 10, '>')}"
                         self.log(row_str)
@@ -1415,9 +1415,9 @@ class AutoTrader:
                 # [수정] 보유 종목 개별 합산으로 평가금액 직접 계산 (데이터 정합성 보장)
                 tot_evlu = 0
                 if holdings:
-                    valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
+                    valid_holdings = [h for h in holdings if api.safe_int(h.get('hldg_qty')) > 0]
                     if valid_holdings:
-                        tot_evlu = sum(int(h['evlu_amt']) for h in valid_holdings)
+                        tot_evlu = sum(api.safe_int(h.get('evlu_amt')) for h in valid_holdings)
                 elif summary:
                     tot_evlu = api.safe_int(summary[0].get('scts_evlu_amt', 0))
                 
@@ -1430,10 +1430,10 @@ class AutoTrader:
             
             # [수정] API 요약 데이터 대신 보유 종목 합산 (데이터 불일치 방지)
             if holdings:
-                valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
+                valid_holdings = [h for h in holdings if api.safe_int(h.get('hldg_qty')) > 0]
                 if valid_holdings:
-                    tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in valid_holdings)
-                    tot_profit = sum(int(h['evlu_pfls_amt']) for h in valid_holdings)
+                    tot_pchs = sum(int(api.safe_int(h.get('hldg_qty')) * api.safe_float(h.get('pchs_avg_pric'), default=0.0)) for h in valid_holdings)
+                    tot_profit = sum(api.safe_int(h.get('evlu_pfls_amt')) for h in valid_holdings)
             
             rate = (tot_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
             
@@ -1608,7 +1608,7 @@ class AutoTrader:
                 msg += f"⚠️ 하락장 방어 중 (현재 {', '.join(skip_msg)} 신규 매수 보류)\n"
 
         # [수정] 보유수량 0 초과인 종목만 필터링
-        valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
+        valid_holdings = [h for h in holdings if api.safe_int(h.get('hldg_qty')) > 0] if holdings else []
 
         if valid_holdings:
             from modules import account
@@ -2189,7 +2189,7 @@ class AutoTrader:
         targets = config.session.stock_data.get("stocks_kr", [])
         if getattr(config, 'SYSTEM_INCLUDE_ETF', False):
             targets += config.session.stock_data.get("etfs_kr", [])
-        holding_codes = {h['pdno'] for h in holdings if int(h.get('hldg_qty', 0)) > 0} if holdings else set()
+        holding_codes = {h['pdno'] for h in holdings if api.safe_int(h.get('hldg_qty')) > 0} if holdings else set()
         
         count_k = 0
         count_q = 0
@@ -2343,8 +2343,8 @@ class AutoTrader:
                 # [수정] 중복 API 호출 방지 및 동일 스냅샷 기반 현재 자산 일괄 계산
                 tot_evlu = 0
                 if holdings:
-                    valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
-                    tot_evlu = sum(int(h['evlu_amt']) for h in valid_holdings)
+                    valid_holdings = [h for h in holdings if api.safe_int(h.get('hldg_qty')) > 0]
+                    tot_evlu = sum(api.safe_int(h.get('evlu_amt')) for h in valid_holdings)
                 elif summary and len(summary) > 0:
                     tot_evlu = api.safe_int(summary[0].get('scts_evlu_amt', 0))
 
@@ -2446,7 +2446,7 @@ class AutoTrader:
         held_codes = set()
         if holdings:
             for h in holdings:
-                if int(h.get('hldg_qty', 0)) > 0:
+                if api.safe_int(h.get('hldg_qty')) > 0:
                     held_codes.add(h.get('pdno'))
 
         if custom_rules:
@@ -2552,11 +2552,11 @@ class AutoTrader:
             
             # [수정] API 요약 데이터 대신 보유 종목 합산 (데이터 불일치 방지)
             if holdings:
-                valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
+                valid_holdings = [h for h in holdings if api.safe_int(h.get('hldg_qty')) > 0]
                 if valid_holdings:
-                    tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in valid_holdings)
-                    tot_profit = sum(int(h['evlu_pfls_amt']) for h in valid_holdings)
-                    tot_evlu = sum(int(h['evlu_amt']) for h in valid_holdings)
+                    tot_pchs = sum(int(api.safe_int(h.get('hldg_qty')) * api.safe_float(h.get('pchs_avg_pric'), default=0.0)) for h in valid_holdings)
+                    tot_profit = sum(api.safe_int(h.get('evlu_pfls_amt')) for h in valid_holdings)
+                    tot_evlu = sum(api.safe_int(h.get('evlu_amt')) for h in valid_holdings)
             
             rate = (tot_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
             color = "[red]" if tot_profit > 0 else ("[blue]" if tot_profit < 0 else "[white]")
@@ -2701,7 +2701,7 @@ class AutoTrader:
         
         # [추가] 보유 종목 리스트 출력
         # [수정] 보유수량 0 초과인 종목만 필터링
-        valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
+        valid_holdings = [h for h in holdings if api.safe_int(h.get('hldg_qty')) > 0] if holdings else []
 
         if valid_holdings:
             holding_rows = []
@@ -2719,11 +2719,14 @@ class AutoTrader:
                     name = item['prdt_name']
                     code = item['pdno']
                     market_type = self._get_stock_market_type(code)
-                    qty = int(item['hldg_qty'])
-                    buy_price = float(item['pchs_avg_pric'])
-                    cur_price = int(item['prpr'])
-                    profit = int(item['evlu_pfls_amt'])
-                    rate = float(item['evlu_pfls_rt'])
+                    #  [Fix 2026-09-06] 하드 서브스크립트는 한 종목의 빈 값 하나로 **표 전체**를 죽인다.
+                    #   (배치 49 에서 '그 줄이 깨질 뿐'이라 판단했던 것은 틀렸다 — 루프를 감싸는
+                    #    행 단위 try 가 없어 예외가 표 밖으로 나간다.) 안전 변환으로 바꾼다.
+                    qty = api.safe_int(item.get('hldg_qty'))
+                    buy_price = api.safe_float(item.get('pchs_avg_pric'), default=0.0)
+                    cur_price = api.safe_int(item.get('prpr'))
+                    profit = api.safe_int(item.get('evlu_pfls_amt'))
+                    rate = api.safe_float(item.get('evlu_pfls_rt'), default=0.0)
                     holding_rows.append((name, code, market_type, qty, buy_price, cur_price, profit, rate))
                     progress.advance(task)
 
@@ -2889,9 +2892,9 @@ class AutoTrader:
                         tot_evlu = api.safe_int(summary[0].get('scts_evlu_amt'))
                     
                     if tot_pchs == 0 and holdings:
-                        tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
-                        tot_profit = sum(int(h['evlu_pfls_amt']) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
-                        tot_evlu = sum(int(h['evlu_amt']) for h in holdings if int(h.get('hldg_qty', 0)) > 0)
+                        tot_pchs = sum(int(api.safe_int(h.get('hldg_qty')) * api.safe_float(h.get('pchs_avg_pric'), default=0.0)) for h in holdings if api.safe_int(h.get('hldg_qty')) > 0)
+                        tot_profit = sum(api.safe_int(h.get('evlu_pfls_amt')) for h in holdings if api.safe_int(h.get('hldg_qty')) > 0)
+                        tot_evlu = sum(api.safe_int(h.get('evlu_amt')) for h in holdings if api.safe_int(h.get('hldg_qty')) > 0)
                     
                     if tot_pchs > 0 or tot_profit != 0:
                         rate = (tot_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
@@ -3031,11 +3034,11 @@ class AutoTrader:
                 
                 # [수정] API 요약 데이터 대신 보유 종목 합산
                 if holdings:
-                    valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
+                    valid_holdings = [h for h in holdings if api.safe_int(h.get('hldg_qty')) > 0]
                     if valid_holdings:
-                        tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in valid_holdings)
-                        tot_profit = sum(int(h['evlu_pfls_amt']) for h in valid_holdings)
-                        tot_evlu = sum(int(h['evlu_amt']) for h in valid_holdings)
+                        tot_pchs = sum(int(api.safe_int(h.get('hldg_qty')) * api.safe_float(h.get('pchs_avg_pric'), default=0.0)) for h in valid_holdings)
+                        tot_profit = sum(api.safe_int(h.get('evlu_pfls_amt')) for h in valid_holdings)
+                        tot_evlu = sum(api.safe_int(h.get('evlu_amt')) for h in valid_holdings)
                 
                 if tot_pchs > 0 or tot_profit != 0:
                     rate = (tot_profit / tot_pchs * 100) if tot_pchs > 0 else 0.0
@@ -3340,11 +3343,11 @@ class AutoTrader:
                     for item in holdings:
                         name = item['prdt_name']
                         code = item['pdno']
-                        qty = int(item['hldg_qty'])
-                        buy_price = float(item['pchs_avg_pric'])
-                        cur_price = int(item['prpr'])
-                        profit = int(item['evlu_pfls_amt'])
-                        rate = float(item['evlu_pfls_rt'])
+                        qty = api.safe_int(item.get('hldg_qty'))
+                        buy_price = api.safe_float(item.get('pchs_avg_pric'), default=0.0)
+                        cur_price = api.safe_int(item.get('prpr'))
+                        profit = api.safe_int(item.get('evlu_pfls_amt'))
+                        rate = api.safe_float(item.get('evlu_pfls_rt'), default=0.0)
                         
                         p_color = "[red]" if profit > 0 else ("[blue]" if profit < 0 else "[white]")
                         
@@ -3665,7 +3668,7 @@ class AutoTrader:
             holdings, _ = api.get_domestic_balance(target_cano, acnt)
             
             # [수정] 보유수량 0 초과인 종목만 필터링
-            valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
+            valid_holdings = [h for h in holdings if api.safe_int(h.get('hldg_qty')) > 0] if holdings else []
 
             if valid_holdings:
                 from modules import account
@@ -4173,7 +4176,7 @@ class AutoTrader:
         """현재 보유 종목 상태 로깅 및 자산 손실 제한(Loss Cut) 체크"""
         try:
             # [수정] 보유수량 0 초과인 종목만 필터링
-            valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
+            valid_holdings = [h for h in holdings if api.safe_int(h.get('hldg_qty')) > 0]
             
             if not valid_holdings:
                 self.log("보유 종목: 없음")
@@ -4217,15 +4220,15 @@ class AutoTrader:
                 
                 for item in valid_holdings:
                     name = f"{item['prdt_name']} ({item['pdno']})"
-                    qty = int(item['hldg_qty'])
-                    buy_price = float(item['pchs_avg_pric'])
-                    cur_price = int(item['prpr'])
+                    qty = api.safe_int(item.get('hldg_qty'))
+                    buy_price = api.safe_float(item.get('pchs_avg_pric'), default=0.0)
+                    cur_price = api.safe_int(item.get('prpr'))
                     # 매입금액: 실전 잔고(INQR_DVSN=01)·토스 어댑터는 pchs_amt가 0/누락으로 오므로
                     # 아래 합계 줄과 동일하게 평단×수량으로 복원한다.
                     pchs_amt = api.safe_int(item.get('pchs_amt')) or int(qty * buy_price)
-                    eval_amt = int(item.get('evlu_amt', 0))
-                    profit = int(item['evlu_pfls_amt'])
-                    rate = float(item['evlu_pfls_rt'])
+                    eval_amt = api.safe_int(item.get('evlu_amt'))
+                    profit = api.safe_int(item.get('evlu_pfls_amt'))
+                    rate = api.safe_float(item.get('evlu_pfls_rt'), default=0.0)
                     
                     row_str = (
                         f"{pad(name, name_col_width, '<')} "
@@ -4248,9 +4251,9 @@ class AutoTrader:
                     total_profit = 0
                     total_eval = 0
                     if valid_holdings:
-                        tot_pchs = sum(int(int(h['hldg_qty']) * float(h['pchs_avg_pric'])) for h in valid_holdings)
-                        total_profit = sum(int(h['evlu_pfls_amt']) for h in valid_holdings)
-                        total_eval = sum(int(h['evlu_amt']) for h in valid_holdings)
+                        tot_pchs = sum(int(api.safe_int(h.get('hldg_qty')) * api.safe_float(h.get('pchs_avg_pric'), default=0.0)) for h in valid_holdings)
+                        total_profit = sum(api.safe_int(h.get('evlu_pfls_amt')) for h in valid_holdings)
+                        total_eval = sum(api.safe_int(h.get('evlu_amt')) for h in valid_holdings)
                     
                     # 총 자산 계산 (예수금 + 평가금)
                     current_total = 0
@@ -5293,13 +5296,18 @@ class AutoTrader:
                 return
 
             qty = api.safe_int(item.get('ord_psbl_qty'))
-            #  [던지지 말고 복원한다 · 2026-09-06] 종전에는 `float(item['evlu_pfls_rt'])`
+            #  [던지지 말고 복원한다 · 2026-09-06] 종전에는 `api.safe_float(item.get('evlu_pfls_rt'), default=0.0)`
             #   라, 증권사가 이 필드를 비우면 ValueError 로 **그 종목의 매도 판정이 통째로
             #   건너뛰어졌다**(손절·트레일링이 그 주기에 돌지 않는다). 필요한 값은 바로
             #   아래 두 줄에 있다 — holding_profit_rate 가 그 둘로 정확히 복원한다.
             profit_rate = _pkg().holding_profit_rate(item)
-            current_price = float(item['prpr'])
-            buy_price = float(item['pchs_avg_pric'])
+            #  [Fix 2026-09-06] 이 두 줄도 하드 서브스크립트였다 — 위 주석이 "필요한 값은
+            #   바로 아래 두 줄에 있다"고 가리키는 그 줄들이다. 증권사가 이 필드를 비우면
+            #   (KIS 는 키를 주고 빈 문자열을 담는다) float('') 가 ValueError 를 내고,
+            #   holding_profit_rate 가 복원한 수익률을 써 보기도 전에 그 종목의 매도 판정이
+            #   통째로 건너뛰어진다. 고친 자리 바로 옆에 같은 함정이 남아 있었다.
+            current_price = api.safe_float(item.get('prpr'), default=0.0)
+            buy_price = api.safe_float(item.get('pchs_avg_pric'), default=0.0)
             if profit_rate is None:
                 self.log(f"[매도 보류] {name}({code}) 수익률을 구할 수 없습니다 "
                          f"(평가손익률·평단·현재가 모두 미확보) — 이번 주기 판정을 건너뜁니다")
@@ -5510,13 +5518,22 @@ class AutoTrader:
                 est_profit, est_rate = trading_cost.net_realized_profit(
                     sell_buy_price, ref_price, target_sell_qty)
                 if sell_buy_price <= 0:      # 매입가를 못 구하면 종전 값으로 폴백
-                    est_profit, est_rate = int(item['evlu_pfls_amt']), profit_rate
+                    #  [Fix 2026-09-06] 종전에는 api.safe_int(item.get('evlu_pfls_amt')) 였다. KIS 는 값이
+                    #   없을 때 키를 주고 **빈 문자열**을 담으므로 int('') 가 ValueError 를 낸다.
+                    #   그 예외는 **주문이 이미 나간 뒤에** 터져 매도 후처리(반익절 캐시 기록·
+                    #   전량매도 시 예약 일괄취소·거래기록)를 통째로 건너뛰고, 워커의 포괄
+                    #   except 가 "이번 주기에 손절·트레일링 판정을 받지 못했습니다"라는
+                    #   **사실과 다른** 경보까지 띄운다(방금 판 종목이다).
+                    est_profit, est_rate = api.safe_int(item.get('evlu_pfls_amt')), profit_rate
                 odno = self.order_manager.send_order(code, target_sell_qty, "sell", name=name, profit_amt=int(est_profit), profit_rate=est_rate, reason=reason, score=score, price=order_price, rule=rule, buy_price=sell_buy_price)
                 if odno:
                     record = {
                         "type": "sell", "code": code, "name": name, "qty": target_sell_qty,
                         "price": float(order_price), "profit_rate": profit_rate,
-                        "profit_amt": int(item['evlu_pfls_amt']), "reason": reason,
+                        #  DB 에 적히는 값(send_order 의 profit_amt)과 같은 수를 쓴다.
+                        #  종전에는 여기만 평가손익(evlu_pfls_amt)이라 같은 매도가 두 화면에서
+                        #  다른 손익으로 보였고, 하드 서브스크립트라 값이 비면 여기서 터졌다.
+                        "profit_amt": int(est_profit), "reason": reason,
                         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "odno": odno
                     }
                     self.trade_records.append(record)
@@ -5541,7 +5558,7 @@ class AutoTrader:
                             
                     # [추가] 매수 로직(상관관계 분석 등)에서 이미 매도한 종목을 보유 중인 것으로 오인하지 않도록 메모리 잔고 즉시 차감
                     try:
-                        item['hldg_qty'] = str(max(0, int(item.get('hldg_qty', 0)) - target_sell_qty))
+                        item['hldg_qty'] = str(max(0, api.safe_int(item.get('hldg_qty')) - target_sell_qty))
                     except Exception: pass
             else:
                 # [추세추종] 보유 판정 시 피라미딩(수익 포지션 증액) 평가
@@ -5823,7 +5840,7 @@ class AutoTrader:
         if holdings:
             for h in holdings:
                 # [추가] 이번 루프의 매도 로직에서 수량이 0이 된 종목은 제외
-                if int(h.get('hldg_qty', 0)) <= 0:
+                if api.safe_int(h.get('hldg_qty')) <= 0:
                     continue
                 code = h['pdno']
                 holding_codes.add(code)

@@ -731,9 +731,13 @@ class ReservedOrderMonitor:
                             adj_price = curr * (1 + slippage) if order['order_type'] == 'buy' else curr * (1 - slippage)
                             #  ETF·ETN 은 호가 격자가 다르다(2,000원 이상 5원 단일).
                             #  주권 표로 반올림하면 주문가가 최대 tick/2 만큼 어긋난다.
+                            #  [Fix 2026-09-06] 종전 키는 'stock_name' 이었는데 예약 주문
+                            #   테이블의 컬럼은 **name** 이다 — 항상 None 이 넘어가
+                            #   ETF 판정이 이름 없이 이뤄졌고(=주권 호가표로 반올림),
+                            #   그 False 가 캐시에 굳어 다른 경로까지 오염시켰다.
                             curr = utils.adjust_to_tick(
                                 adj_price, is_overseas=False,
-                                is_etf=api.is_domestic_etf_etn(order['code'], order.get('stock_name')))
+                                is_etf=api.is_domestic_etf_etn(order['code'], order.get('name')))
                         price_str = str(int(curr)) if curr > 0 else "0"
                     else:
                         ord_dvsn = "01"

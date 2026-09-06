@@ -1581,7 +1581,7 @@ class TelegramCommander:
             if holdings is None:
                 return "⚠️ 잔고를 조회하지 못했습니다 — '보유 없음'이 아닙니다.\n(증권사 API 응답 실패, 잠시 후 다시 시도하세요)"
             # [수정] 보유수량 0 초과인 종목만 필터링
-            valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
+            valid_holdings = [h for h in holdings if api.safe_int(h.get('hldg_qty')) > 0] if holdings else []
             
             # [추가] 제한 종목 및 개별 룰 로드
             restricted_stocks = auto_trade.get_restricted_stocks()
@@ -1604,7 +1604,7 @@ class TelegramCommander:
 
             # [추가] 총 매입금액 직접 계산용 (API 0일 경우 대비)
             calc_total_pchs = sum(
-                int(int(h['hldg_qty']) * float(h.get('pchs_avg_pric') or 0)) for h in valid_holdings
+                int(api.safe_int(h.get('hldg_qty')) * float(h.get('pchs_avg_pric') or 0)) for h in valid_holdings
             )
 
             # [추가] 총 평가금액 및 손익 요약
@@ -1614,12 +1614,12 @@ class TelegramCommander:
                 # 총 주식 평가금액
                 stock_evlu = api.safe_int(s_data.get('scts_evlu_amt'))
                 if stock_evlu == 0 and valid_holdings:
-                    stock_evlu = sum(int(h['evlu_amt']) for h in valid_holdings)
+                    stock_evlu = sum(api.safe_int(h.get('evlu_amt')) for h in valid_holdings)
                 
                 # 총 평가손익
                 tot_profit = api.safe_int(s_data.get('evlu_pfls_smtl_amt'))
                 if tot_profit == 0 and valid_holdings:
-                    tot_profit = sum(int(h['evlu_pfls_amt']) for h in valid_holdings)
+                    tot_profit = sum(api.safe_int(h.get('evlu_pfls_amt')) for h in valid_holdings)
                 
                 # [추가] 수익률 계산
                 tot_pchs = api.safe_int(s_data.get('pchs_amt_smtl'))

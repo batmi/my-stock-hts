@@ -57,14 +57,28 @@ def format_holdings_block(valid_holdings, title="보유 종목 현황", name_dec
     보유 종목이 없을 때의 문구는 호출부마다 부가 설명이 달라 각자 처리한다.
     """
     msg = f"📋 [{title}] ({len(valid_holdings)}종목)"
+    unreadable = []
     for item in valid_holdings:
-        name = item['prdt_name']
-        qty = int(item['hldg_qty'])
-        cur_price = int(item['prpr'])
-        buy_price = float(item.get('pchs_avg_pric') or 0)
-        eval_amt = int(item['evlu_amt'])
-        profit = int(item['evlu_pfls_amt'])
-        rate = float(item['evlu_pfls_rt'])
+        #  [Fix 2026-09-06] **깨진 한 줄이 메시지 전체를 지우지 않게 한다.**
+        #   종전에는 item['evlu_amt'] 같은 하드 서브스크립트를 그대로 int() 에 넣었다.
+        #   KIS 는 값이 없을 때 키를 주고 **빈 문자열**을 담으므로 int('') 가 ValueError 를
+        #   내고, 이 함수는 루프를 감싸는 try 가 없어 **보유 종목 현황 메시지가 통째로
+        #   사라진다**(텔레그램 /status·장 시작·장 종료 알림이 같은 함수를 쓴다).
+        #   같은 교훈이 한 층 아래(account.fetch_domestic_balance)에도 있었다.
+        #   읽을 수 없는 종목은 그 줄만 빼고 아래에 사실을 밝힌다.
+        try:
+            name = item['prdt_name']
+            qty = int(item['hldg_qty'])
+            cur_price = int(item['prpr'])
+            buy_price = float(item.get('pchs_avg_pric') or 0)
+            eval_amt = int(item['evlu_amt'])
+            profit = int(item['evlu_pfls_amt'])
+            rate = float(item['evlu_pfls_rt'])
+        except (KeyError, TypeError, ValueError) as e:
+            code_for_log = item.get('pdno') or '?'
+            logger.warning(f"[보유표시] {code_for_log} 항목을 읽을 수 없어 목록에서 뺍니다: {e}")
+            unreadable.append(f"{item.get('prdt_name') or code_for_log}")
+            continue
 
         name_display = name_decorator(item.get('pdno'), name) if name_decorator else name
 
@@ -150,6 +164,10 @@ def format_holdings_block(valid_holdings, title="보유 종목 현황", name_dec
             f"\n   손익: {profit:+,}원 ({rate:+.2f}%)"
             f"{state_str}{mfe_str}{atr_str}{ts_str}"
         )
+    if unreadable:
+        #  빠뜨린 사실을 밝힌다 — 조용히 줄이면 '판 줄 알았는데 아직 들고 있는' 오해가 난다.
+        msg += (f"\n⚠️ 응답을 읽을 수 없어 {len(unreadable)}종목이 목록에서 빠졌습니다: "
+                + ", ".join(unreadable[:5]) + (" 외" if len(unreadable) > 5 else ""))
     return msg
 
 
@@ -489,7 +507,7 @@ def current_holding_qty(code, cano, acnt, is_overseas=False):
     def _qty(*values):
         """수량 필드를 읽는다. **못 읽으면 None('모름')** — 0(없음)으로 넘기지 않는다.
 
-        [Fix 2026-09-05] 종전에는 `int(item.get('hldg_qty', 0))` 이었다. dict.get 의
+        [Fix 2026-09-05] 종전에는 `api.safe_int(item.get('hldg_qty'))` 이었다. dict.get 의
          기본값은 키가 **없을 때만** 쓰이는데, 증권사 응답은 값이 없을 때 키를 주고
          **빈 문자열**을 담는다 → int('') 가 ValueError 를 내고 이 함수 밖으로 나갔다.
          호출부(제한 정리 추적)는 그 예외를 '조회 실패'로 세어 5회 재시도 뒤

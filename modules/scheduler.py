@@ -305,21 +305,26 @@ class SystemScheduler:
                         "⚠️ 잔고를 조회하지 못해 장 마감 브리핑을 만들지 못했습니다.\n"
                         "(보유 종목이 없다는 뜻이 아닙니다 — 증권사 API 응답 실패)")
                     return
-                valid_holdings = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0] if holdings else []
+                valid_holdings = [h for h in holdings if api.safe_int(h.get('hldg_qty')) > 0] if holdings else []
                 if not valid_holdings:
                     api.send_telegram_message("📭 보유 종목이 없어 장 마감 브리핑을 수행할 수 없습니다.")
                     return
                     
-                tot_evlu = sum(int(h['evlu_amt']) for h in valid_holdings)
+                #  [Fix 2026-09-06] 하드 서브스크립트 하나가 **브리핑 전체**를 죽였다.
+                #   KIS 는 값이 없을 때 키를 주고 빈 문자열을 담는다 — int('') 는 ValueError 다.
+                #   한 종목이 이상하다고 그날의 마감 브리핑을 통째로 잃을 이유는 없다.
+                tot_evlu = sum(api.safe_int(h.get('evlu_amt')) for h in valid_holdings)
                 total_asset = deposit + tot_evlu
-                
+
                 portfolio_str = f"총 자산: {total_asset:,}원 (보유 {len(valid_holdings)}종목)\n\n[보유 종목 비중]\n"
                 for item in valid_holdings:
-                    name = item['prdt_name']
-                    eval_amt = int(item['evlu_amt'])
-                    weight = (eval_amt / total_asset) * 100
-                    profit_rate = float(item['evlu_pfls_rt'])
-                    portfolio_str += f"- {name}: 비중 {weight:.1f}% (수익률 {profit_rate:+.2f}%)\n"
+                    name = item.get('prdt_name') or item.get('pdno') or '?'
+                    eval_amt = api.safe_int(item.get('evlu_amt'))
+                    weight = (eval_amt / total_asset * 100) if total_asset > 0 else 0.0
+                    rate_raw = api.safe_float(item.get('evlu_pfls_rt'), default=None)
+                    #  수익률을 모르면 0%('변동 없음')로 적지 않는다 — AI 브리핑의 입력이다.
+                    rate_str = f"수익률 {rate_raw:+.2f}%" if rate_raw is not None else "수익률 모름"
+                    portfolio_str += f"- {name}: 비중 {weight:.1f}% ({rate_str})\n"
                     
                 report = theme_analysis.generate_daily_closing_report(portfolio_str)
                 if report:

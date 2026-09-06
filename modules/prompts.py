@@ -302,7 +302,7 @@ TRADING_AUTOPSY_PROMPT = """
 [매매 정보]
 • 종목명: {name}({code})
 • 진입 일시: {buy_time}
-• 진입 당시 퀀트 점수: {buy_score}점 (10점 만점)
+• 진입 당시 퀀트 점수: {buy_score}
 • 보유 기간: {holding_days}일
 • 최종 수익률: {profit_rate:+.2f}%
 • 청산 사유: {sell_reason}

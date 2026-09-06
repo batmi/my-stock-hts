@@ -471,8 +471,8 @@ def get_deposit_balance(cano=None, acnt_prdt_cd=None, skip_balance_check=False, 
     holdings, summary_list = _api().get_domestic_balance(cano, acnt_prdt_cd, retries=retries)
     if summary_list and len(summary_list) > 0:
         summary = summary_list[0]
-        res['deposit'] = int(float(summary.get('dnca_tot_amt', 0))) # 예수금 (우선)
-        res['d2_real'] = int(float(summary.get('prvs_rcdl_excc_amt', 0))) # D+2 가수도 (우선)
+        res['deposit'] = int(_api().safe_float(summary.get('dnca_tot_amt'), default=0.0)) # 예수금 (우선)
+        res['d2_real'] = int(_api().safe_float(summary.get('prvs_rcdl_excc_amt'), default=0.0)) # D+2 가수도 (우선)
             
         # [추가] Fallback: 주문가능금액 조회 실패 시 D+2 가수도 사용
         if res['order_possible'] == 0:
@@ -491,12 +491,12 @@ def get_deposit_balance(cano=None, acnt_prdt_cd=None, skip_balance_check=False, 
         res['foreign_deposit'] = int(float(out2.get('frcr_evlu_tota', 0)))
             
         # [추가] 계좌잔고평가 API의 D+2 가수도금(prvs_rcdl_excc_amt)이 더 정확할 수 있음 (매도 대금 반영 등)
-        d2_account_val = int(float(out2.get('prvs_rcdl_excc_amt', 0)))
+        d2_account_val = int(_api().safe_float(out2.get('prvs_rcdl_excc_amt'), default=0.0))
         if d2_account_val > res['d2_real']:
             res['d2_real'] = d2_account_val
                 
         # [추가] 예수금도 확인하여 더 큰 값 사용
-        deposit_account_val = int(float(out2.get('dnca_tot_amt', 0)))
+        deposit_account_val = int(_api().safe_float(out2.get('dnca_tot_amt'), default=0.0))
         if deposit_account_val > res['deposit']:
             res['deposit'] = deposit_account_val
             

@@ -531,6 +531,12 @@ def get_chart_data(code, is_overseas=False, period_type='daily', realtime=True):
 
             retry_count = 0
             seen_dates = set()
+            #  [Fix 2026-09-06] 페이지 도중 조회가 **실패**하면 모아 둔 만큼만 돌려주게 되어
+            #   있었다. 그 반쪽 차트는 빈 프레임과 달리 '정상'으로 보이고(호출부의 검사는
+            #   `df.empty` 다), _get_cached_chart 가 그것을 6시간 메모리 + 디스크에 굳힌다.
+            #   봉이 모자라면 EMA120·52주 밴드가 통째로 어긋나 점수·상태가 조용히 틀어진다.
+            #   '더 받을 과거 봉이 없다'(정상 종료)와 '못 받았다'(실패)를 구분해 표시한다.
+            fetch_failed = False
             while len(all_items) < 250 and retry_count < 10:
                 params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code, "FID_INPUT_DATE_1": current_start_date, "FID_INPUT_DATE_2": current_end_date, "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "0"}
                 data = _api().call_api(url_path, "domestic", "quotations", "chart", params=params, timeout=3)
@@ -559,6 +565,9 @@ def get_chart_data(code, is_overseas=False, period_type='daily', realtime=True):
                     time.sleep(0.5)
                     retry_count += 1
                 else:
+                    fetch_failed = True
+                    logger.debug(f"[Chart] {code} 일봉 페이지 조회 실패 — 여기까지 {len(all_items)}건 "
+                                 f"({data.get('msg_cd')} {data.get('msg1')})")
                     time.sleep(0.2)
                     break
 
@@ -568,7 +577,10 @@ def get_chart_data(code, is_overseas=False, period_type='daily', realtime=True):
             df = df[['stck_bsop_date', 'stck_clpr', 'stck_oprc', 'stck_hgpr', 'stck_lwpr', 'acml_vol']].copy()
             df.columns = ['date', 'close', 'open', 'high', 'low', 'volume']
             df = df.astype({'close': float, 'open': float, 'high': float, 'low': float, 'volume': float})
-            return df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
+            out = df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
+            if fetch_failed:
+                out.attrs['partial'] = True     # 캐시에 굳히지 않는다(_get_cached_chart)
+            return out
 
         return _api()._get_cached_chart(code, is_overseas=False, is_index=False, fetch_func=_fetch_domestic_daily, realtime_overlay=realtime)
 
@@ -585,6 +597,7 @@ def get_chart_data(code, is_overseas=False, period_type='daily', realtime=True):
                 all_items = []
                 seen_dates = set()
                 next_bymd = today
+                fetch_failed = False        # 국내 경로와 같은 규칙 — 위 주석 참조
 
                 retry_count = 0
                 while len(all_items) < 250 and retry_count < 10:
@@ -614,6 +627,12 @@ def get_chart_data(code, is_overseas=False, period_type='daily', realtime=True):
                         time.sleep(0.5)
                         retry_count += 1
                     else:
+                        #  거래소 탐색 중의 '이 거래소가 아니다'도 여기로 온다. all_items 가
+                        #  비어 있으면 다음 거래소를 볼 뿐이므로 반쪽 문제가 아니다.
+                        if all_items:
+                            fetch_failed = True
+                            logger.debug(f"[Chart] {code}({excd}) 일봉 페이지 조회 실패 — "
+                                         f"여기까지 {len(all_items)}건 ({data.get('msg_cd')})")
                         time.sleep(0.1)
                         break
 
@@ -627,7 +646,10 @@ def get_chart_data(code, is_overseas=False, period_type='daily', realtime=True):
                     df = df[df['date'] >= start_date_origin]
                     numeric_cols = ['close', 'open', 'high', 'low', 'volume']
                     for c in numeric_cols: df[c] = df[c].astype(float)
-                    return df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
+                    out = df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
+                    if fetch_failed:
+                        out.attrs['partial'] = True
+                    return out
             return pd.DataFrame()
 
         return _api()._get_cached_chart(code, is_overseas=True, is_index=False, fetch_func=_fetch_overseas_daily, realtime_overlay=realtime)

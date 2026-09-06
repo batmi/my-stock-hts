@@ -481,7 +481,15 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
             return df
 
     df = fetch_func()
-    if df is not None and not df.empty:
+    #  [Fix 2026-09-06] **반쪽 차트를 캐시에 굳히지 않는다.**
+    #   페이지네이션 도중 조회가 실패하면 수집한 만큼만 돌아온다(api/charts.py 주석).
+    #   그 프레임은 빈 프레임과 달리 '정상'으로 보이므로 호출부의 `df.empty` 검사를
+    #   그대로 통과하고, 여기서 캐시에 들어가면 6시간(+디스크) 동안 재사용된다.
+    #   봉이 모자라면 EMA120·52주 밴드가 어긋나 점수·상태가 조용히 틀어진다.
+    #   이번 호출에는 그대로 돌려주되(있는 것이 없는 것보다 낫다) 굳히지는 않는다 —
+    #   다음 호출이 온전한 차트를 받으면 스스로 낫는다.
+    partial = bool(getattr(df, 'attrs', {}).get('partial')) if df is not None else False
+    if df is not None and not df.empty and not partial:
         with _CHART_CACHE_LOCK:
             _CHART_CACHE[cache_key] = {
                 'df': df.copy(),
@@ -492,6 +500,9 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
         # [영속] 일봉(비지수)만 디스크에 저장해 재시작/반복 조회 시 네트워크 호출을 줄인다.
         if not is_index:
             _chart_disk_set(cache_key, df, today_str)
+    elif partial:
+        logger.warning(f"[Chart] {code} 일봉이 조회 실패로 {len(df)}봉만 왔습니다 "
+                       f"— 캐시하지 않습니다(다음 호출에 다시 받습니다).")
     return df
 
 def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=True, progress_updater=None, prefer_ws=False, skip_if_fresh_sec=None):

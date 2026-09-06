@@ -99,12 +99,12 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
                 domestic_query_failed = True
                 holdings = []
             for item in holdings:
-                qty = int(item.get('hldg_qty', 0))
-                buy_price = float(item.get('pchs_avg_pric', 0))
-                cur_price = int(item.get('prpr', 0))
-                eval_amt = int(item.get('evlu_amt', 0))
-                profit = int(item.get('evlu_pfls_amt', 0))
-                rate = float(item.get('evlu_pfls_rt', 0))
+                qty = api.safe_int(item.get('hldg_qty'))
+                buy_price = api.safe_float(item.get('pchs_avg_pric'), default=0.0)
+                cur_price = api.safe_int(item.get('prpr'))
+                eval_amt = api.safe_int(item.get('evlu_amt'))
+                profit = api.safe_int(item.get('evlu_pfls_amt'))
+                rate = api.safe_float(item.get('evlu_pfls_rt'), default=0.0)
                 pchs_amt = int(qty * buy_price)
 
                 candidates.append({
@@ -140,10 +140,10 @@ def select_stock_from_balance(cano=None, acnt_prdt_cd=None):
             for item in holdings:
                 qty = float(item.get('ovrs_cblc_qty', 0) or item.get('ord_psbl_qty', 0))
                 if qty > 0:
-                    pchs_avg = float(item.get('pchs_avg_pric', 0))
-                    profit = float(item.get('frcr_evlu_pfls_amt', 0))
-                    rate = float(item.get('evlu_pfls_rt', 0))
-                    cur_price = float(item.get('ovrs_now_pric', 0))
+                    pchs_avg = api.safe_float(item.get('pchs_avg_pric'), default=0.0)
+                    profit = api.safe_float(item.get('frcr_evlu_pfls_amt'), default=0.0)
+                    rate = api.safe_float(item.get('evlu_pfls_rt'), default=0.0)
+                    cur_price = api.safe_float(item.get('ovrs_now_pric'), default=0.0)
                     
                     item_pchs = qty * pchs_avg
                     item_eval = item_pchs + profit
@@ -1351,7 +1351,7 @@ def modify_order():
                         if h_list:
                             for h in h_list:
                                 if h['pdno'] == pdno:
-                                    buy_price = float(h['pchs_avg_pric'])
+                                    buy_price = api.safe_float(h.get('pchs_avg_pric'), default=0.0)
                                     break
                         if buy_price > 0:
                             c_price = float(price) if price != "0" else float(api.get_current_price(pdno, is_overseas) or 0)
@@ -1377,6 +1377,37 @@ def modify_order():
         except Exception as e:
             config.console.print(f"[red]에러: {e}[/]")
 
+def _rsv_trivial_sub(cond_type, value):
+    """이 서브조건이 **언제나 참**이면 사유를 돌려준다 (아니면 None).
+
+    [왜 필요한가 · 2026-09-06] 단일 조건 경로에는 '등록 즉시 발동'을 되묻는 가드가 있다
+     (_rsv_immediate_trigger). 그런데 복합(AND) 서브조건 경로에는 그것이 통째로 없었고,
+     범위 검사도 없었다. 그래서 이런 입력이 그대로 등록된다:
+       · 목표 퀀트 점수 0 + '점수 이상'  → `score >= 0` — 언제나 참
+       · 목표 RSI 0 + 'RSI 이상'        → `rsi >= 0`   — 언제나 참
+       · 목표가 0 + '가격 이상'          → `price >= 0` — 언제나 참
+     복합은 AND 라 이 하나로 곧장 발주되지는 않지만, **사용자가 걸었다고 믿는 조건 하나가
+     조용히 사라진다.** 두 조건짜리 복합이라면 사실상 단일 조건이 되어, 의도한 것보다
+     훨씬 이른 시점에 실주문이 나간다. 조건을 지우는 실수는 화면에 나타나지 않으므로
+     여기서 막는다(트레일링 폭·ATR 배수 프롬프트는 이미 같은 범위 검사를 갖고 있다).
+    """
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if cond_type == 'SCORE_UP' and v <= 0:
+        return "점수는 0 이상이므로 '점수 ≥ 0'은 언제나 참입니다"
+    if cond_type == 'RSI_UP' and v <= 0:
+        return "RSI는 0 이상이므로 'RSI ≥ 0'은 언제나 참입니다"
+    if cond_type == 'RSI_DOWN' and v >= 100:
+        return "RSI는 100 이하이므로 'RSI ≤ 100'은 언제나 참입니다"
+    if cond_type in ('PRICE_UP',) and v <= 0:
+        return "가격은 0보다 크므로 '가격 ≥ 0'은 언제나 참입니다"
+    if cond_type == 'PRICE_DOWN' and v <= 0:
+        return "'가격 ≤ 0'은 영원히 발동하지 않습니다"
+    return None
+
+
 def _prompt_sub_condition(choice, base_price, is_overseas):
     """복합 조건의 서브 조건 1개를 대화형으로 입력받아 {type, value, _label} 반환 (취소 시 None)."""
     if choice == "1":  # SCORE
@@ -1387,6 +1418,10 @@ def _prompt_sub_condition(choice, base_price, is_overseas):
             config.console.print("[red]점수는 숫자만 입력 가능합니다.[/red]"); return None
         ud = Prompt.ask("1: 점수 이상, 2: 점수 이하", choices=["1", "2"], default="1")
         t = "SCORE_UP" if ud == "1" else "SCORE_DOWN"
+        trivial = _rsv_trivial_sub(t, v)
+        if trivial:
+            config.console.print(f"[red]{trivial} — 조건 하나가 사라집니다. 다시 입력하세요.[/red]")
+            return None
         return {"type": t, "value": v, "_label": f"점수{'≥' if ud=='1' else '≤'}{v}"}
     if choice == "2":  # RSI
         s = Prompt.ask("목표 RSI (예: 35 또는 70)")
@@ -1396,6 +1431,10 @@ def _prompt_sub_condition(choice, base_price, is_overseas):
             config.console.print("[red]RSI는 숫자만 입력 가능합니다.[/red]"); return None
         ud = Prompt.ask("1: RSI 이상, 2: RSI 이하", choices=["1", "2"], default="2")
         t = "RSI_UP" if ud == "1" else "RSI_DOWN"
+        trivial = _rsv_trivial_sub(t, v)
+        if trivial:
+            config.console.print(f"[red]{trivial} — 조건 하나가 사라집니다. 다시 입력하세요.[/red]")
+            return None
         return {"type": t, "value": v, "_label": f"RSI{'≥' if ud=='1' else '≤'}{v}"}
     if choice == "3":  # EMA 위치
         p = Prompt.ask("이동평균선 (5, 20, 60, 120)", choices=["5", "20", "60", "120"], default="20")
@@ -1425,6 +1464,18 @@ def _prompt_sub_condition(choice, base_price, is_overseas):
             config.console.print("[red]목표가는 숫자만 입력 가능합니다.[/red]"); return None
         ud = Prompt.ask("1: 현재가가 목표가 이상, 2: 이하", choices=["1", "2"], default="1")
         t = "PRICE_UP" if ud == "1" else "PRICE_DOWN"
+        trivial = _rsv_trivial_sub(t, v)
+        if trivial:
+            config.console.print(f"[red]{trivial} — 조건 하나가 사라집니다. 다시 입력하세요.[/red]")
+            return None
+        #  방향을 반대로 고른 실수는 '등록 즉시 참'으로 나타난다 — 단일 조건 경로와 같은
+        #  가드를 여기에도 건다(그쪽은 _rsv_immediate_trigger 가 되묻는다).
+        warn = _rsv_immediate_trigger("BREAKOUT" if t == "PRICE_UP" else "STOP", v, base_price)
+        if warn:
+            config.console.print(f"[yellow]⚠️ {warn} — 이 서브조건은 등록 시점부터 이미 참입니다."
+                                 f" (기준가 {_fmt_price(base_price, is_overseas)})[/yellow]")
+            if Prompt.ask("그래도 이 값으로 추가하시겠습니까?", choices=["y", "n"], default="n") != "y":
+                return None
         return {"type": t, "value": v, "_label": f"가격{'≥' if ud=='1' else '≤'}{int(v) if not is_overseas else v}"}
     if choice == "7":  # TIME (지정 시각 이후)
         config.console.print("[dim]  - HHMM 형식 (예: 1500 → 15:00 이후)[/dim]")
@@ -2731,8 +2782,13 @@ def _edit_reserved_order(order):
         elif choice == "2" and editable_target:
             v = Prompt.ask(f"새 목표가 [dim](절대가 또는 현재가 대비 %)[/dim]",
                            default=str(int(order['target_price']) if not is_ovs else order['target_price']))
+            #  [Fix 2026-09-06] 종전 키는 'stock_name' 이었는데 reserved_orders 의 컬럼은
+            #   **name** 이다 — 항상 None 이라 ETF 격자 보정이 꺼진 채였다.
+            #   _rsv_parse_price 독스트링이 그 결과를 적어 뒀다: "사용자가 입력한 유효한
+            #   ETF 호가를 다른 값으로 옮긴다(23,070 → 23,050)". 등록 경로 네 곳은 올바른
+            #   키를 쓰는데 **수정 화면 두 곳만** 어긋나 있었다.
             tp = _rsv_parse_price(v, base, is_ovs,
-                                  code=order.get('code'), name=order.get('stock_name'))
+                                  code=order.get('code'), name=order.get('name'))
             if tp is None:
                 config.console.print("[red]목표가는 0보다 큰 숫자 또는 '+5%' 형식으로 입력하세요.[/red]"); continue
             warn = _rsv_immediate_trigger(ct, tp, curr)
@@ -2754,7 +2810,7 @@ def _edit_reserved_order(order):
                 op = 0.0
             else:
                 op = _rsv_parse_price(v, base, is_ovs,
-                                      code=order.get('code'), name=order.get('stock_name'))
+                                      code=order.get('code'), name=order.get('name'))
                 if op is None:
                     config.console.print("[red]단가는 0(시장가) 또는 0보다 큰 숫자로 입력하세요.[/red]"); continue
             if db_manager.db.update_reserved_order_fields(order['id'], order_price=op):
