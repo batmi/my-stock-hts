@@ -44,6 +44,13 @@ class ReservedOrderMonitor:
                 cls._instance = super(ReservedOrderMonitor, cls).__new__(cls)
                 cls._instance.is_running = False
                 cls._instance.monitor_thread = None
+                #  [Fix 2026-09-07] 종전 stop() 은 is_running 만 내렸고 루프는
+                #   time.sleep(CHECK_INTERVAL_SEC) 안에 있었다. 그래서 '멈춰라'와
+                #   '실제로 멈춤' 사이가 최대 10초다 — 종료 경로가 그만큼 늘어지고,
+                #   테스트에서는 그 사이에 깨어난 스레드가 다음 테스트의 mock 을 건드린다
+                #   (실측: 전체 실행 3회 중 2회에서 예약 계열 17건이 한꺼번에 깨졌다).
+                #   매매일지 워커가 이미 같은 이유로 Event 를 쓴다.
+                cls._instance._wake = threading.Event()
                 cls._instance.chart_cache = {} # {code: {'df': df, 'time': timestamp}}
                 # [보유분석 캐시] {(cano, acnt): {'res': {code: analyze_sell 결과}, 'time': ts}}
                 #  보유분석 1회는 잔고 조회 + DB 다중 조회 + 종목별 차트다. 10초 주기로 그대로
@@ -65,12 +72,15 @@ class ReservedOrderMonitor:
         if self.is_running and self.monitor_thread is not None and self.monitor_thread.is_alive():
             return
         self.is_running = True
+        self._wake.clear()
         self.monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True, name="ReservedOrderMonitor")
         self.monitor_thread.start()
         logger.info(f"[Reserve] 예약 주문 {self.CHECK_INTERVAL_SEC:g}초 주기 감시 스레드 시작")
 
     def stop(self):
+        """감시를 멈춘다. 루프가 자고 있어도 즉시 깨워 다음 주기를 건너뛰게 한다."""
         self.is_running = False
+        self._wake.set()
         
     def _monitor_loop(self):
         while self.is_running:
@@ -78,7 +88,9 @@ class ReservedOrderMonitor:
                 self._check_orders()
             except Exception as e:
                 logger.error(f"[Reserve] 예약 주문 감시 에러: {e}")
-            time.sleep(self.CHECK_INTERVAL_SEC)
+            #  sleep 대신 대기 — stop() 이 깨우면 즉시 빠져나온다.
+            if self._wake.wait(self.CHECK_INTERVAL_SEC):
+                break
             
     # 종목별 권리 조정 점검 주기(초). 조정은 하루 한 번 있을까 말까 한 사건이라
     #  자주 볼 이유가 없고, 점검마다 일봉 조회가 한 번 나간다.

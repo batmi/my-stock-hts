@@ -32,6 +32,7 @@ open+json.load/dump+예외처리 보일러플레이트를 일원화)
 import json
 import logging
 import os
+import threading
 import time
 
 logger = logging.getLogger(__name__)
@@ -93,11 +94,25 @@ def save_json(path, data, indent=4, ensure_ascii=False):
 
     같은 디렉터리의 임시 파일에 쓰고 fsync 한 뒤 os.replace 로 갈아 끼운다
     (다른 디렉터리의 임시 파일은 파일시스템이 다르면 rename 이 원자적이지 않다).
-    임시 파일 이름에 PID 를 넣어, 같은 경로를 두 프로세스가 저장해도 서로의 반쪽을
-    집어 가지 않게 한다. 성공 여부(bool)를 돌려주며, 실패는 로그로 기록한다.
+    성공 여부(bool)를 돌려주며, 실패는 로그로 기록한다.
+
+    [임시 파일 이름은 쓰는 주체마다 달라야 한다 · 2026-09-07]
+     종전 이름은 `<path>.<PID>.tmp` 였다. 프로세스가 둘이면 갈라지지만 **같은 프로세스의
+     스레드끼리는 이름이 하나**다. 두 스레드가 같은 경로를 저장하면 한 임시 파일에
+     번갈아 쓰고 둘 다 os.replace 로 승격시킨다 — 원자성이 지켜지는 대상이 '섞인 내용'
+     이라, 이 모듈이 막으려던 반쪽짜리 JSON 이 그대로 남는다.
+     실측: 두 내용을 네 스레드로 40회 저장하니 **25회**가 '옛 내용도 새 내용도 아닌'
+     파일이 됐다(JSONDecodeError: Extra data).
+     이 시스템은 스레드가 여럿이고(매매 루프·스케줄러·텔레그램 봇·저널 동기화),
+     토큰 캐시처럼 스레드마다 다른 키로 갱신하는 파일이 실재한다
+     ([[account-routing-thread-local]]). 그 파일이 깨지면 다음 load_json 이 격리하고
+     캐시된 토큰이 통째로 사라진다 — KIS 는 앱키 단위 발급 빈도 제한(EGW00133)이 있어
+     하필 그 순간에 재발급이 막힌다.
+     호출부마다 락을 걸어 막을 수도 있지만, 그런 불변식은 새 호출부가 하나 생기면
+     조용히 무너진다. 원시 함수가 스스로 안전해야 한다.
     """
     parent = os.path.dirname(path)
-    tmp = f"{path}.{os.getpid()}.tmp"
+    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
         if parent:
             os.makedirs(parent, exist_ok=True)

@@ -3,6 +3,7 @@ import sys
 import json
 import hashlib
 import logging
+import threading
 from core import jsonio
 from datetime import datetime, timedelta
 from rich.prompt import Prompt
@@ -386,6 +387,19 @@ class SessionManager:
         if updated:
             self.save_stock_config(self.stock_data)
 
+    #  토큰 캐시 파일의 읽고-고치고-쓰기를 감싸는 락 · 2026-09-07
+    #   set_token 은 파일 전체를 읽어 한 항목만 바꾸고 통째로 다시 쓴다. 두 스레드가
+    #   **서로 다른 토큰 종류**를 동시에 저장하면(기동 시 수동·자동 앱키가 함께 발급되고,
+    #   24시간 만료 경계에서 갱신이 겹친다) 둘 다 같은 옛 사본을 읽어 각자의 항목만 넣고
+    #   덮어써, 나중에 쓴 쪽만 남는다.
+    #   실측: 세 토큰을 세 스레드로 저장하는 것을 **인위적 지연 없이** 200회 반복하니
+    #   200회 모두 항목이 소실됐다 — 파일 IO 동안 GIL 이 놓이므로 창이 좁지 않다.
+    #   잃는 것이 자동매매 계좌 토큰이면 재기동 때 다시 발급해야 하는데, KIS 는 앱키당
+    #   1분 1회 제한(EGW00133)이 있어 하필 그 순간에 막힌다([[token-memory-expiry]]).
+    #   원자적 쓰기(core/jsonio)는 '파일이 반쪽이 되는 것'을 막을 뿐 소실 갱신은 못 막는다.
+    #   클래스 단위 락이다 — 파일이 하나뿐이라 인스턴스마다 나눌 이유가 없다.
+    _TOKEN_CACHE_LOCK = threading.RLock()
+
     # [추가] 토큰 캐시 관리 메서드
     def _load_token_cache(self):
         return jsonio.load_json(_config().TOKEN_CACHE_FILE, default={}) or {}
@@ -491,17 +505,22 @@ class SessionManager:
         return datetime.now() < (expired_dt - timedelta(minutes=1))
 
     def set_token(self, key, token, expired):
-        """토큰을 메모리와 파일에 저장"""
+        """토큰을 메모리와 파일에 저장.
+
+        읽기·수정·쓰기를 한 락 안에서 한다 — 나누면 다른 종류의 토큰이 조용히 사라진다
+        (_TOKEN_CACHE_LOCK 주석 참조).
+        """
         self._update_memory_token(key, token, expired)
-        
-        cache = self._load_token_cache()
-        cache[key] = {
-            "access_token": token,
-            "token_expired": expired,
-            "issued_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "app_key_fp": self._app_key_fingerprint(self._token_app_key(key)),
-        }
-        self._save_token_cache(cache)
+
+        with self._TOKEN_CACHE_LOCK:
+            cache = self._load_token_cache()
+            cache[key] = {
+                "access_token": token,
+                "token_expired": expired,
+                "issued_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "app_key_fp": self._app_key_fingerprint(self._token_app_key(key)),
+            }
+            self._save_token_cache(cache)
 
     def is_token_recently_issued(self, key, seconds=60):
         """토큰이 지정된 시간(초) 이내에 발급되었는지 확인.

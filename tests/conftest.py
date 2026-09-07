@@ -1,6 +1,7 @@
 import json as _json
 import sys
 import os
+import threading
 from urllib.parse import urlparse as _urlparse
 import pytest
 import pandas as pd
@@ -541,6 +542,42 @@ def reset_all_singletons():
             _journal._wake.set()
             if _journal.thread is not None and _journal.thread.is_alive():
                 _journal.thread.join(timeout=2)
+        except Exception:
+            pass
+
+    #  [격리 2026-09-07] 매매 루프·텔레그램 봇도 자기 스레드를 띄운다. 지금은 그 둘의
+    #   **실제** 스레드를 띄우는 테스트가 없어 조용하지만, 예약 감시기도 누군가
+    #   `monitor.start()` 를 쓰기 전까지는 똑같이 조용했다(그리고 쓰는 순간 17건이
+    #   깨졌다). 참조를 끊고 나면 세울 방법이 사라지므로, 잠복인 동안 막아 둔다.
+    #   스레드가 없으면 아무 비용도 들지 않는다.
+    for _cls in (AutoTrader, TelegramCommander):
+        _obj = _cls._instance
+        if _obj is None:
+            continue
+        try:
+            _obj.is_running = False
+            _t = getattr(_obj, 'thread', None)
+            if _t is not None and _t.is_alive() and _t is not threading.current_thread():
+                _t.join(timeout=2)
+        except Exception:
+            pass
+
+    #  [격리 2026-09-07] 예약 감시기도 스레드를 띄운다. 2026-09-06 에 이 싱글톤을 초기화
+    #   목록에 넣으면서 **참조만 끊고 스레드는 세우지 않았다** — ConclusionMonitor 주석이
+    #   바로 위에서 경고한 그대로다. 게다가 참조를 지우고 나면 그 스레드를 세울 방법이
+    #   아예 사라진다(stop 을 부를 인스턴스가 없다).
+    #   그 스레드는 10초마다 _check_orders() 를 부르고, 그때 설치돼 있는 **다음 테스트의
+    #   mock** 을 건드린다. 실측: 전체 실행 3회 중 2회에서 예약 계열 17건이 한꺼번에
+    #   깨졌다(파일 단독·같은 순서 직렬 실행은 통과 — xdist 배분과 타이밍에 달렸다).
+    #   is_running 을 내리는 순간 다음 주기부터 _check_orders 는 돌지 않는다. join 은
+    #   이미 판정 중인 한 바퀴를 기다리는 몫이다(감시기를 띄운 테스트에서만 비용이 든다).
+    _reserved = _ReservedOrderMonitor._instance
+    if _reserved is not None:
+        try:
+            _reserved.stop()          # is_running 을 내리고 잠든 루프를 깨운다
+            _thread = getattr(_reserved, 'monitor_thread', None)
+            if _thread is not None and _thread.is_alive():
+                _thread.join(timeout=2)
         except Exception:
             pass
 

@@ -379,11 +379,26 @@ def get_gold_daily(days=400, use_cache=True):
             return hit
 
     rows = []
+    #  [Fix 2026-09-07] 구간 조회 **실패**와 '그 구간에 데이터가 없다'를 갈라야 한다.
+    #   _post 는 이미 실패=None / 없음=[] 로 구분해 돌려주는데, 종전에는 `raw or []` 와
+    #   `if not got: break` 로 둘을 같은 자리에 넣었다. 창은 최신순이라 뒤쪽(과거) 창이
+    #   한 번 실패하면 **요청한 기간의 일부만** 담긴 시계열이 아무 표시 없이 돌아가고,
+    #   그것이 6시간 동안 정상 결과로 캐시된다.
+    #   실측: 3년(창 2개)을 요청하고 과거 창만 실패시키니 28행(1개월)이 돌아왔고,
+    #   호출부가 짧다는 것을 알 방법이 없었다(attrs 에도 표시가 없다).
+    #   이 시계열은 화면 표시뿐 아니라 9-5 백테스트에도 들어간다(KRXGOLD) — 기간이
+    #   조용히 잘린 채 검증되는 것은 krx_daily.get_daily 가 캐시 길이를 따지는 이유와 같다.
+    truncated = False
     for start, end in _range_windows(days):
         raw = _post(_BLD_GOLD_DAILY, isuCd=GOLD_ISU_CD, strtDd=start, endDd=end,
                     mktId="CMD", money="1", csvxls_isNo="false")
+        if raw is None:
+            #  조회 실패다. '그 구간이 없다'가 아니므로 받은 만큼을 완결된 답으로 굳히지
+            #   않는다 — 캐시에 넣지 않고 다음 호출이 다시 받게 한다.
+            truncated = True
+            break
         got = 0
-        for r in raw or []:
+        for r in raw:
             d = _date8(r.get("TRD_DD"))
             if not d:
                 continue
@@ -393,9 +408,17 @@ def get_gold_daily(days=400, use_cache=True):
                          "low": _num(r.get("TDD_LWPRC")), "close": _num(r.get("TDD_CLSPRC")),
                          "volume": _num(r.get("ACC_TRDVOL")) or 0.0})
         if not got:
-            # 더 과거 구간이 비었다 — 상장 이전이거나 그 구간을 안 준다. 받은 만큼 쓴다.
+            # 더 과거 구간이 비었다 — 상장 이전이다(응답은 정상이었다). 받은 만큼 쓴다.
             break
     df = _finish(rows, "KRX")
+    if truncated:
+        if df is None:
+            logger.warning(f"[KRXDATA] 금현물 일봉 조회 실패({days}일 요청) — 값을 돌려주지 않는다")
+        else:
+            logger.warning(f"[KRXDATA] 금현물 일봉이 요청({days}일)보다 짧다 — "
+                           f"{len(df)}행({df['date'].iloc[0]}~{df['date'].iloc[-1]})만 받았다. "
+                           f"과거 구간 조회가 실패했다(캐시하지 않고 다음 호출에 다시 받는다).")
+        return df
     _cache_put(key, df)
     return df
 
