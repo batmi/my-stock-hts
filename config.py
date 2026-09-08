@@ -701,6 +701,12 @@ class GlobalSettings(BaseModel):
     PAPER_SEED_CAPITAL: int = Field(default=10_000_000, gt=0)
 
     SYSTEM_MAX_CONSECUTIVE_ERRORS: int = Field(default=5, ge=1)  # [안전장치] 연속 에러 5회 발생 시 자동 중단
+    # [운영·라즈베리파이] 가용 메모리 경보 문턱(MB). 1GB 파이에서 OOM 킬은 자동매매 중단의
+    #  주된 원인이고, 프로세스가 죽으면 손절·트레일링 감시가 함께 멈춘다.
+    #  종전에는 이 문턱이 get_health_message() 안에 숫자로 박혀 있어 **사람이 /health 를
+    #  쳐야만** 보였다. 정본을 여기 두고, 화면과 능동 경보가 같은 값을 쓴다.
+    SYSTEM_MEMORY_WARN_MB: int = Field(default=120, ge=0)   # 이 아래면 경고
+    SYSTEM_MEMORY_RISK_MB: int = Field(default=60, ge=0)    # 이 아래면 위험(긴급 알림)
     # [2026-08-16 · 방어 모드를 처음 백테스트에 넣었다 · tools/audit_daily_loss_limit.py]
     #  발동 빈도부터가 답이다. 10년 자산곡선에서 '전일 대비 -10% 이하'인 날은 14,694일 중
     #  10일(0.07%)뿐이다(-7% 23일 · -5% 47일 · 최악 하루 -16.5%). 전체창 274.0% vs 없음
@@ -4153,6 +4159,8 @@ CONFIG_DESCRIPTIONS = {
     "MARKET_FILTER_RELEASE_ON_BEAR": "확정 하락(Bear) 국면에서 시장 필터 차단 해제",
     "PAPER_SEED_CAPITAL": "가상투자(페이퍼) 모드 가상 시드 (원)",
     "SYSTEM_MAX_CONSECUTIVE_ERRORS": "시스템 중단 연속 에러 임계값",
+    "SYSTEM_MEMORY_WARN_MB": "가용 메모리 경고 문턱 (MB, OOM 사전 경보)",
+    "SYSTEM_MEMORY_RISK_MB": "가용 메모리 위험 문턱 (MB, 긴급 알림)",
     "SYSTEM_DAILY_LOSS_LIMIT": "비상 정지 기준 손실률 (0%면 비상 정지 OFF)",
     "SYSTEM_RISK_PER_TRADE": "1회 매매 시 계좌 대비 최대 허용 손실률",
     "SYSTEM_MAX_PORTFOLIO_RISK": "포트폴리오 총 오픈 리스크(히트) 한도 (0%면 미사용)",

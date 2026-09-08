@@ -124,10 +124,18 @@ def test_the_same_death_is_reported_only_once(hb_dir):
 
 
 def test_alert_memory_is_kept_per_instance(hb_dir):
+    """알림 기억은 하트비트 파일마다 따로 — 실전 사망을 알린 기록이 토스 것을 삼키면 안 된다.
+
+    [2026-09-08] 같은 파일에 감시자 자신의 도장(`__watchdog__`)도 들어온다
+    (heartbeat.note_watchdog_check — 감시자가 안 도는 것을 '정상'과 구분하기 위해서다).
+    이 테스트가 보는 것은 **인스턴스 키가 섞이지 않는가**이므로 관리용 키는 빼고 센다.
+    """
     _stale("실전", "MAC-REAL", time.time())
     hb.check_all()
     keys = set(json.load(open(hb.ALERT_STATE_PATH)))
-    assert keys == {os.path.basename(hb.path_for("실전"))}
+    instance_keys = {k for k in keys if not k.startswith("__")}
+    assert instance_keys == {os.path.basename(hb.path_for("실전"))}
+    assert hb._WATCHDOG_KEY in keys, "감시자가 돌았는데 도장이 없다"
 
 
 def test_legacy_flat_alert_state_is_still_readable(hb_dir):

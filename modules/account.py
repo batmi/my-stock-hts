@@ -1481,6 +1481,15 @@ def get_asset_status_data(cano, acnt_prdt_cd, progress=None, task=None):
 
             if output2:
                 summary = output2[0]
+                #  [Fix 2026-09-08] 토스는 예수금을 별도 호출로 받는다. 그 호출만 실패하면
+                #   보유분은 멀쩡한데 현금만 모르는 상태가 되는데, 종전에는 그것이 **0원**으로
+                #   채워져 '현금이 없는 정상 계좌'와 글자가 같았다. 아래 예수금 파싱은
+                #   safe_int 라 '키 없음'도 0 이므로, 표식을 따로 봐야 구분된다.
+                #   degraded 에 올리면 기준 자산처럼 되돌릴 수 없는 결정이 그날 보류된다.
+                if summary.get('_deposit_unknown'):
+                    summary_data['degraded'].append("예수금")
+                    logger.error("자산 집계 — 예수금을 읽지 못했습니다(0원이라는 뜻이 아닙니다). "
+                                 "총자산·매수여력이 그만큼 작게 잡히므로 기준선 결정을 보류합니다.")
                 # [수정] 실전/모의 공통으로 D+1, D+2, 예수금 데이터 파싱
                 summary_data['api_tot_asset'] = api.safe_int(summary.get('tot_evlu_amt')) # API 제공 총평가금
                 summary_data['d1_dep'] = api.safe_int(summary.get('nxdy_excc_amt'))

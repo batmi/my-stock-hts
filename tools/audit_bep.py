@@ -31,6 +31,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
 from core import utils  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
+from tools.audit_common import (  # noqa: E402
+    add_universe_args, seeded_targets, universe_seeds,
+)
 
 MAX_HOLD = 400   # 한 포지션을 최대 이만큼 굴린다(추세를 끝까지 보기 위해 넉넉히)
 
@@ -102,17 +105,27 @@ def simulate(recs, status_map, start, sl_rate, applied, use_bep, cfg,
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stocks", type=int, default=41)
     ap.add_argument("--days", type=int, default=1095)
+    add_universe_args(ap, stocks=41)
     args = ap.parse_args()
 
-    # [필수] 시장 필터의 지수 선택(KOSPI/KOSDAQ)은 config.session.stock_data 를 본다.
-    #  JSON 을 직접 읽어 targets 만 만들면 세션은 빈 채로 남아 전 종목이 KOSPI 로 취급된다.
+    # [필수] 시장 필터는 관심종목의 exchange 를 먼저 본다(backtest._resolve_backtest_market).
+    #  세션을 비워 두면 관심종목 표기가 통째로 빠지므로 여기서 한 번 읽어 둔다.
+    #  (관심종목 밖의 씨드 표본은 그 함수가 analysis.get_market_type 으로 판정한다 —
+    #   2026-09-08 이전에는 그 길이 없어 씨드 표본의 코스닥이 전부 코스피로 걸렸다.)
     config.session.load_stock_config()
-    targets = [(s["code"], s["name"])
-               for s in config.session.stock_data.get("stocks_kr", [])][:args.stocks]
-    print(f"[준비] {len(targets)}종목 · {args.days}일")
 
+    #  [Fix 2026-09-08] 종전에는 **살아 있는 관심종목**이 곧 유니버스였다. BEP 는 채택·기각을
+    #   가르는 판정 도구라 표본이 결론을 만든다 — 폐지 종목이 없는 표본은 '본전에서 끊는' 규칙에
+    #   유리한 쪽으로 치우친다(끝까지 살아남은 종목만 보므로). 씨드마다 따로 낸다.
+    for seed in universe_seeds(args):
+        targets = seeded_targets(args, seed)
+        print(f"\n\n=========== 표본 씨드 {seed} · 요청 {len(targets)}종목 "
+              f"({args.days}일) ===========", flush=True)
+        run_once(targets, args)
+
+
+def run_once(targets, args):
     dfs, mf, dates, failed = pb.prepare_universe(targets, args.days)
     thresholds = {
         "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],

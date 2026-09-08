@@ -31,6 +31,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
 from modules import analysis, backtest  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
+from tools.audit_common import (  # noqa: E402
+    add_universe_args, seeded_targets, universe_seeds,
+)
 
 # 상세 문구 → 짧은 항목 키. 문구가 바뀌면 여기도 바뀌어야 한다(미분류는 '기타'로 뜬다).
 LABELS = [
@@ -78,11 +81,23 @@ def main():
     ap.add_argument("--days", type=int, default=3650)
     ap.add_argument("--fwd", type=int, default=20, help="전방 수익률 창(거래일)")
     ap.add_argument("--fwd2", type=int, default=60)
+    add_universe_args(ap)
     args = ap.parse_args()
 
     config.session.load_stock_config()
-    targets = [(s["code"], s["name"]) for s in config.session.stock_data.get("stocks_kr", [])]
-    print(f"[준비] 관심종목 {len(targets)}개 · {args.days}일")
+
+    #  [Fix 2026-09-08] 종전에는 **살아 있는 관심종목 전체**가 유니버스였다. 이 도구는
+    #   '어느 항목이 정보를 주는가'를 재는 판정 도구인데, 관심종목은 이미 그 점수로
+    #   골라 놓은 목록이라 표본과 측정 대상이 서로를 참조한다(선택 편향). 씨드로 뽑은
+    #   표본 + 폐지 종목으로 씨드마다 따로 낸다.
+    for seed in universe_seeds(args):
+        targets = seeded_targets(args, seed)
+        print(f"\n\n=========== 표본 씨드 {seed} · 요청 {len(targets)}종목 "
+              f"({args.days}일) ===========", flush=True)
+        run_once(targets, args)
+
+
+def run_once(targets, args):
     dfs, _mf, dates, failed = pb.prepare_universe(targets, args.days)
     print(f"[준비] 사용 {len(dfs)}종목 / 거래일 {len(dates)}일"
           + (f" · 제외 {len(failed)}" if failed else ""))

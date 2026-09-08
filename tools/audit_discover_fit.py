@@ -36,12 +36,20 @@ from tools.audit_common import seed_notice  # noqa: E402
 
 
 def rule_pool(pool, size, seed):
-    """탐색 메뉴와 같은 규칙을 통과한 종목에서 시총 구간에 고르게 뽑는다."""
-    import FinanceDataReader as fdr
-    krx = fdr.StockListing("KRX")
+    """탐색 메뉴와 같은 규칙을 통과한 종목에서 시총 구간에 고르게 뽑는다.
+
+    [Fix 2026-09-08] 종전에는 `fdr.StockListing` 을 **직접** 불렀다. 그래서
+     ① 같은 씨드로 **다른 날** 돌리면 다른 유니버스가 나왔고(시총 순위가 하루 사이에도
+     흔들린다 — audit_universe._listing 주석의 실측: ±2% 지터에 60종목 중 41.5개 교체),
+     ② 원격이 죽으면 도구가 통째로 못 돈다(2026-09-08 현재 KRX 목록 엔드포인트가 404).
+     2026-08-24 재현성 정비([[audit-universe-reproducibility]])가 스냅샷 규약을 세우고
+     dead_targets 는 옮겼는데 **이 함수만 남아 있었다.** 같은 스냅샷을 쓰게 한다.
+    """
+    from tools.audit_universe import _listing
+    krx = _listing("KRX")
     krx = krx[krx["Market"].isin(["KOSPI", "KOSDAQ"])].dropna(subset=["Marcap"])
     krx = krx.sort_values("Marcap", ascending=False).head(pool)
-    desc = fdr.StockListing("KRX-DESC").set_index("Code")
+    desc = _listing("KRX-DESC").set_index("Code")
     dept = dict(zip(krx["Code"], krx.get("Dept", krx["Code"] * 0)))
 
     def ind(code):

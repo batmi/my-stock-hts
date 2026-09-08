@@ -10,7 +10,6 @@ import time
 from datetime import datetime, timedelta
 import config
 from core import context
-import atexit
 
 logger = logging.getLogger(__name__)
 
@@ -2005,7 +2004,19 @@ class DBManager:
         [왜 sqlite3 backup API인가] 파일 복사(cp)는 WAL 모드에서 안전하지 않다 —
         -wal 파일에만 있는 최신 커밋을 놓치거나, 복사 도중의 쓰기가 섞여 깨진 사본이
         나온다. conn.backup()은 SQLite가 페이지 단위로 일관된 스냅샷을 뜬다.
+
+        [왜 임시 이름으로 뜨고 옮기는가 · 2026-09-08 감사] 종전에는 `dest` 로 바로 떴고,
+         맨 앞에서 `os.path.exists(dest)` 를 '오늘 것은 이미 떴다'로 읽었다. 그런데
+         `sqlite3.connect(dest)` 가 **파일을 먼저 만든다** — `src.backup(dst)` 이 도중에
+         실패하면(디스크 가득·잠금·전원 차단) 비거나 반쪽인 파일이 그 이름으로 남고,
+         같은 날 다시 부르면 그것을 **성공한 백업으로 읽고 되돌아간다.** 백업이 아닌 것이
+         백업 자리를 차지한 채 회전까지 살아남는다. 완성된 것만 그 이름을 갖게 한다.
+
+        [사이드카] WAL 모드 원본을 뜨면 사본도 WAL 이라 `-wal`·`-shm` 이 함께 생긴다.
+         종전 회전은 `.db` 로 끝나는 것만 지워서 그 둘은 영영 남았다(실측: db/backups 에
+         26일자 잔존). 라즈베리파이 SD 카드다 — 같이 지운다.
         """
+        tmp = None
         try:
             src_dir = os.path.dirname(os.path.abspath(self.db_path))
             bdir = os.path.join(src_dir, "backups")
@@ -2013,29 +2024,53 @@ class DBManager:
             base = os.path.splitext(os.path.basename(self.db_path))[0]
             dest = os.path.join(bdir, f"{base}_{datetime.now().strftime('%Y%m%d')}.db")
             if os.path.exists(dest):
-                return dest         # 오늘 것은 이미 떴다
+                return dest         # 오늘 것은 이미 떴다(이제 '완성된 것'만 여기 있다)
 
+            tmp = dest + ".tmp"
+            self._purge_db_file(tmp)        # 지난 실패의 잔해가 있으면 치우고 시작한다
             src = sqlite3.connect(self.db_path, timeout=60)
-            dst = sqlite3.connect(dest)
+            dst = sqlite3.connect(tmp)
             try:
                 src.backup(dst)
             finally:
-                dst.close()
+                dst.close()                 # 정상 종료 시 SQLite 가 WAL 을 체크포인트한다
                 src.close()
+            os.replace(tmp, dest)           # 여기까지 왔을 때만 오늘의 백업이 된다
+            for side in ("-wal", "-shm"):   # 체크포인트 후 남은 잔재(있으면) 정리
+                self._purge_db_file(tmp + side, quiet=True)
+            tmp = None
 
             # 회전: 최신 keep개만 남긴다(SD카드 용량이 넉넉하지 않다).
             olds = sorted(f for f in os.listdir(bdir)
                           if f.startswith(base + "_") and f.endswith(".db"))
             for f in olds[:-keep] if keep > 0 else []:
-                try:
-                    os.remove(os.path.join(bdir, f))
-                except OSError:
-                    pass
+                self._purge_db_file(os.path.join(bdir, f))
             logger.info(f"[DB] 백업 완료: {dest}")
             return dest
         except Exception as e:
             logger.error(f"[DB] 백업 실패: {e}")
             return None
+        finally:
+            #  실패했으면 반쪽 파일을 남기지 않는다 — 남기면 다음 호출이 그것을
+            #  '오늘의 백업'으로 읽는다(위 주석의 바로 그 함정).
+            if tmp:
+                self._purge_db_file(tmp, quiet=True)
+
+    @staticmethod
+    def _purge_db_file(path, quiet=False):
+        """SQLite 파일 하나를 사이드카(-wal·-shm)까지 함께 지운다.
+
+        `.db` 만 지우면 `-wal`·`-shm` 이 남는다. 용량 문제이기도 하지만 더 나쁜 것은,
+        같은 이름의 파일이 다시 생겼을 때 SQLite 가 **낡은 WAL 을 새 DB 에 붙여** 복구를
+        시도한다는 점이다. 짝을 지어 지운다.
+        """
+        for p in (path, path + "-wal", path + "-shm"):
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except OSError as e:
+                if not quiet:
+                    logger.warning(f"[DB] 백업 파일 정리 실패({p}): {e}")
 
     def save_daily_asset(self, date_str, account, asset_value, net_transfer=None, principal=None):
         """일일 총 자산 스냅샷 저장.
@@ -2749,4 +2784,21 @@ class DBManager:
 
 # 전역 인스턴스
 db = DBManager()
-atexit.register(db.run_vacuum)
+
+#  [Fix 2026-09-08] 종전에는 여기서 `atexit.register(db.run_vacuum)` 를 걸었다.
+#   그 등록은 **본체에서는 한 번도 돌지 않고, 본체가 아닌 프로세스에서만 돌았다.**
+#
+#   · main.py 는 `os._exit(0)` 으로 끝난다 — atexit 를 통째로 건너뛴다(main.py 주석이
+#     그 사실을 명시한다). 종료 시 정리는 이미 종료 절차 4/4 에서 run_vacuum() 을
+#     직접 불러 한다. 즉 본체에는 이 등록이 필요 없었다.
+#   · 반대로 이 모듈을 **import 하기만 한** 프로세스는 정상 종료하므로 atexit 가 돈다.
+#     tools/audit_*.py 전부, 일회성 스크립트, `python -c` 한 줄이 여기에 해당한다.
+#
+#   run_vacuum 은 이름과 달리 읽기 작업이 아니다 — trades 와 signal_ledger 에서
+#   보존기간 밖 행을 DELETE 하고 VACUUM 으로 파일을 통째로 다시 쓴다. 그래서 분석용
+#   도구를 한 번 돌릴 때마다 운영 원장이 깎였고, 신호 원장([[signal-ledger-observability]])
+#   은 감사 증거인데 그 보존 시계가 매매와 무관한 실행으로 전진했다. 운영기가 라즈베리
+#   파이 SD 카드라 전체 재기록의 대가도 싸지 않다.
+#
+#   정리는 **의도한 종료 경로에서만** 한다. 지우는 일을 부수효과로 두지 않는다.
+#   (모듈을 읽는 것과 원장을 고치는 것은 다른 일이다 — 부르지 않은 쓰기는 걸지 않는다.)

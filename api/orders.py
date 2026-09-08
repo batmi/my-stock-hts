@@ -430,6 +430,12 @@ def get_deposit_balance(cano=None, acnt_prdt_cd=None, skip_balance_check=False, 
     # [추가] 토스: 매수가능금액(현금)을 예수금으로 사용. D+1/D+2 구분은 제공되지 않음.
     if config.session.is_toss:
         dep = _api()._toss_krw_deposit()
+        #  [Fix 2026-09-08] 실패는 None 이다 — 이 함수의 KIS 경로가 이미 그렇게 답한다
+        #   (아래 `return res if success else None`). 종전 토스 분기만 실패를 **0원**으로
+        #   돌려줘, 같은 함수가 모드에 따라 다른 계약을 말했다. 0원은 '현금이 없다'로
+        #   읽혀 매수여력·총자산·기준 자산이 조용히 어긋난다.
+        if dep is None:
+            return None
         return {"deposit": dep, "foreign_deposit": 0, "withdraw": dep,
                 "d2_deposit": dep, "order_possible": dep, "d2_real": dep}
 

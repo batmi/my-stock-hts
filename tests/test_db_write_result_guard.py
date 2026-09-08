@@ -32,8 +32,10 @@ SRC = pathlib.Path(__file__).resolve().parent.parent / "modules" / "db_manager.p
 #  "함수명" — 조용히 넘겨도 되는 자리. 사유를 반드시 함께 적는다.
 _ALLOWED: dict[str, str] = {
     "run_vacuum":
-        "종료 시 최적화 — 실패해도 데이터가 달라지지 않고, atexit 에서 도는 자리라 "
-        "알릴 대상도 없다. 다음 종료에 다시 시도한다.",
+        "종료 시 최적화 — 실패해도 데이터가 달라지지 않고, 다음 종료에 다시 시도한다. "
+        "(2026-09-08: '아무도 안 보는 atexit 자리'라는 종전 사유는 틀렸다. atexit 등록은 "
+        "제거했고, 지금은 main.py 종료 절차 4/4 가 화면을 보는 앞에서 직접 부른다 — "
+        "실패하면 그 자리에서 'VACUUM 실패'로 드러난다.)",
 }
 
 _WRITE_SQL = ("INSERT", "UPDATE", "DELETE", "REPLACE")

@@ -488,6 +488,51 @@ def compute_price_indicators(df):
 _MARKET_FILTER_STATE = {"dates": None, "desc": "", "key": None}
 
 
+#  시장 판정을 못 한 종목을 종목당 한 번만 알린다(감사 한 번에 수백 종목이 지난다).
+_MARKET_UNKNOWN_WARNED = set()
+
+
+def _resolve_backtest_market(code):
+    """백테스트 시장 필터가 쓸 'KOSPI'|'KOSDAQ'.
+
+    [왜 · 2026-09-08 감사] 종전에는 `config.session.stock_data` 만 뒤지고, 못 찾으면
+     조용히 KOSPI 로 단정했다. 관심종목만 돌리던 시절에는 맞았지만, 감사 도구가 씨드로
+     **관심종목 밖에서** 표본을 뽑기 시작하면서(rule_pool·dead_targets) 그 표본은
+     전부 '못 찾음' → 전부 KOSPI 가 됐다.
+
+     실측(2026-09-08): 도구들이 뽑는 시총 상위 500 풀 중 456 종목이 관심종목 밖이고
+     그중 **153 종목이 코스닥**이다. 즉 씨드를 쓴 감사에서 표본의 약 3분의 1이 남의
+     지수로 진입 차단일을 계산해 왔다 — 코스피와 코스닥은 국면이 갈리므로 차단일 집합이
+     실제로 달라진다. 계측기가 조용히 다른 것을 재는 유형이라([[audit-scale-fn-contamination]]
+     ·[[audit-universe-reproducibility]] 와 같은 계열) 판정 자체를 흔든다.
+
+     [순서] 관심종목(stock.json)을 먼저 본다 — 운영자가 직접 적은 값이고, 이 순서를
+     지켜야 관심종목 유니버스로 낸 **기존 감사 수치가 한 자리도 바뀌지 않는다**.
+     거기 없으면 analysis.get_market_type(마스터 → KRX 목록)에게 묻는다
+     ([[market-type-single-source]] 의 정본). 둘 다 모르면 KOSPI 로 두되 **남긴다** —
+     추측을 조용히 하지 않는 것이 그 규약의 요지다.
+    """
+    for key in ("stocks_kr", "etfs_kr"):
+        for item in config.session.stock_data.get(key, []):
+            if item.get('code') == code and item.get('exchange'):
+                return str(item['exchange']).upper()
+
+    try:
+        from modules import analysis
+        by_ssot = analysis.get_market_type(code)
+    except Exception as e:      # noqa: BLE001 - 판정 실패는 아래에서 '모름'으로 흡수한다
+        logger.debug(f"[백테스트] {code} 시장 판정 실패: {e}")
+        by_ssot = None
+    if by_ssot:
+        return by_ssot
+
+    if code not in _MARKET_UNKNOWN_WARNED:
+        _MARKET_UNKNOWN_WARNED.add(code)
+        logger.warning(f"[백테스트] {code} 의 시장(코스피/코스닥)을 판정하지 못해 "
+                       f"코스피 지수로 시장 필터를 겁니다 — 코스닥 종목이면 차단일이 어긋납니다.")
+    return "KOSPI"
+
+
 def prepare_market_filter(code, is_overseas, days):
     """설정값(USE_MARKET_FILTER, MARKET_FILTER_MA)을 읽어 백테스트용 '신규 매수 차단일' 집합을 준비.
 
@@ -507,12 +552,7 @@ def prepare_market_filter(code, is_overseas, days):
     if is_overseas:
         idx_ticker, idx_name = "^GSPC", "S&P500"
     else:
-        market = "KOSPI"
-        for key in ("stocks_kr", "etfs_kr"):
-            for item in config.session.stock_data.get(key, []):
-                if item.get('code') == code and item.get('exchange'):
-                    market = str(item['exchange']).upper()
-                    break
+        market = _resolve_backtest_market(code)
         if market == "KOSDAQ":
             idx_ticker, idx_name = "^KQ11", "KOSDAQ"
         else:

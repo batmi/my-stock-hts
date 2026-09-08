@@ -437,9 +437,62 @@ def check_all(now=None, base=None, notify=True):
 
     반환: [(경로, 상태, 전송여부, 판정)] — 하트비트 파일이 하나도 없으면 빈 리스트.
     """
+    note_watchdog_check(now)
     out = []
     for p in instance_paths(base):
         result = evaluate(now=now, path=p)
         state, sent = check_and_notify(now=now, path=p, notify=notify)
         out.append((p, state, sent, result))
     return out
+
+
+# ---------------------------------------------------------------------------
+# 감시자 자신의 생존 — '조용한 것'과 '아무도 안 보는 것'을 가른다
+# ---------------------------------------------------------------------------
+#  [왜 · 2026-09-08 감사] 이 파일의 감시자는 평상시(state == "ok")에 **아무것도 쓰지
+#   않았다.** 그래서 cron 이 멈추거나 crontab 이 지워지거나 `. $HOME/.htsrc` 가 실패해
+#   감시자가 **한 번도 돌지 않는 상태**가, 파일상으로 '모든 것이 정상'과 완전히 같았다.
+#   프로세스 사망 감지 체계 전체가 조용히 부재할 수 있고 그 사실을 알 방법이 없었다 —
+#   [[process-death-watchdog]] 는 "알리기만 한다"고 정했지, "알리지 않아도 된다"고
+#   정하지 않았다. 돌 때마다 도장을 찍어 두면 부재가 보인다.
+_WATCHDOG_KEY = "__watchdog__"
+
+
+def note_watchdog_check(now=None):
+    """감시자가 방금 한 바퀴 돌았다는 사실을 남긴다(상태와 무관하게 매번)."""
+    now = now if now is not None else time.time()
+    try:
+        state = _load_alert_state()
+        state[_WATCHDOG_KEY] = {"ts": float(now), "host": socket.gethostname()}
+        _save_alert_state(state)
+    except Exception as e:      # noqa: BLE001 - 도장 실패가 판정을 막지는 않는다
+        logger.debug(f"[Heartbeat] 감시자 도장 기록 실패(무시): {e}")
+
+
+def watchdog_last_check():
+    """감시자가 마지막으로 돈 시각(epoch). 기록이 없으면 None."""
+    entry = _load_alert_state().get(_WATCHDOG_KEY)
+    if not isinstance(entry, dict):
+        return None
+    try:
+        return float(entry.get("ts"))
+    except (TypeError, ValueError):
+        return None
+
+
+def watchdog_status(now=None, stale_after=1800):
+    """감시자가 살아 있는가. (상태, 설명)
+
+    stale_after 기본 30분 — cron 권장 주기가 5분이므로 여섯 번을 내리 거른 셈이다.
+    상태: "unknown"(한 번도 돈 기록 없음) · "ok" · "stale"(오래 안 돎).
+    """
+    now = now if now is not None else time.time()
+    ts = watchdog_last_check()
+    if ts is None:
+        return "unknown", ("감시자가 돈 기록이 없습니다 — cron 등록(tools/hts_watchdog.py)을 "
+                           "확인하세요. 이 상태에서는 프로세스가 죽어도 알림이 가지 않습니다.")
+    age = now - ts
+    if age > stale_after:
+        return "stale", (f"감시자가 {int(age // 60)}분째 돌지 않았습니다 — cron 이 멈췄거나 "
+                         f"환경변수(~/.htsrc)를 못 읽고 있을 수 있습니다.")
+    return "ok", f"감시자 정상({int(age // 60)}분 전 확인)."

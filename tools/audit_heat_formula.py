@@ -37,7 +37,9 @@ import config  # noqa: E402
 from core import utils  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 from modules.auto_trade import engine  # noqa: E402
-from tools.audit_common import windows  # noqa: E402
+from tools.audit_common import (  # noqa: E402
+    add_universe_args, seeded_targets, universe_seeds, windows,
+)
 
 MAX_HOLD = 400
 
@@ -205,18 +207,26 @@ def assumed_stop(rec, rm, trader):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stocks", type=int, default=44)
     ap.add_argument("--days", type=int, default=3650)
     ap.add_argument("--slots", type=int, default=None)
     ap.add_argument("--equity", type=float, default=10_000_000)
+    add_universe_args(ap)
     args = ap.parse_args()
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
 
-    config.session.load_stock_config()
-    targets = [(s["code"], s["name"])
-               for s in config.session.stock_data.get("stocks_kr", [])][:args.stocks]
-    print(f"[준비] {len(targets)}종목 · {args.days}일 · 슬롯 {slots} · 자산 {args.equity:,.0f}원")
+    #  [Fix 2026-09-08] 종전에는 **살아 있는 관심종목**을 그대로 유니버스로 썼다.
+    #   이 도구는 '캡이 언제 물리는가'를 판정하는 도구라 표본이 결론을 만든다 —
+    #   폐지 종목이 하나도 없는 표본에서는 히트가 낮게 나오는 쪽으로 치우친다.
+    #   씨드마다 따로 돌려 표를 나란히 낸다(audit_common.seeded_targets 주석 참조).
+    for seed in universe_seeds(args):
+        targets = seeded_targets(args, seed)
+        print(f"\n\n=========== 표본 씨드 {seed} · 요청 {len(targets)}종목 "
+              f"({args.days}일 · 슬롯 {slots} · 자산 {args.equity:,.0f}원) ===========",
+              flush=True)
+        run_once(targets, args, slots)
 
+
+def run_once(targets, args, slots):
     dfs, mf, _dates, failed = pb.prepare_universe(targets, args.days)
     if failed:
         print(f"[주의] 데이터 미확보 {len(failed)}종목 제외")

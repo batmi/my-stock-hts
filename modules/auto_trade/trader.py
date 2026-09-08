@@ -477,6 +477,21 @@ class AutoTrader:
                 asset_data = account.get_asset_status_data(target_cano, acnt)
                 tot_asset = asset_data.get('tot_asset', 0) if asset_data else 0
 
+                #  [Fix 2026-09-08] 장중 경로(_degraded 검사 2곳)는 결손을 보고 대안 계산으로
+                #   비키는데, **하루의 기준선을 박는 이 자리만** 그 신호를 안 봤다. 결손이 있는
+                #   총자산은 '그만큼 작은 정상 숫자'라 아래 is_plausible_baseline 의 반토막
+                #   문턱에 닿지 않는다(노출 상한이 40%라 주식이 통째로 빠져도 못 닿는다).
+                #   기준선은 하루를 지배하고 되돌릴 수 없으므로, 모르면 박지 않는다.
+                _degraded = list((asset_data or {}).get('degraded') or [])
+                if tot_asset > 0 and _degraded:
+                    tot_asset = 0
+                    warn = (f"⚠️ [시작 자산 보류] 자산 집계에서 결손이 있습니다"
+                            f"({', '.join(_degraded)}).\n"
+                            f"이 값을 오늘 기준 자산으로 삼지 않습니다 — 계좌 차단기"
+                            f"(일일 손실 한도)가 동작하지 않으니 확인해 주세요.")
+                    self.log(warn)
+                    api.send_telegram_message(warn)
+
                 if tot_asset > 0:
                     account_key = f"{target_cano}-{acnt}"
                     saved_initial = load_daily_initial_asset(account_key)
@@ -1705,6 +1720,49 @@ class AutoTrader:
             interval = getattr(config, 'SYSTEM_TRADING_INTERVAL', 60)
             self.log(f"모니터링 완료 (소요 {secs:.1f}초 · 다음 주기까지 {interval}초 대기 "
                      f"→ 청산 감시 간격 {secs + interval:.0f}초). 대기 중...")
+        self._warn_if_memory_low()
+
+    def _warn_if_memory_low(self):
+        """가용 메모리가 OOM 문턱에 다가서면 **먼저 알린다.**
+
+        [왜 · 2026-09-08 감사] 문턱(경고 120MB · 위험 60MB)은 이미 있었는데
+         `get_health_message()` 안에만 있었다 — 사람이 `/health` 를 **쳐야** 보이는
+         값이다. 그런데 OOM 은 종목 분석이 몰리는 순간에 나고, 그 순간 화면을 보고 있는
+         사람은 없다(헤드리스 운영). 결국 메모리는 늘 사후에만 알려졌다: 프로세스가
+         죽고, 밖의 cron 감시자가 사망을 통보하는 순서다([[deployment-raspberry-pi]]).
+         알림 인프라는 이미 다 있으므로 여기서 한 번 밀어 준다.
+
+        [왜 주기 끝인가] 이 자리가 한 주기의 최대 사용 직후다 — 후보 분석·차트가 방금
+         돌았으므로 여유 메모리가 가장 적게 나온다. 한가한 시각의 값으로 안심하지 않는다.
+
+        같은 등급으로는 하루 한 번만 보낸다. 매 주기(기본 60초) 보내면 경보가 소음이 되고,
+        정작 다음 사고를 놓친다. 전달을 **확인한 뒤에** 표식을 남긴다([[unknown-vs-empty]]
+        와 같은 이유 — 못 닿은 알림을 '보냈다'로 굳히면 그날은 영영 조용하다).
+        """
+        try:
+            _rss, avail_mb, peak_mb = self._health_memory()
+            if not avail_mb:
+                return          # 비리눅스 등 — 못 재는 것은 경보하지 않는다
+            warn_at = float(getattr(config, 'SYSTEM_MEMORY_WARN_MB', 120))
+            risk_at = float(getattr(config, 'SYSTEM_MEMORY_RISK_MB', 60))
+            level = "위험" if avail_mb < risk_at else ("경고" if avail_mb < warn_at else None)
+            if level is None:
+                self._mem_alert_key = None      # 회복 — 다음 악화는 다시 알린다
+                return
+
+            key = (level, datetime.now().strftime("%Y-%m-%d"))
+            if getattr(self, '_mem_alert_key', None) == key:
+                return
+            msg = (f"⚠️ [메모리 {level}] 가용 메모리 {avail_mb:,.0f}MB "
+                   f"(문턱 {risk_at if level == '위험' else warn_at:,.0f}MB)\n"
+                   f"프로세스 피크 {peak_mb:,.0f}MB · 방금 주기 직후 측정값입니다.\n"
+                   f"이대로면 OOM 으로 프로세스가 종료될 수 있습니다 — 종료되면 손절·"
+                   f"트레일링 감시가 함께 멈춥니다. 관심종목 수를 줄이거나 재기동을 검토하세요.")
+            if _pkg().alert_delivered(msg, urgent=(level == "위험")):
+                self._mem_alert_key = key
+            self.log(msg.splitlines()[0])
+        except Exception as e:      # noqa: BLE001 - 경보 실패가 매매 주기를 멈추지 않는다
+            logger.debug(f"[Health] 메모리 경보 확인 실패: {e}")
 
     def loop_stall_seconds(self):
         """마지막 '정상 루프 완료' 이후 흐른 초. 감시 대상이 아니면 None.
@@ -1929,12 +1987,30 @@ class AutoTrader:
             resource_parts.append(mem_text)
         if avail_mb:
             resource_parts.append(f"가용 메모리 {avail_mb:,.0f}MB")
-            # 1GB 라즈베리파이 기준으로 가용 메모리가 이 아래로 떨어지면 OOM 종료 위험이 커진다.
-            if avail_mb < 120:
-                (risks if avail_mb < 60 else warnings).append(
+            #  1GB 라즈베리파이 기준으로 가용 메모리가 이 아래로 떨어지면 OOM 종료 위험이 커진다.
+            #  [2026-09-08] 문턱은 config 가 정본이다 — 능동 경보(_warn_if_memory_low)와
+            #  이 화면이 다른 숫자를 쓰면 "화면은 괜찮다는데 알림이 온다"가 된다.
+            _warn_at = float(getattr(config, 'SYSTEM_MEMORY_WARN_MB', 120))
+            _risk_at = float(getattr(config, 'SYSTEM_MEMORY_RISK_MB', 60))
+            if avail_mb < _warn_at:
+                (risks if avail_mb < _risk_at else warnings).append(
                     f"가용 메모리 부족 {avail_mb:,.0f}MB (OOM 위험)"
                 )
         resource_text = " · ".join(resource_parts) if resource_parts else "확인 불가"
+
+        #  [추가 2026-09-08] **감시자가 도는지도 관제에 올린다.** 프로세스가 통째로 죽는
+        #   실패(OOM 킬)에서 알릴 수 있는 것은 밖의 cron 감시자뿐인데, 그 감시자가 멈춘
+        #   상태는 파일상 '정상'과 구분되지 않았다(heartbeat.watchdog_status 주석).
+        #   여기 한 줄이면 사람이 /health 를 볼 때마다 부재가 드러난다.
+        try:
+            from modules import heartbeat
+            wd_state, wd_detail = heartbeat.watchdog_status()
+            if wd_state == "unknown":
+                warnings.append("사망 감시자가 돈 기록이 없습니다 (cron 등록 확인 필요)")
+            elif wd_state == "stale":
+                warnings.append(wd_detail)
+        except Exception as e:      # noqa: BLE001 - 관제 화면이 이것 때문에 죽지는 않는다
+            logger.debug(f"[Health] 감시자 상태 확인 실패: {e}")
 
         # [운영 관제] 주기 소요 시간 — 관심종목을 늘릴 때의 실질 상한 지표.
         #  SYSTEM_TRADING_INTERVAL은 '주기가 끝난 뒤 쉬는 시간'이므로 실제 감시 간격은

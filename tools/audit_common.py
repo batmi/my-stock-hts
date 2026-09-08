@@ -135,3 +135,50 @@ def seed_notice(n_seeds, flag="--seed", example=None, emit=print):
     emit(f"[씨드] 표본 씨드 {n}개로 실행 — 경계선 결과는 3개, 채택 직전이면 5개로 "
          f"재확인할 것. 예: {example or f'{flag} 7'} (audit-seed-robustness)")
     return True
+
+
+# ---------------------------------------------------------------------------
+# 표본 유니버스 — '살아 있는 관심종목'을 쓰지 않는다
+# ---------------------------------------------------------------------------
+#  [왜 · 2026-09-08 감사] 도구 여섯이 유니버스를 이렇게 만들고 있었다.
+#
+#      targets = [(s["code"], s["name"])
+#                 for s in config.session.stock_data["stocks_kr"]][:args.stocks]
+#
+#   그 목록은 **오늘 살아남아 관심종목에 들어 있는 종목**이다. 폐지된 종목이 하나도
+#   없고([[backtest-data-end-exit]] 가 다루는 그 표본이 통째로 빠진다), 씨드가 없어
+#   표본을 바꿔 볼 수도 없다 — [[audit-seed-robustness]] 가 "31/60 부근은 씨드
+#   3~5개로 재확인"을 규약으로 세운 뒤에도 이 도구들만 그 밖에 있었다.
+#
+#   패리티(구현 대조) 도구는 고정 유니버스가 오히려 맞다 — 두 구현에 **같은** 데이터를
+#   먹이는 것이 목적이라 표본이 무엇인지는 상관이 없다. 반면 **전략 판정**을 내는
+#   도구(무엇이 더 낫다/캡이 언제 물린다)는 표본이 결론을 만든다. 그런 도구만 이것을 쓴다.
+
+
+def add_universe_args(ap, stocks=44, dead=45):
+    """씨드로 뽑는 표본 유니버스 인자 한 벌(audit_rebalance_period 와 같은 어휘)."""
+    ap.add_argument("--stocks", type=int, default=stocks, help="씨드당 표본 종목 수")
+    ap.add_argument("--pool", type=int, default=500, help="시총 상위 몇 개에서 뽑을지")
+    ap.add_argument("--dead", type=int, default=dead, help="함께 넣을 상장폐지 종목 수")
+    ap.add_argument("--pool-seeds", default="20260817,31,777",
+                    help="표본 씨드(쉼표 구분). 경계선 결과는 3개, 채택 직전이면 5개")
+    return ap
+
+
+def universe_seeds(args, emit=print):
+    """--pool-seeds 를 정수 목록으로. 규약에 못 미치면 경고 한 줄(판정은 막지 않는다)."""
+    seeds = [int(x) for x in str(args.pool_seeds).split(",") if str(x).strip()]
+    seed_notice(len(seeds), flag="--pool-seeds",
+                example="--pool-seeds 20260817,31,777", emit=emit)
+    return seeds
+
+
+def seeded_targets(args, seed):
+    """그 씨드의 (코드, 이름) 목록 = 규칙 통과 풀에서 뽑은 표본 + 상장폐지 종목.
+
+    지연 임포트인 이유: rule_pool·dead_targets 를 담은 두 도구가 이 모듈을 import 한다
+    (여기서 맞import 하면 순환한다). 무거운 FinanceDataReader 도 부를 때만 들어온다.
+    """
+    from tools.audit_discover_fit import rule_pool
+    from tools.audit_universe import dead_targets
+    return rule_pool(args.pool, args.stocks, seed) + dead_targets(args.dead)

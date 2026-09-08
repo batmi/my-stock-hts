@@ -615,13 +615,30 @@ def _toss_prev_prev_close(code):
 
 
 def _toss_krw_deposit():
-    """토스 매수 가능 금액(KRW, 현금)을 예수금 근사치로 사용한다."""
+    """토스 매수 가능 금액(KRW, 현금)을 예수금 근사치로 사용한다. **모르면 None.**
+
+    [왜 0 이 아닌가 · 2026-09-08 감사] 종전에는 조회 실패도 응답 누락도 `0` 이었다.
+     그 0 은 '현금이 없다'와 글자가 같아서 아래 세 곳으로 그대로 흘렀다.
+
+       · 잔고 요약의 `dnca_tot_amt`·`nxdy_excc_amt`·`prvs_rcdl_excc_amt`·`tot_evlu_amt`
+       · 그 총자산이 그날의 기준 자산(`initial_asset`)이 되면 **일일 손실 한도의 분모**와
+         사이징 기준이 현금만큼 축소된다
+       · 매수여력 0 → 신규 매수가 조용히 멈춘다
+
+     `is_plausible_baseline` 의 '직전 대비 반토막' 검사는 **현금 비중이 절반 미만이면
+     통과한다** — 대부분 투자된 계좌가 정확히 그 상태다. 형제 함수
+     `_toss_domestic_balance`·`_toss_overseas_balance` 는 이미 실패를 None 으로
+     구분하는데 예수금만 구멍이었다([[unknown-vs-empty]]).
+    """
     try:
         bp = toss_api.get_buying_power("KRW")
-        return _toss_int(bp.get('cashBuyingPower')) if bp else 0
     except toss_api.TossApiError as e:
-        logger.debug(f"[Toss] buying-power 조회 실패: {e}")
-        return 0
+        logger.error(f"[Toss] 매수가능금액 조회 실패 — '0원'이 아니라 '모름'으로 돌려준다: {e}")
+        return None
+    if not bp or bp.get('cashBuyingPower') is None:
+        logger.error("[Toss] 매수가능금액 응답에 cashBuyingPower 가 없습니다 — '모름'으로 둡니다.")
+        return None
+    return _toss_int(bp.get('cashBuyingPower'))
 
 
 def _toss_domestic_balance():
@@ -665,16 +682,29 @@ def _toss_domestic_balance():
             'prpr': str(_toss_int(it.get('lastPrice'))),
         })
 
+    #  보유분(output1)은 살아 있는데 예수금만 못 읽는 경우가 있다. 그때 보유를 통째로
+    #   버리면([[toss-balance-sell-gate]]) 손절·트레일링이 멈추므로 보유는 그대로 주고,
+    #   **예수금 칸만 비운다**. 0 을 채우면 총자산이 현금만큼 줄어든 채 '정상 숫자'로
+    #   보이고, 그것이 그날의 기준 자산이 되면 손실 한도의 분모가 조용히 작아진다.
     deposit = _toss_krw_deposit()
     summary = {
-        'tot_evlu_amt': str(tot_eval + deposit),
         'scts_evlu_amt': str(tot_eval),
-        'dnca_tot_amt': str(deposit),
-        'nxdy_excc_amt': str(deposit),
-        'prvs_rcdl_excc_amt': str(deposit),
         'bfdy_sll_amt': '0', 'bfdy_buy_amt': '0',
         'bfdy_tlex_amt': '0', 'thdt_tlex_amt': '0',
     }
+    if deposit is None:
+        #  KIS 응답에는 없는 키다 — 상위(account.get_asset_status_data)가 이 표식을 보고
+        #  'degraded' 로 올려, 기준선처럼 되돌릴 수 없는 결정을 그날 미루게 한다.
+        summary['_deposit_unknown'] = '1'
+        logger.error("[Toss] 예수금을 읽지 못해 총자산·예수금 칸을 비웁니다 "
+                     "— 0원이라는 뜻이 아닙니다(기준 자산 결정은 보류됩니다).")
+    else:
+        summary.update({
+            'tot_evlu_amt': str(tot_eval + deposit),
+            'dnca_tot_amt': str(deposit),
+            'nxdy_excc_amt': str(deposit),
+            'prvs_rcdl_excc_amt': str(deposit),
+        })
     logger.info(f"[Toss] 잔고 조회 결과: 종목수={len(output1)}, 총평가금(주식)={tot_eval:,}원")
     return output1, [summary]
 
