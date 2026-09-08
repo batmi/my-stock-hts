@@ -371,15 +371,32 @@ class KisRealtimeFeed(RealtimeFeed):
                 logger.debug(f"[WS] 체결통보 콜백 오류: {e}")
 
     async def _subscribe_exec(self, ws, approval):
-        """연결 직후 체결통보(HTS ID 키)를 1회 구독한다. 실패해도 시세/폴백에는 영향 없음."""
-        if self._exec_subscribed or not self._exec_enabled():
+        """체결통보(HTS ID 키)를 구독한다. 이미 됐으면 아무것도 하지 않는다(재호출 안전).
+
+        실패해도 체결 확정 자체는 멀쩡하다 — 이 통보는 ConclusionMonitor 를 **깨우는**
+        용도이고, 못 깨워도 그쪽 주기 폴링이 같은 체결을 잡는다(완전 폴백).
+
+        [Fix 2026-09-08] 다만 **등록 슬롯은 돌려받아야 한다.** 호출부가 구독을 시도하기
+         전에 `set_reserved(1)` 로 41건 중 한 자리를 체결통보 몫으로 떼어 두는데, 종전에는
+         send 가 실패해도 그 예약이 그대로 남았다. 구독은 안 됐는데 자리만 비워 둔 꼴이라
+         시세 커버리지가 한 종목 줄어든 채 **그 연결이 끊길 때까지** 회복되지 않았다
+         (재구독을 시도하는 곳도 연결 직후 한 번뿐이었다).
+         실패하면 자리를 반납하고, 다음 재조정 주기가 다시 시도한다.
+        """
+        if not self._exec_enabled():
+            self.manager.set_reserved(0)
+            return
+        if self._exec_subscribed:
             return
         try:
             await ws.send(self._sub_msg(approval, self._exec_tr_id(), self._hts_id(), subscribe=True))
             self._exec_subscribed = True
+            self.manager.set_reserved(1)
             logger.info(f"[WS] 체결통보 구독 요청(tr={self._exec_tr_id()}, id=…{self._hts_id()[-3:]})")
         except Exception as e:
-            logger.info(f"[WS] 체결통보 구독 실패(REST 폴백 유지): {e}")
+            self.manager.set_reserved(0)    # 못 쓴 자리는 시세에 돌려준다
+            logger.info(f"[WS] 체결통보 구독 실패(REST 폴백 유지, 등록 슬롯 반납 — "
+                        f"다음 주기에 재시도): {e}")
 
     # ---- 내부: approval key / URI ----
     def _fetch_approval_key(self):
@@ -461,10 +478,11 @@ class KisRealtimeFeed(RealtimeFeed):
                     self._subscribed = set()
                     self._exec_subscribed = False
                     self._aes_key = self._aes_iv = None
-                    # 체결통보를 쓰면 등록 슬롯 1개를 예약(시세 종목 용량에서 제외) 후 먼저 구독한다.
-                    self.manager.set_reserved(1 if self._exec_enabled() else 0)
-                    self._warn_if_orderbook_inert()
+                    #  체결통보를 먼저 구독한다. 등록 슬롯 예약(시세 종목 용량에서 1건 제외)은
+                    #   _subscribe_exec 가 **성공 여부에 맞춰** 잡고 푼다 — 예약을 여기서
+                    #   따로 걸면 구독이 실패했을 때 자리만 비워 둔 채로 남는다(SSOT).
                     await self._subscribe_exec(ws, approval)
+                    self._warn_if_orderbook_inert()   # 예약이 확정된 뒤의 용량으로 센다
                     await self._reconcile(ws, approval)
                     reconciler = asyncio.ensure_future(self._reconcile_loop(ws, approval))
                     watcher = asyncio.ensure_future(self._disable_watcher(ws))
@@ -526,6 +544,9 @@ class KisRealtimeFeed(RealtimeFeed):
         try:
             while not self._stop.is_set():
                 await asyncio.sleep(interval)
+                #  체결통보 구독이 연결 직후 한 번 실패하면 종전에는 재연결까지 그대로였다.
+                #  이미 됐으면 즉시 돌아오므로(_exec_subscribed) 매 주기 물어도 싸다.
+                await self._subscribe_exec(ws, approval)
                 self.manager.advance()  # 관심종목 로테이션
                 await self._reconcile(ws, approval)
         except asyncio.CancelledError:

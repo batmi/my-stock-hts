@@ -240,7 +240,12 @@ class MarketHaltMonitor:
                 out = res.get("output", {}) or {}
                 curr = float(out.get("bstp_nmix_prpr", 0) or 0)
                 prev = float(out.get("bstp_nmix_prdy_clpr", 0) or 0)
-                if prev > 0:
+                #  [Fix 2026-09-08] 종전에는 prev 만 봤다. 현재가 필드가 비면 curr 이 0 이
+                #   되어 등락률이 **-100.00%** 로 찍힌다 — 하필 서킷브레이커 알림에 붙는
+                #   숫자다. CB 중은 모두가 시세를 두드려 조회가 가장 잘 실패하는 순간이라
+                #   실제로 닿는 자리다(이 클래스의 checked < 2 주석이 같은 얘기를 한다).
+                #   못 읽었으면 숫자를 만들지 않는다 — 호출부가 등락률 표기를 생략한다.
+                if curr > 0 and prev > 0:
                     return (curr - prev) / prev * 100
         except Exception:
             pass

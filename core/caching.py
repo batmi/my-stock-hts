@@ -59,9 +59,13 @@ class TTLCache:
     def __setitem__(self, key, value):
         self.set(key, value)
 
-    def __contains__(self, key):
-        with self._lock:
-            return key in self._store
+    #  [삭제 2026-09-08] `__contains__` 를 두지 않는다.
+    #   `key in cache` 는 ttl 을 받을 수 없어 **만료된 항목도 True** 를 돌려줬다.
+    #   이 클래스를 쓰는 자리는 전부 '유효한 값이 있는가'를 묻는 곳이라, 그 True 는
+    #   낡은 값을 유효한 것으로 읽게 만든다 — 이 저장소가 반복해서 고쳐 온 실패
+    #   유형과 같다([[unknown-vs-empty]]). 지금 `in` 을 쓰는 곳은 하나도 없다(실측).
+    #   메서드를 없애면 앞으로 그렇게 쓰는 코드가 조용히 낡은 값을 읽는 대신
+    #   TypeError 로 그 자리에서 멈춘다. 유효성 검사는 `get(key, ttl) is not None` 이다.
 
     def __len__(self):
         with self._lock:

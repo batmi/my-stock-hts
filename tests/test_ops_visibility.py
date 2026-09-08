@@ -129,6 +129,32 @@ def test_unmeasurable_memory_does_not_alert(capture_alerts):
     assert not capture_alerts
 
 
+def test_memory_check_is_actually_wired_into_the_cycle():
+    """**배선**을 따로 건다 — 산식만 검사하면 호출부가 빠져도 초록이다.
+
+    (2026-09-08 물기 검사에서 실제로 그랬다: `_record_cycle_duration` 에서 호출을
+     지워도 위 테스트 11건이 전부 통과했다. 능동 경보의 값어치는 '주기마다 스스로
+     도는 것'에 있으므로, 그 연결이 곧 기능이다.)
+    """
+    from modules.auto_trade.trader import AutoTrader
+
+    class _Cycle:
+        def __init__(self):
+            self.checked = 0
+            self.cycle_secs_history = []
+            self._record_cycle_duration = AutoTrader._record_cycle_duration.__get__(self)
+
+        def _warn_if_memory_low(self):
+            self.checked += 1
+
+        def log(self, msg):
+            pass
+
+    c = _Cycle()
+    c._record_cycle_duration(12.3, log=False)
+    assert c.checked == 1, "주기가 끝났는데 메모리를 보지 않았다"
+
+
 def test_undelivered_alert_is_not_marked_as_sent(monkeypatch):
     """전달 실패를 '보냈다'로 굳히면 그날은 영영 조용하다."""
     class _Pkg:
