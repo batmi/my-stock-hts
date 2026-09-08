@@ -1640,6 +1640,27 @@ class DefaultStrategy:
             'max_profit_rate': max_profit_rate,
         }
 
+class OrderOutcomeUnclear(Exception):
+    """주문이 접수됐는지 **끝내 확인하지 못한** 상태.
+
+    [왜 '실패'와 갈라야 하나 · 2026-09-08] 전송 계층은 응답 유실을 이미 세 갈래로 나눠 준다
+     (api/orders.py 의 _reconcile_unknown_order):
+       · ORDER_RECOVERED   — 조회로 접수를 확인했다(주문번호까지 이어받는다)
+       · ORDER_NOT_PLACED  — 조회로 미접수를 확인했다
+       · ORDER_UNKNOWN     — 대사 조회 자체가 실패했거나 후보가 둘 이상이라 단정할 수 없다
+     그런데 send_order 가 앞의 둘을 제외한 **모든 실패를 None 하나로 접어** 돌려주는 바람에,
+     호출부의 `if not odno` 가 '미접수'와 '모름'을 같은 것으로 다뤘다. 그 결과:
+       · 신규매수·피라미딩이 히트 캡 선점분을 **반납**한다 — 살아 있을지 모르는 주문의
+         리스크가 장부에서 사라지고, 같은 주기의 다음 후보가 그 예산을 다시 쓴다.
+         히트 캡은 브로커가 막아 주지 않는 우리 쪽 장부라 이것을 막을 것이 없다.
+       · 운용자에게는 "🚫 [매수 실패]" 라고 알린다. 사실이 아니다. 그 말을 믿고 수동으로
+         다시 사면 같은 종목에 두 번째 포지션이 생긴다 — 대사 로직이 막으려던 바로 그것이다.
+     '모름'은 조용히 넘어갈 수 없는 값이라 예외로 올린다. 호출부가 처리를 빠뜨리면
+     시끄럽게 실패하는 편이, 장부가 조용히 어긋나는 것보다 낫다.
+     (같은 계열: api/http.py 의 OrderOutcomeUnknown — 이쪽은 대사 **뒤에도** 남은 모름이다)
+    """
+
+
 class OrderManager:
     """주문 관리 및 상태 추적 전담 클래스"""
     def __init__(self, trader):
@@ -1851,6 +1872,10 @@ class OrderManager:
             
         self.trader.log(log_detail)
 
+        #  접수 여부를 끝내 확인하지 못했는가. finally 를 지난 뒤 예외로 올린다
+        #  (try 안에서 올리면 아래 포괄 except 가 잡아 '에러' 알림을 한 번 더 보낸다).
+        outcome_unclear = False
+
         # [Fix: Point 3] API 지연 중 중복 주문 방지를 위한 임시 ID 선점 (Pre-registration)
         temp_id = f"PRE_{time.time()}"
         with self._lock:
@@ -1945,13 +1970,25 @@ class OrderManager:
 
                 err_msg = res_json.get('msg1', 'Unknown Error')
                 msg_cd = res_json.get('msg_cd')
-                self.trader.log(f"결과: 실패 ({err_msg}) [Code: {msg_cd}]")
-
                 stock_display = f"{name}({code})" if name else code
                 t_type = "매수" if type_str == 'buy' else "매도"
-                fail_msg = f"🚫 [{t_type} 실패] {stock_display}\n수량: {qty}주 / 단가: {price_log}\n원인: {err_msg} (Code: {msg_cd})"
-                # [안전장치] 같은 종목·같은 원인의 반복 실패는 알림을 억제한다. 로그는 항상 남긴다.
-                self._alert_order_fail(code, type_str, msg_cd, fail_msg)
+
+                #  [Fix 2026-09-08] '모름'을 '실패'라고 말하지 않는다(위 예외 클래스 주석).
+                #   반복 알림 억제(_alert_order_fail)도 걸지 않는다 — 이 알림은 눌러선 안 된다.
+                if msg_cd == 'ORDER_UNKNOWN':
+                    self.trader.log(f"결과: 결과 불명 ({err_msg}) [Code: {msg_cd}]")
+                    api.send_telegram_message(
+                        f"⚠️ [{t_type} 결과 불명] {stock_display}\n"
+                        f"수량: {qty}주 / 단가: {price_log}\n"
+                        f"응답이 유실되어 접수 여부를 확인하지 못했습니다 ({err_msg}).\n"
+                        f"다시 주문하지 마십시오 — 이미 체결됐을 수 있습니다. "
+                        f"잔고와 주문내역을 먼저 확인해 주세요.")
+                    outcome_unclear = True
+                else:
+                    self.trader.log(f"결과: 실패 ({err_msg}) [Code: {msg_cd}]")
+                    fail_msg = f"🚫 [{t_type} 실패] {stock_display}\n수량: {qty}주 / 단가: {price_log}\n원인: {err_msg} (Code: {msg_cd})"
+                    # [안전장치] 같은 종목·같은 원인의 반복 실패는 알림을 억제한다. 로그는 항상 남긴다.
+                    self._alert_order_fail(code, type_str, msg_cd, fail_msg)
 
                 if res_json.get('rt_cd') == '9999' or msg_cd in ['OPSQ2000', 'EGW00201']:
                     raise Exception(f"주문 시스템 치명적 오류: {err_msg}")
@@ -1970,6 +2007,8 @@ class OrderManager:
             raise e
         finally:
             self.trader.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        if outcome_unclear:
+            raise OrderOutcomeUnclear(f"{code} {type_str} {qty}주 — 접수 여부 확인 불가")
         return None
 
     # 취소가 연속 이 횟수만큼 실패하면 운영자에게 알린다. 이 상태는 자동 복구되지 않는다 —

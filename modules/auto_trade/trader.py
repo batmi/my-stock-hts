@@ -5771,7 +5771,20 @@ class AutoTrader:
                     #   except 가 "이번 주기에 손절·트레일링 판정을 받지 못했습니다"라는
                     #   **사실과 다른** 경보까지 띄운다(방금 판 종목이다).
                     est_profit, est_rate = api.safe_int(item.get('evlu_pfls_amt')), profit_rate
-                odno = self.order_manager.send_order(code, target_sell_qty, "sell", name=name, profit_amt=int(est_profit), profit_rate=est_rate, reason=reason, score=score, price=order_price, rule=rule, buy_price=sell_buy_price)
+                try:
+                    odno = self.order_manager.send_order(code, target_sell_qty, "sell", name=name, profit_amt=int(est_profit), profit_rate=est_rate, reason=reason, score=score, price=order_price, rule=rule, buy_price=sell_buy_price)
+                except _pkg().OrderOutcomeUnclear as e:
+                    #  [Fix 2026-09-08] 매도는 방향이 반대다 — 접수됐는데 '안 됐다'로 두면
+                    #   다음 주기가 같은 수량을 다시 판다. 부분 체결이었다면 보유보다 많이
+                    #   팔린다. 그래서 여기서 예외를 잡아 **이번 종목의 매도 처리를 끝내고**
+                    #   운용자에게 넘긴다. 아래 `if odno:` 블록(거래기록·반익절 동기화·예약
+                    #   일괄취소·앵커 정리)은 접수가 확인된 주문에만 해야 하는 일이라
+                    #   건너뛰는 것이 맞다.
+                    #   바깥 워커의 포괄 except 로 흘려보내지 않는다 — 그쪽은 "이번 주기에
+                    #   손절·트레일링 판정을 받지 못했습니다"라는 **사실과 다른** 경보를 띄운다.
+                    self.log(f"매도 결과 불명: {name} - 접수 여부를 확인하지 못했습니다 ({e}). "
+                             f"다음 주기의 잔고 조회로 확인합니다 — 재전송하지 않습니다.")
+                    return
                 if odno:
                     record = {
                         "type": "sell", "code": code, "name": name, "qty": target_sell_qty,
@@ -6017,7 +6030,15 @@ class AutoTrader:
                 return
 
             self.log(f"피라미딩 실행: {name} +{add_qty}주 - {reason}")
-            odno = self.order_manager.send_order(code, add_qty, "buy", name=name, reason=reason, score=result['score'], price=order_price, stop_loss_rate=sl_rate)
+            try:
+                odno = self.order_manager.send_order(code, add_qty, "buy", name=name, reason=reason, score=result['score'], price=order_price, stop_loss_rate=sl_rate)
+            except _pkg().OrderOutcomeUnclear as e:
+                #  신규 매수와 같은 이유로 선점분을 반납하지 않는다(위 _execute_buy_orders 주석).
+                #   증액 횟수는 이미 올려 뒀다 — 그대로 둔다. 살아 있는 주문을 세지 않으면
+                #   다음 주기가 상한을 넘겨 한 번 더 증액한다.
+                self.log(f"피라미딩 중단: {name} - 주문 접수 여부를 확인하지 못했습니다 ({e}). "
+                         f"선점한 리스크 예산과 증액 횟수를 그대로 둡니다.")
+                return
             if not odno and reserved_heat:
                 with self._lock:
                     self.portfolio_heat_amt -= add_risk  # 주문 실패 시 선점분 반납
@@ -7117,7 +7138,19 @@ class AutoTrader:
             self.log(f"매수 실행: {cand['name']} - {reason}")
 
             # [수정] 매수 시 사유와 점수, 그리고 지정가 가격을 DB 저장을 위해 전달
-            odno = self.order_manager.send_order(cand['code'], qty, "buy", name=cand['name'], reason=reason, score=cand['score'], price=order_price, rule=cand.get('rule'), stop_loss_rate=sl_rate)
+            try:
+                odno = self.order_manager.send_order(cand['code'], qty, "buy", name=cand['name'], reason=reason, score=cand['score'], price=order_price, rule=cand.get('rule'), stop_loss_rate=sl_rate)
+            except _pkg().OrderOutcomeUnclear as e:
+                #  [Fix 2026-09-08] 접수 여부를 모른다 — **선점분을 반납하지 않는다.**
+                #   반납하면 살아 있을지 모르는 포지션의 리스크가 장부에서 사라지고,
+                #   바로 아래 후보가 같은 예산을 다시 쓴다. 히트 캡은 브로커가 막아 주지
+                #   않는 우리 쪽 장부라 그것을 막을 것이 없다. 남겨 두면 최악의 경우
+                #   이번 주기에 한 자리를 덜 쓸 뿐이고, 다음 주기 잔고 조회가 바로잡는다.
+                #   그리고 이 주기의 매수를 여기서 멈춘다 — 장부가 확실하지 않은 채로
+                #   계속 사는 것은 캡을 세운 이유를 지운다.
+                self.log(f"매수 중단: {cand['name']} - 주문 접수 여부를 확인하지 못했습니다 "
+                         f"({e}). 선점한 리스크 예산은 남겨 두고 이번 주기의 매수를 멈춥니다.")
+                break
             if not odno and new_risk_amt > 0:
                 with self._lock:
                     self.portfolio_heat_amt -= new_risk_amt   # 주문 실패 시 선점분 반납
