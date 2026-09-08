@@ -545,3 +545,67 @@ def get_investor_netbuy(code, start, end):
             _INVESTOR_CACHE.clear()
         _INVESTOR_CACHE[key] = df
     return df
+
+
+# ---------------------------------------------------------------------------
+# FDR 상장목록 — 캐시 지연을 견디며 받는다
+# ---------------------------------------------------------------------------
+#  [무엇이 문제인가 · 2026-09-08 진단]
+#   `fdr.StockListing` 은 KRX 에서 목록을 받지 않는다. ① KRX 에 '최종 영업일(max_work_dt)'을
+#   묻고 ② **그 날짜의 CSV** 를 제3자 GitHub 저장소에서 내려받는다. ②는 장 마감 뒤 사람이
+#   올리는 파일이라, KRX 가 오늘을 영업일이라고 답한 순간부터 그 파일이 올라오기 전까지
+#   **매 거래일** 404 가 난다. 실측(2026-09-08): 오늘 404 · 어제부터 그 이전은 전부 200.
+#
+#   즉 죽은 엔드포인트가 아니라 **날마다 되풀이되는 시차**다. 그래서 '오늘 안 되면 실패'가
+#   아니라 '있는 것 중 가장 최근 것'을 쓴다. 상장목록은 하루 사이에 거의 변하지 않으므로
+#   (시총 순위·업종·소속부) 하루 스테일이 기능을 바꾸지 않는다 — 아예 못 쓰는 것보다 낫다.
+#
+#   [주의] KRX-DELISTING 은 FDR 이 이 404 를 **삼켜서** 빈 프레임을 돌려준다
+#   (`except Exception: df = pd.DataFrame()`). '폐지 종목 0개'는 조용히 틀린 답이므로
+#   호출부는 빈 목록을 실패로 쳐야 한다.
+_FDR_CACHE_BASE = ("https://raw.githubusercontent.com/FinanceData/fdr_krx_data_cache"
+                   "/refs/heads/master/data/listing")
+_FDR_CACHE_DIR = {"KRX": "krx", "KRX-DESC": "desc", "KRX-DELISTING": "delisting"}
+
+
+def fdr_listing(kind, lookback=10):
+    """FDR 상장목록(kind: 'KRX' | 'KRX-DESC' | 'KRX-DELISTING'). 못 받으면 None.
+
+    정상 경로(fdr.StockListing)를 먼저 쓰고, 실패하면 캐시 저장소에서 **올라와 있는
+    가장 최근 날짜**로 받는다. 반환 스키마는 둘이 같다 — FDR 의 후처리가
+    'KRX' 는 reset_index 뿐이고 'KRX-DESC' 는 ListingDate 파싱뿐이라 여기서 맞춘다.
+    """
+    _lazy_import()
+    if _fdr is None:
+        return None
+    try:
+        df = _fdr.StockListing(kind)
+        if df is not None and len(df):
+            return df
+        logger.warning(f"[KRX] FDR {kind} 이 빈 목록을 돌려줬습니다 — 캐시 지연으로 봅니다.")
+    except Exception as e:      # noqa: BLE001 - 아래 지연 허용 경로로 넘긴다
+        logger.debug(f"[KRX] FDR {kind} 조회 실패({type(e).__name__}) → 캐시 지연 경로")
+
+    sub = _FDR_CACHE_DIR.get(str(kind).upper())
+    if not sub:
+        return None
+    today = datetime.now().date()
+    for i in range(max(1, int(lookback))):
+        d = (today - timedelta(days=i)).strftime("%Y-%m-%d")
+        try:
+            df = pd.read_csv(f"{_FDR_CACHE_BASE}/{sub}/{d}.csv", index_col=0,
+                             dtype={"Code": str, "Symbol": str, "Dept": str,
+                                    "ChangeCode": str, "MarketId": str})
+        except Exception:
+            continue            # 그 날짜는 아직/영영 없다(주말·휴장일 포함)
+        if df is None or not len(df):
+            continue
+        df = df.reset_index(drop=True)
+        if "ListingDate" in df.columns:
+            df["ListingDate"] = pd.to_datetime(df["ListingDate"], errors="coerce")
+        if i:
+            logger.info(f"[KRX] FDR {kind} — 오늘({today}) 캐시 파일이 아직 없어 "
+                        f"{d} 파일을 씁니다(상장목록은 하루 사이 거의 변하지 않습니다).")
+        return df
+    logger.warning(f"[KRX] FDR {kind} — 최근 {lookback}일 안에 받을 수 있는 캐시가 없습니다.")
+    return None

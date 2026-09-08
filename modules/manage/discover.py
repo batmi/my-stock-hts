@@ -109,16 +109,25 @@ def _fetch_candidates(target, pool, exclude_holding, seed=None):
     한 번에 보여주는 것은 수십 개뿐이라, 씨드를 고정하면 나머지를 영영 못 본다.
     돌려서 마음에 드는 조합이 나올 때까지 다시 실행할 수 있어야 한다.
     """
-    import FinanceDataReader as fdr
+    from modules import krx_daily
 
     have = set()
     for key in ("stocks_kr", "etfs_kr"):
         have |= {s["code"] for s in config.session.stock_data.get(key, [])}
 
-    krx = fdr.StockListing("KRX")
+    #  [Fix 2026-09-08] 종전에는 fdr.StockListing 을 직접 불렀다. 그런데 그 함수는 KRX 가
+    #   아니라 **제3자 GitHub 캐시**에서 '오늘 날짜' CSV 를 받는데, 그 파일은 장 마감 뒤에야
+    #   올라온다 — KRX 가 오늘을 영업일이라고 답한 순간부터 그때까지 **매 거래일** 404 가
+    #   나고 이 메뉴가 통째로 죽었다(2026-09-08 실측: 오늘 404 · 어제 이전은 전부 200).
+    #   krx_daily.fdr_listing 이 '올라와 있는 가장 최근 날짜'로 받아 준다. 시총 순위·업종은
+    #   하루 사이 거의 변하지 않으므로 후보를 고르는 이 화면의 의미는 달라지지 않는다.
+    krx = krx_daily.fdr_listing("KRX")
+    desc = krx_daily.fdr_listing("KRX-DESC")
+    if krx is None or desc is None:
+        raise RuntimeError("KRX 상장목록·업종 조회 실패 (FDR 캐시 저장소 응답 없음)")
     krx = krx[krx["Market"].isin(["KOSPI", "KOSDAQ"])].dropna(subset=["Marcap"])
     krx = krx.sort_values("Marcap", ascending=False).head(pool)
-    desc = fdr.StockListing("KRX-DESC").set_index("Code")
+    desc = desc.set_index("Code")
 
     steps = []
     n0 = len(krx)

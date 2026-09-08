@@ -26,8 +26,10 @@ from modules import backtest
 @pytest.fixture(autouse=True)
 def _clear_warn_memo():
     backtest._MARKET_UNKNOWN_WARNED.clear()
+    backtest._MARKET_TYPE_OVERRIDES.clear()
     yield
     backtest._MARKET_UNKNOWN_WARNED.clear()
+    backtest._MARKET_TYPE_OVERRIDES.clear()
 
 
 def test_watchlist_exchange_wins_over_ssot(monkeypatch):
@@ -74,4 +76,43 @@ def test_market_type_failure_does_not_break_preparation(monkeypatch):
         raise RuntimeError("마스터 파일 없음")
 
     monkeypatch.setattr("modules.analysis.get_market_type", _boom)
+    assert backtest._resolve_backtest_market("111111") == "KOSPI"
+
+
+# ── 폐지 종목: 정본이 모르는 것을 호출부가 알려 준다 ────────────────
+#  [왜 · 2026-09-08] 상장폐지 종목은 현재 상장 목록에도 KIS 마스터에도 없어 위 두 원천이
+#   모두 침묵한다. 그러면 전부 코스피로 떨어지는데, 생존 편향 축은 바로 그 종목들이
+#   표본의 절반이다 — 실측: 폐지 표본 120 중 **69 개(58%)가 코스닥**이었다.
+#   폐지 목록(KRX-DELISTING)에는 Market 칸이 있으니 아는 쪽이 알려 준다.
+
+def test_registered_market_is_used_when_ssot_is_silent(monkeypatch):
+    monkeypatch.setattr(config.session, "stock_data", {"stocks_kr": []}, raising=False)
+    monkeypatch.setattr("modules.analysis.get_market_type", lambda code: None)
+    backtest.register_market_types({"043090": "KOSDAQ"})
+    assert backtest._resolve_backtest_market("043090") == "KOSDAQ"
+
+
+def test_registered_market_does_not_override_the_ssot(monkeypatch):
+    """등록값은 **모를 때만** 쓰인다 — 정본을 덮으면 단일 소스가 무너진다."""
+    monkeypatch.setattr(config.session, "stock_data", {"stocks_kr": []}, raising=False)
+    monkeypatch.setattr("modules.analysis.get_market_type", lambda code: "KOSPI")
+    backtest.register_market_types({"005930": "KOSDAQ"})
+    assert backtest._resolve_backtest_market("005930") == "KOSPI"
+
+
+def test_watchlist_still_wins_over_registration(monkeypatch):
+    monkeypatch.setattr(config.session, "stock_data",
+                        {"stocks_kr": [{"code": "123456", "exchange": "KOSPI"}]}, raising=False)
+    monkeypatch.setattr("modules.analysis.get_market_type", lambda code: None)
+    backtest.register_market_types({"123456": "KOSDAQ"})
+    assert backtest._resolve_backtest_market("123456") == "KOSPI"
+
+
+def test_unusable_market_values_are_ignored(monkeypatch):
+    """KONEX·빈 값은 등록하지 않는다 — 코스피/코스닥 지수만 존재한다.
+    (등록되지 않으므로 코스피 폴백 + 경고가 남는 것이 정상이다.)"""
+    monkeypatch.setattr(config.session, "stock_data", {"stocks_kr": []}, raising=False)
+    monkeypatch.setattr("modules.analysis.get_market_type", lambda code: None)
+    backtest.register_market_types({"111111": "KONEX", "222222": "", "333333": None})
+    assert backtest._MARKET_TYPE_OVERRIDES == {}
     assert backtest._resolve_backtest_market("111111") == "KOSPI"

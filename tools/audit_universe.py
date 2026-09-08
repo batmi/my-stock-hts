@@ -47,6 +47,11 @@ DIALS = [
     ("현행", []),
     ("ATR손절 1.5", [("sell", "ATR_STOP_MULTIPLIER", 1.5)]),
     ("시간청산 10일", [("sell", "TIME_STOP_DAYS", 10)]),
+    #  [추가 2026-09-08] 12일 팔. 2026-09-08 축 B 에서 **시간청산만 순위가 뒤집혔다**
+    #   (현행풀에서 10일이 명확한 열위인데 폐지를 섞으면 동률로 좁혀진다). 죽어 가는
+    #   종목이 섞이면 빨리 버리는 쪽이 유리해지는 것은 직관과 맞으므로, 현행 15일과 10일
+    #   사이를 한 점 더 찍어 '옮겨야 하는가'를 판단할 수 있게 한다([[time-stop-days-15]]).
+    ("시간청산 12일", [("sell", "TIME_STOP_DAYS", 12)]),
     ("콜백 2.5", [("sell", "TRAILING_ATR_MULTIPLIER", 2.5)]),
 ]
 
@@ -70,6 +75,14 @@ def _listing_paths(kind):
     os.makedirs(d, exist_ok=True)
     base = os.path.join(d, kind.replace("/", "_"))
     return base + ".csv", base + ".meta.json"
+
+
+#  [SSOT 2026-09-08] FDR 캐시 지연을 견디는 조회는 modules/krx_daily.fdr_listing 하나다.
+#   운영(탐색 메뉴)과 감사가 같은 실패를 겪으므로 사본을 두지 않는다.
+def _listing_tolerating_cache_lag(kind, lookback=10):
+    """캐시 저장소에 올라와 있는 가장 최근 날짜로 목록을 받는다. 못 받으면 None."""
+    from modules import krx_daily
+    return krx_daily.fdr_listing(kind, lookback=lookback)
 
 
 def _listing(kind, refresh=None):
@@ -119,10 +132,12 @@ def _listing(kind, refresh=None):
         if df is None or not len(df):
             raise RuntimeError("빈 목록")
     except Exception as e:
-        if os.path.exists(f):
-            print(f"[목록] {kind} 원격 실패({type(e).__name__}) → 스냅샷 사용: {f}", flush=True)
-            return pd.read_csv(f, dtype={"Code": str, "Symbol": str})
-        raise
+        df = _listing_tolerating_cache_lag(kind)
+        if df is None:
+            if os.path.exists(f):
+                print(f"[목록] {kind} 원격 실패({type(e).__name__}) → 스냅샷 사용: {f}", flush=True)
+                return pd.read_csv(f, dtype={"Code": str, "Symbol": str})
+            raise
     df.to_csv(f, index=False, encoding="utf-8")
     import datetime as _dt
     with open(meta_f, "w", encoding="utf-8") as fh:
@@ -298,9 +313,23 @@ def extend_targets(exclude, limit, mode="marcap", pool=500, seed=20260816, pit_d
     return cand[:limit]
 
 
-def dead_targets(limit, since="2016-01-01"):
-    """상장폐지 주권 목록. 스팩·피흡수합병처럼 '전략과 무관한 소멸'은 뺀다."""
+def dead_targets(limit, since="2016-01-01", markets=("KOSPI", "KOSDAQ")):
+    """상장폐지 주권 목록. 스팩·피흡수합병처럼 '전략과 무관한 소멸'은 뺀다.
+
+    markets: 표본에 넣을 시장. 기본값이 코스피·코스닥인 이유는 아래 KONEX 주석 참조.
+
+    [부수효과 · 2026-09-08] 고른 종목의 **시장(코스피/코스닥)을 백테스트에 등록한다**
+     (backtest.register_market_types). 폐지 종목은 현재 상장 목록에도 KIS 마스터에도
+     없어서 시장 판정의 두 원천이 모두 침묵하고, 그러면 시장 필터가 전부 코스피 지수로
+     걸린다 — 실측(2026-09-08): 폐지 표본 120 종목 중 **69 개(58%)가 코스닥**이었다.
+     생존 편향 축은 바로 이 종목들이 표본의 절반이라, 남의 지수로 차단일을 받으면
+     측정하려는 것 자체가 흔들린다.
+
+     여기서 하는 이유는 이 함수가 **폐지 목록을 손에 들고 있는 유일한 자리**이기 때문이다
+     (Market 칸이 그 안에 있다). 이 함수를 쓰는 도구 전부가 자동으로 맞춰진다.
+    """
     import pandas as pd
+    from modules import backtest as _bt
     df = _listing("KRX-DELISTING")
     df["DelistingDate"] = pd.to_datetime(df["DelistingDate"], errors="coerce")
     m = (df["DelistingDate"] >= since) & (df["SecuGroup"] == "주권")
@@ -310,7 +339,17 @@ def dead_targets(limit, since="2016-01-01"):
     # 폐지 사유가 합병·완전자회사화면 주가가 급락으로 끝나지 않아 편향 측정 대상이 아니다.
     keep = ~df["Reason"].fillna("").str.contains("합병|완전자회사|해산|지주회사")
     df = df[keep]
+    #  [Fix 2026-09-08] **거래하지 않는 시장은 표본에서 뺀다.**
+    #   종전에는 `SecuGroup == "주권"` 만 보고 시장을 안 봐서 KONEX 가 그대로 들어왔다 —
+    #   실측: 폐지 표본 120 종목 중 **30개(25%)가 KONEX**. 이 시스템은 코스피·코스닥만
+    #   거래하고(관심종목도 시장 필터 지수도 그 둘뿐), 애초에 살 수 없는 종목이 망한 것을
+    #   생존 편향으로 세면 프리미엄이 그만큼 과대평가된다.
+    #   ※ 이 변경으로 축 B 수치가 2026-09-08 이전 실행과 달라진다([[survivorship-premium-2x]]).
+    if markets and "Market" in df.columns:
+        df = df[df["Market"].isin(list(markets))]
     df = df.sort_values("DelistingDate", ascending=False).head(limit * 3)
+    if "Market" in df.columns:
+        _bt.register_market_types(dict(zip(df["Symbol"], df["Market"])))
     return [(r["Symbol"], r["Name"]) for _, r in df.iterrows()]
 
 

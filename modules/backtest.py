@@ -491,6 +491,27 @@ _MARKET_FILTER_STATE = {"dates": None, "desc": "", "key": None}
 #  시장 판정을 못 한 종목을 종목당 한 번만 알린다(감사 한 번에 수백 종목이 지난다).
 _MARKET_UNKNOWN_WARNED = set()
 
+#  [폐지 종목] 호출부가 알려 준 시장. 실매매 경로는 절대 쓰지 않는다 — 채우는 곳은
+#   감사 도구뿐이다(tools/audit_universe.dead_targets).
+#
+#   [왜 필요한가 · 2026-09-08] 상장폐지 종목은 **현재 상장 목록에도 KIS 마스터에도 없다.**
+#    그래서 아래 두 원천이 모두 None 을 내고 코스피로 떨어진다. 그런데 생존 편향 감사는
+#    바로 그 폐지 종목이 표본의 절반인 축이다 — 실측(2026-09-08): 폐지 표본 120 종목 중
+#    **69 개(58%)가 코스닥**인데 전부 코스피 지수로 진입 차단일을 받고 있었다.
+#    폐지 목록(KRX-DELISTING)에는 Market 칸이 있으니, 아는 쪽이 알려 주면 된다.
+_MARKET_TYPE_OVERRIDES = {}
+
+
+def register_market_types(mapping):
+    """{코드: 'KOSPI'|'KOSDAQ'} 를 시장 판정에 보탠다(폐지 종목처럼 정본이 모르는 것).
+
+    덮어쓰지 않고 **모를 때만** 쓰인다 — 아래 우선순위의 세 번째다.
+    """
+    for code, market in (mapping or {}).items():
+        m = str(market or "").strip().upper()
+        if m in ("KOSPI", "KOSDAQ"):
+            _MARKET_TYPE_OVERRIDES[str(code)] = m
+
 
 def _resolve_backtest_market(code):
     """백테스트 시장 필터가 쓸 'KOSPI'|'KOSDAQ'.
@@ -509,8 +530,9 @@ def _resolve_backtest_market(code):
      [순서] 관심종목(stock.json)을 먼저 본다 — 운영자가 직접 적은 값이고, 이 순서를
      지켜야 관심종목 유니버스로 낸 **기존 감사 수치가 한 자리도 바뀌지 않는다**.
      거기 없으면 analysis.get_market_type(마스터 → KRX 목록)에게 묻는다
-     ([[market-type-single-source]] 의 정본). 둘 다 모르면 KOSPI 로 두되 **남긴다** —
-     추측을 조용히 하지 않는 것이 그 규약의 요지다.
+     ([[market-type-single-source]] 의 정본). 그 다음이 호출부가 등록한 값
+     (register_market_types — 폐지 종목처럼 정본이 알 수 없는 것). 셋 다 모르면
+     KOSPI 로 두되 **남긴다** — 추측을 조용히 하지 않는 것이 그 규약의 요지다.
     """
     for key in ("stocks_kr", "etfs_kr"):
         for item in config.session.stock_data.get(key, []):
@@ -525,6 +547,11 @@ def _resolve_backtest_market(code):
         by_ssot = None
     if by_ssot:
         return by_ssot
+
+    #  정본이 모르는 것(상장폐지 등)을 호출부가 알려 줬으면 그것을 쓴다.
+    by_caller = _MARKET_TYPE_OVERRIDES.get(str(code))
+    if by_caller:
+        return by_caller
 
     if code not in _MARKET_UNKNOWN_WARNED:
         _MARKET_UNKNOWN_WARNED.add(code)
