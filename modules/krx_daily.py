@@ -567,31 +567,54 @@ _FDR_CACHE_BASE = ("https://raw.githubusercontent.com/FinanceData/fdr_krx_data_c
                    "/refs/heads/master/data/listing")
 _FDR_CACHE_DIR = {"KRX": "krx", "KRX-DESC": "desc", "KRX-DELISTING": "delisting"}
 
+#  캐시 경로로 받았을 때 **어느 날짜 파일**이었는지. 스냅샷 메타에 적어 두면 여러 목록이
+#  같은 날짜로 고정됐는지 나중에 대조할 수 있다(정상 경로로 받으면 알 수 없어 비어 있다).
+_LAST_LISTING_DATE = {}
 
-def fdr_listing(kind, lookback=10):
+
+def last_listing_date(kind):
+    """직전 fdr_listing 이 **캐시에서** 받은 날짜('YYYY-MM-DD'). 정상 경로였으면 None."""
+    return _LAST_LISTING_DATE.get(str(kind).upper())
+
+
+def fdr_listing(kind, lookback=10, on=None):
     """FDR 상장목록(kind: 'KRX' | 'KRX-DESC' | 'KRX-DELISTING'). 못 받으면 None.
 
     정상 경로(fdr.StockListing)를 먼저 쓰고, 실패하면 캐시 저장소에서 **올라와 있는
     가장 최근 날짜**로 받는다. 반환 스키마는 둘이 같다 — FDR 의 후처리가
     'KRX' 는 reset_index 뿐이고 'KRX-DESC' 는 ListingDate 파싱뿐이라 여기서 맞춘다.
+
+    on: 기준일('YYYY-MM-DD' 또는 date). 주면 **그 날짜부터 거슬러** 찾고 정상 경로는
+      건너뛴다 — `fdr.StockListing` 은 언제나 '최신'만 주므로 과거를 물을 수단이 없다.
+      감사 유니버스를 여러 목록에 걸쳐 **같은 날짜로 고정**할 때 쓴다
+      ([[audit-universe-reproducibility]]).
     """
     _lazy_import()
-    if _fdr is None:
-        return None
-    try:
-        df = _fdr.StockListing(kind)
-        if df is not None and len(df):
-            return df
-        logger.warning(f"[KRX] FDR {kind} 이 빈 목록을 돌려줬습니다 — 캐시 지연으로 봅니다.")
-    except Exception as e:      # noqa: BLE001 - 아래 지연 허용 경로로 넘긴다
-        logger.debug(f"[KRX] FDR {kind} 조회 실패({type(e).__name__}) → 캐시 지연 경로")
+    key = str(kind).upper()
+    sub = _FDR_CACHE_DIR.get(key)
+    #  직전 호출의 날짜가 남으면 '정상 경로로 받았다'가 옛 캐시 날짜로 둔갑한다.
+    _LAST_LISTING_DATE.pop(key, None)
+    if on is None:
+        if _fdr is None:
+            return None
+        try:
+            df = _fdr.StockListing(kind)
+            if df is not None and len(df):
+                return df
+            logger.warning(f"[KRX] FDR {kind} 이 빈 목록을 돌려줬습니다 — 캐시 지연으로 봅니다.")
+        except Exception as e:      # noqa: BLE001 - 아래 지연 허용 경로로 넘긴다
+            logger.debug(f"[KRX] FDR {kind} 조회 실패({type(e).__name__}) → 캐시 지연 경로")
 
-    sub = _FDR_CACHE_DIR.get(str(kind).upper())
     if not sub:
         return None
-    today = datetime.now().date()
+    if on is None:
+        start = datetime.now().date()
+    elif isinstance(on, str):
+        start = datetime.strptime(on, "%Y-%m-%d").date()
+    else:
+        start = on
     for i in range(max(1, int(lookback))):
-        d = (today - timedelta(days=i)).strftime("%Y-%m-%d")
+        d = (start - timedelta(days=i)).strftime("%Y-%m-%d")
         try:
             df = pd.read_csv(f"{_FDR_CACHE_BASE}/{sub}/{d}.csv", index_col=0,
                              dtype={"Code": str, "Symbol": str, "Dept": str,
@@ -604,8 +627,9 @@ def fdr_listing(kind, lookback=10):
         if "ListingDate" in df.columns:
             df["ListingDate"] = pd.to_datetime(df["ListingDate"], errors="coerce")
         if i:
-            logger.info(f"[KRX] FDR {kind} — 오늘({today}) 캐시 파일이 아직 없어 "
+            logger.info(f"[KRX] FDR {kind} — 기준일({start}) 캐시 파일이 없어 "
                         f"{d} 파일을 씁니다(상장목록은 하루 사이 거의 변하지 않습니다).")
+        _LAST_LISTING_DATE[key] = d
         return df
     logger.warning(f"[KRX] FDR {kind} — 최근 {lookback}일 안에 받을 수 있는 캐시가 없습니다.")
     return None

@@ -41,7 +41,7 @@ from tools.audit_common import seed_notice  # noqa: E402
 BASE = "현행 (3.0/3.5/+10%)"
 
 # (라벨, 오버라이드) — 대상: sell=SELL_STRATEGY, thr=ANALYSIS_THRESHOLDS
-ARMS = [
+ARMS_LATE = [
     (BASE, []),
     ("발동 3.5 단독", [("sell", "TS_ACTIVATION_ATR_MULTIPLIER", 3.5)]),
     ("콜백 4.5 단독", [("sell", "TRAILING_ATR_MULTIPLIER", 4.5)]),
@@ -52,11 +52,35 @@ ARMS = [
                             ("sell", "TRAILING_ATR_MULTIPLIER", 4.5),
                             ("thr", "PYRAMIDING_PROFIT_TRIGGER", 7.0)]),
 ]
-PAIR = ("발동 3.5 단독", "콜백 4.5 단독", "발동3.5 + 콜백4.5")
+PAIR_LATE = ("발동 3.5 단독", "콜백 4.5 단독", "발동3.5 + 콜백4.5")
+
+#  [추가 2026-09-08] **조이는 방향**. 2026-09-08 장중 다이얼 재실행에서 발동 2.0 이
+#   전체창 34-0-11 · MAR승 39/45 로 이겼다 — 종전 기록("2.0은 전체창에서 진다, 19-0-26")과
+#   방향이 뒤집힌 것이라 확인이 필요하다([[dials-intraday-recalibration]]).
+#   따로 재면 안 되는 이유는 늦추는 쪽과 같다: 발동 2.0 은 **더 일찍 무장**시키는데,
+#   그 이득이 진짜 독립적인지 아니면 그냥 '콜백을 조인 것'과 같은 일을 하는지 갈라야 한다.
+#   늦추는 방향에서는 콜백이 발동을 **완전히 흡수**했다(소수점까지 동일). 조이는 방향에도
+#   같은 흡수가 있다면 발동 2.0 은 독립 후보가 아니라 콜백 축의 그림자다.
+ARMS_EARLY = [
+    (BASE, []),
+    ("발동 2.0 단독", [("sell", "TS_ACTIVATION_ATR_MULTIPLIER", 2.0)]),
+    ("콜백 3.0 단독", [("sell", "TRAILING_ATR_MULTIPLIER", 3.0)]),
+    ("발동2.0 + 콜백3.0", [("sell", "TS_ACTIVATION_ATR_MULTIPLIER", 2.0),
+                          ("sell", "TRAILING_ATR_MULTIPLIER", 3.0)]),
+    #  발동만 조이고 콜백은 넓히는 대각선 — '일찍 무장하되 여유는 크게'가 별개 팔인지 본다.
+    ("발동2.0 + 콜백4.0", [("sell", "TS_ACTIVATION_ATR_MULTIPLIER", 2.0),
+                          ("sell", "TRAILING_ATR_MULTIPLIER", 4.0)]),
+]
+PAIR_EARLY = ("발동 2.0 단독", "콜백 3.0 단독", "발동2.0 + 콜백3.0")
+
+ARMS, PAIR = ARMS_LATE, PAIR_LATE
 
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--direction", choices=["late", "early"], default="late",
+                    help="late=늦게 자르는 축(발동3.5·콜백4.5·트리거+7%%, 기본) · "
+                         "early=조이는 축(발동2.0·콜백3.0)")
     ap.add_argument("--trials", type=int, default=15)
     ap.add_argument("--sample", type=int, default=20)
     ap.add_argument("--days", type=int, default=1200)
@@ -68,6 +92,11 @@ def main():
     ap.add_argument("--subperiods", type=int, default=3)
     ap.add_argument("--exclude-from", default="20260301")
     args = ap.parse_args()
+    global ARMS, PAIR
+    if args.direction == "early":
+        ARMS, PAIR = ARMS_EARLY, PAIR_EARLY
+        print("[방향] 조이는 축(발동 2.0 · 콜백 3.0) — 2026-09-08 재실행에서 뒤집힌 축을 확인한다",
+              flush=True)
     seed_notice(args.seeds, example="--seeds 3")
 
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)

@@ -123,6 +123,15 @@ def test_profit_lock_is_seen_by_both(rm, monkeypatch):
     """
     monkeypatch.setitem(config.SELL_STRATEGY, "PROFIT_LOCK_USE", True)
     monkeypatch.setitem(config.SELL_STRATEGY, "TS_ACTIVATION_MODE", "breakeven")
+    #  [고정 2026-09-08] 아래 '37.0%'는 발동 배수 3.0 의 값이다. 기본값이 2.0 이 되면
+    #   발동선이 22.0% 로 내려와 MFE 30% 가 이미 무장 구간에 들어가고, 그러면 이 검사가
+    #   재려던 '무장 전 구간의 이익 보호선'을 재지 못한다. 다이얼에서 떼어 놓는다.
+    monkeypatch.setitem(config.SELL_STRATEGY, "TS_ACTIVATION_ATR_MULTIPLIER", 3.0)
+    #  발동선 상한 캡도 고정한다. 앞 파일(test_ts_activation_mode)이 캡 25% 를 흘리는데
+    #   monkeypatch 해제가 autouse 픽스처 복원보다 **나중에** 도는 순서라 그 파일 안에서는
+    #   지울 수 없다. 캡이 25% 로 남으면 발동선이 37.0 → 25.0 으로 잘려 이 표본의
+    #   'MFE 30% 는 아직 무장 전' 이라는 전제가 깨진다. 여기서 필요한 값을 직접 못 박는다.
+    monkeypatch.setitem(config.SELL_STRATEGY, "TS_ACTIVATION_MAX_RATE", 0.0)
     # MFE +30% — 이익 보호선(≥25%)은 켜지고 TS 발동선(ATR 900이면 37.0%)은 아직 멀다.
     #  그 사이 구간이 정확히 이 선의 존재 이유다.
     buy, high, cur, qty, atr = 10000.0, 13000.0, 12500.0, 10, 900.0

@@ -136,3 +136,55 @@ def test_the_drop_reason_is_recorded(monkeypatch, caplog):
         _prepare(monkeypatch, n_targets=4, n_fail=1)
     assert any("레이트리밋" in r.message for r in caplog.records), \
         "제외 사유가 남지 않는다 — 레이트리밋인지 상장폐지인지 구분할 수 없다"
+
+
+# ---------------------------------------------------------------------------
+# [2026-09-08] 정상 경로도 stdout 에 남아야 한다
+# ---------------------------------------------------------------------------
+#  종전에는 폴백·실패가 있을 때만 시끄러웠고 정상은 `logger.info` 로만 나갔다. 그런데
+#  감사 도구는 stdout/stderr 만 로그 파일로 받으므로 **정상 실행에는 출처가 한 줄도 남지
+#  않았다.** 그러면 '두 감사가 같은 데이터 위에서 잰 것인가'를 사후에 확인할 수 없어,
+#  이 장치를 만든 목적이 반만 이뤄진다. 실측 계기: audit_rebalance_period 로그에서 수급
+#  KIS 폴백 실패(EGW00104)는 보였지만 나머지 303종목이 KRX 였다는 사실은 안 보였다.
+#  → [[audit-tools-kis-credentials]]
+import config as _config
+
+
+@pytest.fixture
+def spoken(monkeypatch):
+    """config.console.print 로 나간 줄을 모은다(= 감사 로그에 남는 것)."""
+    said = []
+
+    class _C:
+        def print(self, msg, *a, **k):
+            said.append(str(msg))
+
+    monkeypatch.setattr(_config, "console", _C())
+    return said
+
+
+def test_a_clean_daily_run_still_records_its_source(spoken):
+    _seed(["KRX/pykrx"] * 5)
+    pb.announce_daily_source()
+    assert any("일봉 출처" in m and "KRX/pykrx 5종목" in m for m in spoken), \
+        f"정상 실행에 출처가 남지 않는다 — 나중에 비교할 수 없다: {spoken}"
+
+
+def test_a_clean_smart_money_run_still_records_its_source(spoken):
+    backtest.reset_smart_money_source()
+    backtest._SMART_MONEY_SOURCE.update({"000001": "KRX", "000002": "KRX"})
+    try:
+        pb.announce_smart_money_source()
+    finally:
+        backtest.reset_smart_money_source()
+    assert any("수급(스마트머니) 출처" in m and "KRX 2종목" in m for m in spoken), \
+        f"KRX 로 정상 조회된 실행이 로그에 남지 않는다: {spoken}"
+
+
+def test_the_degraded_path_is_still_louder_than_the_clean_one(spoken, caplog):
+    """정상도 남기게 했다고 해서 문제가 묻히면 안 된다 — 경고는 그대로 WARNING 이다."""
+    _seed(["KRX/pykrx"] * 9 + ["yfinance"])
+    with caplog.at_level("WARNING", logger=pb.logger.name):
+        pb.announce_daily_source()
+    assert [r for r in caplog.records if r.levelname == "WARNING"], \
+        "폴백이 있는데 조용해졌다 — 이번 변경이 경고를 삼켰다"

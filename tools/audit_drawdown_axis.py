@@ -38,14 +38,25 @@ INITIAL_CAPITAL = 10_000_000  # 실거래 시드와 같게 둔다(seed-slot-sizi
 # ---------------------------------------------------------------------------
 # 배수 산출
 # ---------------------------------------------------------------------------
-def market_scale_by_date(dates, days):
-    """국면×휩소율 배수를 날짜별로. 두 시장 중 **열위 쪽**(trader.risk_scale과 동일)."""
+def market_scale_by_date(dates, days, combine="product"):
+    """국면×휩소율 배수를 날짜별로. 두 시장 중 **열위 쪽**(trader.risk_scale과 동일).
+
+    combine: 국면·휩소 두 축을 어떻게 합치나. "product"=현행(곱) · "min"=둘 중 나쁜 쪽만.
+
+    [왜 옵션이 필요한가 · 2026-09-08] 네 축은 서로 80% 넘게 겹친다(실측 KOSPI:
+     P(휩소|시장필터) 87.5% · P(시장필터|국면) 79.5% · P(드로다운|시장필터) 82.7%,
+     3축 이상 동시 발동이 36.1%). 곱으로 합치면 **같은 정보가 여러 번 과세**된다.
+     min 은 '가장 나쁜 축 하나만 듣는다'는 대안이다 — 중복 과세는 없애고 축 자체는 남긴다.
+     ※ 축을 아예 빼는 것은 이미 반증돼 있다: 같은 평균 배수를 상수로 준 대조군은 수익이
+       절반이었다(trader._update_risk_scale 주석, 146.5% → 71.0%). 타이밍은 기여한다.
+    """
     start = (datetime.now() - timedelta(days=days + 400)).strftime("%Y-%m-%d")
     combined = {}
     for ticker in ("KS11", "KQ11"):
         idx, close = load_index(ticker, start)
         regimes, whips = regime_series(idx, close)
-        scale = regime_scale(regimes) * whipsaw_scale(whips)
+        r_s, w_s = regime_scale(regimes), whipsaw_scale(whips)
+        scale = np.minimum(r_s, w_s) if combine == "min" else r_s * w_s
         for d, s in zip(idx.strftime("%Y%m%d"), scale):
             combined[d] = min(combined.get(d, 1.0), float(s))
     # 지수 휴장일 등으로 비는 날은 직전 값을 잇는다(실운영도 마지막 판정을 유지한다).
@@ -56,10 +67,18 @@ def market_scale_by_date(dates, days):
     return out
 
 
-def make_scale_fn(mkt_scale, dd_params, use_market=True):
+def make_scale_fn(mkt_scale, dd_params, use_market=True, combine="product", floor=None):
     """run_portfolio에 넘길 콜러블. 자산곡선 피드백으로 드로다운 배수를 계산한다.
 
     dd_params=None이면 드로다운 축을 끈다(대조군).
+    combine: 시장 배수와 드로다운 배수를 합치는 방식. "product"=현행 · "min"=나쁜 쪽만.
+    floor: 결합 결과의 하한(예: 0.60). None 이면 하한 없음.
+      [왜 하한인가 · 2026-09-08] 결합 배수와 향후 20일 지수 수익률이 **단조가 아니다**.
+       실측(KOSPI 4,095일): 0.00~0.45 -3.27% · 0.45~0.60 +0.11% · **0.60~0.80 +2.14%
+       (승률 66.1%, 하위10% -4.05% — 모든 지표에서 최고)** · 0.80~0.99 +0.36% ·
+       0.99~1.01 +1.71%. 가장 좋은 구간에서 노출을 크게 깎고 있다는 뜻이라, 그 아래로
+       내려가는 것을 막으면 어떻게 되는지 재 볼 값어치가 있다.
+       ※ 단, 이 수치는 **지수** 수익률이지 전략 수익률이 아니다 — 그래서 이 도구가 있다.
 
     [1회용이다 — 실행마다 새로 만들어라] 이 콜러블은 내부에 자산곡선 이력(hist)을 들고 있다.
      하나를 만들어 여러 run_portfolio 에 돌려쓰면 앞선 실행의 자산곡선이 남아 고점(hwm)이
@@ -90,10 +109,14 @@ def make_scale_fn(mkt_scale, dd_params, use_market=True):
                 window = [e for _d, e in hist]
             hwm = max(window) if window else equity
             dd = (1.0 - equity / hwm) * 100.0 if hwm > 0 else 0.0
+            dd_scale = 1.0
             if l2 > 0 and dd >= l2:
-                scale *= s2
+                dd_scale = s2
             elif l1 > 0 and dd >= l1:
-                scale *= s1
+                dd_scale = s1
+            scale = min(scale, dd_scale) if combine == "min" else scale * dd_scale
+        if floor is not None:
+            scale = max(float(floor), scale)
         return scale
 
     return fn

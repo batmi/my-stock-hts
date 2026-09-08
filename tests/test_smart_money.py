@@ -300,7 +300,20 @@ def test_a_run_without_krx_says_so_loudly():
     assert "KRX_ID" in printed
 
 
-def test_a_run_with_krx_does_not_nag():
+def test_a_run_with_krx_records_itself_without_nagging():
+    """정상 경로는 **조르지 않되 기록은 남긴다.**
+
+    [정정 2026-09-08] 종전 이 검사는 정상 상태에서 `console.print` 가 아예 불리지 않을
+    것을 요구했다("콘솔을 어지럽히지 않는다"). 그런데 감사 도구는 stdout/stderr 만 로그로
+    받으므로, 그 침묵이 **감사 로그에 출처가 한 줄도 남지 않는다**는 뜻이 됐다. 이 장치를
+    만든 이유가 '자격증명이 다른 두 기계의 감사는 서로 다른 전략을 잰 것인데 결과에 그
+    상태가 남지 않는다' 였으니, 정상만 지워 버리면 목적이 반만 이뤄진다 — 문제 있는
+    실행만 표시해서는 두 실행을 **비교**할 수 없다.
+
+    'nag' 의 뜻은 유지한다: 정상 경로는 WARNING 을 내지 않고 dim 한 줄만 남긴다.
+    실행당 한 줄은 warn_if_unmodeled 가 이미 매번 찍는 수준과 같다.
+    → [[audit-tools-kis-credentials]]
+    """
     from modules import portfolio_backtest as pb
 
     backtest.reset_smart_money_source()
@@ -309,7 +322,9 @@ def test_a_run_with_krx_does_not_nag():
         dist = pb.announce_smart_money_source()
 
     assert dist == {"KRX": 1}
-    assert not mock_print.called, "정상 상태에서 콘솔을 어지럽히지 않는다"
+    printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list if c.args)
+    assert "KRX 1종목" in printed, f"정상 실행이 로그에 남지 않는다: {printed!r}"
+    assert "KRX_ID" not in printed, "정상인데 자격증명을 조르면 안 된다"
 
 
 # ==========================================================

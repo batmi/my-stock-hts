@@ -79,13 +79,58 @@ def _listing_paths(kind):
 
 #  [SSOT 2026-09-08] FDR 캐시 지연을 견디는 조회는 modules/krx_daily.fdr_listing 하나다.
 #   운영(탐색 메뉴)과 감사가 같은 실패를 겪으므로 사본을 두지 않는다.
-def _listing_tolerating_cache_lag(kind, lookback=10):
-    """캐시 저장소에 올라와 있는 가장 최근 날짜로 목록을 받는다. 못 받으면 None."""
+def _listing_tolerating_cache_lag(kind, lookback=10, on=None):
+    """캐시 저장소에서 목록을 받는다(on 을 주면 그 날짜 기준). 못 받으면 None."""
     from modules import krx_daily
-    return krx_daily.fdr_listing(kind, lookback=lookback)
+    return krx_daily.fdr_listing(kind, lookback=lookback, on=on)
 
 
-def _listing(kind, refresh=None):
+#  [Fix 2026-09-08] 스냅샷은 **목록마다 따로** 찍힌다. KRX-DESC 가 rule_pool 에 쓰이기
+#   시작하면서 오늘 처음 만들어졌고, KRX·KRX-DELISTING 은 2026-08-24 자였다 — 즉 유니버스
+#   하나가 **두 시점의 목록을 조인해** 만들어지고 있었다. 목록 고정의 요점이 '같은 날의
+#   같은 세계를 본다'는 것이므로, 날짜가 갈리면 그 요점이 깨진다.
+#   그래서 ① 스냅샷 메타에 **데이터 날짜**를 적고 ② 갈리면 소리 나게 한다.
+_SNAPSHOT_DATES = {}
+
+
+#  며칠까지는 무해한가. 상장목록은 하루 사이 거의 변하지 않으므로 며칠 차이는 표본을
+#   바꾸지 않는다. 문제가 되는 것은 **주 단위로 벌어질 때**(2026-09-08 실측: KRX-DESC 만
+#   2주 앞서 있었다)와, 조인되는 두 목록이 조금이라도 어긋날 때다.
+_SNAPSHOT_SKEW_TOLERANCE_DAYS = 7
+#  KRX(시총·풀 정렬)와 KRX-DESC(업종·배제 규칙)는 Code 로 **조인된다** — 이 둘이 다른
+#   날이면 한쪽에만 있는 종목이 생겨 배제 규칙이 조용히 빗나간다. 폐지 목록은 별개
+#   유니버스라 조인 대상이 아니다.
+_JOINED_KINDS = ("KRX", "KRX-DESC")
+
+
+def _announce_snapshot_skew():
+    """스냅샷 날짜가 **의미 있게** 갈리면 알린다. 며칠 차이까지 조르지는 않는다."""
+    import datetime as _dt
+    dated = {k: v for k, v in _SNAPSHOT_DATES.items() if v and v != "?"}
+    if len(set(dated.values())) <= 1:
+        return
+
+    def _d(v):
+        try:
+            return _dt.datetime.strptime(str(v)[:10], "%Y-%m-%d").date()
+        except Exception:
+            return None
+
+    joined = {k: _d(v) for k, v in dated.items() if k in _JOINED_KINDS}
+    joined_split = len({v for v in joined.values() if v}) > 1
+    days = [v for v in (_d(x) for x in dated.values()) if v]
+    spread = (max(days) - min(days)).days if len(days) > 1 else 0
+    if not joined_split and spread <= _SNAPSHOT_SKEW_TOLERANCE_DAYS:
+        return
+
+    parts = " · ".join(f"{k} {v}" for k, v in sorted(dated.items()))
+    why = ("조인되는 KRX·KRX-DESC 가 다른 날이라 배제 규칙이 빗나갑니다"
+           if joined_split else f"최대 {spread}일 벌어졌습니다")
+    print(f"[목록] ※ 스냅샷 날짜가 갈립니다 — {parts}. {why}. "
+          f"맞추려면 --refresh-listing --as-of YYYY-MM-DD", flush=True)
+
+
+def _listing(kind, refresh=None, as_of=None):
     """FDR 종목 목록. **스냅샷으로 고정**하고, 갱신은 명시적으로만 한다.
 
     [종전 동작과 왜 바꿨나 — 2026-08-24] 이 함수는 매 호출마다 원격을 받아 캐시를
@@ -118,21 +163,28 @@ def _listing(kind, refresh=None):
             when = "?"
             try:
                 with open(meta_f, encoding="utf-8") as fh:
-                    when = json.load(fh).get("fetched_at", "?")
+                    _m = json.load(fh)
+                #  데이터 날짜가 있으면 그것이 정본이다(받은 시각이 아니라).
+                when = _m.get("data_date") or _m.get("fetched_at", "?")
             except Exception:
                 import datetime as _dt
                 when = _dt.datetime.fromtimestamp(os.path.getmtime(f)).strftime("%Y-%m-%d")
             print(f"[목록] {kind} 스냅샷 {when} 사용 — 유니버스를 고정한다. "
                   f"갱신은 AUDIT_LISTING_REFRESH=1", flush=True)
+            _SNAPSHOT_DATES[kind] = when
+            _announce_snapshot_skew()
         return pd.read_csv(f, dtype={"Code": str, "Symbol": str})
 
+    from modules import krx_daily
     try:
+        if as_of:
+            raise RuntimeError(f"기준일 고정({as_of}) — 최신 조회를 건너뛴다")
         import FinanceDataReader as fdr
         df = fdr.StockListing(kind)
         if df is None or not len(df):
             raise RuntimeError("빈 목록")
     except Exception as e:
-        df = _listing_tolerating_cache_lag(kind)
+        df = _listing_tolerating_cache_lag(kind, on=as_of)
         if df is None:
             if os.path.exists(f):
                 print(f"[목록] {kind} 원격 실패({type(e).__name__}) → 스냅샷 사용: {f}", flush=True)
@@ -140,12 +192,17 @@ def _listing(kind, refresh=None):
             raise
     df.to_csv(f, index=False, encoding="utf-8")
     import datetime as _dt
+    #  캐시 경로로 받았으면 그 파일의 날짜가 곧 데이터 날짜다. 정상 경로면 알 수 없다
+    #  (FDR 이 '오늘' 파일을 받으므로 오늘로 적는다).
+    data_date = krx_daily.last_listing_date(kind) or _dt.datetime.now().strftime("%Y-%m-%d")
     with open(meta_f, "w", encoding="utf-8") as fh:
-        json.dump({"kind": kind, "rows": int(len(df)),
+        json.dump({"kind": kind, "rows": int(len(df)), "data_date": data_date,
                    "fetched_at": _dt.datetime.now().strftime("%Y-%m-%d %H:%M")}, fh,
                   ensure_ascii=False)
-    print(f"[목록] {kind} 스냅샷 갱신 — {len(df):,}행. "
+    print(f"[목록] {kind} 스냅샷 갱신 — {len(df):,}행 · 데이터 {data_date}. "
           f"이전 수치와 유니버스가 달라진다.", flush=True)
+    _SNAPSHOT_DATES[kind] = data_date
+    _announce_snapshot_skew()
     return df
 
 
@@ -377,15 +434,23 @@ def prep(targets, days, label):
     return dfs, mf, dates
 
 
-def refresh_listings():
+#  갱신 대상은 세 목록 전부다. KRX-DESC 가 빠져 있으면 그것만 다른 날짜로 남아
+#   유니버스가 두 시점의 조인이 된다(2026-09-08 실측).
+_LISTING_KINDS = ("KRX", "KRX-DESC", "KRX-DELISTING")
+
+
+def refresh_listings(as_of=None):
     """종목 목록 스냅샷을 의도적으로 새로 받고, **유니버스가 얼마나 움직였는지** 보고한다.
 
     갱신은 되돌릴 수 없다(옛 스냅샷을 덮어쓴다). 그래서 조용히 하지 않는다 — 갱신 뒤에
     찍은 수치는 갱신 전 기록과 유니버스가 다르고, 얼마나 다른지는 여기 출력이 말해 준다.
+
+    as_of: 'YYYY-MM-DD' 를 주면 세 목록을 **그 날짜로 맞춰** 받는다(캐시 저장소의 날짜별
+      파일). 날짜가 갈린 스냅샷을 한 시점으로 되맞출 때 쓴다.
     """
     import pandas as pd
     before = {}
-    for kind in ("KRX", "KRX-DELISTING"):
+    for kind in _LISTING_KINDS:
         f, _ = _listing_paths(kind)
         if os.path.exists(f):
             df = pd.read_csv(f, dtype={"Code": str, "Symbol": str})
@@ -397,11 +462,11 @@ def refresh_listings():
     except Exception:
         pass
 
-    for kind in ("KRX", "KRX-DELISTING"):
-        _listing(kind, refresh=True)
+    for kind in _LISTING_KINDS:
+        _listing(kind, refresh=True, as_of=as_of)
 
     print()
-    for kind in ("KRX", "KRX-DELISTING"):
+    for kind in _LISTING_KINDS:
         f, _ = _listing_paths(kind)
         df = pd.read_csv(f, dtype={"Code": str, "Symbol": str})
         col = "Code" if "Code" in df.columns else "Symbol"
@@ -424,6 +489,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--refresh-listing", action="store_true",
                     help="종목 목록 스냅샷을 새로 받는다(되돌릴 수 없다). 유니버스 변화량을 찍는다")
+    ap.add_argument("--as-of", default=None, metavar="YYYY-MM-DD",
+                    help="--refresh-listing 과 함께: 세 목록을 그 날짜로 맞춰 받는다. "
+                         "스냅샷 날짜가 갈렸을 때 한 시점으로 되맞추는 용도")
     ap.add_argument("--axis", default="A", choices=["A", "B"])
     ap.add_argument("--trials", type=int, default=15)
     ap.add_argument("--days", type=int, default=3650)
@@ -449,7 +517,7 @@ def main():
     ap.add_argument("--exclude-from", default="20260301")
     args = ap.parse_args()
     if args.refresh_listing:
-        refresh_listings()
+        refresh_listings(as_of=args.as_of)
         return
     seed_notice(args.seeds, example="--seeds 3")
 

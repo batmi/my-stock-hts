@@ -312,6 +312,10 @@ def test_portfolio_heat_bep_uplift_follows_toggle(monkeypatch):
     monkeypatch.setitem(config.SELL_STRATEGY, 'TRAILING_STOP_ACTIVATION_RATE', 10.0)
     monkeypatch.setitem(config.SELL_STRATEGY, 'TRAILING_STOP_CALLBACK_RATE', 5.0)
 
+    #  [고정 2026-09-08] 이 표본은 **TS 가 무장하지 않은 채로** BEP 토글만 갈라야 한다.
+    #   발동 배수 3.0 이면 발동선 8.1% > MFE 6% 라 그렇게 되는데, 기본값이 2.0 이 되면
+    #   발동선이 5.26% 로 내려와 무장해 버려 BEP 가 아니라 TS 를 재게 된다.
+    monkeypatch.setitem(config.SELL_STRATEGY, 'TS_ACTIVATION_ATR_MULTIPLIER', 3.0)
     # 최고가 +6% ≥ 손절폭 5%(ATR 동기화) → BEP 발동선은 넘겼다. 무장 여부만 다르다.
     trader.trailing_stop_cache['000001'] = 10600.0
     holding = [_holding('000001', 10, 10000, 10300)]
@@ -474,6 +478,12 @@ def test_portfolio_heat_uses_live_atr_instead_of_back_derivation(monkeypatch):
     monkeypatch.setitem(config.SELL_STRATEGY, 'TRAILING_STOP_CALLBACK_RATE', 5.0)
     monkeypatch.setitem(config.SELL_STRATEGY, 'ATR_STOP_MULTIPLIER', 2.0)
     monkeypatch.setitem(config.SELL_STRATEGY, 'TRAILING_ATR_MULTIPLIER', 3.5)
+    #  [고정 2026-09-08] 이 표본의 '8.1% → 22.0%'는 발동 배수 3.0 의 값이다. 종전에는
+    #   운영 기본값이 마침 3.0 이라 안 적어도 맞았는데, 기본값이 2.0 으로 바뀌자 발동선이
+    #   13.6% 로 내려와 '역산은 무장 전, 실제는 무장 후'라는 이 표본의 전제가 깨졌다.
+    #   이 검사가 재는 것은 발동 배수가 아니라 **역산 ATR 대신 실시간 ATR을 쓰는가**이므로,
+    #   다이얼에서 떼어 놓는다([[config-fallback-literals]] 와 같은 취지).
+    monkeypatch.setitem(config.SELL_STRATEGY, 'TS_ACTIVATION_ATR_MULTIPLIER', 3.0)
 
     buy, high, cur, qty = 10000.0, 11500.0, 11400.0, 10
     live_atr = 600.0                       # 지금의 ATR (진입 시 250에서 확대)

@@ -3,6 +3,27 @@ import config
 import pytest
 from unittest.mock import patch
 
+@pytest.fixture(autouse=True)
+def _keep_sell_strategy():
+    """[Fix 2026-09-08] 이 파일은 config.SELL_STRATEGY 를 **직접 바꾸고 되돌리지 않았다.**
+
+    남기고 가는 값이 `USE_ATR_STOP=False` 와 `HALF_TAKE_PROFIT_USE=False` 라, 뒤에 도는
+    파일들이 ATR 손절 대신 고정 비율 경로를 타게 된다. 실측(2026-09-08, 직렬 실행):
+    test_holding_analysis 1건 · test_exit_parity 1건 · test_heat_parity 2건이 이것 때문에
+    깨졌다. xdist 로 돌리면 워커 배분에 따라 나타났다 사라져서 '플래키'로 보였다
+    (그래서 오래 남아 있었다).
+
+    청산 파리티 검사가 조용히 다른 설정에서 도는 것은 특히 나쁘다 — 두 구현이 같은지
+    보는 검사인데 전제가 어긋난 채로 초록이 될 수 있다.
+    → [[config-group-dict-aliasing]] · [[test-isolation-network-threads]]
+    """
+    import copy
+    saved = copy.deepcopy(config.SELL_STRATEGY)
+    yield
+    config.SELL_STRATEGY.clear()          # 대입이 아니라 제자리 갱신 — 별칭이 갈라지면 안 된다
+    config.SELL_STRATEGY.update(saved)
+
+
 @pytest.fixture
 def strategy():
     return DefaultStrategy()

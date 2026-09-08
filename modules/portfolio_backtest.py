@@ -348,6 +348,20 @@ def _announce(msg, loud=True):
         print(msg)
 
 
+#  [Fix 2026-09-08] 출처 알림이 정상 경로에서 `logger.info` 로만 나가면 **감사 CLI 로그에
+#   아무 흔적이 없다.** 감사 도구는 stdout/stderr 만 파일로 받으므로, '이 실행이 어느
+#   데이터 위에서 돌았나'를 나중에 확인할 방법이 사라진다 — 이 장치를 만든 이유(자격증명·
+#   폴백이 다른 두 실행은 서로 다른 전략을 잰 것) 자체가 반만 이뤄진 상태였다.
+#   문제 있는 경우만 시끄럽게 하는 것으로는 부족하다. **정상도 기록되어야 비교가 된다.**
+def _note_provenance(msg):
+    """출처 한 줄을 로그와 stdout 양쪽에 남긴다(조용하지만 보이게)."""
+    logger.info(msg)
+    try:
+        config.console.print(f"[dim]{msg}[/dim]")
+    except Exception:
+        print(msg)
+
+
 def warn_if_unmodeled(where="백테스트"):
     """재현 불가 기능이 켜져 있으면 알린다. 조용히 지나가지 않는 것이 요점이다.
 
@@ -384,7 +398,7 @@ def announce_smart_money_source(where="백테스트"):
     parts = " · ".join(f"{k} {v}종목" for k, v in sorted(dist.items()))
     msg = f"[{where}] 수급(스마트머니) 출처: {parts}"
     if dist.get("KRX"):
-        logger.info(msg)
+        _note_provenance(msg)
     else:
         # KRX가 하나도 없다 = 이 축이 사실상 빠진 채로 도는 중이다. 눈에 띄어야 한다.
         msg += " — KRX_ID/KRX_PW 가 없으면 이 축은 최근 구간 밖에서 꺼진 것으로 계산된다."
@@ -417,7 +431,7 @@ def announce_daily_source(where="백테스트"):
     parts = " · ".join(f"{k} {v}종목" for k, v in sorted(dist.items()))
     msg = f"[{where}] 일봉 출처: {parts}"
     if not fallback:
-        logger.info(msg)
+        _note_provenance(msg)
         return dist
 
     msg += (f" — KRX 공식이 아닌 종목이 {fallback}개다. 종가가 어긋나 손절·익절 판정이"
