@@ -2806,7 +2806,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                     market_type = get_market_type(code)
                     market_str = market_type or "-"
                     
-                    if market_type and config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
+                    if market_type and config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", False):
                         regime, score_adj = get_market_regime(market_type)
                         if score_adj != 0 and not rule_applied: # [수정] 개별 룰이 없을 때만 보정 적용
                             buy_score += score_adj
@@ -2814,7 +2814,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         elif is_domestic_index:
             market_type = "KOSDAQ" if "KOSDAQ" in code else "KOSPI"
             market_str = code
-            if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
+            if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", False):
                 try:
                     regime, score_adj = get_market_regime(market_type)
                     if score_adj != 0 and not rule_applied:
@@ -3131,7 +3131,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     obv_val = ind.get('obv')
     vol_sum = df['volume'].tail(5).sum() if df is not None and 'volume' in df.columns else 0
     
-    if df is None or len(df) < config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 5):
+    if df is None or len(df) < config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 10):
         obv_trend = None
         obv_val = None
         
@@ -3665,7 +3665,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                     obv_val = ind.get('obv')
                     vol_sum = df['volume'].tail(5).sum() if df is not None and 'volume' in df.columns else 0
                     
-                    if df is None or len(df) < config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 5):
+                    if df is None or len(df) < config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 10):
                         obv_trend = None
                         obv_val = None
                         
@@ -4216,7 +4216,7 @@ def _analyze_stock_worker(stock, params=None, restricted_stocks=None, rules_map=
         obv_trend = ind.get('obv_trend')
         vol_sum = df['volume'].tail(5).sum() if df is not None and 'volume' in df.columns else 0
         
-        if df is None or len(df) < config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 5):
+        if df is None or len(df) < config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 10):
             obv_trend = None
             obv_val = None
             
@@ -5477,7 +5477,7 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
             obv_val = ind.get('obv')
             vol_sum = chart_df['volume'].tail(5).sum() if chart_df is not None and 'volume' in chart_df.columns else 0
             
-            if chart_df is None or len(chart_df) < config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 5):
+            if chart_df is None or len(chart_df) < config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 10):
                 obv_trend = None
                 obv_val = None
                 
@@ -5679,7 +5679,7 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None, is_
 
     # [이동] 적응형 임계값 준비 (테이블 생성 전으로 이동)
     use_adaptive = False
-    if not is_overseas and config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
+    if not is_overseas and config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", False):
         use_adaptive = True
         if market_regime_adj is None:
             market_regime_adj = {}
@@ -6102,7 +6102,7 @@ def show_stock_analysis():
                 # [최적화] 조회 주기마다 한 번만 시장 국면 분석 수행 (중복 API 호출 방지)
                 shared_regime_adj = None
                 has_domestic = any(not is_ovs for _, _, is_ovs in target_list)
-                if has_domestic and config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
+                if has_domestic and config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", False):
                     shared_regime_adj = {}
                     try:
                         with Progress(

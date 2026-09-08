@@ -5459,7 +5459,7 @@ class AutoTrader:
         
         # [추가] 시장 국면 판단 (적응형 임계값용) - 매도 분석 시에도 상태 분류를 위해 필요
         market_regime_adj = {}
-        if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
+        if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", False):
             for m_type in ["KOSPI", "KOSDAQ"]:
                 regime, adj = analysis.get_market_regime(m_type)
                 market_regime_adj[m_type] = adj
@@ -6472,7 +6472,7 @@ class AutoTrader:
             #  전역 방어 게이트라 개별 룰로 덮지 않는다 — build_buy_thresholds를 거치지
             #  않고 config에서 직접 읽는다.
             tq_cap_skip_msg = None
-            _tq_cap = float(config.ANALYSIS_THRESHOLDS.get('TREND_QUALITY_MAX', 0) or 0)
+            _tq_cap = float(config.ANALYSIS_THRESHOLDS.get('TREND_QUALITY_MAX', 300.0) or 0)
             _tq_now = result.get('trend_quality')
             if _tq_cap > 0 and _tq_now is not None and _tq_now >= _tq_cap:
                 tq_cap_skip_msg = (f"[추세품질 상한] (추세품질 {_tq_now:,.0f} >= {_tq_cap:,.0f}"
@@ -6687,7 +6687,7 @@ class AutoTrader:
         
         # [추가] 시장 국면 판단 (적응형 임계값용)
         market_regime_adj = {} # Market Type -> Score Adj
-        if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
+        if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", False):
             for m_type in ["KOSPI", "KOSDAQ"]:
                 regime, adj = analysis.get_market_regime(m_type)
                 market_regime_adj[m_type] = adj
@@ -6823,7 +6823,7 @@ class AutoTrader:
         # [추세추종] 추세품질 상한 보류 종목 로그 기록 — 이 줄이 주기마다 여러 건 찍히면
         #  유니버스가 과열된 것이다(config TREND_QUALITY_MAX 주석의 '되돌릴 조건').
         if tq_cap_skipped_stocks:
-            _cap = config.ANALYSIS_THRESHOLDS.get('TREND_QUALITY_MAX', 0)
+            _cap = config.ANALYSIS_THRESHOLDS.get('TREND_QUALITY_MAX', 300.0)
             self.log(f"[추세품질 상한] 과열 추세(추세품질 {_cap:,.0f} 이상)로 매수 제외 "
                      f"({len(tq_cap_skipped_stocks)}종목): {', '.join(tq_cap_skipped_stocks)}")
 

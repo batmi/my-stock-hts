@@ -366,7 +366,7 @@ def view_system_config(group=None):
         if thresholds.get('PYRAMIDING_USE', True):
             row("증액 발동 수익률", "이 수익률 이상 & 매수신호 유지 시 증액", "ANALYSIS_THRESHOLDS['PYRAMIDING_PROFIT_TRIGGER']", f"{thresholds.get('PYRAMIDING_PROFIT_TRIGGER', 10.0)}%", key="PYRAMIDING_PROFIT_TRIGGER", indent=True)
             row("증액 비율", "보유 수량 대비 증액 수량 비율", "ANALYSIS_THRESHOLDS['PYRAMIDING_RATIO']", f"{thresholds.get('PYRAMIDING_RATIO', 0.5)}", key="PYRAMIDING_RATIO", indent=True)
-            row("최대 증액 횟수", "포지션당 피라미딩 허용 횟수", "ANALYSIS_THRESHOLDS['PYRAMIDING_MAX_COUNT']", f"{thresholds.get('PYRAMIDING_MAX_COUNT', 1)}회", key="PYRAMIDING_MAX_COUNT", indent=True)
+            row("최대 증액 횟수", "포지션당 피라미딩 허용 횟수", "ANALYSIS_THRESHOLDS['PYRAMIDING_MAX_COUNT']", f"{thresholds.get('PYRAMIDING_MAX_COUNT', 3)}회", key="PYRAMIDING_MAX_COUNT", indent=True)
 
         subheader("1-3. 청산 — 손절·트레일링·시간")
         # [추세추종 보호] 고정 익절/반익절/RSI 과열 매도는 조회·편집 화면에서 숨김 (ANTI_TREND_HIDDEN_KEYS 주석 참조)
@@ -826,7 +826,7 @@ def anti_trend_hidden_keys():
     (TS_ACTIVATION_MODE 자체는 잠겨 있어 메뉴로는 fixed로 갈 수 없다 — json 직접 편집 전용)
     """
     keys = set(ANTI_TREND_HIDDEN_KEYS)
-    if str(config.SELL_STRATEGY.get("TS_ACTIVATION_MODE", "fixed")).lower() == "breakeven":
+    if str(config.SELL_STRATEGY.get("TS_ACTIVATION_MODE", "breakeven")).lower() == "breakeven":
         keys.add("TRAILING_STOP_ACTIVATION_RATE")
     return keys
 
@@ -1218,7 +1218,7 @@ def _entry_strategy_items():
         {"desc": "증액 비율", "help": "보유 수량 대비 증액 수량 비율 (예: 0.5 = 50%)", "name": "PYRAMIDING_RATIO", "type": "float", "section": "1-2. 서브전략 — 피라미딩",
          "get": lambda: config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_RATIO", 0.5), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"PYRAMIDING_RATIO": v})},
         {"desc": "최대 증액 횟수", "help": "포지션당 피라미딩 허용 횟수 (기본 3회)", "name": "PYRAMIDING_MAX_COUNT", "type": "int", "section": "1-2. 서브전략 — 피라미딩",
-         "get": lambda: config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_MAX_COUNT", 1), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"PYRAMIDING_MAX_COUNT": v})}
+         "get": lambda: config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_MAX_COUNT", 3), "set": lambda v: config.ANALYSIS_THRESHOLDS.update({"PYRAMIDING_MAX_COUNT": v})}
     ]
     # [추가] 토스: 체결강도 미제공 → 체결강도 관련 항목은 편집 목록에서 숨김(미사용 유지)
     #   수급 확인은 매도잔량비(BUY_ASK_BID_RATIO)로 수행하므로 해당 항목은 유지한다.
@@ -1599,17 +1599,17 @@ def _risk_portfolio_items():
         {"desc": "휩소율 상한", "help": "이 값 이상이면 최대 축소 (0~1, 하한보다 커야 함, 예: 0.75)", "name": "WHIPSAW_HI", "type": "float", "section": "3-4. 리스크 한도 동적 스케일링",
          "get": lambda: config.RISK_SCALING_PARAMS.get("WHIPSAW_HI", 0.75), "set": lambda v: config.RISK_SCALING_PARAMS.update({"WHIPSAW_HI": v}), "validator": lambda v: 0 < v <= 1.0},
         {"desc": "휩소율 최소 배수", "help": "휩소율 연동 최소 리스크 배수 (0<v<1, 기본 0.85 — 낮출수록 톱니장에서 크게 줄이지만 수익 비용이 급증)", "name": "WHIPSAW_MIN_SCALE", "type": "float", "section": "3-4. 리스크 한도 동적 스케일링",
-         "get": lambda: config.RISK_SCALING_PARAMS.get("WHIPSAW_MIN_SCALE", 0.6), "set": lambda v: config.RISK_SCALING_PARAMS.update({"WHIPSAW_MIN_SCALE": v}), "validator": lambda v: 0 < v < 1.0},
+         "get": lambda: config.RISK_SCALING_PARAMS.get("WHIPSAW_MIN_SCALE", 0.85), "set": lambda v: config.RISK_SCALING_PARAMS.update({"WHIPSAW_MIN_SCALE": v}), "validator": lambda v: 0 < v < 1.0},
         {"desc": "드로다운 리스크 감속 사용", "help": "계좌 고점(HWM) 대비 하락 시 단계적으로 리스크 한도 축소", "name": "USE_DRAWDOWN_RISK_SCALING", "type": "bool", "choices": ["y", "n"], "section": "3-4. 리스크 한도 동적 스케일링",
          "get": lambda: config.RISK_SCALING_PARAMS.get("USE_DRAWDOWN_RISK_SCALING", True), "set": lambda v: config.RISK_SCALING_PARAMS.update({"USE_DRAWDOWN_RISK_SCALING": v})},
         {"desc": "드로다운 1단계 기준 (%)", "help": "고점 대비 이 % 이상 하락 시 1단계 배수 적용", "name": "DD_LEVEL_1", "type": "float", "section": "3-4. 리스크 한도 동적 스케일링",
          "get": lambda: config.RISK_SCALING_PARAMS.get("DD_LEVEL_1", 5.0), "set": lambda v: config.RISK_SCALING_PARAMS.update({"DD_LEVEL_1": v}), "validator": lambda v: v >= 0},
         {"desc": "드로다운 1단계 배수", "help": "1단계 리스크 곱 배수 (0<v<1, 예: 0.75)", "name": "DD_SCALE_1", "type": "float", "section": "3-4. 리스크 한도 동적 스케일링",
-         "get": lambda: config.RISK_SCALING_PARAMS.get("DD_SCALE_1", 0.75), "set": lambda v: config.RISK_SCALING_PARAMS.update({"DD_SCALE_1": v}), "validator": lambda v: 0 < v <= 1.0},
+         "get": lambda: config.RISK_SCALING_PARAMS.get("DD_SCALE_1", 0.9), "set": lambda v: config.RISK_SCALING_PARAMS.update({"DD_SCALE_1": v}), "validator": lambda v: 0 < v <= 1.0},
         {"desc": "드로다운 2단계 기준 (%)", "help": "고점 대비 이 % 이상 하락 시 2단계 배수 적용", "name": "DD_LEVEL_2", "type": "float", "section": "3-4. 리스크 한도 동적 스케일링",
          "get": lambda: config.RISK_SCALING_PARAMS.get("DD_LEVEL_2", 10.0), "set": lambda v: config.RISK_SCALING_PARAMS.update({"DD_LEVEL_2": v}), "validator": lambda v: v >= 0},
         {"desc": "드로다운 2단계 배수", "help": "2단계 리스크 곱 배수 (0<v<1, 예: 0.5)", "name": "DD_SCALE_2", "type": "float", "section": "3-4. 리스크 한도 동적 스케일링",
-         "get": lambda: config.RISK_SCALING_PARAMS.get("DD_SCALE_2", 0.5), "set": lambda v: config.RISK_SCALING_PARAMS.update({"DD_SCALE_2": v}), "validator": lambda v: 0 < v <= 1.0},
+         "get": lambda: config.RISK_SCALING_PARAMS.get("DD_SCALE_2", 0.8), "set": lambda v: config.RISK_SCALING_PARAMS.update({"DD_SCALE_2": v}), "validator": lambda v: 0 < v <= 1.0},
         {"desc": "자산 고점 룩백 (일)", "help": "HWM(자산 고점) 산출 기간", "name": "DD_LOOKBACK_DAYS", "type": "int", "section": "3-4. 리스크 한도 동적 스케일링",
          "get": lambda: config.RISK_SCALING_PARAMS.get("DD_LOOKBACK_DAYS", 90), "set": lambda v: config.RISK_SCALING_PARAMS.update({"DD_LOOKBACK_DAYS": v}), "validator": lambda v: v > 0},
         {"desc": "갭 리스크 버퍼", "help": "사이징 시 손절폭에 곱하는 배수 (갭하락 대비, 1.0=미사용)", "name": "GAP_RISK_BUFFER", "type": "float", "section": "3-4. 리스크 한도 동적 스케일링",

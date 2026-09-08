@@ -683,7 +683,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     _bar_pyr = (intraday_pyramid if intraday_pyramid is not None
                 else bool(intraday_bars and intraday_status))
     pyr_day_cap = pyr_per_day if pyr_per_day is not None else (0 if _bar_pyr else 1)
-    pyr_max = pyramiding_max if pyramiding_max is not None else thr.get("PYRAMIDING_MAX_COUNT", 1)
+    pyr_max = pyramiding_max if pyramiding_max is not None else thr.get("PYRAMIDING_MAX_COUNT", 3)
     pyr_use = thr.get("PYRAMIDING_USE", True) and pyr_max > 0
     pyr_trigger = thr.get("PYRAMIDING_PROFIT_TRIGGER", 10.0)
     pyr_ratio = thr.get("PYRAMIDING_RATIO", 0.5)
@@ -742,7 +742,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     #  ANALYSIS_THRESHOLDS['TREND_QUALITY_MAX'] 주석. 이력 부족은 실매매와 같이 통과.
     #  0을 주면 해제된다(옛 수치를 재현할 때).
     _tq_lb = config.INDICATOR_PARAMS.get("TREND_QUALITY_LOOKBACK", 90)
-    _tq_cap = float(config.ANALYSIS_THRESHOLDS.get("TREND_QUALITY_MAX", 0) or 0)
+    _tq_cap = float(config.ANALYSIS_THRESHOLDS.get("TREND_QUALITY_MAX", 300.0) or 0)
     _tq = ({code: _trend_quality_cached(df, _tq_lb) for code, df in dfs.items()}
            if (_tq_cap > 0 or rank_fn is None) else {})
     if rank_fn == "legacy":
@@ -1771,7 +1771,7 @@ def run_portfolio_backtest():
             continue
 
         max_holdings = getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
-        pyr_default = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_MAX_COUNT", 1)
+        pyr_default = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_MAX_COUNT", 3)
         config.console.print(f"\n[dim]대상 {len(targets)}종목 · 현재 설정: 슬롯 {max_holdings} · 피라미딩 {pyr_default}차[/dim]")
 
         val = Prompt.ask("분석 기간(일)", default="1095")

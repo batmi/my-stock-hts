@@ -657,7 +657,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         pyr_max = pyramiding_max_count_limit
         pyr_use = pyr_max > 0
     else:
-        pyr_max = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_MAX_COUNT", 1)
+        pyr_max = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_MAX_COUNT", 3)
     pyramid_count = 0
     # [동기화] 실매매(trader._try_pyramid_buy)는 시장 필터가 켜져 있으면 약세 시장에서 증액도 보류한다.
     #  필터가 꺼져 있던 동안에는 차이가 없었으나, 켠 뒤에는 이를 반영하지 않으면 증액이 과대평가된다.
@@ -859,7 +859,7 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             elif ts_highest_price > 0:
                 # [SSOT] 발동 기준은 실매매(engine.compute_trailing_stop)와 같은 모드를 따른다.
                 #  두 경로가 다른 식을 쓰면 백테스트 수치가 실매매를 설명하지 못한다.
-                if str(config.SELL_STRATEGY.get("TS_ACTIVATION_MODE", "fixed")).lower() == "breakeven":
+                if str(config.SELL_STRATEGY.get("TS_ACTIVATION_MODE", "breakeven")).lower() == "breakeven":
                     from modules.auto_trade.engine import (breakeven_activation_rate,
                                                            ts_activation_atr_mult)
                     ts_act_eff = breakeven_activation_rate(row.get('ATR', 0), position['avg_price'],
@@ -2160,7 +2160,7 @@ def run_backtest():
 
             config.console.print("\n[bold]5. 피라미딩(수익 증액) 차수 설정[/bold]")
             cur_pyr_on = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_USE", True)
-            cur_pyr_cnt = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_MAX_COUNT", 1)
+            cur_pyr_cnt = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_MAX_COUNT", 3)
             cur_pyr_desc = f"{cur_pyr_cnt}차" if cur_pyr_on else "미사용"
             if Prompt.ask(f"피라미딩 차수를 변경하시겠습니까? (현재: {cur_pyr_desc})", choices=["y", "n"], default="n") == "y":
                 val = Prompt.ask(
@@ -2290,7 +2290,7 @@ def run_backtest():
         if pyramiding_max is not None:
             _pyr_n = pyramiding_max
         else:
-            _pyr_n = _at.get("PYRAMIDING_MAX_COUNT", 1) if _at.get("PYRAMIDING_USE", True) else 0
+            _pyr_n = _at.get("PYRAMIDING_MAX_COUNT", 3) if _at.get("PYRAMIDING_USE", True) else 0
         if _pyr_n > 0:
             # 차수만 적으면 '언제·얼마나' 얹는지가 빠져 증액 조건을 오해한다.
             pyr_disp = (f"+{_g(_at.get('PYRAMIDING_PROFIT_TRIGGER', 10.0))}%마다 "

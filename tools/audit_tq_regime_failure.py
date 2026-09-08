@@ -95,7 +95,7 @@ def main():
 
     seg_of = {d: name for name, wd in audit_windows(dates, args.subperiods) for d in wd}
 
-    cap = (config.ANALYSIS_THRESHOLDS.get("TREND_QUALITY_MAX", 0)
+    cap = (config.ANALYSIS_THRESHOLDS.get("TREND_QUALITY_MAX", 300.0)
            if args.tq_cap is None else args.tq_cap)
     config.ANALYSIS_THRESHOLDS["TREND_QUALITY_MAX"] = cap
     print(f"[준비] {len(dfs)}종목(폐지 {len(dead_c)}) · 거래일 {len(dates)} · "

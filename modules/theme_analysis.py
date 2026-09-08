@@ -1440,7 +1440,7 @@ def _analyze_stock_ui():
                     except Exception: pass
             
             score_adj = 0.0
-            if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True) and not is_overseas:
+            if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", False) and not is_overseas:
                 #  판정 정본은 analysis.get_market_type — 모르면 국면 보정을 건너뛴다.
                 market_type = analysis.get_market_type(code)
                 if market_type:

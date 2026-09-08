@@ -117,7 +117,7 @@ def main():
     seeds = [int(s) for s in args.seeds.split(",")]
     picks = {sd: [random.Random(sd * 7 + i).sample(codes_all, min(args.sample, len(codes_all)))
                   for i in range(args.trials)] for sd in seeds}
-    cur_days = int(config.SELL_STRATEGY.get("TIME_STOP_DAYS", 20))
+    cur_days = int(config.SELL_STRATEGY.get("TIME_STOP_DAYS", 15))
 
     def paired(title, arms, cfg_key):
         print(f"\n{title} — 표본 {args.sample}/{len(codes_all)} · {args.trials}회 × 씨드 {len(seeds)}개")

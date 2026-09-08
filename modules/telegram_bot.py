@@ -851,7 +851,7 @@ class TelegramCommander:
             
             # [추가] 시장 국면(적응형 임계값) 보정 적용
             score_adj = 0.0
-            if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True) and not is_overseas:
+            if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", False) and not is_overseas:
                 #  시장 구분 판정은 analysis.get_market_type 하나만 쓴다. 종전에는 현재가
                 #  응답의 rprs_mrkt_kor_name 을 보는 사본을 여기서 굴렸는데, 그 필드는
                 #  토스 모드 응답에 없어 코스닥 종목까지 KOSPI 국면 보정을 받았다.
@@ -2029,7 +2029,7 @@ class TelegramCommander:
             # [수정] 적응형 임계값 적용
             score_adj = 0.0
             regime_msg = ""
-            if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True) and not is_overseas:
+            if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", False) and not is_overseas:
                 #  판정 정본은 analysis.get_market_type (마스터 → KRX 상장목록).
                 #  모르면 국면 보정을 얹지 않는다 — 틀린 지수로 임계값을 흔드느니 안 흔든다.
                 market_type = analysis.get_market_type(code)

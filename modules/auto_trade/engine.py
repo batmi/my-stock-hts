@@ -262,7 +262,7 @@ def compute_trailing_stop(highest_price, buy_price, current_price, ind=None, thr
     #   구간5 수익승이 23/30 → 14/30으로 무너졌다. 매수가 기준이라야 문턱이 진입 시점에
     #   고정되고, 검증된 결과가 재현된다.
     stop_price = highest_price * (1 - actual_callback / 100)
-    if str(ss.get("TS_ACTIVATION_MODE", "fixed")).lower() == "breakeven":
+    if str(ss.get("TS_ACTIVATION_MODE", "breakeven")).lower() == "breakeven":
         # [분리] 발동선은 콜백 배수(ts_atr_mult)가 아니라 발동 전용 배수로 계산한다.
         ts_activation = breakeven_activation_rate(atr_val, buy_price, ts_callback,
                                                   ts_activation_atr_mult(), use_atr_stop)
@@ -436,7 +436,7 @@ def ts_activation_label(ts_activation=None):
     환산값이므로, 개별 포지션 화면은 그 값을 넘겨 구체적인 %를 보여줄 수 있다.
     """
     ss = config.SELL_STRATEGY
-    if str(ss.get("TS_ACTIVATION_MODE", "fixed")).lower() == "breakeven":
+    if str(ss.get("TS_ACTIVATION_MODE", "breakeven")).lower() == "breakeven":
         if ts_activation is None:
             return "손익분기"
         return f"손익분기(≈+{ts_activation:.1f}%)"
@@ -451,7 +451,7 @@ def ts_activation_dynamic():
     모드에서는 종목 변동성에 따라 20%~90%까지 벌어져 그 값이 없으면 화면만 보고
     무장 여부를 설명할 수 없다. 표시부가 모드 문자열을 각자 해석하지 않게 모은다.
     """
-    return str(config.SELL_STRATEGY.get("TS_ACTIVATION_MODE", "fixed")).lower() == "breakeven"
+    return str(config.SELL_STRATEGY.get("TS_ACTIVATION_MODE", "breakeven")).lower() == "breakeven"
 
 
 # [변동성 국면] 지수 실현변동성의 장기 대비 배율. 손절 캡을 국면에 맞춰 넓히는 데 쓴다.
@@ -1110,7 +1110,7 @@ def analyze_holdings(entries, max_workers=None, restricted_codes=None, account=N
 
     # 시장 국면 보정 (매수 임계값 → 상태 분류에 반영). 매도 분석 경로와 동일하게 적용한다.
     market_regime_adj = {}
-    if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", True):
+    if config.MARKET_REGIME_PARAMS.get("USE_ADAPTIVE_THRESHOLD", False):
         for m_type in ("KOSPI", "KOSDAQ"):
             try:
                 _regime, adj = analysis.get_market_regime(m_type)
@@ -1366,7 +1366,7 @@ class DefaultStrategy:
             return False, ""
 
         trigger = thresholds.get("PYRAMIDING_PROFIT_TRIGGER", at.get("PYRAMIDING_PROFIT_TRIGGER", 10.0)) if thresholds else at.get("PYRAMIDING_PROFIT_TRIGGER", 10.0)
-        max_count = thresholds.get("PYRAMIDING_MAX_COUNT", at.get("PYRAMIDING_MAX_COUNT", 1)) if thresholds else at.get("PYRAMIDING_MAX_COUNT", 1)
+        max_count = thresholds.get("PYRAMIDING_MAX_COUNT", at.get("PYRAMIDING_MAX_COUNT", 3)) if thresholds else at.get("PYRAMIDING_MAX_COUNT", 3)
 
         # 판정은 pyramid_gate_ok가 단독 보유한다(백테스트도 같은 함수를 부른다).
         #  여기서 조건을 다시 쓰면 두 구현이 갈라져도 아무도 모른다.
@@ -2452,7 +2452,7 @@ class RiskManager:
                     if use_atr_stop and live_atr > 0:
                         est_atr = live_atr
                     act = ts_act
-                    if str(sell_cfg.get("TS_ACTIVATION_MODE", "fixed")).lower() == "breakeven":
+                    if str(sell_cfg.get("TS_ACTIVATION_MODE", "breakeven")).lower() == "breakeven":
                         act = breakeven_activation_rate(est_atr, buy_price, ts_cb,
                                                         use_atr=bool(use_atr_stop))
                     # [이익 보호선] TS 무장 **전** 구간에만 걸리는 별도의 선. 매도 판정
