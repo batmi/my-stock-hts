@@ -43,6 +43,11 @@ BLOCK_COLS = {
     "blocked_other": "기타",
 }
 GATE_COLS = ("blocked_vol", "blocked_abr", "blocked_hold")   # 실매매 전용 수급 게이트
+#  [시장 필터] 위 사유들과 분모가 다르다. 나머지는 '분석해 보니 미달'이지만 이것은 분석
+#   자체를 막은 주기라, 그 종목이 신호였는지 원장은 모른다. 차단율의 분자에 섞으면
+#   '게이트가 이만큼 막았다'가 부풀고, 분모에 남기면 게이트 통과율이 눌린다.
+#   그래서 따로 세고, 게이트 통계에서는 분모에서 뺀다.
+MARKET_COL = "blocked_market"
 
 
 def load(db_path, start, end, is_sim=0):
@@ -100,11 +105,16 @@ def main():
 
     _scope = {"real": 0, "sim": 1, "all": None}[args.account]
     rows = load(args.db, args.start, args.end, is_sim=_scope)
+    if rows is None:
+        #  못 읽은 것을 '없다'로 적으면, 이 도구가 막으려던 오독을 이 도구가 저지른다.
+        print("[실패] 신호 원장을 읽지 못했다 — 결과를 낼 수 없다(로그의 [Ledger] 줄 확인).")
+        return 1
     if not rows:
         print("[없음] 신호 원장이 비어 있다. 자동매매가 돌아야 쌓인다 "
               "(2026-08-19 이전 기간은 원장이 없다 — 그때는 로그를 봐야 한다).")
         return
 
+    market_cycles = sum(r.get(MARKET_COL) or 0 for r in rows)
     days = sorted({r["date"] for r in rows})
     print(f"[원장] {len(rows):,}행 · {len(days)}거래일 ({days[0]} ~ {days[-1]}) · "
           f"종목 {len({r['code'] for r in rows})}개")
@@ -113,12 +123,21 @@ def main():
     # ── ① 무엇이 신호를 막았나 (주기 기준)
     print("\n[1] 사유별 차단 (주기 기준 — 하루에 여러 번 돈다)")
     total_cycles = sum(r["cycles"] for r in rows)
+    #  시장 필터에 잘린 주기는 '판정이 돌지 않은 주기'다. 게이트 비율의 분모에서 뺀다.
+    judged = total_cycles - market_cycles
+    if market_cycles:
+        print(f"   시장 필터로 판정 안 함 {market_cycles:>8,}회 "
+              f"({market_cycles / total_cycles * 100:5.1f}%) "
+              f"— 아래 비율의 분모에서 뺀다(신호였는지 알 수 없다)")
+    if judged <= 0:
+        print("   판정이 한 주기도 돌지 않았다 — 게이트 통계를 낼 수 없다.")
+        return 0
     passed_cycles = sum(r["passed"] for r in rows)
-    print(f"   통과 {passed_cycles:,}회 ({passed_cycles / total_cycles * 100:.1f}%)")
+    print(f"   통과 {passed_cycles:,}회 ({passed_cycles / judged * 100:.1f}%)")
     for col, label in BLOCK_COLS.items():
-        n = sum(r[col] for r in rows)
+        n = sum(r.get(col) or 0 for r in rows)
         if n:
-            print(f"   {label:<22} {n:>8,}회 ({n / total_cycles * 100:5.1f}%)")
+            print(f"   {label:<22} {n:>8,}회 ({n / judged * 100:5.1f}%)")
 
     # ── ② 신호 기준 (일자·종목) — 완전 차단 / 부분 차단
     gate_full, gate_part, clean = [], [], []

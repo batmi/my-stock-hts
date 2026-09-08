@@ -1361,6 +1361,12 @@ class TelegramCommander:
         current_asset = 0
         sec_buy = 0
         sec_pl = 0
+        #  [Fix 2026-09-08] 자산 집계는 구간별로 실패해도 **숫자로** 나온다(그만큼 작을
+        #   뿐이다 — account.get_asset_status_data 의 degraded 주석). 그 값이 여기서
+        #   '총 계좌 자산 증감'의 분자가 되므로, 국내 잔고 한 번 못 읽은 것이 큰 손실로
+        #   보고된다. 자동매매는 이 표식을 읽고 판단을 미루는데 사람에게 가는 이 화면만
+        #   표식을 버리고 있었다.
+        asset_degraded = []
         try:
             with utils.AccountContext(target_cano):
                 asset_data = account.get_asset_status_data(target_cano, acnt)
@@ -1368,6 +1374,7 @@ class TelegramCommander:
                     current_asset = asset_data.get('tot_asset', 0)
                     sec_buy = asset_data.get('sec_buy', 0)
                     sec_pl = asset_data.get('sec_pl', 0)
+                    asset_degraded = list(asset_data.get('degraded') or [])
         except Exception as e:
             logger.error(f"Profit 자산 조회 실패: {e}")
 
@@ -1471,6 +1478,9 @@ class TelegramCommander:
                 msg += f"총 계좌 시작 자산: {int(initial_asset):,}원\n"
                 msg += f"총 계좌 현재 자산: {current_asset:,}원\n"
                 msg += f"총 계좌 자산 증감: {total_asset_profit:+,}원 ({total_asset_roi:+.2f}%)\n"
+                if asset_degraded:
+                    msg += (f"⚠️ 자산 집계 일부 실패({', '.join(asset_degraded)}) — "
+                            f"위 현재 자산·증감은 그만큼 적게 잡힌 값입니다.\n")
             else:
                 msg += "총 계좌 자산 증감: - (데이터 부족)\n"
                 
@@ -1599,6 +1609,13 @@ class TelegramCommander:
                 msg += f"금일비용: {data['total_cost']:,}원\n"
                 
                 msg += f"실현손익: {data['realized_pl']:+,}원"
+
+                #  구간별 조회 실패는 총액을 **줄이기만** 하고 예외를 내지 않는다.
+                #   못 읽었다는 사실을 적지 않으면 그 숫자가 실제 자산으로 읽힌다.
+                _deg = list(data.get('degraded') or [])
+                if _deg:
+                    msg += (f"\n\n⚠️ 집계하지 못한 구간: {', '.join(_deg)} — "
+                            f"위 금액은 그만큼 빠진 값입니다(실제 자산이 준 것이 아닙니다).")
 
                 return msg
 

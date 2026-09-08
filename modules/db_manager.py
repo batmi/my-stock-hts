@@ -493,6 +493,13 @@ class DBManager:
                         --  로그 파싱은 원장을 만든 이유 자체이므로 되돌아갈 수 없다.
                         blocked_slot INTEGER DEFAULT 0,
                         blocked_cash INTEGER DEFAULT 0,
+                        -- [시장 필터] 종목 판정 **자체를 못 한** 주기. 위 게이트들과 성격이
+                        --  다르다 — 나머지는 '분석해 보니 미달'이지만 이것은 시장 필터가
+                        --  분석 전에 잘라, 그 종목이 신호였는지 알 수 없다는 뜻이다.
+                        --  그래서 별도 칸에 둔다(차단율의 분자로 섞으면 안 된다).
+                        --  이 칸이 없던 동안 필터를 켠 계좌의 원장은 통째로 비어 있었다
+                        --  (실전 trade_history.db: 2026-08-19 신설 후 2026-09-08까지 0행).
+                        blocked_market INTEGER DEFAULT 0,
                         max_score REAL DEFAULT 0.0,
                         max_vol REAL,
                         min_abr REAL,
@@ -554,10 +561,12 @@ class DBManager:
                                    "ADD COLUMN principal REAL")
                     print("[DB] 자산 이력 컬럼 추가됨: principal")
 
-                # [마이그레이션 2026-08-30] 계좌 상태 차단 컬럼 추가. PK가 그대로라 ADD로 족하다.
+                # [마이그레이션 2026-08-30 / 2026-09-08] 계좌 상태·시장 필터 차단 컬럼 추가.
+                #  PK가 그대로라 ADD로 족하다. (이 지점은 위 is_sim 재생성 뒤라 컬럼 목록을
+                #  다시 읽는다 — 재생성된 표에는 이 칸들이 없다.)
                 cursor.execute("PRAGMA table_info(signal_ledger)")
                 _led_cols = [c[1] for c in cursor.fetchall()]
-                for _c in ("blocked_slot", "blocked_cash"):
+                for _c in ("blocked_slot", "blocked_cash", "blocked_market"):
                     if _led_cols and _c not in _led_cols:
                         cursor.execute(f"ALTER TABLE signal_ledger ADD COLUMN {_c} INTEGER DEFAULT 0")
                         print(f"[DB] 신호 원장 컬럼 추가됨: {_c}")
@@ -1792,6 +1801,9 @@ class DBManager:
         "tq": "blocked_tq",                 # 추세품질 상한
         "reentry": "blocked_reentry",       # 당일 재진입 차단
         "other": "blocked_other",
+        #  [시장 필터] 다른 값들과 성격이 다르다 — 분석 자체를 못 한 주기다.
+        #   판정 전에 잘렸으므로 score·state 가 없다(그래서 last_state 를 덮지 않는다).
+        "market": "blocked_market",
     }
     #  [계좌 상태] 게이트 판정과 **직교**한다 — 신호는 섰는데 계좌가 못 사게 한 경우다.
     #   passed 와 동시에 오른다(둘의 합이 주기 수가 되지 않는다는 뜻).
@@ -1804,12 +1816,17 @@ class DBManager:
         """한 주기의 매수 신호 판정을 (일자, 종목) 단위로 누적한다.
 
         rows: [{'code','name','outcome','score','vol','abr','state'}, ...]
+        outcome='market' 은 **판정 전에** 시장 필터가 잘랐다는 뜻이라 score·state 가 없다.
         주기마다 한 번 호출한다 — 종목마다 쓰면 파이3에서 쓰기가 주기당 수십 번이 된다.
         실패해도 매매에 영향을 주지 않는다(계측은 매매를 막지 않는다).
         """
         if not rows:
             return
-        # 모의투자 원장은 실전과 섞이면 안 된다(같은 DB 파일을 쓴다). trades.is_sim과 같은 기준.
+        #  is_sim 은 **지금은 항상 0 이다.** KIS 모의 모드가 없어졌고([[mode1-retirement]]),
+        #   가상투자·관찰 모드는 DB 파일 자체가 분리돼 있어(config.PAPER_DB_FILE_PATH)
+        #   한 파일 안에서 두 계좌가 섞이는 상황이 남아 있지 않다. 칸과 PK는 그대로 둔다 —
+        #   과거 행을 읽을 수 있어야 하고, 한 파일을 나눠 쓰는 모드가 다시 생기면 여기만
+        #   고치면 된다. trades.insert_trade 도 같은 이유로 0 을 쓴다.
         is_sim = 0
         payload = []
         for r in rows:
@@ -1829,16 +1846,16 @@ class DBManager:
                 counts["passed"], counts["blocked_vol"], counts["blocked_abr"],
                 counts["blocked_hold"], counts["blocked_corr"], counts["blocked_rs"],
                 counts["blocked_tq"], counts["blocked_reentry"], counts["blocked_other"],
-                counts["blocked_slot"], counts["blocked_cash"],
+                counts["blocked_slot"], counts["blocked_cash"], counts["blocked_market"],
                 float(r.get("score") or 0.0), r.get("vol"), r.get("abr"), r.get("state"),
             ))
         sql = '''
             INSERT INTO signal_ledger
                 (date, code, is_sim, name, cycles, passed, blocked_vol, blocked_abr, blocked_hold,
                  blocked_corr, blocked_rs, blocked_tq, blocked_reentry, blocked_other,
-                 blocked_slot, blocked_cash,
+                 blocked_slot, blocked_cash, blocked_market,
                  max_score, max_vol, min_abr, last_state, updated_at)
-            VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(date, code, is_sim) DO UPDATE SET
                 cycles          = cycles + 1,
                 passed          = passed + excluded.passed,
@@ -1852,6 +1869,7 @@ class DBManager:
                 blocked_other   = blocked_other + excluded.blocked_other,
                 blocked_slot    = blocked_slot + excluded.blocked_slot,
                 blocked_cash    = blocked_cash + excluded.blocked_cash,
+                blocked_market  = blocked_market + excluded.blocked_market,
                 max_score       = MAX(max_score, excluded.max_score),
                 -- NULL은 '못 쟀다'이지 0이 아니다. 한쪽만 값이 있으면 그 값을 남긴다.
                 max_vol = CASE WHEN excluded.max_vol IS NULL THEN max_vol
@@ -1860,7 +1878,11 @@ class DBManager:
                 min_abr = CASE WHEN excluded.min_abr IS NULL THEN min_abr
                                WHEN min_abr IS NULL THEN excluded.min_abr
                                ELSE MIN(min_abr, excluded.min_abr) END,
-                last_state = excluded.last_state,
+                -- 시장 필터에 잘린 주기는 상태를 재지 못한다(NULL). 그 NULL 이 직전에
+                --  기록된 진짜 상태를 지우면, 필터가 켜진 하루의 끝에서 원장은 그 종목이
+                --  어떤 상태였는지 통째로 잊는다. 값이 있을 때만 덮는다.
+                last_state = CASE WHEN excluded.last_state IS NULL THEN last_state
+                                  ELSE excluded.last_state END,
                 updated_at = CURRENT_TIMESTAMP
         '''
         with self.lock:
@@ -1894,8 +1916,13 @@ class DBManager:
             cursor.execute(sql, params)
             return [dict(r) for r in cursor.fetchall()]
         except Exception as e:
+            #  [Fix 2026-09-08] 종전에는 빈 목록이었다. 이 함수를 읽는 것은 감사 도구뿐인데,
+            #   빈 목록은 '그 기간에 신호가 없었다'로 읽힌다 — 조회가 실패했다는 사실과
+            #   글자 하나 다르지 않다. 원장을 만든 이유가 '로그를 되읽다 한 번 뒤집어
+            #   읽었다'였으므로, 그 계측기가 스스로 조용해지는 것은 같은 실패다.
+            #   못 읽었으면 None 이다([[unknown-vs-empty]]).
             logger.warning(f"[Ledger] 신호 원장 조회 실패: {e}")
-            return []
+            return None
 
     def cleanup_old_data(self, days_to_keep):
         """보존 기간이 지난 오래된 거래 내역 삭제"""

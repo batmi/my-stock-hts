@@ -1678,6 +1678,15 @@ def _display_asset_status(cano, acnt_prdt_cd):
 
     config.console.print()
     config.console.print(panel)
+    #  [Fix 2026-09-08] 구간별 조회 실패는 예외 없이 **총액을 줄이기만** 한다(위
+    #   summary_data['degraded'] 주석의 실측: 국내 잔고만 실패해도 총자산이 36% 작게 나온다).
+    #   자동매매는 이 표식을 읽고 기준선 갱신을 미루는데, 정작 사람이 보는 이 표는
+    #   표식을 버리고 온전한 숫자처럼 찍고 있었다.
+    _deg = list(summary_data.get('degraded') or [])
+    if _deg:
+        config.console.print(
+            f"[bold yellow]⚠️ 집계하지 못한 구간: {', '.join(_deg)}[/] "
+            f"[dim]— 위 금액은 그만큼 빠진 값입니다(실제 자산이 준 것이 아닙니다).[/]")
     config.console.print("\n")
 
 def get_deposit_balance():

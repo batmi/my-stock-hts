@@ -171,6 +171,43 @@ def test_the_unknown_marker_finally_reaches_the_screen():
     assert analysis.REGIME_EMOJI_UNKNOWN in analysis.all_regime_emojis()
 
 
+def test_the_console_status_table_says_it_could_not_judge():
+    """[2026-09-08] /status·텔레그램은 고쳤는데 **콘솔 상태표만** 남아 있었다.
+
+    그 표는 format_regime(국면문자열) 로 라벨만 뽑았다. 지수를 못 읽으면 그 문자열이
+     'Sideways' 라, 지수가 끊긴 동안에도 표에는 🟡 '판정 보류'가 적혔다 — 시장이 실제로
+     어느 쪽도 아니라는 뜻이라 전혀 다른 말이다. 여기서 못 박는 것은 **두 상태가 서로
+     다른 글자로 나온다**는 것이다(마크업 표기는 종전과 같게 유지한다).
+    """
+    blind = analysis.describe_regime({'regime': "Sideways", 'segments': 0,
+                                      'whipsaw_ratio': None, 'unknown': True}, markup=True)[1]
+    real = analysis.describe_regime({'regime': "Sideways", 'segments': 3,
+                                     'whipsaw_ratio': 0.2, 'unknown': False}, markup=True)[1]
+    assert blind != real, "판정 불가와 실제 횡보가 같은 글자로 나온다"
+    assert "판정 불가" in blind
+    #  종전 표기(rich 색 태그, 이모지 없음)를 유지한다 — 표 폭이 흔들리면 안 된다.
+    assert real.startswith("[") and real.endswith("[/]")
+    assert analysis.REGIME_EMOJI_UNKNOWN not in blind
+
+
+def test_the_console_status_table_reads_the_dict_not_the_string():
+    """국면 문자열만 들고 다니면 unknown 이 어디에도 실리지 않는다 — dict 를 들고 가야 한다."""
+    import inspect
+    from modules.auto_trade.trader import AutoTrader
+
+    src = inspect.getsource(AutoTrader.print_status)
+    assert "describe_regime" in src, (
+        "콘솔 상태표가 국면 글자를 스스로 만든다 — 판정 불가가 다시 '판정 보류'로 접힌다")
+    assert "get_market_regime_detail" in src, "unknown 을 담지 못하는 get_market_regime 로 돌아갔다"
+    #  unknown 을 버리는 요약 API 를 다시 쓰면 dict 를 들고 온 의미가 없어진다.
+    for line in src.splitlines():
+        code = line.split("  #")[0]
+        if line.strip().startswith("#"):
+            continue
+        assert "get_market_regime(" not in code, (
+            f"unknown 이 실리지 않는 get_market_regime 로 되돌아갔다: {line.strip()}")
+
+
 def test_a_real_sideways_market_is_still_called_sideways():
     """'판정 보류'는 실제 횡보에만 쓰인다 — 둘을 뒤집으면 반대 방향의 거짓말이다."""
     emoji, label = analysis.describe_regime(
@@ -193,9 +230,14 @@ def test_no_screen_keeps_its_own_copy_of_the_regime_label():
             code = line.split("  #")[0]
             if line.strip().startswith("#"):
                 continue
-            if "regime_emoji(" in code and "def regime_emoji" not in code:
-                offenders.append(f"{path}:{i}")
+            #  [2026-09-08 확장] 이모지만 보던 가드는 trader 의 콘솔 상태표를 놓쳤다 —
+            #   거기서는 format_regime(국면문자열) 로 **라벨만** 뽑고 있었고, 지수를 못
+            #   읽으면 그 문자열이 'Sideways' 라 화면에 '판정 보류'가 찍혔다. 라벨 경로도
+            #   같은 구멍이므로 함께 막는다(describe_regime 안의 호출은 정본이다).
+            for bad in ("regime_emoji(", "format_regime("):
+                if bad in code and f"def {bad[:-1]}" not in code:
+                    offenders.append(f"{path}:{i} ({bad[:-1]})")
     assert not offenders, (
-        "국면 이모지를 describe_regime 을 거치지 않고 직접 만든다 — "
+        "국면 이모지·라벨을 describe_regime 을 거치지 않고 직접 만든다 — "
         f"판정 불가가 다시 '판정 보류'로 접힌다: {offenders}")
     assert checked == 2

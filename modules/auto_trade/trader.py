@@ -2305,8 +2305,11 @@ class AutoTrader:
             status_text = "WAITING"
             status_color = "yellow"
         
-        kospi_regime, kospi_adj = "확인 불가", 0.0
-        kosdaq_regime, kosdaq_adj = "확인 불가", 0.0
+        #  국면 dict 를 그대로 들고 간다 — 표시는 analysis.describe_regime 하나를 지나야
+        #   '판정 불가'(지수를 못 읽음)와 '판정 보류'(실제 횡보)가 갈린다. 조회 자체가
+        #   던진 경우(None)만 '확인 불가'로 적는다.
+        kospi_info = kosdaq_info = None
+        kospi_adj = kosdaq_adj = 0.0
 
         # 3. 자산 및 손익 현황 (안전성 핵심)
         current_asset = None
@@ -2348,8 +2351,8 @@ class AutoTrader:
 
                 def _fetch_regimes():
                     try:
-                        k = analysis.get_market_regime("KOSPI")
-                        q = analysis.get_market_regime("KOSDAQ")
+                        k = analysis.get_market_regime_detail("KOSPI")
+                        q = analysis.get_market_regime_detail("KOSDAQ")
                         return k, q
                     except Exception:
                         return None, None
@@ -2383,8 +2386,8 @@ class AutoTrader:
 
                     holdings, summary, deposit = fut_asset.result()
                     _k, _q = fut_regime.result()
-                    if _k: kospi_regime, kospi_adj = _k
-                    if _q: kosdaq_regime, kosdaq_adj = _q
+                    if _k: kospi_info, kospi_adj = _k, _k.get('score_adj', 0.0)
+                    if _q: kosdaq_info, kosdaq_adj = _q, _q.get('score_adj', 0.0)
                     fut_indices.result()
 
                 # [수정] 중복 API 호출 방지 및 동일 스냅샷 기반 현재 자산 일괄 계산
@@ -2430,8 +2433,17 @@ class AutoTrader:
                           f"[dim]매도·손절·트레일링 스탑 감시는 정상 동작 중 (날짜 변경 시 자동 해제)[/]")
 
         # [추가] 시장 국면 상태 표시
-        k_regime_str = analysis.format_regime(kospi_regime)
-        q_regime_str = analysis.format_regime(kosdaq_regime)
+        #  [Fix 2026-09-08] 종전에는 format_regime(국면문자열) 이었다. 지수를 못 읽으면
+        #   get_market_regime 이 'Sideways' 를 돌려주므로, 이 표는 지수가 끊긴 동안에도
+        #   🟡 '판정 보류'라고 적었다 — 시장이 실제로 어느 쪽도 아니라는 뜻이라 전혀 다른
+        #   말이다. /status·텔레그램은 2026-09-08에 고쳤는데 이 콘솔 표만 남아 있었다.
+        def _regime_cell(info):
+            if info is None:
+                return "확인 불가"
+            #  markup=True 는 종전 format_regime 호출과 같은 표기(rich 색 태그, 이모지 없음).
+            return analysis.describe_regime(info, markup=True)[1]
+        k_regime_str = _regime_cell(kospi_info)
+        q_regime_str = _regime_cell(kosdaq_info)
         rp = config.MARKET_REGIME_PARAMS
         regime_desc = f"EMA {rp.get('REGIME_EMA_FAST', 9)}/{rp.get('REGIME_EMA_SLOW', 41)} 교차 + {rp.get('REGIME_CONFIRM_PCT', 5.0):g}% 확인"
         table.add_row("시장 국면", f"KOSPI: {k_regime_str} (보정: {kospi_adj:+.1f}점) / KOSDAQ: {q_regime_str} (보정: {kosdaq_adj:+.1f}점) [dim]({regime_desc})[/]")
@@ -6393,7 +6405,15 @@ class AutoTrader:
                 market_stat = self.market_index_status.get(market_type)
                 if not isinstance(market_stat, dict) or not market_stat.get('is_healthy', False):
                     self.set_stock_state(code, None)
-                    return {'type': 'market_skip', 'name': name, 'market_type': market_type}
+                    #  [Fix 2026-09-08] 원장에도 남긴다. 종전에는 이 반환에 'ledger' 키가
+                    #   아예 없어, **필터를 켠 계좌의 원장이 통째로 비었다** — 실전
+                    #   trade_history.db 는 원장 신설(2026-08-19)부터 2026-09-08까지 0행이다.
+                    #   그 상태에서는 '왜 안 샀나'를 원장으로 답할 수 없고, 0행이 '신호가
+                    #   없었다'인지 '계측이 돌지 않았다'인지조차 가릴 수 없다(원장을 만든
+                    #   이유가 바로 그 구분이다). 판정 전에 잘렸으므로 점수·상태는 없다 —
+                    #   전용 칸(blocked_market)에 세고, 게이트 차단율의 분자에는 섞지 않는다.
+                    return {'type': 'market_skip', 'name': name, 'market_type': market_type,
+                            'ledger': {'code': code, 'name': name, 'outcome': 'market'}}
             
             if not self.is_running: return None # API 호출 전 최종 확인
             
@@ -7454,7 +7474,9 @@ class AutoTrader:
                                 rs = key[1]
                             if 0 < rs < 1.0:
                                 m_scale *= rs
-                                m_parts.append(f"{analysis.format_regime(info['regime'], markup=False)} x{rs:g}")
+                                #  이 자리는 unknown 을 이미 위에서 걸러낸 뒤라 라벨이 같지만,
+                                #   국면 글자를 만드는 길을 하나로 두어야 가드가 의미를 갖는다.
+                                m_parts.append(f"{analysis.describe_regime(info)[1]} x{rs:g}")
 
                     # 1-b) 휩소율 배수 — 톱니장일수록 연속적으로 축소
                     if use_whipsaw and info.get('whipsaw_ratio') is not None:
