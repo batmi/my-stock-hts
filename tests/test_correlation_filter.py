@@ -245,7 +245,9 @@ def test_analyze_candidates_logging(mock_prefetch, mock_worker):
             
             # 종합 집계 로그가 정상적으로 남았는지 검증
             log_calls = [call.args[0] for call in mock_log.call_args_list]
-            assert any("보유 종목과 유사 테마로 매수 보류 (1종목): 삼성전자" in log for log in log_calls)
+            assert any("보유·미체결 종목과 유사 테마로 매수 보류 (1종목): 삼성전자" in log for log in log_calls), \
+                    ("[2026-09-08] 비교 대상이 '잔고 + 미체결'로 넓어지며 문구도 바뀌었다 — "
+                     "미체결 매수는 백테스트에선 이미 포지션인데 실매매에선 안 보였다.")
 
 @patch('modules.auto_trade.AutoTrader._get_stock_market_type', return_value='KOSPI')
 @patch('modules.auto_trade.api.get_realtime_vol_strength', return_value=120.0)

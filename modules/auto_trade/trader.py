@@ -5430,8 +5430,13 @@ class AutoTrader:
         # [알려진 한계] 기준은 **잔고**다. 직전 주기에 낸 매수·증액 주문이 아직 체결되지
         #  않았으면 그 오픈 리스크는 여기 안 잡혀, 체결될 때까지 히트가 과소평가된다
         #  (주기 안에서의 이중 사용은 매수/증액 경로의 '주문 전 선점'이 막지만, 그 선점분은
-        #  다음 주기의 이 재계산으로 리셋된다). 미체결은 보통 한 주기 안에 체결·취소로
-        #  정리되고, 과소평가 폭은 그 한 주문분이라 캡을 실질적으로 무너뜨리지 않는다.
+        #  다음 주기의 이 재계산으로 리셋된다).
+        #  [2026-09-08 정정] 종전 주석은 과소평가 폭을 '그 한 주문분'이라고 적었다. 틀렸다 —
+        #   한 주기에 빈 슬롯 수만큼 주문이 나가므로 폭은 그 주문들의 합이고, 게다가 슬롯을
+        #   **잔고로만** 세던 탓에 미체결이 남은 다음 주기가 같은 자리를 다시 비어 있다고
+        #   보아 주문이 겹겹이 쌓일 수 있었다. 슬롯 판정을 '잔고 + 미체결'로 바꿔
+        #   (occupied_slot_codes) 그 누적을 끊었으므로, 지금의 과소평가 폭은 **한 주기에
+        #   나간 주문분**으로 묶인다. 증액(피라미딩)은 슬롯을 쓰지 않으므로 여기서 제외다.
         try:
             self.portfolio_heat_amt = self.risk_manager.compute_portfolio_heat(
                 holdings, buy_trades_map, live_map=self._live_risk_map(_all_hold_codes))
@@ -6053,6 +6058,35 @@ class AutoTrader:
         except Exception as e:
             self.log(f"[피라미딩 오류] {name}: {e}")
 
+    def occupied_slot_codes(self, holding_codes):
+        """지금 슬롯을 차지하고 있는 종목 코드들 — **잔고 + 미체결 주문**.
+
+        [왜 미체결까지 세나 · 2026-09-08] 슬롯 상한(SYSTEM_MAX_HOLDINGS)은 잔고만 보고
+         판정했다. 그런데 직전 주기에 낸 매수 주문이 아직 체결되지 않았으면 그 종목은
+         잔고에 없다 — 같은 슬롯이 다음 주기에 **다시 비어 보인다.**
+
+           주기 N   : 보유 2 / 상한 4 → 두 자리가 비어 A·B 매수 (미체결)
+           주기 N+1 : 보유 여전히 2 → **또 두 자리가 비어** C·D 매수
+           네 주문이 모두 체결되면 6종목. 상한은 4다.
+
+         A·B 자신은 is_pending 으로 후보에서 빠지지만 그것은 **같은 종목**의 중복만 막는다.
+         슬롯은 '몇 자리를 썼나'의 문제라 종목이 달라도 넘친다.
+         미체결 자동 취소는 UNFILLED_ORDER_CANCEL_SECONDS(기본 120초) 뒤이고 감시 주기는
+         그보다 짧으므로, 이 창은 상시 열려 있다(취소가 연속 실패하는 경로도 따로 있다).
+
+        pending_orders 는 매수/매도를 구분하지 않으므로 **합집합**으로 센다. 보유 중인
+         종목의 미체결 매도는 이미 잔고에 있어 중복되지 않고, 잔고에서 사라진 뒤에도
+         남아 있는 미체결이라면 그 자리는 아직 정리 중이라 비었다고 볼 수 없다.
+        """
+        occupied = set(holding_codes or ())
+        try:
+            om = self.order_manager
+            with om._lock:
+                occupied |= {c for c, orders in (om.pending_orders or {}).items() if orders}
+        except Exception as e:      # noqa: BLE001 - 못 세면 잔고만으로 두되 흔적을 남긴다
+            self.log(f"[슬롯] 미체결 주문을 세지 못했습니다 — 잔고만으로 판정합니다: {e}")
+        return occupied
+
     def _check_buy_conditions(self, holdings, deposit_res, is_market_open=True, rules_map=None, restricted_stocks=None):
         # [안전장치] 방어 모드(일일 손실 한도 초과 등)에서는 신규 진입만 차단한다.
         #  매도 검사(_check_sell_conditions)는 이 게이트 앞에서 이미 수행되므로 손절 감시는 유지된다.
@@ -6136,9 +6170,14 @@ class AutoTrader:
         #  원장을 읽는 감사가 '게이트를 통과했는데 왜 안 샀나'에 답할 수 없었다.
         buy_block = None
 
-        if len(holding_codes) >= max_holdings:
-            buy_skip_reason = (f"보유 슬롯 가득 참 — {len(holding_codes)}/{max_holdings}종목 "
-                               f"(투자비중 {config.format_invest_ratio()})")
+        #  [Fix 2026-09-08] 슬롯은 잔고가 아니라 '잔고 + 미체결'로 센다(occupied_slot_codes).
+        slot_codes = self.occupied_slot_codes(holding_codes)
+        if len(slot_codes) >= max_holdings:
+            pending_only = len(slot_codes) - len(holding_codes)
+            buy_skip_reason = (f"보유 슬롯 가득 참 — {len(slot_codes)}/{max_holdings}종목"
+                               + (f" (보유 {len(holding_codes)} + 미체결 {pending_only})"
+                                  if pending_only else "")
+                               + f" (투자비중 {config.format_invest_ratio()})")
             if self.consecutive_errors == 0: # 로그 도배 방지
                 self.log(f"매수 스킵: 최대 보유 종목 수({max_holdings}개) 도달 (투자비중 {config.format_invest_ratio()} 기준) - 종목분석은 계속 진행합니다.")
             can_buy = False
@@ -6260,7 +6299,10 @@ class AutoTrader:
                     self.log("   └ 보유 종목이 청산되어 슬롯이 비면 다음 주기에 재평가됩니다.")
                 return
 
-            self._execute_buy_orders(candidates, avail_cash, invest_ratio, len(holding_codes), max_holdings)
+            #  주문 실행부도 같은 셈을 써야 한다 — 여기만 잔고로 세면 게이트는 막는데
+            #  실행부는 자리가 있다고 믿는다.
+            self._execute_buy_orders(candidates, avail_cash, invest_ratio,
+                                     len(self.occupied_slot_codes(holding_codes)), max_holdings)
 
     #  손실 청산 계열의 사유 접두어. 이 사유로 나간 종목은 같은 날 그 가격 위에서 되사지 않는다.
     #  (익절·반익절·트레일링·시간청산은 제외 — 추세가 살아 있는 상태의 청산이라 재진입이 정당하다)
@@ -6442,7 +6484,7 @@ class AutoTrader:
                     if len(combined) > 30:
                         corr = combined.iloc[:, 0].corr(combined.iloc[:, 1])
                         if corr >= corr_threshold:
-                            correlation_skip_msg = f"[상관관계 보류] (보유종목 {hold_name} 상관계수: {corr:.2f} >= {corr_threshold})"
+                            correlation_skip_msg = f"[상관관계 보류] (보유·미체결 {hold_name} 상관계수: {corr:.2f} >= {corr_threshold})"
                             break
 
             # [추세추종] 상대강도(RS) 게이트: 소속 지수(KOSPI/KOSDAQ)보다 약한 종목의 신규 진입 차단.
@@ -6726,11 +6768,19 @@ class AutoTrader:
         # [추가] 보유 종목의 차트 데이터 수집 (상관계수 분석용)
         holdings_dfs = {}
         use_corr_filter = getattr(config, 'USE_CORRELATION_FILTER', True)
-        if use_corr_filter and holding_codes:
-            for code in holding_codes:
+        #  [Fix 2026-09-08] 비교 대상은 잔고가 아니라 '잔고 + 미체결'이다(슬롯과 같은 셈).
+        #   백테스트에서는 매수가 즉시 포지션이 되어 **다음 판정의 held 에 들어간다**
+        #   (portfolio_backtest 의 entry_gate(day, code, tuple(positions))). 실매매에서만
+        #   체결 전까지 보이지 않아, 이 필터를 검증한 모델보다 실매매가 더 허용적이었다.
+        #   후보끼리 비교하지 않는 것은 양쪽이 같은 설계 범위이므로 건드리지 않는다
+        #   (한 번에 만든 후보 목록을 같은 스냅샷으로 판정한다).
+        corr_ref_codes = self.occupied_slot_codes(holding_codes) if use_corr_filter else set()
+        if use_corr_filter and corr_ref_codes:
+            for code in corr_ref_codes:
                 is_overseas = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
                 df = api.get_chart_data(code, is_overseas)
                 if df is not None and not df.empty:
+                    #  미체결분은 이름이 없을 수 있다 — 코드로 표기한다(대조에는 영향 없음).
                     name = holding_names_map.get(code, code)
                     # [최적화] 수익률 시리즈를 주기당 1회만 계산 (워커에서 후보×보유 조합마다 재계산 방지)
                     try:
@@ -6835,7 +6885,7 @@ class AutoTrader:
 
         # [추가] 상관관계 보류 종목 로그 기록
         if correlation_skipped_stocks:
-            self.log(f"[상관관계 보류] 보유 종목과 유사 테마로 매수 보류 ({len(correlation_skipped_stocks)}종목): {', '.join(correlation_skipped_stocks)}")
+            self.log(f"[상관관계 보류] 보유·미체결 종목과 유사 테마로 매수 보류 ({len(correlation_skipped_stocks)}종목): {', '.join(correlation_skipped_stocks)}")
 
         # [추세추종] 상대강도(RS) 필터 보류 종목 로그 기록
         if rs_skipped_stocks:
