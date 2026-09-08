@@ -20,6 +20,48 @@ import config
 #  서브모듈마다 다른 이름을 쓰면 기존 설정이 조용히 빗나간다.
 logger = logging.getLogger("api")
 
+#  [Fix 2026-09-07] 예열 스레드에는 **멈출 방법이 아예 없었다.** 데몬이라 프로세스와 함께
+#   죽기는 하지만, 그 전까지는 아무도 세울 수 없다 — 모드를 바꿔도, 종료를 시작해도
+#   15초마다 깨어나 외부 조회를 낸다. 테스트에서는 그 대가가 더 크다: main() 을 태우는
+#   테스트 하나가 워머를 띄우면 그 스레드가 **세션 끝까지** 살아 남아, 뒤에 도는 다른
+#   파일의 mock 을 자기 주기마다 건드린다(실측: 전체 실행에서 358개 테스트가 살아 있는
+#   워머를 남긴 채 끝났다).
+_WARM_STOP = threading.Event()
+
+
+#  살아 있는 예열 스레드. 세우려면 잡고 있어야 한다 — 신호만 주고 놓아 버리면
+#   '멈추라고 말했다'와 '멈췄다'를 구분할 수 없다.
+_WARM_THREADS = []
+
+
+def _register_warm_thread(t):
+    _WARM_THREADS.append(t)
+    #  죽은 것은 흘려보낸다(목록이 무한히 자라지 않게).
+    _WARM_THREADS[:] = [x for x in _WARM_THREADS if x.is_alive()]
+
+
+def stop_background_warmers(timeout=1.0):
+    """예열 스레드들에게 멈추라고 알리고, 실제로 내려갈 때까지 잠깐 기다린다.
+
+    [신호를 지우지 않는다 · 2026-09-07] 처음에는 stop 직후 clear 하는 reset 을 함께
+     불렀다. 그런데 워커는 `_WARM_STOP.wait(interval)` 안에서 자고 있어서, 깨어나기
+     전에 신호가 지워지면 wait 가 False 를 돌려주고 **루프가 그대로 계속된다** —
+     멈추라고 말한 적이 없는 것과 같다(실측: 그 판으로 돌리니 살아남은 워머가
+     358개에서 745개로 오히려 늘었다).
+     신호는 켠 채로 두고, 다음에 워머를 띄우는 쪽(start_*)이 그때 내린다.
+    """
+    _WARM_STOP.set()
+    global _OVERVIEW_WARMER_STARTED
+    _OVERVIEW_WARMER_STARTED = False
+    for t in list(_WARM_THREADS):
+        try:
+            if t.is_alive():
+                t.join(timeout=timeout)
+        except Exception:      # noqa: BLE001
+            pass
+    _WARM_THREADS[:] = [x for x in _WARM_THREADS if x.is_alive()]
+
+
 def _api():
     """패키지 네임스페이스(api)를 돌려준다 — 다른 계층의 이름은 반드시 이걸 통해 부른다.
 
@@ -737,14 +779,18 @@ def prefetch_watchlists_async():
                 except Exception as e:
                     logger.debug(f"[Cache] 예열 중 오류({code}): {e}")
                 
-                time.sleep(delay)
-                
+                if _WARM_STOP.wait(delay):
+                    logger.debug("[Cache] 종료 신호 — 예열을 중단한다")
+                    return
+
             logger.info("[Cache] 백그라운드 예열 완료")
         except Exception as e:
             logger.error(f"[Cache] 예열 워커 오류: {e}")
 
+    _WARM_STOP.clear()          # 새로 띄우는 쪽이 옛 종료 신호를 내린다
     t = threading.Thread(target=worker, daemon=True, name="CacheWarmer")
     t.start()
+    _register_warm_thread(t)
     return t # [수정] 테스트 코드에서 제어할 수 있도록 스레드 객체 반환
 
 _OVERVIEW_WARMER_STARTED = False
@@ -797,7 +843,8 @@ def start_overview_warmer():
                 if not idle_logged:
                     logger.info("[Warm] 개요를 보는 사람이 없어 예열을 멈춘다(화면을 열면 재개).")
                     idle_logged = True
-                time.sleep(interval)
+                if _WARM_STOP.wait(interval):
+                    return
                 continue
             if idle_logged:
                 logger.info("[Warm] 개요 예열 재개")
@@ -832,9 +879,12 @@ def start_overview_warmer():
                     logger.debug(f"[Warm] 지수 예열 오류: {e}")
             except Exception as e:
                 logger.error(f"[Warm] 개요 예열 루프 오류: {e}")
-            time.sleep(interval)
+            if _WARM_STOP.wait(interval):
+                return
 
+    _WARM_STOP.clear()          # 새로 띄우는 쪽이 옛 종료 신호를 내린다
     t = threading.Thread(target=worker, daemon=True, name="OverviewWarmer")
     t.start()
+    _register_warm_thread(t)
     _OVERVIEW_WARMER_STARTED = True
     return t

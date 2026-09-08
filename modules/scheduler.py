@@ -52,6 +52,11 @@ class SystemScheduler:
             self._initialized = True
             self.is_running = False
             self.thread = None
+            #  [Fix 2026-09-07] 종전 루프는 time.sleep(10) 안에서 잤다. stop() 이
+            #   is_running 만 내리면 '멈춰라'와 '실제로 멈춤' 사이가 최대 10초다 —
+            #   그 사이 깨어난 주기가 알림을 한 번 더 내보내고, 종료 경로도 그만큼
+            #   늘어진다. 예약 감시기·매매일지 워커가 이미 같은 이유로 Event 를 쓴다.
+            self._wake = threading.Event()
             self.last_holiday_notified_date = None
             self.last_briefing_date = None
             self.last_calendar_alert_date = None
@@ -60,14 +65,25 @@ class SystemScheduler:
 
     def start(self):
         if not getattr(config, 'ENABLE_TELEGRAM', True): return
-        if self.is_running: return
+        #  [Fix 2026-09-07] is_running 만 보면 **죽은 스레드도 '실행 중'**이라, 되살리려는
+        #   start() 가 그 값을 보고 그대로 되돌아간다(실측: 루프가 예외로 죽은 뒤
+        #   is_running=True 인 채 start() 가 아무것도 하지 않는다).
+        #   이 스레드가 죽으면 휴장 알림·장전 브리핑·공시·캘린더·시장정지 감시·하트비트가
+        #   **한꺼번에** 멈춘다. 하트비트를 찍는 주체가 이 루프라 바깥 감시자는 결국
+        #   알아채지만([[process-death-watchdog]]), 되살릴 길이 막혀 있으면 알아도 소용없다.
+        #   실제로 도는지는 스레드에게 묻는다 — ConclusionMonitor·ReservedOrderMonitor 가
+        #   2026-09-06 에 같은 이유로 같은 모양이 됐고 여기만 남아 있었다.
+        if self.is_running and self.thread is not None and self.thread.is_alive():
+            return
         self.is_running = True
+        self._wake.clear()
         self.thread = threading.Thread(target=self._run_loop, daemon=True, name="SystemScheduler")
         self.thread.start()
         logger.debug("[Scheduler] 백그라운드 스케줄러 시작...")
 
     def stop(self):
         self.is_running = False
+        self._wake.set()              # 자고 있어도 즉시 깨워 다음 주기를 건너뛴다
         if self.thread:
             self.thread.join(timeout=2)
         # 도장을 찍던 스레드가 내려간다 — '앞으로 신호가 없는 건 정상'임을 남겨야
@@ -97,7 +113,9 @@ class SystemScheduler:
             except Exception as e:
                 logger.error(f"[Scheduler] 스케줄러 루프 에러: {e}", exc_info=True)
 
-            time.sleep(10) # 10초 주기 체크
+            #  10초 주기 체크. sleep 대신 대기 — stop() 이 깨우면 즉시 빠져나온다.
+            if self._wake.wait(10):
+                break
 
     def _check_disclosure_alerts(self):
         """관심종목 중대 공시 텔레그램 알림 (평일, 30분 간격 폴링)."""

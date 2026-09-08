@@ -180,10 +180,14 @@ def test_market_halt_gate_honours_both_switches(scheduler, monkeypatch, cb_on, v
     monkeypatch.setattr(scheduler, '_check_heartbeat', lambda: None)
     monkeypatch.setattr(scheduler, '_check_market_halt', lambda: called.append(True))
 
-    #  루프를 한 바퀴만 돌린다 — sleep 이 곧 종료 신호다.
-    def _stop(_sec):
+    #  루프를 한 바퀴만 돌린다 — 주기 대기가 곧 종료 신호다.
+    #   [2026-09-07] 종전에는 time.sleep 을 패치했다. 루프가 sleep 대신 Event.wait 로
+    #   자게 바뀌면서(stop() 이 즉시 닿게 하려고) 그 패치는 아무것도 막지 못하고
+    #   테스트가 영영 돌았다. 끊는 자리를 실제 대기 지점으로 옮긴다.
+    def _stop(_timeout=None):
         scheduler.is_running = False
-    monkeypatch.setattr('modules.scheduler.time.sleep', _stop)
+        return True
+    monkeypatch.setattr(scheduler._wake, 'wait', _stop)
 
     scheduler.is_running = True
     try:

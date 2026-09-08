@@ -38,6 +38,35 @@ console = config.console
 
 logger = logging.getLogger(__name__)
 
+#  보조 스레드(제한 해제 확인)의 '세대'. stop() 이 올리고, 스레드는 자기가 태어난 세대와
+#   다르면 즉시 물러난다.
+#
+#  [왜 shutdown 이벤트만으로는 안 되는가 · 2026-09-07] 그 이벤트는 start() 가 clear() 한다
+#   ("재시작 시 이전 종료 신호가 남아 있으면 보조 스레드가 즉시 죽는다"). 그런데 보조
+#   스레드는 3초씩 자며 최대 5번 돈다 — stop() 이 신호를 켠 뒤 그 스레드가 **깨어나기
+#   전에** 누군가 start() 를 부르면 신호가 지워지고, 그 스레드는 멈추라는 말을 들은 적이
+#   없는 것처럼 계속 돌아 잔고를 조회하고 제한 목록을 건드린다.
+#   테스트에서는 그것이 다음 테스트의 mock 을 건드리는 간헐 실패로 나타났다(실측: 전체
+#   실행에서 193개 테스트가 살아 있는 RestrictionCheck 스레드를 남긴 채 끝났고, 예약
+#   계열 17건이 잔고 mock 호출이 어긋나 깨졌다).
+#   세대 번호는 지울 수 없다 — 한 번 올라가면 옛 스레드는 무슨 일이 있어도 물러난다.
+_AUX_EPOCH = 0
+_AUX_EPOCH_LOCK = threading.Lock()
+
+
+def _bump_aux_epoch():
+    """살아 있는 보조 스레드를 전부 퇴역시킨다. 새 세대 번호를 돌려준다."""
+    global _AUX_EPOCH
+    with _AUX_EPOCH_LOCK:
+        _AUX_EPOCH += 1
+        return _AUX_EPOCH
+
+
+def current_aux_epoch():
+    with _AUX_EPOCH_LOCK:
+        return _AUX_EPOCH
+
+
 
 def _recalc_realized(origin_trade, fill_price, fill_qty, is_overseas, fallback_amt, fallback_rate):
     """주문 시점 추정 손익을 '실제 체결가 + 왕복 비용' 기준으로 다시 계산한다.
@@ -133,6 +162,47 @@ class ConclusionMonitor:
                 cls._instance.loop_died_at = None
             return cls._instance
 
+    def _release_restriction_when_flat(self, code, cano, acnt, is_overseas, aux_epoch):
+        """매도 뒤 잔고를 다시 확인해 전량 매도면 제한을 푼다. (보조 스레드 몸통)
+
+        [왜 메서드로 꺼냈나 · 2026-09-07] 종전에는 감시 루프 한가운데 35줄짜리 클로저였다.
+         이 몸통이 다음 테스트의 잔고 mock 을 건드려 예약 계열 17건을 깨뜨렸는데, 부를
+         방법이 없어 **고친 것이 실제로 무는지 확인할 수 없었다**. 부를 수 있어야 검사할
+         수 있다.
+
+        [두 겹으로 멈춘다]
+         · shutdown 이벤트 — 즉시 깨어나게 하는 빠른 신호. 다만 start() 가 clear() 하므로
+           경합에 약하다.
+         · 세대 번호(aux_epoch) — 지울 수 없다. 신호를 못 봤어도 세대가 바뀌었으면 물러난다.
+        """
+        # [수정] 잔고 반영 지연/일시적 조회 실패 대비 재시도 (고정 1회 → 최대 5회)
+        for _ in range(5):
+            # 증권사 API 체결 및 잔고 반영 대기.
+            #  sleep이 아니라 종료 신호를 기다린다 — 감시가 멈춘 뒤에도 최대 15초를 더
+            #  살면서 잔고를 조회하고 제한 목록을 건드리는 스레드가 남는다.
+            if self.shutdown.wait(3):
+                return
+            if current_aux_epoch() != aux_epoch:
+                return
+            try:
+                #  [계좌 컨텍스트 · 2026-09-05] 이 몸통은 새로 띄운 데몬 스레드에서 돈다.
+                #   use_auto_account 는 threading.local 이라 미설정(=수동)이고, 그러면
+                #   자동 계좌 잔고를 **수동 앱키**로 묻는다. 실패하면 아래에서 qty=None →
+                #   '제한 유지'로 굳어 그 종목의 손절·트레일링이 영영 멈춘다.
+                #   보유수량 판정은 common.current_holding_qty 가 정본이다 — 사본을 두지 않는다.
+                qty = _pkg().current_holding_qty(code, cano, acnt, is_overseas)
+                if qty is None:
+                    continue  # 조회 실패 → 재시도
+                if qty == 0:
+                    remove_restricted_stock(code, cano=cano, acnt=acnt)
+                    logger.info(f"[Restriction] {code} 전량 매도 확인. "
+                                f"계좌({cano}-{acnt}) 제한 종목에서 해제되었습니다.")
+                return  # 잔고 확정(0 또는 보유분 잔존) → 종료
+            except Exception as e:
+                logger.error(f"수동매매 제한 해제 검사 중 오류: {e}")
+        logger.warning(f"[Restriction] {code} 잔고 확인 실패로 제한 해제를 보류합니다. "
+                       f"(계좌 {cano}-{acnt})")
+
     def start(self):
         #  [Fix 2026-09-06] 종전에는 is_running 만 봤다. 스레드가 죽어도 그 값은 True 로
         #   남아 있어, 되살리려는 start() 가 "이미 돌고 있다"며 되돌아갔다 — 죽은 채로
@@ -183,6 +253,7 @@ class ConclusionMonitor:
     def stop(self):
         self.is_running = False
         self.shutdown.set()  # 보조 스레드(제한 해제 확인)의 대기도 함께 깬다
+        _bump_aux_epoch()    # 신호를 못 본 보조 스레드까지 퇴역시킨다
         self.event.set() # 대기 해제
         if self.thread and self.thread is not threading.current_thread():
             self.thread.join(timeout=2)
@@ -873,39 +944,12 @@ class ConclusionMonitor:
 
                                     # 매도: 비동기로 잔고 재확인(재시도) 후 전량 매도 시 해당 계좌 제한 해제
                                     if type_name and "매도" in type_name:
-                                        def _check_and_remove_restriction(t_code, t_cano, t_acnt, t_is_ovrs):
-                                            # [수정] 잔고 반영 지연/일시적 조회 실패 대비 재시도 (고정 1회 → 최대 5회)
-                                            for attempt in range(5):
-                                                # 증권사 API 체결 및 잔고 반영 대기.
-                                                #  sleep이 아니라 종료 신호를 기다린다 — 감시가 멈춘 뒤에도
-                                                #  최대 15초를 더 살면서 잔고를 조회하고 제한 목록을 건드리는
-                                                #  스레드가 남는다(종료 지연·테스트 간섭의 원인).
-                                                if self.shutdown.wait(3):
-                                                    return
-                                                try:
-                                                    #  [계좌 컨텍스트 · 2026-09-05] 이 몸통은 새로 띄운
-                                                    #   데몬 스레드에서 돈다. use_auto_account 는
-                                                    #   threading.local 이라 미설정(=수동)이고, 그러면
-                                                    #   자동 계좌 잔고를 **수동 앱키**로 묻는다. 실패하면
-                                                    #   아래에서 qty=None → '제한 유지'로 굳어 그 종목의
-                                                    #   손절·트레일링이 영영 멈춘다.
-                                                    #   보유수량 판정은 common.current_holding_qty 가 정본이고
-                                                    #   그쪽이 컨텍스트를 세운다 — 사본을 두지 않는다.
-                                                    qty = _pkg().current_holding_qty(
-                                                        t_code, t_cano, t_acnt, t_is_ovrs)
-
-                                                    if qty is None:
-                                                        continue  # 조회 실패 → 재시도
-
-                                                    if qty == 0:
-                                                        remove_restricted_stock(t_code, cano=t_cano, acnt=t_acnt)
-                                                        logger.info(f"[Restriction] {t_code} 전량 매도 확인. 계좌({t_cano}-{t_acnt}) 제한 종목에서 해제되었습니다.")
-                                                    return  # 잔고 확정(0 또는 보유분 잔존) → 종료
-                                                except Exception as e:
-                                                    logger.error(f"수동매매 제한 해제 검사 중 오류: {e}")
-                                            logger.warning(f"[Restriction] {t_code} 잔고 확인 실패로 제한 해제를 보류합니다. (계좌 {t_cano}-{t_acnt})")
-
-                                        threading.Thread(target=_check_and_remove_restriction, args=(code, cano, acnt, is_overseas_trade), daemon=True, name=f"RestrictionCheck-{code}").start()
+                                        threading.Thread(
+                                            target=self._release_restriction_when_flat,
+                                            args=(code, cano, acnt, is_overseas_trade,
+                                                  current_aux_epoch()),
+                                            daemon=True,
+                                            name=f"RestrictionCheck-{code}").start()
 
                                     # 상태 업데이트
                                     with self._lock:

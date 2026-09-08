@@ -15,6 +15,7 @@ import api # [추가] 외부 API 차단용
 from modules import db_manager # [추가] DB 매니저 임포트
 from modules import analysis # [추가] 지수 조회 차단용
 from modules.auto_trade import AutoTrader, ConclusionMonitor
+from modules.auto_trade import conclusion as _conclusion_mod
 from modules.auto_trade import engine as _atr_engine  # [추가] 지수 변동성 배율 전역 격리
 from modules.auto_trade import trader as _atr_trader  # [추가] 개장 보류 게이트 전역 격리
 from modules.telegram_bot import TelegramCommander
@@ -527,6 +528,9 @@ def reset_all_singletons():
         try:
             _monitor.is_running = False
             _monitor.shutdown.set()
+            #  신호를 못 보고 자고 있는 보조 스레드까지 퇴역시킨다 — 다음 테스트가
+            #  start() 로 그 신호를 지워도 세대는 되돌릴 수 없다.
+            _conclusion_mod._bump_aux_epoch()
         except Exception:
             pass
 
@@ -581,11 +585,45 @@ def reset_all_singletons():
         except Exception:
             pass
 
+    #  [격리 2026-09-07] 매매 루프·텔레그램 봇도 자기 스레드를 띄운다. 지금은 그 둘의
+    #   **실제** 스레드를 띄우는 테스트가 없어 조용하지만, 예약 감시기도 누군가
+    #   monitor.start() 를 쓰기 전까지는 똑같이 조용했다(그리고 쓰는 순간 17건이 깨졌다).
+    #   참조를 끊고 나면 세울 방법이 사라지므로, 잠복인 동안 막아 둔다.
+    for _cls in (AutoTrader, TelegramCommander):
+        _obj = _cls._instance
+        if _obj is None:
+            continue
+        try:
+            _obj.is_running = False
+            _t = getattr(_obj, 'thread', None)
+            if _t is not None and _t.is_alive() and _t is not threading.current_thread():
+                _t.join(timeout=2)
+        except Exception:
+            pass
+
+    #  [격리 2026-09-07] 예약 감시기도 스레드를 띄운다. 2026-09-06 에 이 싱글톤을 초기화
+    #   목록에 넣으면서 **참조만 끊고 스레드는 세우지 않았다** — 위 ConclusionMonitor
+    #   주석이 경고한 그대로다. 참조를 지우고 나면 그 스레드를 세울 방법이 아예 사라진다.
+    #   그 스레드는 10초마다 _check_orders() 를 부르며 그때 설치돼 있는 **다음 테스트의
+    #   mock** 을 건드린다(실측: 전체 실행 3회 중 2회에서 예약 계열 17건이 한꺼번에 깨졌다).
+    _reserved = _ReservedOrderMonitor._instance
+    if _reserved is not None:
+        try:
+            _reserved.stop()          # is_running 을 내리고 잠든 루프를 깨운다
+            _thread = getattr(_reserved, 'monitor_thread', None)
+            if _thread is not None and _thread.is_alive():
+                _thread.join(timeout=2)
+        except Exception:
+            pass
+
     #  스케줄러도 마찬가지 — start() 가 띄운 루프 스레드가 남아 있으면 안 된다.
     _sched = _SystemScheduler._instance
     if _sched is not None:
         try:
             _sched.is_running = False
+            _wake = getattr(_sched, '_wake', None)
+            if _wake is not None:
+                _wake.set()           # 10초 주기 대기 중이면 즉시 깨운다
             if getattr(_sched, 'thread', None) is not None and _sched.thread.is_alive():
                 _sched.thread.join(timeout=2)
         except Exception:
@@ -602,6 +640,37 @@ def reset_all_singletons():
     _SystemScheduler._instance = None
     _JournalSyncWorker._instance = None
     _MarketHaltMonitor._instance = None
+    #  [격리 2026-09-07] 아래 셋은 싱글톤이 아니라 **모듈 수준** 스레드라 위 목록으로는
+    #   닿지 않는다. main() 을 태우는 테스트 하나가 띄우면 세션 끝까지 살아남아, 자기
+    #   주기마다 깨어나 다른 파일의 mock 을 건드린다.
+    #   실측(전체 실행 1회): 예열 358건 · 실시간 피드 189건 · 캘린더 알림 261건의
+    #   테스트가 그 스레드를 남긴 채 끝났다.
+    try:
+        from api import chart_cache as _cc
+        _cc.stop_background_warmers()
+    except Exception:
+        pass
+
+    try:
+        from brokers import realtime as _rt
+        _rt.stop_feed()
+        _feed_obj = getattr(_rt, '_feed', None)
+        _feed_thread = getattr(_feed_obj, '_thread', None) if _feed_obj else None
+        if _feed_thread is not None and _feed_thread.is_alive():
+            _feed_thread.join(timeout=0.5)
+    except Exception:
+        pass
+
+    #  한 번 돌고 끝나는 보조 스레드(캘린더 알림·마감 리포트)는 루프도 싱글톤도 아니다.
+    #   그 '한 번'이 다음 테스트 구간에서 끝나면서 DB 를 쓰고 텔레그램을 보낸다.
+    #   아주 짧게만 기다린다 — 안 끝나도 붙잡지 않는다.
+    for _t in list(threading.enumerate()):
+        if _t.name in ("CalendarAlert", "DailyClosingReport") and _t.is_alive():
+            try:
+                _t.join(timeout=0.5)
+            except Exception:
+                pass
+
     analysis._MARKET_REGIME_CACHE.clear()
     analysis.reset_tvdatafeed_circuit()
     _atr_engine.set_vol_regime_ratio(1.0)
