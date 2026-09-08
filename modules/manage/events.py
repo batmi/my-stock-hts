@@ -180,12 +180,22 @@ def _collect_kr(code, name):
     confirmed = False
     decl_dps = None
     last_confirmed_rec = None
+    #  [Fix 2026-09-08] 확정 공시를 **못 읽은 것**과 확정 공시가 **없는 것**을 나눈다.
+    #   이 화면의 요지가 '추정을 확정으로 대체한다'인데, 조회가 실패하면 조용히 추정으로
+    #   되돌아가고 비고에는 '연1회·추정'만 남는다 — 운용자에게는 애초에 확정 공시가
+    #   없었던 종목과 똑같이 보인다.
+    #   실측 2026-09-08: 확정 기준일이 있는 종목에서 이 조회만 실패시키자 배당락일이
+    #    9/23(확정) → 12/29(결산월 일반규칙 추정)로 **3개월** 움직였고, 화면에는 아무
+    #    표시도 남지 않았다. 배당락일은 그날 하루 가격이 배당만큼 내리는 날이라
+    #    매수·매도 시점 판단에 직접 쓰인다.
+    decision_unread = False
     try:
         dec = api.get_dart_dividend_decision(code, days=200)
         if dec and dec.get("record_date"):
             last_confirmed_rec = datetime.strptime(dec["record_date"], "%Y%m%d").date()
-    except Exception:
-        pass
+    except Exception as e:      # noqa: BLE001 - 행 전체를 잃지 않되 못 읽은 사실은 남긴다
+        decision_unread = True
+        logger.debug(f"[캘린더] {code} 배당결정 공시 조회 실패: {e}")
 
     # 2) 미래의 확정 기준일이 있다면 추정 대신 확정값으로 바로 사용
     if last_confirmed_rec and last_confirmed_rec >= today:
@@ -214,6 +224,7 @@ def _collect_kr(code, name):
         "freq_label": freq_label,
         "exact": exact,
         "confirmed": confirmed,
+        "decision_unread": decision_unread,
         "decl_dps": decl_dps,
     }
 
@@ -370,6 +381,7 @@ def _collect_watchlist_events(kr, us, on_progress=None, failures=None):
                 "freq": r.get("freq_label", ""),
                 "exact": r.get("exact", False),
                 "confirmed": r.get("confirmed", False),
+                "decision_unread": r.get("decision_unread", False),
                 "decl_dps": r.get("decl_dps"),
             })
     return events, kr_rows
@@ -388,6 +400,10 @@ def _upcoming_note(e):
     if e.get("estimated"):
         freq = e.get("freq", "")
         basis = "전년패턴" if e.get("exact") else "추정"
+        #  확정 공시를 못 읽어서 추정으로 내려온 것이면 그 사실을 비고에 적는다.
+        #   '확정 공시가 아직 없다'와 글자가 같으면 안 된다.
+        if e.get("decision_unread"):
+            basis += "(확정공시 조회실패)"
         return (f"{freq}·{basis}" if freq else basis), True
     return "", False
 

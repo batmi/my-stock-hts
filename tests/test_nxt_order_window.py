@@ -22,8 +22,8 @@ def _at(hm):
 @pytest.mark.parametrize("hm, expected", [
     ("0759", False),   # 개장 전
     ("0800", True),    # NXT 프리마켓 시작
-    ("0849", True),
-    ("0850", True),    # 경계는 포함 — 종전 구현과 같게 둔다
+    ("0849", True),    # NXT 프리마켓의 마지막 분
+    ("0850", False),   # [Fix 2026-09-08] 08:50 부터 KRX 시가 단일가 — 종전엔 True 였다
     ("0851", False),   # NXT 휴식 · KRX 시가 단일가 접수
     ("0859", False),
     ("0900", False),   # KRX 정규장
@@ -43,8 +43,35 @@ def test_the_ten_minutes_before_the_open_differ_from_the_quote_phase():
     assert api.nxt_order_window(_at("0855")) is False
     # 시세 경계(domestic_session_phase)는 같은 시각을 nxt_pre 로 본다. 둘이 같아지면
     # 어느 한쪽이 다른 쪽 용도로 잘못 쓰였다는 뜻이다.
+    #  끝 값은 '이 분까지 NXT'라는 뜻이므로 08:50 이 아니라 08:49 다(양끝 포함 비교).
     lo, hi = api.NXT_ORDER_WINDOWS[0]
-    assert (lo, hi) == ("0800", "0850")
+    assert (lo, hi) == ("0800", "0849")
+
+
+@pytest.mark.parametrize("hm", ["0850", "0855", "0859"])
+def test_the_two_authorities_never_name_two_different_markets_at_once(hm, monkeypatch):
+    """같은 시각에 '지금 NXT 다'와 'KRX 동시호가 휴게다'가 동시에 참이면 안 된다.
+
+    [실측 2026-09-08] 08:50:30 에 nxt_order_window()=True, is_single_price_break()=True 였다.
+     그 1분의 시장가 주문은 실제로는 KRX 동시호가로 들어가 정상 접수되는데, 앞의 True
+     때문에 현재가 지정가로 바뀐다 — 단일가에서 지정가는 체결을 보장하지 않는다.
+     자동매매·예약 감시기·수동 발주 세 경로가 모두 이 판정 하나를 읽는다.
+    """
+    from modules.auto_trade import common
+
+    monkeypatch.setattr(api, 'is_holiday_today', lambda *a, **k: False)
+    t = _at(hm).replace(second=30)
+    assert not (api.nxt_order_window(t) and common.is_single_price_break(t)), (
+        f"{hm}:30 에 두 정본이 서로 다른 시장을 가리킨다")
+
+
+def test_the_market_order_notice_matches_the_window():
+    """화면 안내문('08:00~08:50')과 실제 구간이 갈라지면 안내가 거짓말이 된다."""
+    src = open("modules/trading.py", encoding='utf-8').read()
+    assert "NXT장(08:00~08:50, 15:30~20:00)" in src
+    lo, hi = api.NXT_ORDER_WINDOWS[0]
+    #  안내문의 '~08:50'은 '08:50 직전까지'라는 뜻이다(마지막 분은 08:49).
+    assert lo == "0800" and hi == "0849"
 
 
 @pytest.mark.parametrize("path", [

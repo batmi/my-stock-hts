@@ -102,6 +102,15 @@ def _standalone_op(code, year, reprt, data):
     prev = _extract_is(rows)
     if not prev or not prev.get("op") or prev["op"][0] is None:
         return None
+    #  [Fix 2026-09-08] 두 보고서의 재무제표 기준(연결/개별)이 같을 때만 뺀다.
+    #   _extract_is 는 보고서마다 독립적으로 '연결 우선'을 적용하므로, 당기 반기는 연결로
+    #   잡히고 직전 1분기는 연결 미제출이라 개별로 잡히는 조합이 실제로 나온다. 그때
+    #   종전 코드는 (연결누적 − 개별누적)을 빼서 자회사 몫만큼 부풀거나 음수인 수를
+    #   '단독분기 영업이익'으로 찍었다 — 게다가 옆의 '기준' 칸은 연결이라고 적혀 있어
+    #   읽는 사람이 이상함을 눈치챌 단서가 없다. 값이 비는 것보다 **틀린 값이 확신에
+    #   차서 찍히는 쪽**이 나쁘다(전년동기 증감률·'적전' 태그까지 함께 붙는다).
+    if prev.get("fs") != data.get("fs"):
+        return None
     cur_q = op[0] - prev["op"][0]
     base_q = None
     if op[1] is not None and prev["op"][1] is not None:
@@ -143,19 +152,31 @@ def _collect(code, name, candidates):
             continue
         data = _extract_is(rows)
         if data:
+            #  [Fix 2026-09-08] 보조 조회의 **실패**를 '해당 값 없음'과 섞지 않는다.
+            #   손익 본체는 위에서 실패하면 예외가 그대로 올라가 ScanFailures 에 잡히는데,
+            #   단독분기·ROE·부채비율은 여기서 통째로 삼켜져 전부 '-' 로 찍혔다. DART 는
+            #   분기 지표를 아예 안 주는 회사가 흔해서 '-' 가 일상이고, 그래서 한도 초과나
+            #   네트워크 순단으로 못 읽은 칸도 똑같은 '-' 가 되어 구분할 방법이 없다.
+            #   (관심종목 40여 개 × 보고서 후보 × 지표 2종이라 한 화면이 수백 콜을 낸다 —
+            #    레이트리밋은 가정이 아니라 상시 조건이다.)
+            #   못 읽은 칸은 '?' 로 남기고 몇 종목이 그런지 표 아래에 밝힌다.
+            unread = []
             try:
                 op_q = _standalone_op(code, year, reprt, data)
-            except Exception:
+            except Exception as e:      # noqa: BLE001 - 못 읽었다는 사실만 남기고 계속한다
                 op_q = None
+                unread.append(f"단독Q({e})")
             try:
                 roe, debt = _collect_metrics(code, year, reprt)
-            except Exception:
+            except Exception as e:      # noqa: BLE001
                 roe, debt = None, None
+                unread.append(f"지표({e})")
             return {
                 "code": code, "name": name,
                 "basis": f"{year} {_REPRT_LABEL[reprt]}·{data['fs']}",
                 "rev": data.get("rev"), "op": data.get("op"), "net": data.get("net"),
                 "op_q": op_q, "roe": roe, "debt": debt,
+                "unread": unread,
             }
     return None
 
@@ -232,16 +253,23 @@ def show_financial_snapshot():
     table.add_column("영업익(단독Q)", justify="right")
     table.add_column("ROE", justify="right")
     table.add_column("부채비율", justify="right")
+    #  '-'(값 없음)와 '?'(못 읽음)를 나눈다. 아래 unread 는 _collect 가 남긴 실패 목록.
+    partial = 0
     for r in rows:
+        unread = r.get("unread") or []
+        idx_unread = any(u.startswith("지표") for u in unread)
+        q_unread = any(u.startswith("단독Q") for u in unread)
+        if unread:
+            partial += 1
         roe = r.get("roe")
         if roe is None:
-            roe_str = "-"
+            roe_str = "[yellow]?[/]" if idx_unread else "-"
         else:
             roe_color = "red" if roe >= 10 else ("blue" if roe < 0 else "white")
             roe_str = f"[{roe_color}]{roe:.1f}%[/]"
         debt = r.get("debt")
         if debt is None:
-            debt_str = "-"
+            debt_str = "[yellow]?[/]" if idx_unread else "-"
         else:
             debt_str = f"[yellow]{debt:,.0f}%[/]" if debt >= 200 else f"{debt:,.0f}%"
         table.add_row(
@@ -250,13 +278,17 @@ def show_financial_snapshot():
             _fmt_cell(r.get("rev")),
             _fmt_cell(r.get("op")),
             _fmt_cell(r.get("net")),
-            _fmt_cell(r.get("op_q")),
+            "[yellow]?[/]" if (q_unread and r.get("op_q") is None) else _fmt_cell(r.get("op_q")),
             roe_str,
             debt_str,
         )
     config.console.print(table)
     #  표에 몇 종목이 빠졌는지 밝힌다 — 보고서 미제출과 조회 실패를 합쳐 '없는 줄'로만
     #  두면, 관심종목 44개 중 30줄만 보고도 그게 정상인지 알 수 없다.
+    if partial:
+        config.console.print(
+            f"[yellow]※ {partial}개 종목은 일부 칸을 조회하지 못했습니다('?'로 표시) — "
+            f"값이 없는 것('-')과 다릅니다.[/yellow]")
     missing = len(codes) - len(rows)
     if missing > 0:
         config.console.print(
