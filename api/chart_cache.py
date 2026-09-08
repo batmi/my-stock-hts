@@ -604,6 +604,22 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
                        f"— 캐시하지 않습니다(다음 호출에 다시 받습니다).")
     return df
 
+#  [Fix 2026-09-08] 작업 풀 워커에 **부르는 쪽의 우선순위를 물려준다**.
+#   TPS 게이트의 우선순위 판정(api.http._is_system_priority)은 스레드 **이름**으로 한다.
+#   그런데 아래 예열 함수는 이름 없는 ThreadPoolExecutor 로 부챗살을 펴므로, 워커 이름이
+#   'ThreadPoolExecutor-N_M' 이 되어 **전부 비우선**으로 분류됐다. 이 함수는 매매 루프가
+#   부르고(trader.py 의 감시 주기 두 곳), 실제 KIS 요청은 부모가 아니라 그 10워커가 낸다 —
+#   즉 매매 경로의 요청 대부분이 예약분을 양보하고 조회와 같은 줄에 서 있었다.
+#   (같은 계열: 스레드로는 안 넘어가는 계좌 컨텍스트 — core/context.py 의 use_auto_account)
+#   실측 운영 로그: EGW00201 을 맞은 스레드 1위가 이름 없는 풀 2,094건, AutoTrader 는 365건.
+#   접두어 'at_' 는 이미 우선순위 목록에 있으므로, 부모가 매매면 그 접두어를 붙인다.
+#   덤으로 거부 로그에 어느 풀인지가 남는다(종전에는 전부 'ThreadPoolExecutor-*' 였다).
+def _pool_prefix(base):
+    #  서브모듈을 직접 import 하지 않는다 — 패키지 규약(_api()). 직접 import 하면
+    #   테스트의 patch.object(api, ...) 가 닿지 않고 순환 import 의 씨앗이 된다.
+    return f"at_{base}" if _api().http._is_system_priority() else base
+
+
 def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=True, progress_updater=None, prefer_ws=False, skip_if_fresh_sec=None):
     """[최적화] 다중 종목 실시간 데이터 일괄 조회 (Micro-Cache 사전 예열)
 
@@ -681,7 +697,8 @@ def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=
                 if progress_updater: progress_updater()
 
             max_w = 5
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
+            with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=max_w, thread_name_prefix=_pool_prefix("prefetch_yf")) as executor:
                 futures = [executor.submit(fetch_yf_worker, c) for c in remaining_codes]
                 concurrent.futures.wait(futures)
     else:
@@ -714,7 +731,8 @@ def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=
             except Exception: pass
 
         max_w = 10
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=max_w, thread_name_prefix=_pool_prefix("prefetch")) as executor:
             futures = [executor.submit(fetch_worker, c) for c in codes]
             for future in concurrent.futures.as_completed(futures):
                 if progress_updater: progress_updater()

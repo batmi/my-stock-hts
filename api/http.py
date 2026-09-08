@@ -342,7 +342,23 @@ class ThrottledSession(requests.Session):
             #  그 헛걸음이 쌓여 [1]의 붕괴를 만든다. 실측 전송률에서 물러나야 한 번에 맞는다.
             if now - b.last_drop >= float(getattr(config, 'TPS_BACKOFF_WINDOW_SEC', 1.0) or 0):
                 sent_1s = sum(1 for t in b.history if t > now - 1.0)
-                ref = min(cur, float(sent_1s)) if sent_1s > 0 else cur
+                # [3] 다만 실측 전송률을 기준으로 삼는 것은 **한도가 실제로 구속했을 때**
+                #  뿐이다. 종전에는 조건이 없어, 한도 근처도 아닌 상태의 거부가 그 낮은
+                #  전송건수를 새 기준으로 만들었다 — 1건/s 중의 거부 하나가 20 → 하한(15)
+                #  까지 한 번에 무너뜨린다(0.95배가 아니라 하한 클램프로). 포화 상태의
+                #  거부(20건/s)는 20 → 19 로 얌전히 내려가므로, **덜 밀수록 더 크게
+                #  무너지는** 뒤집힌 곡선이었다.
+                #  실측 2026-09-08(운영 로그 2,569건): 거부의 45.9% 가 하한에 착지.
+                #   집계 창 1,208개 중 전송률이 한도의 절반이라도 된 창은 20개(1.7%).
+                #   한도가 구속하지 않는데 한도를 낮추면 거부는 그대로고 나중의 버스트만
+                #   잃는다 — 컨트롤러가 자기가 통제하지 못하는 것을 통제하려 한 것이다.
+                #  구속하지 않았으면 한도 자체에서 한 눈금 물러난다. 거부가 계속되면
+                #   여러 번에 걸쳐 내려가되, 한 번에 바닥까지 가지는 않는다.
+                binding = float(getattr(config, 'TPS_BACKOFF_BINDING_RATIO', 0.8) or 0)
+                if sent_1s > 0 and float(sent_1s) >= cur * binding:
+                    ref = min(cur, float(sent_1s))
+                else:
+                    ref = cur
                 b.adaptive_limit = max(lo, ref * getattr(config, 'TPS_ADAPT_BACKOFF', 0.95))
                 b.last_drop = now
                 # 물러난 직후 곧바로 올리지 않는다(한 윈도우는 낮춘 값으로 관찰한다).
