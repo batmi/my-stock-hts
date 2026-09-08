@@ -131,7 +131,7 @@ class _RealTpsBucket:
     오므로, 한쪽 키가 물러난 것을 근거로 다른 키까지 낮추면 멀쩡한 예산을 버린다.
     """
     __slots__ = ("history", "adaptive_limit", "last_raise", "last_drop",
-                 "last_priority_grant", "grants",
+                 "last_priority_grant", "last_priority_demand", "grants",
                  "rl_count", "rl_window_start", "rl_limit_from", "rl_grants_from",
                  "rl_trs", "rl_threads", "rl_last_emit")
 
@@ -150,6 +150,10 @@ class _RealTpsBucket:
         # 우선순위(매매) 스레드가 마지막으로 전송을 얻은 시각. 매매가 놀 때는 조회에게
         #  예약분을 돌려주기 위한 값이다.
         self.last_priority_grant = 0.0
+        # 우선순위 스레드가 마지막으로 **게이트에 들어온** 시각(전송을 얻었는지와 무관).
+        #  [Fix 2026-09-08] 예약 해제를 '마지막 전송'으로만 판정하면 자기 자신을 끈다 —
+        #   아래 해제 조건의 주석 참조.
+        self.last_priority_demand = 0.0
         self.grants = 0                # 게이트를 통과한 누적 전송 건수(실전)
         # [로그 집계] 거부는 초당 수 건까지 나므로 건건이 WARNING을 남기면 로그가 그것만으로
         #  찬다. TPS_LOG_INTERVAL_SEC 마다 한 줄로 묶되(첫 거부는 즉시), 사후에 상황을
@@ -456,6 +460,11 @@ class ThrottledSession(requests.Session):
                             #  움직이면 비율은 틀린 도구다 — 한도 20에서 조회 10은 넉넉하지만 한도
                             #  6에서 조회 3은 메뉴가 못 쓸 만큼 느리면서 매매 몫도 3뿐이다.
                             #  절대량 예약은 한도가 어디로 가든 매매 헤드룸을 그대로 지킨다.
+                            # 우선순위 스레드는 '들어왔다'는 사실 자체를 남긴다. 전송을
+                            #  얻지 못하고 다시 자더라도 매 회차 갱신되므로, 기다리는 동안
+                            #  예약이 풀리지 않는다(위 해제 조건 참조).
+                            if is_priority:
+                                bucket.last_priority_demand = now
                             gate_limit = effective_limit
                             gate_interval = min_interval
                             # [속도] 균등 전송을 끄면 창 한도만 지키고 그 안에서는 몰아 보낸다.
@@ -471,7 +480,22 @@ class ThrottledSession(requests.Session):
                                 # 매매가 지금 돌고 있지 않으면 예약분을 풀어 준다. 떼어 두기만
                                 #  하고 아무도 안 쓰면 그냥 버려지는 몫이다(주말·자동매매 미가동).
                                 idle = float(getattr(config, 'PRIORITY_RESERVE_IDLE_SEC', 10.0) or 0.0)
-                                if idle > 0 and (now - bucket.last_priority_grant) > idle:
+                                #  [Fix 2026-09-08] '매매가 돌고 있는가'를 **마지막 전송**
+                                #   으로만 판정하면 안 된다. 조회가 창을 가득 채운 상태에서
+                                #   매매 스레드는 전송을 못 얻는데, 못 얻었다는 이유로 예약이
+                                #   풀려 더 못 얻는다 — 예약이 자기 자신을 끄는 구조다.
+                                #   기다리는 매매 스레드와 존재하지 않는 매매 스레드가 이
+                                #   판정에서 구별되지 않았다.
+                                #   실측 2026-09-08(조회 16스레드 포화, 명목 20 TPS):
+                                #     예약 살아있음 → 매매 첫 전송까지 0ms · 0ms · 0ms
+                                #     예약 풀림     → 6,108ms · 1,700ms · 1,694ms
+                                #   매매 루프는 주기가 10초보다 길어 주기 사이에 반드시 유휴
+                                #   판정에 걸린다. 즉 **매 주기의 첫 요청**이 이 상태를 만난다.
+                                #   요청(demand)도 활동의 증거로 센다. 매매가 아예 없는
+                                #   주말·미가동에는 요청 자체가 없으므로 종전대로 풀린다.
+                                last_sign = max(bucket.last_priority_demand,
+                                                bucket.last_priority_grant)
+                                if idle > 0 and (now - last_sign) > idle:
                                     reserve = 0.0
                                 if reserve > 0:
                                     gate_limit = max(1.0, effective_limit - reserve)
