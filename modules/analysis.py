@@ -1850,6 +1850,21 @@ def regime_emoji(regime):
     return REGIME_EMOJI.get(regime, REGIME_EMOJI_UNKNOWN)
 
 
+def describe_regime(info, markup=False):
+    """국면 dict -> (이모지, 라벨). **판정 불가는 '판정 보류'와 다른 글자로 나온다.**
+
+    [왜 필요한가 · 2026-09-08] REGIME_EMOJI_UNKNOWN(⚪)은 '조회 실패·미지의 값'을 위해
+     만들어졌는데 화면에 한 번도 나온 적이 없다. 실패가 regime='Sideways'로 접혀 왔기
+     때문이다 — 그래서 지수를 못 읽는 동안 /status·텔레그램·하단 버튼이 모두 🟡 '판정 보류'
+     라고 적었다. 그것은 시장이 실제로 어느 쪽도 아니라는 뜻이라 완전히 다른 말이다.
+     국면을 읽는 화면은 이 함수 하나를 지난다(라벨·이모지 사본이 갈라지지 않게).
+    """
+    if not info or info.get('unknown'):
+        return REGIME_EMOJI_UNKNOWN, ("[dim]판정 불가[/]" if markup else "판정 불가")
+    regime = info.get('regime')
+    return regime_emoji(regime), format_regime(regime, markup=markup)
+
+
 def all_regime_emojis():
     """regime_emoji 가 낼 수 있는 모든 값.
 
@@ -2068,8 +2083,16 @@ def classify_regime_from_df(df, params=None):
           'moved_pct': 교차 이후 현재까지 진행률(%),
           'whipsaw_ratio': 직전 N개 완료 교차 중 확인 기준 미달 비율(0~1, 산출 불가 시 None),
           'segments': 집계에 사용한 완료 교차 구간 수,
+          'unknown': **판정 자체를 못 했는가**(데이터 부족/조회 실패). True 면 나머지 값은
+                     자리를 채운 기본값일 뿐 시장에 대해 아무것도 말하지 않는다.
         }
-        데이터가 부족하면 regime='Sideways'를 돌려준다(호출부는 중립으로 취급).
+        데이터가 부족하면 regime='Sideways' + unknown=True 를 돌려준다.
+
+    [왜 unknown 이 따로 있는가 · 2026-09-08] 종전에는 '지수를 못 읽었다'와 '실제로 횡보다'가
+     **글자 하나 다르지 않은 같은 딕셔너리**였다. 그 값을 읽는 리스크 스케일링은 횡보를
+     '축소할 이유 없음'으로 보므로, 지수 조회가 끊긴 순간 진입 리스크 한도가 조용히
+     x1.00(최대)으로 되돌아갔다 — 실측: 하락 미확정+휩소 85%에서 x0.51 이던 배수가 다음
+     주기에 x1.00, 로그는 '리스크 한도 정상 복원'. 회복된 것이 아니라 눈을 감은 것이다.
 
     지수 화면(market.py)과 자동매매(analysis.get_market_regime)가 같은 판정을 쓰도록
     데이터프레임만 받는 순수 함수로 분리했다.
@@ -2077,7 +2100,8 @@ def classify_regime_from_df(df, params=None):
     params = params or getattr(config, 'MARKET_REGIME_PARAMS', {}) or {}
     slow = int(params.get("REGIME_EMA_SLOW", 41))
 
-    blank = {'regime': "Sideways", 'moved_pct': 0.0, 'whipsaw_ratio': None, 'segments': 0}
+    blank = {'regime': "Sideways", 'moved_pct': 0.0, 'whipsaw_ratio': None, 'segments': 0,
+             'unknown': True}
     if df is None or df.empty or 'close' not in df.columns or len(df) < slow:
         return blank
 
@@ -2091,7 +2115,22 @@ def classify_regime_from_df(df, params=None):
     whipsaw = ser['whipsaw'][-1]
     return {'regime': ser['regime'][-1], 'moved_pct': float(ser['moved_pct'][-1]),
             'whipsaw_ratio': None if np.isnan(whipsaw) else float(whipsaw),
-            'segments': int(ser['segments'][-1])}
+            'segments': int(ser['segments'][-1]), 'unknown': False}
+
+
+#  국면 '판정 불가' 경고를 (지수, 거래일)당 한 번만 내기 위한 표시.
+#   이 함수는 감시 주기마다 시장별로 불리므로 매번 찍으면 로그가 그 한 줄로 덮인다.
+_REGIME_UNKNOWN_WARNED = set()
+
+
+def _warn_regime_unknown(market_type, err=None):
+    key = (market_type, _current_market_day())
+    if key in _REGIME_UNKNOWN_WARNED:
+        return
+    _REGIME_UNKNOWN_WARNED.add(key)
+    logger.warning(f"[MARKET_REGIME] {market_type} 국면을 판정하지 못했습니다"
+                   + (f" ({err})" if err else " (지수 데이터 부족)")
+                   + " — 국면·휩소율에 따른 진입 리스크 축소가 이 시장에서 돌지 않습니다.")
 
 
 def get_market_regime_detail(market_type="KOSPI"):
@@ -2106,12 +2145,15 @@ def get_market_regime_detail(market_type="KOSPI"):
         return cached
 
     neutral = {'regime': "Sideways", 'score_adj': 0.0, 'moved_pct': 0.0,
-               'whipsaw_ratio': None, 'segments': 0}
+               'whipsaw_ratio': None, 'segments': 0, 'unknown': True}
     try:
         params = getattr(config, 'MARKET_REGIME_PARAMS', {}) or {}
         df = get_domestic_index_data(market_type)
         info = classify_regime_from_df(df, params)
-        if info['regime'] == "Sideways" and info['segments'] == 0:
+        if info.get('unknown') or (info['regime'] == "Sideways" and info['segments'] == 0):
+            #  종전에는 여기서 아무 흔적도 남기지 않았다. 판정 불가는 그 자체로 알려야 하는
+            #  사건이다 — 이 값을 읽는 리스크 스케일링이 '축소할 이유 없음'으로 읽기 때문이다.
+            _warn_regime_unknown(market_type)
             return neutral  # 데이터 부족 — 캐시하지 않음
 
         key, default = REGIME_SCORE_ADJ_KEYS.get(info['regime'], ("SIDEWAYS_SCORE_ADJ", 0.0))
@@ -2125,6 +2167,7 @@ def get_market_regime_detail(market_type="KOSPI"):
 
     except Exception as e:
         logger.error(f"시장 국면 판단 오류: {e}")
+        _warn_regime_unknown(market_type, str(e))
         return neutral
 
 

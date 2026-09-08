@@ -199,6 +199,9 @@ class AutoTrader:
                 cls._instance.risk_scale = 1.0            # [리스크 스케일링] 계좌 단위 배수 = 열위 시장 기준 (히트 캡용, 1.0=축소 없음)
                 cls._instance.risk_scale_reason = ""      # [리스크 스케일링] 현재 배수의 사유 (로그 표시용)
                 cls._instance.risk_scale_by_market = {}   # [리스크 스케일링] 시장별 배수 {KOSPI: x, KOSDAQ: y} — 종목 사이징용
+                #  드로다운을 곱하기 전의 국면 배수. 국면을 못 읽은 주기가 이 값을 재사용한다
+                #  (저장본에는 드로다운이 이미 곱해져 있어 그대로 쓰면 두 번 곱해진다).
+                cls._instance.risk_scale_regime_by_market = {}
                 cls._instance.risk_scale_reason_by_market = {}
                 cls._instance.strategy = DefaultStrategy() # [추가] 전략 인스턴스
                 cls._instance.last_log_date = datetime.now().date() # [추가] 로그 파일 날짜 추적용
@@ -1611,9 +1614,13 @@ class AutoTrader:
         for m_type, label in [("KOSPI", "KOSPI"), ("KOSDAQ", "KOSDAQ")]:
             try:
                 info = analysis.get_market_regime_detail(m_type)
-                regime = info['regime']
                 # 이모지·라벨 모두 analysis 단일 소스에서 받는다(메뉴 헤더·텔레그램 버튼과 공유).
-                regime_str = f"{analysis.regime_emoji(regime)} {analysis.format_regime(regime, markup=False)}"
+                #  판정 불가(지수를 못 읽음)는 '판정 보류'(실제 횡보)와 다른 글자로 나온다.
+                emoji, label_txt = analysis.describe_regime(info)
+                regime_str = f"{emoji} {label_txt}"
+                if info.get('unknown'):
+                    msg += f"• {label}: {regime_str} (지수 데이터를 확인할 수 없습니다)\n"
+                    continue
                 msg += f"• {label}: {regime_str} ({info['moved_pct']:+.1f}%, {ema_desc} 기준)\n"
             except Exception:
                 msg += f"• {label}: 확인 불가\n"
@@ -6910,8 +6917,7 @@ class AutoTrader:
             #  매 주기 찍히는 로그에 같은 설명을 되풀이할 이유가 없다.
             self.log(f"[매수 후보 선정] 총 {len(candidates)}종목 (우선순위순) "
                      f"— 점수가 1순위이고, 점수가 같으면 추세품질이 높을수록 검증된 추세며, "
-                     f"매수 여부는 가르지 않고(게이트 아님) 순위만 정한다 "
-                     f"— 그마저 같으면 52주위치 → 체결강도 순으로 가른다.")
+                     f"매수 여부는 가르지 않고(게이트 아님) 순위만 정한다")
             for i, c in enumerate(candidates):
                 tq = c.get('trend_quality')
                 tq_disp = f"{tq:.0f} ({indicators.describe_trend_quality(tq)})" if tq is not None else "- (이력부족)"
@@ -7410,9 +7416,32 @@ class AutoTrader:
             use_whipsaw = params.get("USE_WHIPSAW_RISK_SCALING", True)
             if use_regime or use_whipsaw:
                 best_scale, best_reason = 1.0, None
+                #  국면 배수는 '드로다운을 곱하기 전' 값으로 따로 보관한다. 아래 판정 불가
+                #   경로가 직전 배수를 그대로 쓰는데, 저장본(risk_scale_by_market)에는 이미
+                #   드로다운이 곱해져 있어 그것을 재사용하면 드로다운이 두 번 곱해진다.
+                prev_regime_scales = getattr(self, 'risk_scale_regime_by_market', None) or {}
+                regime_scales = {}
                 for m_type in ("KOSPI", "KOSDAQ"):
                     info = analysis.get_market_regime_detail(m_type)
                     m_scale, m_parts = 1.0, []
+
+                    if info.get('unknown'):
+                        #  [Fix 2026-09-08] 국면을 **못 읽은** 것이다. 종전에는 이 상태가
+                        #   '횡보'와 같은 값이라 축소할 이유가 없는 것으로 읽혔고, 배수가
+                        #   x1.00 으로 되돌아갔다 — 지수가 끊긴 바로 그 순간에 신규 진입
+                        #   한도가 최대로 열렸다(실측 x0.51 → x1.00, 로그는 '정상 복원').
+                        #   시장 필터를 끈 운용에서는 이 배수가 유일한 시장 인식 브레이크다.
+                        #   이 메서드는 계산 자체가 실패하면 이미 '기존값 유지'로 빠진다 —
+                        #   판정 불가도 같은 규약으로 둔다: 모르면 완화하지 않는다.
+                        m_scale = float(prev_regime_scales.get(m_type, 1.0) or 1.0)
+                        if m_scale < 1.0:
+                            m_parts.append(f"국면 판정 불가 — 직전 x{m_scale:.2f} 유지")
+                        regime_scales[m_type] = m_scale
+                        market_scales[m_type] = m_scale
+                        market_reasons[m_type] = " ".join(m_parts)
+                        if m_scale < best_scale:
+                            best_scale, best_reason = m_scale, f"{m_type} " + " ".join(m_parts)
+                        continue
 
                     # 1-a) 국면 배수 — 축소 대상은 '하락 미확정'(추세 붕괴 초기)이 핵심
                     if use_regime:
@@ -7434,11 +7463,13 @@ class AutoTrader:
                             m_scale *= ws_scale
                             m_parts.append(f"휩소율 {info['whipsaw_ratio']*100:.0f}% x{ws_scale:.2f}")
 
+                    regime_scales[m_type] = m_scale
                     market_scales[m_type] = m_scale
                     market_reasons[m_type] = " ".join(m_parts)
                     if m_scale < best_scale:
                         best_scale, best_reason = m_scale, f"{m_type} " + " ".join(m_parts)
 
+                self.risk_scale_regime_by_market = regime_scales
                 if best_reason:
                     scale *= best_scale
                     reasons.append(best_reason)

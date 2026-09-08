@@ -178,10 +178,18 @@ def _selection_log_source():
 
 
 def test_log_names_the_tiebreakers_in_sort_order():
-    """설명 순서가 candidate_priority_key 튜플 순서와 같아야 한다."""
+    """설명이 이름을 대는 기준들은 candidate_priority_key 튜플 순서와 같아야 한다.
+
+    [2026-09-08] 운용자 요청으로 뒤쪽 두 기준('그마저 같으면 52주위치 → 체결강도')을 문구에서
+     뺐다. 매 주기 찍히는 줄이라 길이가 곧 비용이고, 그 두 값은 바로 아래 후보별 줄에
+     숫자로 함께 나온다. 그래서 이 가드는 '넷을 모두 말하라'가 아니라 **말한 것의 순서가
+     실제 정렬과 같아야 한다**로 좁힌다 — 문구를 줄이는 것은 자유지만 순서를 뒤집는 것은 아니다.
+    """
     text = _selection_log_source()
     order = ["점수", "추세품질", "52주위치", "체결강도"]
-    positions = [text.index(w) for w in order]
+    named = [w for w in order if w in text]
+    assert named[:2] == ["점수", "추세품질"], f"1·2순위가 문구에서 사라졌다: {text}"
+    positions = [text.index(w) for w in named]
     assert positions == sorted(positions), f"설명 순서가 정렬 순서와 다르다: {text}"
 
 

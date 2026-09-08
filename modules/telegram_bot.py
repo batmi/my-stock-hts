@@ -1805,8 +1805,9 @@ class TelegramCommander:
             
         try:
             from modules import analysis
-            regime, _ = analysis.get_market_regime("KOSPI")
-            emoji = analysis.regime_emoji(regime)
+            #  판정 불가를 '판정 보류'(🟡)로 적지 않는다 — 버튼 매칭은 all_regime_emojis()
+            #   가 ⚪ 를 이미 포함하고 있어 그대로 동작한다.
+            emoji, _label = analysis.describe_regime(analysis.get_market_regime_detail("KOSPI"))
         except Exception:
             emoji = "⚪"   # analysis 를 못 불러온 경우까지 대비 (analysis.REGIME_EMOJI_UNKNOWN)
             
@@ -2436,7 +2437,10 @@ class TelegramCommander:
                 msg += f"\n[현재 시장 국면]\n"
                 for m_type in ("KOSPI", "KOSDAQ"):
                     info = analysis.get_market_regime_detail(m_type)
-                    label = analysis.format_regime(info['regime'], markup=False)
+                    _emoji, label = analysis.describe_regime(info)
+                    if info.get('unknown'):
+                        msg += f"• {m_type}: {_emoji} {label} (지수 데이터 확인 불가)\n"
+                        continue
                     ws = info.get('whipsaw_ratio')
                     ws_str = f", 휩소율 {ws*100:.0f}%" if ws is not None else ""
                     msg += (f"• {m_type}: {label} (보정 {info['score_adj']:+.1f}점, "
