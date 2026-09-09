@@ -174,7 +174,11 @@ def get_current_price(code, is_overseas):
         return 0
     # [WS] 실시간 피드에 신선한 현재가가 있으면 REST 호출 없이 즉시 반환(TPS 절감).
     #  미구독/끊김/정규장 외(KRX 정지)면 None → 아래 REST 경로로 자동 폴백한다.
-    if not is_overseas and getattr(config, 'USE_WEBSOCKET', True) and not config.session.is_toss:
+    #  [2026-09-09] 토스도 여기 들어온다(TossWsFeed). 토스 WS 체결가는 KRX+NXT 합산인데,
+    #   폴백 대상인 토스 REST 현재가(lastPrice)도 같은 성질이라 **값의 성질이 바뀌지 않는다**.
+    #   지표·일봉은 이 경로로 오지 않는다(krx_daily 가 KRX 확정 봉을 준다 —
+    #   [[krx-nxt-data-boundary]] 의 '판단=확정 봉, 트리거·주문가=실시간가').
+    if not is_overseas and getattr(config, 'USE_WEBSOCKET', True):
         try:
             from brokers import realtime
             p = realtime.get_feed().get_price(code, max_age=getattr(config, 'WS_DATA_TTL_SEC', 3.0))
@@ -301,7 +305,10 @@ def get_ask_bid_ratio(code, is_overseas=False):
         return None
 
     # [WS] 국내주식 실시간 호가 총잔량 우선 사용(REST 절감)
-    if not is_overseas and getattr(config, 'USE_WEBSOCKET', True) and not config.session.is_toss:
+    #  [2026-09-09] 토스도 포함. 위 시간창 게이트를 이미 통과한 뒤라 여기서 다시 막지 않는다.
+    #   TossWsFeed 는 REST 변환기(api/toss.py _toss_order_book)와 **같이 상위 10호가만**
+    #   더한다 — 셈이 갈리면 같은 순간에도 경로에 따라 게이트 판정이 달라진다.
+    if not is_overseas and getattr(config, 'USE_WEBSOCKET', True):
         try:
             from brokers import realtime
             ob = realtime.get_feed().get_orderbook(code, max_age=getattr(config, 'WS_DATA_TTL_SEC', 3.0))

@@ -9,13 +9,16 @@
 # 제약(KIS): 단일 연결당 41건(종목×TR) 등록 한도 + approval_key당 동시 연결 1개.
 #       → 보유종목 우선 구독 + 관심종목 로테이션(SubscriptionManager)으로 운용한다.
 #
-# 토스(mode 3): 공식 WS 미지원 → TossPollingFeed(빈 캐시)로 두어 항상 REST 폴백.
-#       추후 토스가 WS를 공개하면 TossWsFeed만 추가하면 된다.
+# 토스(mode 3): 2026-09-09 공식 WS 공개(AsyncAPI 3.0.0) → TossWsFeed.
+#       1단계로 **주문 이벤트(personal:order)만** 구독한다. 시세는 붙이지 않아 읽기 경로가
+#       계속 REST 폴링을 쓴다(사유는 TossWsFeed 머리말). 쓸 수 없으면 TossPollingFeed로 퇴화.
+#       한도(토스): 구독 100건(채널×종목) + 계정당 동시 연결 2개 — KIS의 41건보다 넉넉하다.
 # -----------------------------------------------------------------------------
 import asyncio
 import base64
 import json
 import logging
+import random
 import threading
 import time
 
@@ -271,8 +274,517 @@ class RealtimeFeed:
 
 
 class TossPollingFeed(RealtimeFeed):
-    """토스(mode 3): 공식 WS 미지원 → 빈 피드(항상 None) → 읽기 경로가 기존 REST 폴링 사용."""
+    """토스 폴백 피드: 빈 피드(항상 None) → 읽기 경로가 기존 REST 폴링을 그대로 쓴다.
+
+    TossWsFeed 를 쓸 수 없을 때(USE_WEBSOCKET OFF·websockets 미설치 등) 자리를 지킨다.
+    """
     pass
+
+
+# ==========================================================
+# 토스 WebSocket 피드 (mode 3)
+# ==========================================================
+#  [무엇을 구독하는가 · 1단계] 주문 이벤트(`personal:order`) **하나뿐**이다.
+#   시세(`trade:kr`·`orderbook:kr`)는 스펙상 가능하지만 아직 붙이지 않는다:
+#     · `trade:kr` 은 "KRX 정규장 + NXT 프리·정규·애프터마켓 **합산**"이다. 이 프로젝트의
+#       경계는 '판단(지표)=KRX 확정 봉, 트리거·주문가=실시간가'이므로(krx-nxt-data-boundary),
+#       지표 경로에 닿으면 ATR 이 부풀어 오른다(krx-daily-source 가 기록한 6~15%).
+#     · 프레임에 누적 거래량·매수/매도 구분이 없고 유실(LOSSY) 가능성이 있어, 스펙이
+#       **수신 합산으로 누적 거래량을 재구성하지 말라고 명시**한다. KIS 캐시는 volume 을
+#       담는 자리가 있어 0 으로 채우기 쉬운데, 그러면 '못 잰 값'이 '0 거래'로 둔갑한다.
+#     · 체결강도는 토스가 REST 에서도 제공하지 않는다(api/quotes/price.py 가 None 반환).
+#       웹소켓도 이 값을 주지 않으므로 붙여도 게이트가 얻는 것이 없다.
+#   그래서 시세 읽기 메서드는 RealtimeFeed 기본값(None)을 그대로 둔다 = REST 폴백.
+#
+#  [KIS 와 다른 점 — 코드를 옮겨 오면 깨지는 자리]
+#    · 구독이 **선언형 full-replace** 다. sub/unsub 액션이 없고, 보낸 배열 하나가 곧 현재
+#      구독 전체다(빠진 항목 자동 해제, `[]` 는 전체 해제). KisRealtimeFeed._reconcile 의
+#      집합 diff 방식을 그대로 쓸 수 없다.
+#    · keepalive 는 JSON 이 아니라 **순수 텍스트 `PING`**(대문자 4글자)이다. 그리고 서버가
+#      보내주는 데이터는 idle 타이머를 리셋하지 않는다 — 데이터를 받는 중에도 계속 보내야 한다.
+#    · 인증은 handshake 1회뿐이라 연결 유지 중 토큰이 만료돼도 끊기지 않는다. 토큰은
+#      **재연결할 때만** 필요하다.
+#    · 동시 연결이 계정당 2개이고, 초과하면 **가장 오래된 연결이 close code 없이** 종료된다.
+#      같은 앱키를 다른 기기에서 쓰면 서로 밀어내는데 로그에는 그냥 '끊김'으로 보인다.
+#      그래서 재연결은 반드시 지수 백오프(jitter 포함)로 한다 — 즉시 재연결하면 두 기기가
+#      서로를 무한히 밀어낸다.
+class TossWsFeed(RealtimeFeed):
+    """토스 주문 이벤트 웹소켓 피드.
+
+    [설계 원칙] 프레임 내용을 **믿지 않는다.** 주문 이벤트가 오면 ConclusionMonitor 를
+     깨우기만 하고, 체결 확정은 검증된 REST 경로가 한다(KIS 체결통보와 같은 규약 —
+     modules/auto_trade/conclusion.py 의 _on_ws_exec_notice 참고). 웹소켓은 **지연을
+     줄일 뿐**이고, 한 프레임도 오지 않아도 주기 폴링이 같은 체결을 잡는다.
+
+     이 원칙은 토스에서 더 강하게 지켜야 한다. 스펙이 이렇게 적고 있다:
+     "클라이언트 수신이 2초 이상 계속 막히면(backpressure) 서버가 연결을 끊습니다."
+     콜백에서 DB 를 쓰거나 REST 를 부르면 그 순간 연결이 끊긴다.
+
+    [무손실의 범위] 주문 채널은 LOSSLESS 지만 **연결 세션 안에서만** 그렇다. 끊긴 구간의
+     이벤트는 재전송되지 않으므로, 재연결하면 구독을 다시 선언하고 REST 로 주문 상태를
+     재동기화해야 한다. 여기서는 재연결마다 콜백을 한 번 깨워(`reconnect` 통보) 그 일을
+     ConclusionMonitor 에 맡긴다 — 이 피드가 직접 주문을 조회하지 않는다.
+    """
+
+    def __init__(self):
+        #  구독 계획은 KIS 와 **같은 정책**을 쓴다(보유→후보 우선, 남는 슬롯에 관심종목
+        #  로테이션, 현재가 먼저·호가는 잔여 슬롯). 한도만 100 으로 다르다. 토스도 구독 수를
+        #  '채널×종목'으로 세므로 KIS 의 'TR×종목'과 셈법이 같아 그대로 재사용된다.
+        self.manager = SubscriptionManager(
+            max_regs=getattr(config, 'TOSS_WS_MAX_SUBSCRIPTIONS', 100),
+            subscribe_orderbook=True,
+        )
+        self.manager.set_reserved(1)   # personal:order 몫 한 자리
+        self._price = {}   # code -> {'price', 'ts'}   ※ volume·vol_strength 는 담지 않는다
+        self._ask = {}     # code -> {'total_ask', 'total_bid', 'ts'}
+        self._cache_lock = threading.RLock()
+        self._thread = None
+        self._stop = threading.Event()
+        self._loop = None
+        self._exec_callbacks = []
+        self._cb_lock = threading.RLock()
+        self._was_enabled = None    # USE_WEBSOCKET 토글 전환 로깅용
+        self._got_event = False     # 연결당 첫 주문 이벤트 로깅용
+        self._got_quote = False     # 연결당 첫 시세 프레임 로깅용
+        self._account_seq = None    # 구독 중인 accountSeq(문자열)
+        self._subscribed = False    # 주문 채널이 ack 로 확정됐는가
+        self._declared = ()         # 마지막으로 선언한 구독(재선언 여부 판단용)
+        self._quote_codes = frozenset()   # ack 로 확정된 시세 종목
+
+    # ---- 라이프사이클 ----
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._thread_main, daemon=True, name="TossWsFeed")
+        self._thread.start()
+        logger.info("[TossWS] 주문 이벤트 피드 시작")
+
+    def stop(self):
+        self._stop.set()
+
+    # ---- 읽기 API (읽기 경로가 호출) ----
+    def _fresh(self, entry, max_age):
+        return entry is not None and (time.time() - entry['ts']) <= max_age
+
+    def get_price(self, code, max_age=3.0):
+        with self._cache_lock:
+            e = self._price.get(code)
+            if self._fresh(e, max_age) and e['price'] > 0:
+                return e['price']
+        return None
+
+    def get_orderbook(self, code, max_age=3.0):
+        with self._cache_lock:
+            e = self._ask.get(code)
+            if self._fresh(e, max_age):
+                return {'total_ask': e['total_ask'], 'total_bid': e['total_bid']}
+        return None
+
+    #  get_vol_strength 는 정의하지 않는다(기본 None). 토스는 체결강도를 REST 에서도
+    #  웹소켓에서도 주지 않는다 — 여기서 무언가 돌려주면 그것은 지어낸 값이다.
+
+    def set_symbols(self, priority, other=None):
+        self.manager.set_symbols(priority, other)
+
+    def coverage(self):
+        """커버리지 요약. 시세 구독이 꺼져 있으면 그 항목은 0 이 아니라 None 이다.
+
+        '0종목 커버'라고 적으면 KIS 와 같은 표에서 '피드가 죽었다'로 읽힌다. 재는 축이
+        아닐 때와 재 봤더니 0 일 때는 다른 사실이다(unknown-vs-empty).
+        """
+        base = {
+            'order_subscribed': self._subscribed,
+            'account_seq': self._account_seq,
+        }
+        if not self._quotes_enabled():
+            base.update(priority=None, capacity=None, price_covered=None,
+                        ob_covered=None, rest_fallback=None)
+            return base
+        cov = self.manager.coverage()
+        cov.update(base)
+        return cov
+
+    # ---- 주문 이벤트 콜백 (KIS 체결통보와 같은 등록 규약) ----
+    def register_exec_callback(self, fn):
+        with self._cb_lock:
+            if fn not in self._exec_callbacks:
+                self._exec_callbacks.append(fn)
+
+    def _invoke_exec_callbacks(self, notice):
+        with self._cb_lock:
+            callbacks = list(self._exec_callbacks)
+        for fn in callbacks:
+            try:
+                fn(notice)
+            except Exception as e:      # noqa: BLE001 - 콜백 하나가 피드를 죽이지 않는다
+                logger.debug(f"[TossWS] 주문 이벤트 콜백 오류: {e}")
+
+    @staticmethod
+    def _enabled():
+        return getattr(config, 'USE_WEBSOCKET', True)
+
+    def _log_toggle(self, enabled):
+        if self._was_enabled is None or self._was_enabled != enabled:
+            logger.info("[TossWS] USE_WEBSOCKET 켜짐 → 연결 시작" if enabled
+                        else "[TossWS] USE_WEBSOCKET 꺼짐 → 연결 안 함(REST 폴백)")
+            self._was_enabled = enabled
+
+    # ---- 내부: 스레드/이벤트루프 ----
+    def _thread_main(self):
+        try:
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+            self._loop.run_until_complete(self._run())
+        except Exception as e:      # noqa: BLE001
+            logger.debug(f"[TossWS] 이벤트루프 종료: {e}")
+
+    def _resolve_account_seq(self):
+        """구독 대상 accountSeq 를 구한다(실패 시 None).
+
+        종목 코드가 아니라 계좌 순번이고, 값은 숫자지만 codes 에는 **문자열**로 넣는다.
+        """
+        try:
+            from brokers import toss_api
+            seq = toss_api.resolve_account_seq()
+            return str(seq) if seq is not None else None
+        except Exception as e:      # noqa: BLE001
+            logger.info(f"[TossWS] accountSeq 확인 실패(REST 폴링 유지): {e}")
+            return None
+
+    def _fetch_token(self):
+        try:
+            from brokers import toss_api
+            return toss_api.get_access_token()
+        except Exception as e:      # noqa: BLE001
+            logger.info(f"[TossWS] 토큰 발급 실패(REST 폴링 유지): {e}")
+            return None
+
+    async def _run(self):
+        try:
+            import websockets
+        except ImportError:
+            logger.info("[TossWS] websockets 미설치 → 주문 이벤트 구독 없음(REST 폴링 유지)")
+            return
+        attempt = 0
+        while not self._stop.is_set():
+            if not self._enabled():
+                self._log_toggle(False)
+                await asyncio.sleep(2)
+                continue
+            self._log_toggle(True)
+            connected = False
+            try:
+                token = await self._loop.run_in_executor(None, self._fetch_token)
+                seq = await self._loop.run_in_executor(None, self._resolve_account_seq)
+                if not token or not seq:
+                    raise RuntimeError("토큰 또는 accountSeq 없음")
+                uri = getattr(config, 'TOSS_WS_URI', 'wss://openapi-ws.tossinvest.com/ws/v1')
+                #  websockets 14 에서 extra_headers → additional_headers 로 이름이 바뀌었다.
+                #  requirements 는 >=12 를 허용하므로 둘 다 시도한다.
+                try:
+                    conn = websockets.connect(
+                        uri, additional_headers={"Authorization": f"Bearer {token}"},
+                        ping_interval=None, max_size=None)
+                except TypeError:
+                    conn = websockets.connect(
+                        uri, extra_headers={"Authorization": f"Bearer {token}"},
+                        ping_interval=None, max_size=None)
+                async with conn as ws:
+                    connected = True
+                    attempt = 0        # 성공했으니 백오프를 처음으로 되돌린다
+                    self._got_event = False
+                    self._got_quote = False
+                    self._subscribed = False
+                    self._quote_codes = frozenset()
+                    #  새 연결에는 아무 구독도 없다. 장부를 비우지 않으면 '이미 선언했다'고
+                    #  판단해 한 건도 보내지 않은 채 조용히 아무것도 안 받는다.
+                    self._declared = ()
+                    self._account_seq = seq
+                    logger.info(f"[TossWS] 연결 성공 (accountSeq={seq})")
+                    await self._declare(ws, seq, force=True)
+                    #  [재동기화] 무손실 보장은 연결 세션 안에서만이다. 끊겨 있던 동안의
+                    #   이벤트는 다시 오지 않으므로, 붙자마자 한 번 깨워 REST 로 주문 상태를
+                    #   맞추게 한다(이 피드가 직접 조회하지 않는다).
+                    self._invoke_exec_callbacks(self._resync_notice())
+                    pinger = asyncio.ensure_future(self._ping_loop(ws))
+                    watcher = asyncio.ensure_future(self._disable_watcher(ws))
+                    rotator = asyncio.ensure_future(self._rotate_loop(ws, seq))
+                    try:
+                        async for msg in ws:
+                            self._on_message(msg)
+                            if self._stop.is_set() or not self._enabled():
+                                break
+                    finally:
+                        pinger.cancel()
+                        watcher.cancel()
+                        rotator.cancel()
+                logger.info("[TossWS] 연결 종료")
+            except Exception as e:      # noqa: BLE001
+                logger.info(f"[TossWS] 연결 오류: {e}")
+            finally:
+                #  끊긴 뒤에도 캐시가 남아 있으면 읽기 경로가 '신선하다'고 믿고 낡은 값을
+                #  쓴다(TTL 3초 안이면 통과한다). 연결이 없으면 REST 로 가야 한다.
+                self._subscribed = False
+                self._declared = ()
+                self._quote_codes = frozenset()
+                with self._cache_lock:
+                    self._price.clear()
+                    self._ask.clear()
+            if self._stop.is_set():
+                break
+            #  [백오프] 스펙이 정한 1s → 2s → 4s … + jitter. 즉시 재연결하면, 같은 앱키를
+            #   쓰는 다른 기기와 서로를 밀어내는 무한 루프가 된다(동시 연결 계정당 2개).
+            attempt = 0 if connected else attempt + 1
+            cap = getattr(config, 'TOSS_WS_MAX_BACKOFF_SEC', 60)
+            delay = min(cap, 2 ** min(attempt, 10)) * (0.5 + random.random() * 0.5)
+            await asyncio.sleep(max(1.0, delay))
+
+    @staticmethod
+    def _resync_notice():
+        """재연결 직후 한 번 보내는 '재동기화하라' 통보.
+
+        rejected=False 여야 한다 — 콜백은 거부 통보를 무시하도록 되어 있어서, True 면
+        이 깨우기가 통째로 사라진다(그리고 아무도 모른다).
+        """
+        return {'source': 'toss-ws', 'event': 'RECONNECT', 'resync': True,
+                'rejected': False, 'is_fill': False}
+
+    @staticmethod
+    def _quotes_enabled():
+        return bool(getattr(config, 'TOSS_WS_SUBSCRIBE_QUOTES', True))
+
+    def _plan(self, seq):
+        """지금 선언해야 할 구독 목록을 만든다.
+
+        **full-replace 라 '전체'를 만들어야 한다.** KIS 처럼 '추가할 것'만 담으면 담지 않은
+        구독이 해제된다 — 주문 채널까지 함께 날아간다.
+        """
+        entries = [("personal:order", (seq,))]
+        if self._quotes_enabled():
+            trades, books = [], []
+            for tr_id, code in self.manager.plan():
+                (trades if tr_id == TR_PRICE else books).append(code)
+            if trades:
+                entries.append(("trade:kr", tuple(trades)))
+            if books:
+                entries.append(("orderbook:kr", tuple(books)))
+        return tuple(entries)
+
+    async def _declare(self, ws, seq, force=False):
+        """구독을 선언한다. **full-replace** 라 배열 하나가 곧 구독 전체다.
+
+        선언 빈도 한도가 5회/초라 내용이 그대로면 보내지 않는다(로테이션 주기가 30초라
+        평상시엔 문제가 없지만, 한도를 넘기면 rate-limit-exceeded 로 선언 자체가 실패한다).
+        """
+        entries = self._plan(seq)
+        if not force and entries == self._declared:
+            return False
+        payload = [{"id": f"sub-{int(time.time() * 1000)}"}]
+        payload += [{"type": t, "codes": list(codes)} for t, codes in entries]
+        await ws.send(json.dumps(payload))
+        self._declared = entries
+        counts = " · ".join(f"{t} {len(c)}건" for t, c in entries)
+        logger.info(f"[TossWS] 구독 선언: {counts}")
+        return True
+
+    async def _rotate_loop(self, ws, seq):
+        """관심종목 로테이션 주기마다 구독을 다시 선언한다(내용이 바뀐 때만)."""
+        interval = getattr(config, 'WS_ROTATE_INTERVAL_SEC', 30)
+        try:
+            while not self._stop.is_set():
+                await asyncio.sleep(interval)
+                if not self._quotes_enabled():
+                    continue
+                self.manager.advance()
+                await self._declare(ws, seq)
+        except asyncio.CancelledError:
+            pass
+
+    async def _ping_loop(self, ws):
+        """텍스트 `PING` 을 주기적으로 보낸다.
+
+        서버는 **클라이언트로부터의 수신**이 180초 없으면 끊는다. 서버가 보내는 데이터는
+        이 타이머를 리셋하지 않으므로, 이벤트를 받는 중에도 계속 보내야 한다.
+        JSON 으로 감싸면 안 된다 — 따옴표 없는 대문자 4글자 그대로다.
+        """
+        interval = getattr(config, 'TOSS_WS_PING_INTERVAL_SEC', 60)
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                await ws.send("PING")
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:      # noqa: BLE001
+            logger.debug(f"[TossWS] PING 실패(연결이 곧 끊긴다): {e}")
+
+    async def _disable_watcher(self, ws):
+        """USE_WEBSOCKET 이 꺼지거나 중지되면 소켓을 닫아 수신 루프를 즉시 끝낸다."""
+        try:
+            while True:
+                await asyncio.sleep(1)
+                if self._stop.is_set() or not self._enabled():
+                    if not self._enabled():
+                        logger.info("[TossWS] 토글 OFF 감지 → 연결 해제(REST 폴백)")
+                    try:
+                        await ws.close()
+                    except Exception:
+                        pass
+                    return
+        except asyncio.CancelledError:
+            pass
+
+    def _on_message(self, msg):
+        """수신 프레임을 top-level `type` 으로 갈라 처리한다.
+
+        한 연결로 ack·데이터·에러·pong 이 섞여 온다. 모르는 type 은 조용히 버리되,
+        **구독 거부(rejected)만은 반드시 남긴다** — 삼키면 그 계좌의 주문 이벤트가
+        영영 오지 않는데 로그에는 아무 흔적이 없다(무증상 폴백).
+        """
+        try:
+            if not msg:
+                return
+            if isinstance(msg, bytes):
+                msg = msg.decode('utf-8', 'ignore')
+            text = msg.strip()
+            if not text or text[0] not in '{[':
+                return          # 텍스트 프레임(서버가 보내는 것은 없다)
+            data = json.loads(text)
+            kind = data.get('type')
+            if kind == 'pong':
+                return
+            if kind == 'subscriptions':
+                self._on_ack(data)
+                return
+            if kind == 'error':
+                self._on_error(data)
+                return
+            if kind == 'message':
+                self._on_data_frame(data)
+                return
+        except Exception as e:      # noqa: BLE001
+            logger.debug(f"[TossWS] 메시지 처리 오류: {e}")
+
+    def _on_ack(self, data):
+        subscribed = [str(x) for x in (data.get('subscribed') or [])]
+        rejected = data.get('rejected') or []
+        #  주문 채널과 시세 채널을 갈라서 센다. 하나로 뭉쳐 세면 시세가 다 붙었다는
+        #  이유로 '구독 정상'이 되고, 정작 주문 이벤트가 거부된 사실이 묻힌다.
+        self._subscribed = any(t.startswith('personal:order') for t in subscribed)
+        self._quote_codes = frozenset(
+            t.rsplit(':', 1)[-1] for t in subscribed
+            if t.startswith('trade:') or t.startswith('orderbook:'))
+        if subscribed:
+            logger.info(f"[TossWS] 구독 확정 {len(subscribed)}건 "
+                        f"(주문 {'O' if self._subscribed else 'X'} · 시세 {len(self._quote_codes)}종목)")
+        for r in rejected:
+            #  스펙: 원인을 고치기 전에는 재선언해도 같은 이유로 다시 거부된다.
+            #  그러니 재시도 루프를 돌리지 않고 사실만 남긴다(REST 폴링이 계속 잡는다).
+            #  [흔한 원인] trade:kr 의 codes 는 스펙상 '6자리 숫자'다. 0080G0 같은 신형
+            #   우선주는 stock-not-found 로 거부될 수 있다 — 그 종목만 REST 로 돈다.
+            logger.warning(f"[TossWS] 구독 거부: {r.get('target')} — "
+                           f"{r.get('code')} {r.get('message')} (REST 폴링 유지)")
+        if not self._subscribed:
+            logger.warning("[TossWS] 주문 이벤트 구독이 확정되지 않았습니다 — "
+                           "체결 인지는 REST 폴링에만 의존합니다.")
+
+    def _on_error(self, data):
+        err = data.get('error') or {}
+        code = err.get('code')
+        msg = err.get('message')
+        if code == 'server-shutdown':
+            #  프레임 직후 연결이 끊긴다. 백오프 루프가 재연결하고 다시 선언한다.
+            logger.info(f"[TossWS] 서버 배포 알림({code}) → 재연결 대기: {msg}")
+            return
+        logger.warning(f"[TossWS] 에러 프레임: {code} — {msg} (기존 구독은 유지된다)")
+
+    #  토스 수치는 전부 문자열(decimal)이다. 못 읽으면 0 이 아니라 None 이어야 한다 —
+    #  0 은 '값이 0'이라는 사실이고, 못 읽은 것은 사실이 없는 것이다.
+    @staticmethod
+    def _num(v):
+        try:
+            return float(str(v).strip().replace(',', ''))
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+    def _on_trade_frame(self, topic, payload):
+        """실시간 체결 → 현재가 캐시.
+
+        **체결가만 담는다.** 누적 거래량은 프레임에 없고, 스펙이 수신 합산으로 재구성하지
+        말라고 명시한다(LOSSY · sequence 없음). 매수/매도 구분과 체결강도도 없다.
+        KIS 캐시에는 그 자리가 있어 0 으로 채우기 쉬운데, 그러면 '못 잰 값'이 '0 거래'가 된다.
+        """
+        code = topic.rsplit(':', 1)[-1]
+        price = self._num(payload.get('price'))
+        if price is None or price <= 0:
+            return
+        with self._cache_lock:
+            self._price[code] = {'price': price, 'ts': time.time()}
+        if not self._got_quote:
+            self._got_quote = True
+            logger.info("[TossWS] 시세 수신 시작")
+
+    def _on_orderbook_frame(self, topic, payload):
+        """실시간 호가 → 총잔량 캐시.
+
+        [REST 와 같은 셈] api/toss.py 의 _toss_order_book 은 **상위 10호가만** 더해
+        total_askp_rsqn/total_bidp_rsqn 를 만든다. 여기서 전 호가를 더하면 같은 순간에도
+        WS 경로와 REST 경로가 다른 비율을 내놓는다 — 매수 게이트가 '어느 경로가 먼저
+        답했는가'에 따라 갈리게 된다. 그래서 10단으로 맞춘다.
+        """
+        code = topic.rsplit(':', 1)[-1]
+
+        def _total(rows):
+            tot = 0
+            for row in (rows or [])[:10]:
+                v = self._num((row or {}).get('volume'))
+                if v is not None:
+                    tot += v
+            return tot
+
+        with self._cache_lock:
+            self._ask[code] = {'total_ask': _total(payload.get('asks')),
+                               'total_bid': _total(payload.get('bids')),
+                               'ts': time.time()}
+        if not self._got_quote:
+            self._got_quote = True
+            logger.info("[TossWS] 시세 수신 시작")
+
+    def _on_data_frame(self, data):
+        """`type: message` 프레임을 topic 접두어로 갈라 보낸다."""
+        topic = str(data.get('topic') or '')
+        payload = data.get('data') or {}
+        if topic.startswith('personal:order'):
+            self._on_order_frame(topic, payload)
+        elif topic.startswith('trade:'):
+            self._on_trade_frame(topic, payload)
+        elif topic.startswith('orderbook:'):
+            self._on_orderbook_frame(topic, payload)
+
+    def _on_order_frame(self, topic, payload):
+        """주문 이벤트를 통보 dict 로 바꿔 콜백에 넘긴다(내용은 신뢰하지 않는다)."""
+        order = payload.get('order') or {}
+        event = payload.get('event')
+        if not self._got_event:
+            self._got_event = True
+            logger.info("[TossWS] 주문 이벤트 수신 시작")
+        #  [unknown enum] 스펙이 "클라이언트는 unknown code 를 허용하도록 구현" 하라고
+        #   적는다. 모르는 event 도 버리지 않고 깨운다 — 모르는 상태 변화일수록 REST 로
+        #   확인해야 한다. 다만 '거부'만은 KIS 규약대로 표시해 폴링의 미체결 정리에 맡긴다.
+        rejected = event in ('REJECTED', 'CANCEL_REJECTED', 'REPLACE_REJECTED')
+        notice = {
+            'source': 'toss-ws',
+            'event': event,
+            'acnt_seq': payload.get('accountSeq'),
+            'odno': order.get('orderId'),
+            'code': order.get('symbol'),
+            #  KIS 의 '01'=매도 / '02'=매수 표기에 맞춘다(콜백이 같은 키를 읽는다).
+            'buy_sell': {'SELL': '01', 'BUY': '02'}.get(order.get('side')),
+            'rejected': rejected,
+            'is_fill': event in ('FILL', 'PARTIAL_FILL'),
+        }
+        logger.info(f"[TossWS] 주문 이벤트 {event}: {notice['code']} (주문 {notice['odno']})")
+        self._invoke_exec_callbacks(notice)
 
 
 # ==========================================================
@@ -675,22 +1187,21 @@ def get_feed():
     with _feed_lock:
         if _feed is None:
             if getattr(config.session, 'is_toss', False):
-                _feed = TossPollingFeed()
+                _feed = TossWsFeed()
             else:
                 _feed = KisRealtimeFeed()
         return _feed
 
 
 def start_feed():
-    """KIS 모드에서 실시간 피드 스레드를 시작한다.
+    """현재 모드의 실시간 피드 스레드를 시작한다.
 
     USE_WEBSOCKET이 꺼져 있어도 스레드는 떠 있되 연결 없이 유휴 대기한다. 메뉴 0에서 토글을
     켜면 프로그램 재시작 없이 자동으로 연결을 시작하고, 끄면 연결을 해제하고 REST로 폴백한다.
-    토스(mode 3)는 공식 WS 미지원이라 시작하지 않는다(항상 REST).
+
+    [2026-09-09] 토스(mode 3)도 이제 시작한다 — 주문 이벤트 웹소켓이 열렸다. 시세는
+     구독하지 않으므로 현재가·호가 읽기 경로는 종전 그대로 REST 폴링이다.
     """
-    if getattr(config.session, 'is_toss', False):
-        logger.info("[WS] 토스 모드: 공식 WS 미지원 → REST 폴링 유지")
-        return None
     feed = get_feed()
     feed.start()
     return feed
@@ -724,9 +1235,10 @@ def coverage():
 
 
 def register_exec_callback(fn):
-    """체결통보(H0STCNI0/9) 도착 시 호출할 콜백을 등록한다(KIS 피드 한정).
+    """주문 체결 통보 도착 시 호출할 콜백을 등록한다.
 
-    토스/미지원 피드에서는 메서드가 없으므로 조용히 무시 → 기존 REST 폴링이 체결을 처리한다.
+    KIS는 체결통보(H0STCNI0/9), 토스는 주문 이벤트(personal:order)가 같은 자리에 붙는다.
+    메서드가 없는 피드(TossPollingFeed 등)에서는 조용히 무시 → REST 폴링이 체결을 처리한다.
     """
     try:
         feed = get_feed()

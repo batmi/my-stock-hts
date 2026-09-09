@@ -22,10 +22,23 @@
 [빈도부터 센다] 진단 표본에서 TQ 300+ 진입은 11,221건 중 803건(7.2%)이었다. 무시할
  수 없되 흔하지도 않다 — 구간별 표본이 얇아질 수 있으니 밴드별 건수를 함께 볼 것.
 
+[!! 계측기 함정 · 2026-09-09 실측] **엔진이 이 상한을 직접 적용한다.**
+ `portfolio_backtest.run_portfolio` 는 `config.ANALYSIS_THRESHOLDS["TREND_QUALITY_MAX"]` 를
+ 읽어 `entry_gate` **보다 먼저** 후보를 자른다(실매매 파리티, 2026-08-18 e692b24). 채택으로
+ 그 값이 300 이 된 뒤부터, 이 도구의 '기준선(상한 없음)' 팔은 **상한 없는 세계가 아니었다** —
+ 이미 300 으로 잘린 세계였다. 그래서 상한 팔이 더 자를 것이 없어 차단율 0.0%,
+ 네 창 전부 **0-36-0**(완전 동률)으로 나왔다. 다이얼이 무의미한 것이 아니라 **재지 못한 것**이다.
+
+ → 그래서 아래 `_release_engine_cap()` 이 측정 동안 엔진 상한을 해제한다. 상한은 오직
+   `entry_gate` 로만 건다. 그래야 기준선이 진짜 기준선이 된다.
+ → 원 채택 측정(2026-08-18)은 이 키와 엔진 게이트가 **생기기 전**이라 유효하다. 그 사이의
+   재실행들이 0-36-0 을 '결론 불변'으로 읽었을 수 있다 — 동률은 확인이 아니라 침묵이다.
+
 [실행] python3 tools/audit_tq_upper_cap.py --trials 12
        python3 tools/audit_tq_upper_cap.py --trials 12 --live-only   # 목록 원본이 죽었을 때
 """
 import argparse
+import contextlib
 import os
 import random
 import sys
@@ -141,6 +154,25 @@ def main():
 
     counters = {"calls": 0, "blocks": 0}
 
+    @contextlib.contextmanager
+    def _release_engine_cap():
+        """측정 동안 엔진의 내장 TQ 상한을 해제한다(위 '계측기 함정' 참고).
+
+        [대입 금지] 그룹 딕셔너리를 통째로 갈아끼우면 settings 와 갈라져 설정이 조용히
+         사라진다([[config-group-dict-aliasing]]). 반드시 제자리에서 키만 바꾼다.
+        """
+        thr_group = config.ANALYSIS_THRESHOLDS
+        had = "TREND_QUALITY_MAX" in thr_group
+        prev = thr_group.get("TREND_QUALITY_MAX")
+        thr_group["TREND_QUALITY_MAX"] = 0      # 0 = 해제
+        try:
+            yield prev if had else None
+        finally:
+            if had:
+                thr_group["TREND_QUALITY_MAX"] = prev
+            else:
+                thr_group.pop("TREND_QUALITY_MAX", None)
+
     def cap_gate(cap):
         def g(day, code, _held):
             counters["calls"] += 1
@@ -169,6 +201,14 @@ def main():
         return g
 
     def run(wd, gate):
+        res = []
+        #  [필수] 엔진 상한을 해제한 채로 돌린다. 상한은 오직 gate 로만 건다 —
+        #   그래야 '기준선 = 상한 없음'이 사실이 되고 팔끼리 실제로 갈린다.
+        with _release_engine_cap():
+            res.extend(_run_arms(wd, gate))
+        return res
+
+    def _run_arms(wd, gate):
         res = []
         for sd in seeds:
             for i in range(args.trials):
@@ -199,6 +239,12 @@ def main():
               f"{g('pf'):>6.2f}{g('n'):>6.0f}{g('top10'):>9.1f}{g('win'):>7.1f}"
               f"{wl:>10}", flush=True)
 
+    engine_cap = float(config.ANALYSIS_THRESHOLDS.get("TREND_QUALITY_MAX", 0) or 0)
+    if engine_cap > 0:
+        print(f"[계측] 엔진 내장 TQ 상한 {engine_cap:.0f} 을 측정 동안 해제한다 — "
+              f"해제하지 않으면 '기준선'이 이미 잘린 세계라 모든 팔이 동률로 나온다 "
+              f"(도구 머리말 '계측기 함정' 참고).", flush=True)
+
     for wn, wd in W:
         print(f"\n########## {wn} ({len(wd)} 거래일) ##########")
         print(f"{'팔':<30}{'수익%':>9}{'MDD%':>8}{'MAR':>7}{'PF':>6}{'청산':>6}"
@@ -211,6 +257,14 @@ def main():
             res = run(wd, cap_gate(cap))
             rates[cap] = counters["blocks"] / max(1, counters["calls"])
             show(f"TQ 상한 {cap:.0f} (차단 {rates[cap] * 100:.1f}%)", res, base)
+            #  [자기검증] 게이트가 한 번도 불리지 않았다면 잰 것이 없다. '차단 0건'과
+            #   '측정 자체가 안 됨'은 다른 사실인데 표에서는 똑같이 0.0% · 0-N-0 으로
+            #   보인다 — 동률을 '결론 불변'으로 읽는 사고가 여기서 난다.
+            if counters["calls"] == 0:
+                raise SystemExit(
+                    f"[계측 실패] {wn} · 상한 {cap:.0f}: entry_gate 가 한 번도 호출되지 "
+                    f"않았다. 후보가 없었거나 엔진이 먼저 잘랐다는 뜻이다 — 이 표는 "
+                    f"읽으면 안 된다(도구 머리말 '계측기 함정' 참고).")
         for fl in floors:
             counters["calls"] = counters["blocks"] = 0
             res = run(wd, floor_gate(fl))

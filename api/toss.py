@@ -92,7 +92,13 @@ def _toss_nxt_supported(code):
     반환해, 시세 갱신 주기마다 stocks API를 두드리지 않게 한다.
     """
     global _toss_nxt_map, _toss_nxt_miss, _toss_nxt_day
-    if not config.session.is_toss or not code or not str(code).isdigit():
+    #  [Fix 2026-09-09] 종전 가드가 isdigit() 이라 문자가 섞인 국내 코드('0080G0'·'0101N0'
+    #   같은 최근 상장 ETF/ETN·신형우선주)를 전부 '판정 불가'로 떨어뜨렸다. 같은 결함을
+    #   이 파일 아래쪽(_krx_daily_chart)과 krx_daily.is_domestic_code 에서 이미 고쳤는데
+    #   이 자리만 남아 있었다. 토스 1.2.15 스펙이 종목코드를 '숫자 또는 영문·숫자 조합'
+    #   으로 명문화하면서(예시 0101N0) 앞으로 더 흔해진다 → [[market-type-single-source]]
+    from modules import krx_daily
+    if not config.session.is_toss or not code or not krx_daily.is_domestic_code(code):
         return None
     today = datetime.now().strftime('%Y%m%d')
     with _toss_nxt_lock:

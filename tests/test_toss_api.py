@@ -2411,3 +2411,40 @@ def test_토스_수급_요청_실패는_빈_수급이_아니다():
             assert m.call_count == 0, "'없음'까지 매번 다시 물으면 TPS 절감이 무너진다"
     finally:
         config.session.is_toss = False
+
+
+# ---------------------------------------------------------------------------
+# 국내 종목코드 판정 — 문자가 섞인 코드를 배제하지 않는가
+# ---------------------------------------------------------------------------
+#  [무엇이 문제였나 · 2026-09-09] NXT 지원 여부 판정이 `isdigit()` 으로 걸러서, 문자가
+#  섞인 국내 코드('0080G0' KODEX K방산TOP10, '0101N0' 신형우선주 등)를 전부 '판정 불가'로
+#  떨어뜨렸다. 같은 결함을 krx_daily.is_domestic_code 와 _krx_daily_chart 에서 이미 고쳐
+#  뒀는데 이 자리만 남아 있었다 — 판정이 여러 곳에 흩어져 있으면 한 곳만 낡는다.
+#
+#  토스 Open API 1.2.15 가 종목코드를 "6자리 숫자 **또는 영문·숫자 조합**"으로 명문화하며
+#  `0101N0` 을 공식 예시로 넣었다. 앞으로 더 흔해진다.
+#  → [[market-type-single-source]] · [[krx-nxt-data-boundary]]
+def test_nxt_gate_accepts_alphanumeric_domestic_codes():
+    """문자가 섞인 국내 코드도 NXT 판정 경로에 들어가야 한다."""
+    import inspect
+
+    from api import toss as _toss
+    #  주석에도 'isdigit()' 이 설명으로 등장하므로, **실제 호출 형태**만 본다.
+    src = inspect.getsource(_toss._toss_nxt_supported)
+    code_lines = [ln.split("#")[0] for ln in src.splitlines()]
+    body = "\n".join(code_lines)
+    assert ".isdigit()" not in body, \
+        "isdigit() 가드는 '0080G0'·'0101N0' 같은 국내 코드를 조용히 배제한다"
+    assert "is_domestic_code" in body, "판정은 krx_daily.is_domestic_code 하나로 모은다"
+
+
+def test_domestic_code_helper_is_the_single_source():
+    """판정 규칙 자체가 옳은가 — 숫자로 시작하는 6자리 영숫자."""
+    from modules import krx_daily
+
+    assert krx_daily.is_domestic_code("005930")
+    assert krx_daily.is_domestic_code("0080G0"), "KODEX K방산TOP10 — 실제 상장 코드"
+    assert krx_daily.is_domestic_code("0101N0"), "토스 1.2.15 스펙의 공식 예시"
+    assert not krx_daily.is_domestic_code("AAPL"), "해외 티커는 국내가 아니다"
+    assert not krx_daily.is_domestic_code("12345"), "6자리가 아니다"
+    assert not krx_daily.is_domestic_code("A05930"), "숫자로 시작해야 한다"

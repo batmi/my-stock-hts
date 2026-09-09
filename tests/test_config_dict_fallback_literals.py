@@ -7,7 +7,10 @@
  그 형태는 가드 밖이었고, 전수 조사에서 **32곳이 정본과 어긋나** 있었다. 그중 다수가
  '측정으로 폐기된 옛 값의 마지막 사본'이었다:
 
-   · INDICATOR_PARAMS['OBV_MA_PERIOD']  정본 10 / 폴백 5   (5→10 은 2026-08-17 채택분)
+   · INDICATOR_PARAMS['OBV_MA_PERIOD']  정본 10 / 폴백 5   (당시 5→10 은 2026-08-17 채택분.
+     2026-09-09 재측정에서 그 채택이 철회돼 **정본이 다시 5**가 됐고, 이 가드가 잡던
+     불일치는 그 되돌림으로 없어졌다. 예시로는 그대로 둔다 — 폴백이 정본과 갈리면
+     어떤 일이 생기는지 보여주는 자리다.)
    · SELL_STRATEGY['TS_ACTIVATION_MODE'] 정본 breakeven / 폴백 fixed  (fixed 는 폐기된 모드)
    · MARKET_REGIME_PARAMS['USE_ADAPTIVE_THRESHOLD'] 정본 False / 폴백 True
      (적응형 임계값은 측정 후 OFF 로 확정된 축이다 — 폴백이 그것을 되살린다)

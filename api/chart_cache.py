@@ -704,7 +704,7 @@ def prefetch_multiple_current_prices(codes, is_overseas=False, include_investor=
     else:
         # WS가 신선한 현재가를 이미 가진 종목은 현재가 REST 예열을 생략(TPS 절감)하기 위한 피드 핸들
         _ws_feed = None
-        if prefer_ws and getattr(config, 'USE_WEBSOCKET', True) and not config.session.is_toss:
+        if prefer_ws and getattr(config, 'USE_WEBSOCKET', True):
             try:
                 from brokers import realtime
                 _ws_feed = realtime.get_feed()

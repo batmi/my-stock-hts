@@ -369,7 +369,7 @@ def show_help():
     ema_fast = _rp.get('REGIME_EMA_FAST', 9)
     ema_slow = _rp.get('REGIME_EMA_SLOW', 41)
     confirm_pct = _rp.get('REGIME_CONFIRM_PCT', 5.0)
-    obv_period = config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 10)
+    obv_period = config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 5)
 
     table.add_row("시장 지수명", f"EMA{ema_fast} > EMA{ema_slow} & 교차 후 {confirm_pct:+g}% 진행", "[red]빨간색[/]", "강세장 (Bull) - 확정 상승추세")
     # [폭] 항목 라벨은 컬럼 폭(28칸) 안에서 행을 나눠 이어 쓴다 — 셀이 스스로 접히면

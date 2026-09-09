@@ -3174,7 +3174,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     obv_val = ind.get('obv')
     vol_sum = df['volume'].tail(5).sum() if df is not None and 'volume' in df.columns else 0
     
-    if df is None or len(df) < config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 10):
+    if df is None or len(df) < config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 5):
         obv_trend = None
         obv_val = None
         
@@ -3708,7 +3708,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                     obv_val = ind.get('obv')
                     vol_sum = df['volume'].tail(5).sum() if df is not None and 'volume' in df.columns else 0
                     
-                    if df is None or len(df) < config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 10):
+                    if df is None or len(df) < config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 5):
                         obv_trend = None
                         obv_val = None
                         
@@ -4259,7 +4259,7 @@ def _analyze_stock_worker(stock, params=None, restricted_stocks=None, rules_map=
         obv_trend = ind.get('obv_trend')
         vol_sum = df['volume'].tail(5).sum() if df is not None and 'volume' in df.columns else 0
         
-        if df is None or len(df) < config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 10):
+        if df is None or len(df) < config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 5):
             obv_trend = None
             obv_val = None
             
@@ -5520,7 +5520,7 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
             obv_val = ind.get('obv')
             vol_sum = chart_df['volume'].tail(5).sum() if chart_df is not None and 'volume' in chart_df.columns else 0
             
-            if chart_df is None or len(chart_df) < config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 10):
+            if chart_df is None or len(chart_df) < config.INDICATOR_PARAMS.get("OBV_MA_PERIOD", 5):
                 obv_trend = None
                 obv_val = None
                 

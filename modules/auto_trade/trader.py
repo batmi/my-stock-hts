@@ -1933,7 +1933,18 @@ class AutoTrader:
             from brokers import realtime
             feed = realtime.get_feed()
             if getattr(config.session, "is_toss", False):
-                feed_text = "토스: REST 폴링 (공식 WS 미지원)"
+                #  [2026-09-09] 토스 WS는 **주문 이벤트 전용**이다. 시세는 구독하지 않으므로
+                #   현재가·호가는 여전히 REST 폴링이다. 둘을 한 줄에 같이 적지 않으면
+                #   "WebSocket 연결됨"이 시세까지 실시간이라는 뜻으로 읽힌다.
+                thread = getattr(feed, "_thread", None)
+                alive = bool(thread and thread.is_alive())
+                subscribed = bool(getattr(feed, "_subscribed", False))
+                if alive and subscribed:
+                    feed_text = "토스: 시세 REST 폴링 + 주문 이벤트 WS 구독 중"
+                else:
+                    feed_text = "토스: 시세 REST 폴링 (주문 이벤트 WS 연결 대기)"
+                    if getattr(config, "USE_WEBSOCKET", True):
+                        warnings.append("토스 주문 이벤트 WebSocket이 연결 또는 구독 대기 상태입니다")
             elif not getattr(config, "USE_WEBSOCKET", True):
                 feed_text = "REST 폴링 (WebSocket 비활성)"
             else:
@@ -5449,7 +5460,11 @@ class AutoTrader:
             # [WS] 커버리지 진단: 시스템 종목 수가 WS 동시 용량을 넘으면 초과분은 현재가/호가를
             #  REST로 폴백(로테이션)하므로 모의투자(2 TPS)에서 분석이 느려질 수 있다. 상태 변화 시에만 1회 로그.
             cov = realtime.coverage()
-            if cov:
+            #  [2026-09-09] 토스 피드는 시세를 구독하지 않아 커버리지 항목이 None 이다
+            #   ('0종목 커버'가 아니라 '재는 축이 아님'). 아래 비교는 숫자를 전제하므로
+            #   None 이면 건너뛴다 — 종전이면 TypeError 가 바깥 except 에 삼켜져,
+            #   커버리지 진단이 조용히 사라진 채 아무도 몰랐다.
+            if cov and cov.get('capacity') is not None:
                 sig = (cov.get('priority'), cov.get('capacity'), cov.get('rest_fallback'), cov.get('ob_covered'))
                 if sig != getattr(self, '_ws_cov_sig', None):
                     self._ws_cov_sig = sig

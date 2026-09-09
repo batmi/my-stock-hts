@@ -92,12 +92,15 @@ def main():
     ap.add_argument("--subperiods", type=int, default=3)
     ap.add_argument("--exclude-from", default="20260301")
     args = ap.parse_args()
+    seed_notice(args.seeds, example="--seeds 3")
+
+    #  씨드 경고보다 뒤에 둔다 — 규약은 '경고가 데이터 준비보다 앞'이고
+    #  tests/test_audit_seed_notice.py 가 parse_args 바로 다음 줄을 본다.
     global ARMS, PAIR
     if args.direction == "early":
         ARMS, PAIR = ARMS_EARLY, PAIR_EARLY
         print("[방향] 조이는 축(발동 2.0 · 콜백 3.0) — 2026-09-08 재실행에서 뒤집힌 축을 확인한다",
               flush=True)
-    seed_notice(args.seeds, example="--seeds 3")
 
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
     config.session.load_stock_config()

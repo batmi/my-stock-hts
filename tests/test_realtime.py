@@ -122,12 +122,46 @@ def test_dedup_and_other_excludes_priority():
     assert "C" in codes
 
 
-def test_start_feed_toss_returns_none(monkeypatch):
-    # 토스(mode 3)는 공식 WS 미지원 → 피드 시작 안 함(항상 REST 폴백)
+def test_toss_mode_gets_the_ws_feed(monkeypatch):
+    """[2026-09-09] 토스 WS가 열렸다 — 이제 피드를 만든다(종전엔 None 을 돌려줬다).
+
+    스레드는 띄우지 않는다. get_feed() 는 '자동 시작하지 않는다'가 계약이고,
+    여기서 start() 를 부르면 테스트가 실제로 연결을 시도한다.
+    """
     import config
     monkeypatch.setattr(rt, "_feed", None)
     monkeypatch.setattr(config.session, "is_toss", True)
-    assert rt.start_feed() is None
+    assert isinstance(rt.get_feed(), rt.TossWsFeed)
+
+
+def test_toss_feed_reports_quotes_off_as_unknown_not_zero(monkeypatch):
+    """시세를 **구독하지 않기로 한** 것이 '0종목 커버'로 둔갑하면 안 된다.
+
+    0 이라고 적으면 관제 화면이 '피드가 죽었다'로 읽고, 운용자는 멀쩡한 주문 채널을
+    두고 원인을 찾게 된다. 재는 축이 아니면 None 이다([[unknown-vs-empty]]).
+    """
+    import config
+    monkeypatch.setattr(config, "TOSS_WS_SUBSCRIBE_QUOTES", False, raising=False)
+    cov = rt.TossWsFeed().coverage()
+    assert cov['price_covered'] is None and cov['capacity'] is None
+    assert cov['order_subscribed'] is False
+
+
+def test_toss_feed_never_answers_vol_strength():
+    """토스는 체결강도를 REST 에서도 웹소켓에서도 주지 않는다.
+
+    여기서 무언가 돌려주면 그것은 **지어낸 값**이고, 매수 수급 게이트가 그것을 믿는다.
+    기본 구현(None)을 덮어쓰지 않았는지 고정한다.
+    """
+    feed = rt.TossWsFeed()
+    assert feed.get_vol_strength("005930") is None
+    assert "get_vol_strength" not in rt.TossWsFeed.__dict__
+
+
+def test_toss_feed_caches_are_empty_before_any_frame():
+    feed = rt.TossWsFeed()
+    assert feed.get_price("005930") is None
+    assert feed.get_orderbook("005930") is None
 
 
 def test_get_price_returns_none_when_no_data():

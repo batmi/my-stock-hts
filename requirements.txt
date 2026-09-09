@@ -41,7 +41,8 @@ numpy>=1.26
 requests>=2.28
 # urllib3: 재시도(Retry)·풀 설정을 api.py 가 직접 만진다.
 urllib3>=2.0
-# websockets: KIS 실시간 시세/체결통보 피드(realtime.py). 없으면 REST 폴백으로 퇴화한다.
+# websockets: KIS 실시간 시세/체결통보 + 토스 주문 이벤트 피드(realtime.py).
+#  없으면 두 모드 모두 REST 폴백으로 퇴화한다(기능은 살아 있고 지연만 늘어난다).
 websockets>=12.0
 # cryptography: KIS 체결통보 AES256-CBC 복호화(realtime.py).
 #  '표준 라이브러리'가 아니라 서드파티다 — 빠지면 체결통보만 조용히 실패한다.

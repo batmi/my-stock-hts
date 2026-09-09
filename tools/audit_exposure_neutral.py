@@ -48,6 +48,43 @@ from tools.audit_defensive_sector import INITIAL_CAPITAL, new_scale_fn_factory  
 GROUPS = ("SELL_STRATEGY", "ANALYSIS_THRESHOLDS", "RISK_SCALING_PARAMS",
           "INDICATOR_PARAMS", "MARKET_REGIME_PARAMS", "SCORING_WEIGHTS")
 
+#  [Fix 2026-09-09] **이 도구가 바꿀 수 없는 것들이 있다.**
+#   오버라이드는 run_portfolio 를 감쌀 뿐인데, 지표 컬럼(dfs)과 일자별 판정(status)은
+#   그보다 먼저 **한 번만** 만들어진다. 그래서 아래 것들을 --set 으로 주면 조용히
+#   무동작이 되고, 표에는 `0-N-0 완전 동률`이 찍힌다 — 읽는 사람은 그것을 '차이가 없다'
+#   로 읽지만 실제로는 **'재지 못했다'** 이다([[unknown-vs-empty]] 의 감사 도구 판).
+#   실측 2026-09-09: OBV_MA_PERIOD 5 vs 10 을 걸었더니 다섯 창 전부 소수점까지 같았다.
+#   같은 함정이 tools/audit_indicator_construction.py 머리말에 이미 적혀 있었다.
+#
+#   · 컬럼에 굳는 것(INDICATOR_PARAMS) → 이 도구로는 불가. 지표를 다시 만들어야 한다.
+#   · 판정에 굳는 것(아래 STATUS_BAKED) → status 를 팔마다 다시 계산해 지원한다(1~3초).
+_COLUMN_BAKED = ("INDICATOR_PARAMS",)
+_STATUS_BAKED = {
+    "SCORING_WEIGHTS": None,                       # None = 그룹 전체
+    "ANALYSIS_THRESHOLDS": {"BUY_SCORE", "BUY_RSI_MAX", "RISE_SCORE"},
+}
+
+
+def _touches_status(pairs):
+    """이 오버라이드가 precompute_status 의 입력을 건드리는가."""
+    for g, k, _v in pairs or []:
+        keys = _STATUS_BAKED.get(g, "MISS")
+        if keys is None or (keys != "MISS" and k in keys):
+            return True
+    return False
+
+
+def _reject_unmeasurable(pairs):
+    """이 도구가 실제로 바꿀 수 없는 오버라이드는 **조용히 넘기지 않고 멈춘다.**"""
+    bad = [f"{g}.{k}" for g, k, _v in pairs or [] if g in _COLUMN_BAKED]
+    if bad:
+        raise SystemExit(
+            f"[중단] {', '.join(bad)} 은 이 도구로 잴 수 없다 — 지표는 컬럼으로 굳어 있어\n"
+            f"  run_portfolio 를 감싸는 오버라이드가 닿지 않는다(결과가 0-N-0 동률로 나와\n"
+            f"  '차이 없음'처럼 보인다). 지표 축은 tools/audit_indicator_construction.py 로\n"
+            f"  잴 것 — 그쪽은 팔마다 지표 컬럼을 다시 만든다."
+        )
+
 
 def parse_set(text):
     """'GROUP.KEY=VALUE' → (그룹, 키, 파이썬 값). 값은 리터럴로 읽는다."""
@@ -127,6 +164,8 @@ def main():
     ap.add_argument("--max-iter", type=int, default=6, help="보정 반복 상한")
     args = ap.parse_args()
     seed_notice(len(args.seeds.split(",")), example="--seeds 20260816,7,101")
+    _reject_unmeasurable(args.sets)
+    _reject_unmeasurable(args.base_sets)
     if not args.sets:
         ap.error("--set 으로 검증할 안을 하나 이상 줄 것 "
                  "(예: --set SELL_STRATEGY.TIME_STOP_DAYS=25)")
@@ -161,12 +200,21 @@ def main():
     def run(wd, overrides, iratio, trials):
         prev, missing = apply_overrides(overrides)
         try:
+            #  점수 판정에 굳는 값을 바꿨으면 status 를 이 팔의 설정으로 다시 만든다.
+            #   안 하면 옛 판정을 그대로 읽어 조용히 무동작이 된다.
+            st = status
+            if _touches_status(overrides):
+                st = pb.precompute_status(dfs, {
+                    "BUY_SCORE": config.ANALYSIS_THRESHOLDS["BUY_SCORE"],
+                    "BUY_RSI_MAX": config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"],
+                    "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"],
+                    "WEIGHTS": config.SCORING_WEIGHTS})
             out = []
             for sd in seeds:
                 for i in range(trials):
                     codes = picks[(sd, i)]
                     r = pb.run_portfolio(
-                        {c: dfs[c] for c in codes}, {c: status[c] for c in codes}, wd,
+                        {c: dfs[c] for c in codes}, {c: st[c] for c in codes}, wd,
                         initial_capital=args.seed_capital, slots=slots,
                         market_filter_dates={c: mf.get(c, set()) for c in codes},
                         # 콜러블은 자산곡선 이력을 들고 있다 — 실행마다 새로 만든다

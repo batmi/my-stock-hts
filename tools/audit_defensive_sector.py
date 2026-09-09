@@ -236,20 +236,78 @@ def main():
                                     market_filter_dates={c: mf.get(c, set()) for c in codes},
                                     risk_scale_by_date=new_scale(), entry_gate=gate)
 
+        #  [Fix 2026-09-09] **같은 차단율 무작위 대조를 세운다.**
+        #   진입 필터는 무엇을 막든 슬롯을 비워 다음 후보를 당겨오므로, '막았더니 좋아졌다'가
+        #   업종 라벨의 공인지 그냥 '덜 사서'인지 가려야 한다([[entry-filter-random-control]]).
+        #   규약대로 ① 차단율을 창마다 **실측**하고(추정하지 않는다) ② 무작위 팔을 **5장**
+        #   뽑아 ③ 평균이 아니라 분포(최선/최악)로 본다 — 한 장은 추첨이라 결론이 안 된다.
+        _RANDOM_DRAWS = 5
+
+        class _Counting:
+            """게이트가 실제로 몇 번 막았는지 센다 — 차단율의 분모·분자를 실측한다."""
+            def __init__(self, fn):
+                self.fn, self.calls, self.blocks = fn, 0, 0
+
+            def __call__(self, day, code, held):
+                self.calls += 1
+                out = bool(self.fn(day, code, held))
+                self.blocks += out
+                return out
+
+        def _random_gate(rate, draw):
+            """같은 비율로, 그러나 **고른 이유 없이** 막는다. (일자,종목)에 결정적이다."""
+            import hashlib
+
+            def fn(day, code, held):
+                h = hashlib.md5(f"{draw}|{day}|{code}".encode()).digest()
+                return (int.from_bytes(h[:4], "big") / 0xFFFFFFFF) < rate
+            return fn
+
         gate = lambda day, code, held: code in DEF_CODES  # noqa: E731
         print(f"\n[C] 방어주 배제 짝비교 — 표본 {args.sample}(방어 {len(defs_in)} 강제 포함) · "
-              f"{args.trials}회 × 씨드 {len(seeds)}개")
+              f"{args.trials}회 × 씨드 {len(seeds)}개 · 무작위 대조 {_RANDOM_DRAWS}장")
         print(f"{'창':<12}{'쌍':>5}{'배제승':>7}{'무':>4}{'배제패':>7}{'수익 기준':>11}{'수익 배제':>11}"
               f"{'차이':>9}{'MDD기준':>9}{'MDD배제':>9}{'꼬리기준':>9}{'꼬리배제':>9}")
+        rand_rows = []
         for wn, wd in W:
             b = [metrics(run(p, wd, None)) for sd in seeds for p in picks[sd]]
-            e = [metrics(run(p, wd, gate)) for sd in seeds for p in picks[sd]]
+            #  배제 팔은 세면서 돌린다 — 이 창의 실제 차단율이 무작위 팔의 입력이 된다.
+            counters = []
+            e = []
+            for sd in seeds:
+                for p in picks[sd]:
+                    cg = _Counting(gate)
+                    e.append(metrics(run(p, wd, cg)))
+                    counters.append(cg)
+            calls = sum(c.calls for c in counters)
+            blocks = sum(c.blocks for c in counters)
+            rate = (blocks / calls) if calls else 0.0
             win = sum(1 for x, y in zip(e, b) if x["ret"] > y["ret"] + 1e-9)
             tie = sum(1 for x, y in zip(e, b) if abs(x["ret"] - y["ret"]) <= 1e-9)
             g = lambda ms, k: np.mean([m[k] for m in ms])  # noqa: E731
             print(f"{wn:<12}{len(b):>5}{win:>7}{tie:>4}{len(b) - win - tie:>7}"
                   f"{g(b, 'ret'):>11.2f}{g(e, 'ret'):>11.2f}{g(e, 'ret') - g(b, 'ret'):>9.2f}"
                   f"{g(b, 'mdd'):>9.2f}{g(e, 'mdd'):>9.2f}{g(b, 'top10'):>9.2f}{g(e, 'top10'):>9.2f}")
+
+            draws = []
+            for d in range(_RANDOM_DRAWS):
+                rg = _random_gate(rate, d)
+                r = [metrics(run(p, wd, rg)) for sd in seeds for p in picks[sd]]
+                w = sum(1 for x, y in zip(r, b) if x["ret"] > y["ret"] + 1e-9)
+                draws.append((g(r, "ret"), w, g(r, "mdd"), g(r, "top10")))
+            rand_rows.append((wn, rate, blocks, calls, g(e, "ret"), win, len(b), draws))
+
+        print(f"\n[C-대조] 같은 차단율 무작위 — 배제가 라벨의 공인가, 그냥 덜 산 것인가")
+        print(f"{'창':<12}{'차단율%':>8}{'차단/시도':>13}{'배제 수익':>10}{'배제승':>7}"
+              f"{'무작위 최악':>12}{'무작위 중앙':>12}{'무작위 최선':>12}{'무작위 승 범위':>15}")
+        for wn, rate, blocks, calls, eret, ewin, n, draws in rand_rows:
+            rets = sorted(d[0] for d in draws)
+            wins = sorted(d[1] for d in draws)
+            print(f"{wn:<12}{rate * 100:>8.2f}{f'{blocks:,}/{calls:,}':>13}{eret:>10.2f}"
+                  f"{f'{ewin}/{n}':>7}{rets[0]:>12.2f}{rets[len(rets) // 2]:>12.2f}"
+                  f"{rets[-1]:>12.2f}{f'{wins[0]}~{wins[-1]}':>15}")
+        print("[읽는 법] 배제 수익이 무작위 **최선**보다 높아야 라벨이 정보를 가진 것이다.")
+        print("  무작위 범위 안에 들어가면 그 이득은 '방어주라서'가 아니라 '덜 사서'다.")
 
 
 if __name__ == "__main__":

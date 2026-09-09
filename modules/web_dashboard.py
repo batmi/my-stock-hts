@@ -464,7 +464,22 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             display: block;
             overflow-y: auto;
             overflow-x: hidden;
-            padding: 20px 0;
+            /*  [Fix 2026-09-09] 아래쪽 여백을 컨테이너 padding 으로 주면 **스크롤 끝에서
+                사라진다** — 스크롤 컨테이너의 padding-bottom 은 엔진에 따라 스크롤
+                가능 영역에 안 들어간다. 차트 PNG 는 4800x6720 (세로 1.4배)이라 폭에
+                맞추면 화면보다 훨씬 길어지고, 맨 아래 x축 날짜 라벨이 뷰포트 경계에
+                딱 걸려 반쯤 잘렸다. 아래 ::after 스페이서로 바꾼다(실제 콘텐츠라
+                어느 엔진에서나 스크롤 높이에 포함된다). */
+            padding: 20px 0 0;
+            -webkit-overflow-scrolling: touch;
+            overscroll-behavior: contain;
+        }
+        #lightbox.active.zoomed::after {
+            content: '';
+            display: block;
+            /*  마지막 축 라벨이 경계에 닿지 않게 한 화면치의 여유를 둔다.
+                iOS 홈 인디케이터 영역(safe-area)까지 더한다. */
+            height: calc(48px + env(safe-area-inset-bottom, 0px));
         }
         #lightbox img {
             max-width: 95%;
@@ -489,7 +504,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             cursor: zoom-out;
         }
         .close-btn {
-            position: absolute;
+            /*  확대 모드에서는 컨테이너가 스크롤된다 — absolute 면 닫기 버튼이 위로
+                흘러가 버려, 길게 스크롤한 뒤에는 닫을 방법이 사라진다. fixed 로 둔다. */
+            position: fixed;
             top: 20px; right: 30px;
             font-size: 2.5rem;
             color: white;

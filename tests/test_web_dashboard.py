@@ -372,3 +372,41 @@ def test_인덱스_저장_실패는_차트_생성을_망치지_않는다(tmp_pat
     assert any("인덱스 저장 실패" in r.message for r in caplog.records), (
         "조용히 삼키면 갤러리가 왜 안 바뀌는지 아무 데도 안 남는다")
     assert not (tmp_path / "index.html.tmp").exists(), "실패한 임시 파일을 치우지 않았다"
+
+
+# ---------------------------------------------------------------------------
+# 확대(라이트박스) 스크롤 — 맨 아래가 잘리지 않는가
+# ---------------------------------------------------------------------------
+#  [무엇이 문제였나 · 2026-09-09] 차트를 클릭해 브라우저 폭만큼 확대하면 세로로 아주
+#  길어진다(PNG 4800x6720, 세로 1.4배). 그 상태에서 끝까지 스크롤해도 **맨 아래 x축 날짜
+#  라벨이 반쯤 잘렸다.** 아래 여백을 스크롤 컨테이너의 padding-bottom 으로 줬기 때문인데,
+#  그 padding 은 엔진에 따라 스크롤 가능 영역에 포함되지 않는다.
+#  → 실제 콘텐츠인 ::after 스페이서로 바꿨다. 함께: 닫기 버튼이 absolute 라 길게 스크롤한
+#    뒤에는 화면 밖으로 흘러가 닫을 수 없었다(fixed 로 변경).
+def _css():
+    from modules import web_dashboard
+    import inspect
+    return inspect.getsource(web_dashboard)
+
+
+def test_zoomed_view_reserves_room_below_the_image():
+    css = _css()
+    assert "#lightbox.active.zoomed::after" in css, \
+        "확대 모드에 아래 스페이서가 없다 — 끝까지 스크롤해도 마지막 축 라벨이 잘린다"
+    tail = css.split("#lightbox.active.zoomed::after", 1)[1][:300]
+    assert "height:" in tail and "48px" in tail, "스페이서에 높이가 없으면 아무것도 안 밀어낸다"
+
+
+def test_the_bottom_gap_is_not_container_padding():
+    """padding-bottom 으로 되돌아가면 같은 결함이 재발한다."""
+    css = _css()
+    block = css.split("#lightbox.active.zoomed {", 1)[1].split("}", 1)[0]
+    assert "padding: 20px 0;" not in block, \
+        "스크롤 컨테이너의 아래 padding 은 스크롤 끝에서 사라진다 — ::after 스페이서를 쓸 것"
+
+
+def test_close_button_stays_reachable_while_scrolling():
+    css = _css()
+    block = css.split(".close-btn {", 1)[1].split("}", 1)[0]
+    assert "position: fixed" in block, \
+        "확대 모드는 컨테이너가 스크롤된다 — absolute 면 닫기 버튼이 위로 흘러간다"
