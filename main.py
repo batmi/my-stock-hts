@@ -729,7 +729,10 @@ def show_help():
                 "kosdaq_str": q_r_str, "kosdaq_adj": kosdaq_adj
             }
             
-            # [추가] 실시간 필터링 상태 계산
+            # [추가] 실시간 필터링 상태 + 판정 근거 계산
+            #  '보류'만 보여 주면 왜 막혔는지 알 수 없다 → 지수/SMA/차단·해제선/지속 봉 수를
+            #  함께 모은다. 판정은 실매매와 같은 함수 하나(indicators.get_market_filter_detail
+            #  → get_market_filter_blocked + market_filter_ready)만 쓴다.
             if getattr(config, 'USE_MARKET_FILTER', True):
                 filter_info = {}
                 ma_period_filter = getattr(config, 'MARKET_FILTER_MA', 80)
@@ -737,13 +740,18 @@ def show_help():
                 for m_type in ["KOSPI", "KOSDAQ"]:
                     try:
                         df = analysis.get_domestic_index_data(m_type)
-                        if (df is not None and not df.empty
-                                and indicators.market_filter_ready(df['close'], ma_period_filter)):
-                            # 실매매와 같은 판정 함수(밴드 히스테리시스 포함)
-                            filter_info[m_type] = not bool(indicators.get_market_filter_blocked(
-                                df['close'], ma_period_filter, band_filter).iloc[-1])
+                        if df is None or df.empty:
+                            filter_info[m_type] = None   # 조회 실패 = 판정 불가(보류)
+                            continue
+                        det = indicators.get_market_filter_detail(
+                            df['close'], ma_period_filter, band_filter)
+                        # 마지막 봉 일자·출처를 함께 남긴다(어떤 데이터로 판정했는지)
+                        if 'date' in df.columns:
+                            det['asof'] = str(df['date'].iloc[-1])
+                        det['source'] = df.attrs.get('source')
+                        filter_info[m_type] = det
                     except Exception:
-                        pass
+                        filter_info[m_type] = None
     except Exception:
         pass
 
@@ -867,9 +875,32 @@ def show_help():
     if filter_info is None and getattr(config, 'USE_MARKET_FILTER', True):
         score_table.add_row("현재 시장 필터링 상태", "확인 불가", "-", "-")
     elif filter_info:
-        k_stat = "[green]허용[/]" if filter_info.get("KOSPI", True) else "[red]보류[/]"
-        q_stat = "[green]허용[/]" if filter_info.get("KOSDAQ", True) else "[red]보류[/]"
-        score_table.add_row("현재 시장 필터링 상태", f"KOSPI: {k_stat} / KOSDAQ: {q_stat}", "-", "실시간 필터링 적용 여부")
+        def _filter_stat(det):
+            # 판정 불가는 '허용'이 아니다 — 실매매가 fail-closed 로 막는 것과 같게 적는다.
+            if not det or not det.get("ready"):
+                return "[red]보류(판정 불가)[/]"
+            return "[red]보류[/]" if det.get("blocked") else "[green]허용[/]"
+        k_det, q_det = filter_info.get("KOSPI"), filter_info.get("KOSDAQ")
+        score_table.add_row("현재 시장 필터링 상태",
+                            f"KOSPI: {_filter_stat(k_det)} / KOSDAQ: {_filter_stat(q_det)}",
+                            "-", "실시간 필터링 적용 여부")
+        #  판정 근거 — 무엇과 무엇을 비교해 그 상태가 됐는지, 며칠째인지까지 적는다.
+        for _name, _det in (("KOSPI", k_det), ("KOSDAQ", q_det)):
+            if not _det:
+                score_table.add_row("", f"[dim]└ {_name}: 지수 조회 실패[/dim]", "[dim]-[/dim]",
+                                    "[dim]모르면 보류(fail-closed)[/dim]")
+                continue
+            _c, _m, _g = _det.get("close"), _det.get("ma"), _det.get("gap_pct")
+            _lhs = (f"{_c:,.1f} / SMA{_det['ma_period']} {_m:,.1f} ({_g:+.2f}%)"
+                    if _c is not None and _m is not None and _g is not None else "값 확인 불가")
+            #  어떤 데이터로 판정했는지(마지막 봉 일자·출처)까지 적는다 — 묵은 지수로 막혀 있을 수 있다.
+            _digits = "".join(ch for ch in str(_det.get("asof") or "") if ch.isdigit())[:8]
+            _tail = f" [dim]{_digits[4:6]}/{_digits[6:8]}[/dim]" if len(_digits) == 8 else ""
+            _src = {"TVDATAFEED": "TV", "YFINANCE": "YF"}.get(_det.get("source"), _det.get("source"))
+            if _src:
+                _tail += f" [dim]{_src}[/dim]"
+            _days = (f"{_det['streak']}봉째" if _det.get("ready") else "-")
+            score_table.add_row("", f"└ {_name} {_lhs}{_tail}", _days, _det.get("reason", ""))
 
     # [추가] 상대강도(RS) 필터 섹션 (룩백: RS_FILTER_LOOKBACK>0 우선, 0이면 가격 모멘텀 룩백 연동 — trader RS 게이트와 동일 규칙)
     #  [추세추종 보호] 기본 OFF이므로 꺼져 있으면 섹션 자체를 그리지 않는다 — 동작하지 않는 필터를

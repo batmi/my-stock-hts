@@ -1576,6 +1576,7 @@ class AutoTrader:
                     market_idx_msgs.append(f"• {name}: {curr:,.2f} ({rate:+.2f}%)")
                     
                     filter_status = "허용"
+                    det = None
                     # 시스템 루프의 상태 캐시(market_index_status)를 우선 적용
                     cached_stat = self.market_index_status.get(m_type)
                     
@@ -1585,12 +1586,17 @@ class AutoTrader:
                     elif cached_stat and isinstance(cached_stat, dict) and cached_stat.get('current', 0) > 0:
                         is_healthy = cached_stat.get('is_healthy', True)
                         filter_status = "허용" if is_healthy else "보류"
+                        det = cached_stat.get('filter')   # 루프가 판정할 때 같이 남긴 근거
                     else:
                         ma_period = getattr(config, 'MARKET_FILTER_MA', 80)
                         if indicators.market_filter_ready(df['close'], ma_period):
-                            is_healthy = not bool(indicators.get_market_filter_blocked(
+                            det = indicators.get_market_filter_detail(
                                 df['close'], ma_period,
-                                getattr(config, 'MARKET_FILTER_BAND', 1.0)).iloc[-1])
+                                getattr(config, 'MARKET_FILTER_BAND', 1.0))
+                            if 'date' in df.columns:
+                                det['asof'] = str(df['date'].iloc[-1])
+                            det['source'] = analysis.index_source(df)
+                            is_healthy = not bool(det['blocked'])
                             filter_status = "허용" if is_healthy else "보류"
                         else:
                             is_healthy = False
@@ -1602,6 +1608,9 @@ class AutoTrader:
                         is_healthy_q = is_healthy
                         
                     market_flt_msgs.append(f"• {name}: {filter_status}")
+                    #  상태만으로는 기다릴지 알 수 없다 — 무엇과 무엇을 비교해 그렇게 됐는지,
+                    #  어느 선을 넘어야 풀리는지, 며칠째인지까지 적는다.
+                    market_flt_msgs.extend(f"  {line}" for line in self._format_market_filter_basis(det))
                 else:
                     # [fail-closed] 지수를 못 읽으면 표시도 '보류(판단불가)'다. 종전에는
                     #  화면만 '확인 불가'로 찍고 is_healthy_* 는 기본값 True 로 남아,
@@ -7392,9 +7401,11 @@ class AutoTrader:
 
                 # [이탈 확인 밴드] 상태 기계는 가격 이력만의 함수라 전 구간에서 재계산한다.
                 #  재기동해도 상태가 유실되지 않고, 백테스트(prepare_market_filter)와 같은 값을 본다.
+                #  판정과 그 근거를 한 번에 받는다 — 근거를 따로 계산하면 알림·상태 보고가
+                #  판정과 갈라진다(지수/SMA/차단·해제선/지속 봉 수는 모두 같은 상태 기계의 산물).
+                det = indicators.get_market_filter_detail(df['close'], ma_period, band_pct)
                 current_idx = df['close'].iloc[-1]
-                is_healthy = not bool(indicators.get_market_filter_blocked(
-                    df['close'], ma_period, band_pct).iloc[-1])
+                is_healthy = not bool(det['blocked'])
 
                 #  [Fix 2026-09-04] 판단에 쓴 지수가 **어디서 온 값인지** 함께 남긴다.
                 #   지수는 KRX 확정 봉 위에 KIS/토스/tvDatafeed/yfinance 중 하나를 얹어
@@ -7402,11 +7413,17 @@ class AutoTrader:
                 #   attrs 에만 있고 아무도 읽지 않았다. 최후 폴백(yfinance)은 최신 종가를
                 #   결측으로 주는 일이 잦아, 매수 중단·재개가 어긋났을 때 무엇으로 판단한
                 #   것인지 되짚을 수 없었다.
+                #   근거(det)에도 같은 것을 실어 보낸다 — 알림·상태 보고가 '무엇으로 언제 찍은
+                #   값인지'까지 한 줄에 말할 수 있어야 한다.
+                if 'date' in df.columns:
+                    det['asof'] = str(df['date'].iloc[-1])
+                det['source'] = analysis.index_source(df)
                 self.market_index_status[market_name] = {
                     "is_healthy": is_healthy,
                     "unknown": False,
                     "current": current_idx,
                     "source": analysis.index_source(df),
+                    "filter": det,   # 판정 근거(지수/SMA/차단·해제선/지속 봉 수/사유)
                 }
 
                 # [동적 손절 캡] KOSPI 실현변동성의 장기 대비 배율을 갱신한다. 이 값이
@@ -7429,13 +7446,16 @@ class AutoTrader:
                 # 밴드가 켜져 있으면 '이평선 아래'가 아니라 '이평선 -밴드% 이탈'이 실제 트리거이므로
                 #  문구에 밴드를 함께 실어 화면·알림과 판정식이 어긋나 보이지 않게 한다.
                 band_txt = f" -{band_pct:g}%" if band_pct else ""
+                #  '어떤 수치로 그렇게 판정했는지'를 알림에도 싣는다 — 받는 사람이 차트를
+                #  열지 않고도 얼마나 벌어졌는지, 어디까지 올라와야 풀리는지 알 수 있어야 한다.
+                basis = "".join(f"\n{line}" for line in self._format_market_filter_basis(det))
                 notified = self.market_status_notified.get(market_name, False)
                 if not is_healthy and not notified:
-                    api.send_telegram_message(f"📉 [시장 감지] {market_name} 지수가 {ma_period}일 이평선{band_txt} 아래로 하락했습니다.\n해당 시장 종목의 신규 매수를 일시 중단합니다.")
+                    api.send_telegram_message(f"📉 [시장 감지] {market_name} 지수가 {ma_period}일 이평선{band_txt} 아래로 하락했습니다.{basis}\n해당 시장 종목의 신규 매수를 일시 중단합니다.")
                     self.market_status_notified[market_name] = True
                 elif is_healthy and notified:
                     band_up = f" +{band_pct:g}%" if band_pct else ""
-                    api.send_telegram_message(f"📈 [시장 회복] {market_name} 지수가 {ma_period}일 이평선{band_up}을 회복했습니다.\n매수를 재개합니다.")
+                    api.send_telegram_message(f"📈 [시장 회복] {market_name} 지수가 {ma_period}일 이평선{band_up}을 회복했습니다.{basis}\n매수를 재개합니다.")
                     self.market_status_notified[market_name] = False
             except Exception as e:
                 self.log(f"{market_name} 지수 조회 실패: {e} → 시장 방향 판단 불가로 신규 매수를 보류합니다. (매도·손절은 정상 동작)")
@@ -7443,6 +7463,35 @@ class AutoTrader:
                 self.market_index_status[market_name] = {"is_healthy": False, "unknown": True, "current": 0,
                                                          "source": None}
                 self._notify_market_unknown(market_name, notify)
+
+    @staticmethod
+    def _format_market_filter_basis(det):
+        """시장 필터 판정 **근거**를 텔레그램 한두 줄로 만든다 (표시 전용).
+
+        판정은 indicators.get_market_filter_detail 하나가 하고 여기는 그 dict 를 읽기만 한다 —
+        근거를 여기서 다시 계산하면 알림이 판정과 갈라진다. 판정이 성립하지 않으면
+        (ready=False) 숫자를 말하지 않는다: 모르는 것을 아는 척하지 않는다.
+        """
+        if not isinstance(det, dict) or not det.get('ready'):
+            return []
+        lines = []
+        c, ma, gap = det.get('close'), det.get('ma'), det.get('gap_pct')
+        if c is not None and ma is not None and gap is not None:
+            tail = ""
+            #  판단에 쓴 봉의 일자·출처 — 묵은 지수로 막혀 있는 경우를 알아챌 수 있어야 한다.
+            digits = "".join(ch for ch in str(det.get('asof') or "") if ch.isdigit())[:8]
+            if len(digits) == 8:
+                tail += f" {digits[4:6]}/{digits[6:8]}"
+            src = {"TVDATAFEED": "TV", "YFINANCE": "YF"}.get(det.get('source'), det.get('source'))
+            if src:
+                tail += f" {src}"
+            #  소수 한 자리로 맞춘다 — 같은 메시지 안의 차단선·해제선(indicators 사유)과 같은 자릿수여야
+            #  눈으로 바로 비교된다.
+            lines.append(f"└ 지수 {c:,.1f} / SMA{det.get('ma_period')} {ma:,.1f} ({gap:+.2f}%){tail}")
+        if det.get('reason'):
+            streak = det.get('streak') or 0
+            lines.append(f"└ {det['reason']}" + (f" ({streak}봉째)" if streak else ""))
+        return lines
 
     def _notify_market_unknown(self, market_name, notify=True):
         """지수 판단 불가(데이터 장애)로 매수를 보류할 때 1회만 알린다.

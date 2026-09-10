@@ -400,6 +400,82 @@ def market_filter_ready(close, ma_period=None):
     return bool(s.iloc[-n:].notna().all())
 
 
+def get_market_filter_detail(close, ma_period=None, band_pct=None, release_on_bear=None):
+    """시장 필터 판정의 **근거**를 함께 돌려준다 (도움말·점검 표시용).
+
+    판정(blocked)은 `get_market_filter_blocked` / `market_filter_ready` 하나만 쓰고,
+    이 함수는 그 결과에 '무엇과 무엇을 비교해 그렇게 됐는지'를 붙인다 — 설명이 판정을
+    다시 구현하면 화면과 실매매가 조용히 갈라진다.
+
+    돌려주는 dict:
+      ready     : 마지막 봉에서 판정이 성립하는가 (False면 실매매는 fail-closed = 보류)
+      blocked   : 신규 매수 차단 여부 (ready=False면 의미 없음)
+      close/ma  : 마지막 종가와 SMA
+      gap_pct   : 종가의 SMA 대비 이격 (%)
+      lower/upper : 차단선(SMA×(1-밴드))·해제선(SMA×(1+밴드))
+      streak    : 현재 상태가 이어진 봉 수 (전환 이후 경과)
+      reason    : 사람이 읽는 판정 사유 한 줄
+    """
+    if ma_period is None:
+        ma_period = getattr(config, 'MARKET_FILTER_MA', 80)
+    if band_pct is None:
+        band_pct = getattr(config, 'MARKET_FILTER_BAND', 1.0)
+    if release_on_bear is None:
+        release_on_bear = getattr(config, 'MARKET_FILTER_RELEASE_ON_BEAR', False)
+
+    n = int(ma_period)
+    band = max(0.0, float(band_pct))
+    out = {"ready": False, "blocked": False, "close": None, "ma": None, "gap_pct": None,
+           "lower": None, "upper": None, "streak": 0, "ma_period": n, "band_pct": band,
+           "reason": "지수 데이터가 없어 판정 불가 → 모르면 보류(fail-closed)"}
+    try:
+        s = pd.Series(close, dtype='float64').reset_index(drop=True)
+    except (TypeError, ValueError):
+        return out
+    if s.empty:
+        return out
+
+    ready = market_filter_ready(s, n)
+    blocked_s = get_market_filter_blocked(s, n, band, release_on_bear)
+    blocked = bool(blocked_s.iloc[-1])
+
+    ma = s.rolling(window=n).mean()
+    last_close = s.iloc[-1]
+    last_ma = ma.iloc[-1]
+    out.update({"ready": ready, "blocked": blocked,
+                "close": None if pd.isna(last_close) else float(last_close),
+                "ma": None if pd.isna(last_ma) else float(last_ma)})
+    if out["ma"] is not None:
+        out["lower"] = out["ma"] * (1 - band / 100.0)
+        out["upper"] = out["ma"] * (1 + band / 100.0)
+        if out["close"] is not None:
+            out["gap_pct"] = (out["close"] / out["ma"] - 1) * 100
+
+    # 현재 상태가 이어진 봉 수 — '며칠째 보류인가'를 그대로 답한다.
+    arr = blocked_s.values
+    streak = 1
+    while streak < len(arr) and bool(arr[-streak - 1]) == blocked:
+        streak += 1
+    out["streak"] = streak
+
+    if not ready:
+        out["reason"] = f"최근 {n}봉 결측 — SMA{n} 판정 불가(보류)"
+        return out
+
+    lo, up = out["lower"], out["upper"]
+    _lo = f"차단선 {lo:,.1f}" + (f"(SMA-{band:g}%)" if band else "(SMA)")
+    _up = f"해제선 {up:,.1f}" + (f"(SMA+{band:g}%)" if band else "(SMA)")
+    if blocked:
+        out["reason"] = (f"{_lo} 이탈 중" if out["close"] < lo
+                         else f"{_up} 회복 전까지 보류")
+    else:
+        out["reason"] = (f"{_up} 위 — 정상" if out["close"] > up
+                         else f"{_lo} 이탈 시 보류")
+    if release_on_bear:
+        out["reason"] += " · Bear해제 ON"
+    return out
+
+
 def vol_regime_ratio(close, window=None, ref_min=None):
     """[변동성 국면] 지수 실현변동성의 '장기 대비 배율' 시계열 (float Series).
 

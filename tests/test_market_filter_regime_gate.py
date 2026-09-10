@@ -145,3 +145,71 @@ def test_게이트_호출부가_그_검사를_실제로_쓴다():
         assert len(ready) >= len(calls), (
             f"{mod.__name__}: 시장 필터를 읽는 자리 {len(calls)}곳 중 "
             f"판정 가능 검사는 {len(ready)}곳뿐이다")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 판정 '근거' 표시 (get_market_filter_detail) — 화면·텔레그램이 판정과 갈라지지 않게
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _blocked_then_inside_band():
+    """차단된 뒤 SMA 위로 올라왔지만 해제선(+1%)은 아직 못 넘은 상태 — 차단 유지."""
+    s = pd.Series(np.concatenate([np.linspace(100.0, 200.0, 100),
+                                  np.linspace(200.0, 150.0, 5), [165.5]]))
+    assert indicators.get_market_filter_blocked(s, 80, 1.0).iloc[-1], "전제: 아직 차단 중"
+    return s
+
+
+def test_설명은_판정을_다시_구현하지_않는다():
+    """detail 의 blocked 는 실매매가 보는 판정과 같은 값이어야 한다."""
+    for close in (_confirmed_bear(), _pending_up(), _blocked_then_inside_band(),
+                  pd.Series(np.linspace(100.0, 200.0, 150))):
+        det = indicators.get_market_filter_detail(close, 80, 1.0)
+        assert det["blocked"] == bool(
+            indicators.get_market_filter_blocked(close, 80, 1.0).iloc[-1])
+
+
+def test_밴드_안_차단유지와_이탈중을_다른_말로_적는다():
+    """'왜 보류인가'의 두 경우가 한 문장으로 뭉개지면 기다릴지 판단할 수 없다."""
+    inside = indicators.get_market_filter_detail(_blocked_then_inside_band(), 80, 1.0)
+    assert inside["blocked"] and "해제선" in inside["reason"]
+    assert inside["upper"] > inside["ma"] > inside["lower"]
+
+    outside = indicators.get_market_filter_detail(_confirmed_bear(), 80, 1.0)
+    assert outside["blocked"] and "차단선" in outside["reason"] and "이탈" in outside["reason"]
+    assert outside["close"] < outside["lower"]
+    assert outside["gap_pct"] < 0
+
+
+def test_상태_지속_봉수를_센다():
+    close = _blocked_then_inside_band()
+    blocked = indicators.get_market_filter_blocked(close, 80, 1.0)
+    det = indicators.get_market_filter_detail(close, 80, 1.0)
+    # 마지막에서 거꾸로 같은 상태가 이어진 봉 수
+    expected = 1
+    while expected < len(blocked) and bool(blocked.iloc[-expected - 1]) == det["blocked"]:
+        expected += 1
+    assert det["streak"] == expected
+
+
+def test_판정_불가면_숫자를_말하지_않는다():
+    """결측·빈 데이터는 '허용'도 '약세'도 아니다 — 근거 줄을 만들지 않는다(fail-closed)."""
+    from modules.auto_trade.trader import AutoTrader
+
+    broken = pd.Series(np.concatenate([np.linspace(100.0, 200.0, 100), [np.nan]]))
+    for close in (broken, pd.Series([], dtype=float)):
+        det = indicators.get_market_filter_detail(close, 80, 1.0)
+        assert det["ready"] is False
+        assert "보류" in det["reason"]
+        assert AutoTrader._format_market_filter_basis(det) == []
+    assert AutoTrader._format_market_filter_basis(None) == []
+
+
+def test_텔레그램_근거줄에_지수와_SMA와_지속봉수가_들어간다():
+    from modules.auto_trade.trader import AutoTrader
+
+    det = indicators.get_market_filter_detail(_blocked_then_inside_band(), 80, 1.0)
+    det["asof"], det["source"] = "20260909", "KIS"
+    lines = AutoTrader._format_market_filter_basis(det)
+    assert len(lines) == 2
+    assert "SMA80" in lines[0] and "09/09" in lines[0] and "KIS" in lines[0]
+    assert "해제선" in lines[1] and "봉째" in lines[1]
