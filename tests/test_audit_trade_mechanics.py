@@ -60,7 +60,7 @@ def _sell(conn, code="005930", name="삼성전자", price=93000, reason="ATR손�
     conn.commit()
 
 
-def _run(path, days=30):
+def _run(path, days=3650):
     import sys
     from unittest.mock import patch
     with patch.object(sys, "argv", ["x", "--db", path, "--days", str(days)]):

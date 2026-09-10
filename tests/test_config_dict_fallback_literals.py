@@ -49,6 +49,9 @@ ALLOWED = {
     #  가 반사실 실험에서 주입하고, 그 실험의 '현행'이 False 다. 정본에 넣으면 메뉴에
     #  노출돼 운용 설정처럼 보인다.
     ("modules/portfolio_backtest.py", "SELL_STRATEGY", "TS_ARM_LATCH"),
+    #  tools/audit_tq_upper_cap.py 에서는 상한 해제를 의미하기 위해 폴백으로 0을 사용합니다.
+    #  정본(300.0)을 쓰면 해제 상태를 명시적으로 표현할 수 없습니다.
+    ("tools/audit_tq_upper_cap.py", "ANALYSIS_THRESHOLDS", "TREND_QUALITY_MAX"),
 }
 
 
