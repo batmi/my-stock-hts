@@ -14,8 +14,18 @@
  **같은 [시작, 끝]** 을 덮도록 마지막 창을 잘라 맞춘다. 이것을 안 하면 주기가 짧은 팔이
  더 긴 기간을 굴려 최종 배수가 부풀려진다.
 
+[!! 복리 체인 하나는 추첨이다 · 2026-09-09] 아래 2단계는 팔마다 **최종 배수 한 개**를
+ 낸다. 그런데 체인은 복리라, 한 창에서 벌어진 차이가 이후 전 구간에 곱해진다 — 초반
+ 한 번의 운이 9년치 결론을 만든다. 실제로 씨드 셋에서 순위가 1-5-5 / 2-2-3 / 1-1-4 로
+ 흩어져 **판정 불가**가 나왔다(도구 자신도 "풀 씨드마다 크게 흩어진다"고 경고한다).
+ 기록된 '고정 대비 10/12승'은 **창마다 승패를 센 것**이라 방법이 다르다 — 두 수치를
+ 직접 맞대지 말 것.
+ → `--windowed` 가 그 방법이다. 창마다 **같은 자본에서 다시 시작**해 팔끼리 짝비교하므로
+   경로 의존이 끊기고, 표본이 씨드당 1개에서 창 개수만큼으로 늘어난다.
+
 [실행] python3 tools/audit_rebalance_period.py --turnover-only   # 1단계: 교체율만
-       python3 tools/audit_rebalance_period.py                   # 2단계: 전체
+       python3 tools/audit_rebalance_period.py                   # 2단계: 복리 체인
+       python3 tools/audit_rebalance_period.py --windowed        # 2단계': 창별 승패(권장)
 """
 import argparse
 import os
@@ -49,6 +59,13 @@ def main():
     ap.add_argument("--slots", type=int, default=None)
     ap.add_argument("--start", type=int, default=250, help="워밍업 거래일")
     ap.add_argument("--turnover-only", action="store_true")
+    ap.add_argument("--windowed", action="store_true",
+                    help="복리 체인 대신 창마다 승패를 센다(기록된 10/12승과 같은 방식)")
+    ap.add_argument("--eval-months", type=int, default=9,
+                    help="--windowed 의 평가 창 길이(개월). 9면 9년 구간에 12창")
+    ap.add_argument("--fixed-draws", type=int, default=5,
+                    help="--windowed: '고정' 대조군 장수. 고정 팔도 한 번의 추첨이라 "
+                         "여러 앵커에서 뽑아 분포로 본다")
     args = ap.parse_args()
     seed_notice(len(args.pool_seeds.split(",")), example="--pool-seeds 20260817,31,777")
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
@@ -134,6 +151,107 @@ def main():
                 cache[m] = rank_at(m)
             return cache[m][:args.size]
 
+        fixed = fit_pick(args.start)
+
+        if args.windowed:
+            # ── 2단계': 창별 승패. 창마다 같은 자본에서 다시 시작해 경로 의존을 끊는다.
+            #  체인은 복리라 초반 한 창의 운이 9년치 결론을 만든다(머리말 참고).
+            grid = max(21, args.eval_months * 21)
+
+            def run_window(wd, uni):
+                if not uni:
+                    return None
+                r = pb.run_portfolio(
+                    {c: dfs[c] for c in uni}, {c: status[c] for c in uni}, wd,
+                    initial_capital=INITIAL_CAPITAL, slots=slots,
+                    market_filter_dates={c: mf.get(c, set()) for c in uni},
+                    risk_scale_by_date=new_scale())
+                return r["final_asset"] / INITIAL_CAPITAL
+
+            def uni_at(mo, w0):
+                """이 창이 시작될 때 그 주기가 들고 있는 목록(가장 최근 재조정 시점)."""
+                step = max(1, mo * 21)
+                mark = args.start + ((w0 - args.start) // step) * step
+                return fit_pick(mark)
+
+            #  [고정 팔도 추첨이다] 종전엔 시작 시점 한 날의 적합도 상위 44종목 **하나**를
+            #   기준선으로 썼다. 그 한 장이 좋으면 재조정 전부가 지고, 나쁘면 전부가 이긴다 —
+            #   재조정의 값어치가 아니라 그 장의 운을 재게 된다.
+            #   그래서 **앵커를 앞으로 물려 가며 여러 장** 뽑아 분포로 본다. 앵커는 모두
+            #   첫 창보다 앞이라 선견이 없다(21거래일씩 뒤로, 60 아래로는 안 간다).
+            fixed_anchors = [a for a in
+                             (args.start - i * 21 for i in range(max(1, args.fixed_draws)))
+                             if a >= 60]
+            fixed_unis = [fit_pick(a) for a in fixed_anchors]
+            #  [대조] 적합도 정렬 자체가 값을 하는가 — 아무 44종목을 고정으로 들고 간다.
+            rnd_unis = []
+            for d in range(max(1, args.fixed_draws)):
+                pick = list(dfs)
+                random.Random(f"{ps}|fixedrnd|{d}").shuffle(pick)
+                rnd_unis.append(pick[:args.size])
+
+            wins = {mo: [0, 0, 0] for mo in months}     # 승·무·패 (기준선 고정 대비)
+            rets = {mo: [] for mo in months}
+            base_rets = []
+            draw_rets = [[] for _ in fixed_unis]
+            rnd_rets = [[] for _ in rnd_unis]
+            n_win = 0
+            for w0 in range(args.start, end, grid):
+                wd = dates[w0:min(w0 + grid, end)]
+                if len(wd) < 20:
+                    break          # 꼬리 조각은 버린다 — 창 길이가 다르면 비교가 안 된다
+                b = run_window(wd, fixed)
+                if b is None:
+                    continue
+                n_win += 1
+                base_rets.append(b)
+                for mo in months:
+                    v = run_window(wd, uni_at(mo, w0))
+                    if v is None:
+                        continue
+                    rets[mo].append(v)
+                    d = v - b
+                    wins[mo][0 if d > 1e-9 else (1 if abs(d) <= 1e-9 else 2)] += 1
+                for k, uni in enumerate(fixed_unis):
+                    v = run_window(wd, uni)
+                    if v is not None:
+                        draw_rets[k].append(v)
+                for k, uni in enumerate(rnd_unis):
+                    v = run_window(wd, uni)
+                    if v is not None:
+                        rnd_rets[k].append(v)
+
+            print(f"\n[2'] 창별 승패 — {args.eval_months}개월 창 {n_win}개 · 창마다 "
+                  f"같은 자본에서 재시작 · {args.size}종목 · {slots}슬롯")
+            print(f"{'팔':<26}{'평균 배수':>11}{'중앙 배수':>11}{'승-무-패':>12}")
+            print(f"{'[기준선] 고정':<26}{np.mean(base_rets):>10.3f}x"
+                  f"{np.median(base_rets):>10.3f}x{'— (기준)':>12}")
+            for mo in months:
+                w, t, l = wins[mo]
+                print(f"{f'적합도 {mo}개월 재조정':<26}{np.mean(rets[mo]):>10.3f}x"
+                      f"{np.median(rets[mo]):>10.3f}x{f'{w}-{t}-{l}':>12}", flush=True)
+            def _spread(label, groups, note):
+                vals = sorted(float(np.mean(g)) for g in groups if g)
+                if not vals:
+                    return
+                print(f"{label:<26}{vals[0]:>10.3f}x{vals[len(vals) // 2]:>10.3f}x"
+                      f"{vals[-1]:>10.3f}x   {note}")
+
+            print(f"\n{'대조군 (장별 평균 배수)':<26}{'최악':>11}{'중앙':>11}{'최선':>11}")
+            _spread("[대조] 적합도 고정 다앵커", draw_rets,
+                    f"앵커 {len(draw_rets)}장 · 기준선도 이 분포의 한 장이다")
+            _spread("[대조] 무작위 고정", rnd_rets,
+                    f"{len(rnd_rets)}장 · 적합도 정렬 자체의 값어치를 가른다")
+            print("  [읽는 법] 재조정 팔이 '적합도 고정' 분포의 **최선**을 넘어야 "
+                  "'갈아끼우는 행위'가 값을 한 것이다. 분포 안에 들면 그것은 앵커 운이다.")
+            print("  [읽는 법] '적합도 고정'이 '무작위 고정'을 넘지 못하면 적합도 정렬 자체가 "
+                  "값을 못 하는 것이라, 주기 논의는 그 위에서 무의미하다.")
+            print("  [읽는 법] 창마다 자본을 되돌리므로 배수는 '그 창의 수익률'이다. "
+                  "복리 체인의 최종 배수와 직접 비교하지 말 것.")
+            print("  [주의] 창 개수가 곧 표본이다. 씨드 하나에서 12창이면 판정 근거로 얇다 "
+                  "— 풀 씨드 셋에서 같은 방향이 나와야 한다.")
+            continue
+
         years = (end - args.start) / 252.0
         print(f"\n[2] 성과 — 같은 구간 {args.start}~{end}({years:.1f}년) 복리 연결 · "
               f"{args.size}종목 · {slots}슬롯")
@@ -145,7 +263,6 @@ def main():
             print(f"{rows[-1][0]:<26}{mult:>10.2f}x"
                   f"{((mult ** (1 / years) - 1) * 100):>9.1f}", flush=True)
         # 고정: 시작 시점에 한 번 뽑고 끝까지 간다 — 재조정의 값어치는 이것 대비로 읽는다.
-        fixed = fit_pick(args.start)
         mult = run_chain(999, lambda _m: fixed)
         print(f"{'[기준선] 재조정 없음(고정)':<26}{mult:>10.2f}x"
               f"{((mult ** (1 / years) - 1) * 100):>9.1f}", flush=True)
