@@ -480,7 +480,7 @@ my-stock-hts/
 │
 ├── brokers/                # Raw broker clients
 │   ├── toss_api.py         #   Toss Securities Open API
-│   └── realtime.py         #   KIS WebSocket quotes and fill notifications
+│   └── realtime.py         #   Realtime WebSocket — KIS (quotes, fills) / Toss (order events)
 │
 ├── api/                    # Quote/order API layer (callers use api.func())
 │   ├── auth.py             #   Token issuance/refresh, shared call entry point
@@ -585,7 +585,8 @@ my-stock-hts/
 
 **Quote consistency**
 - **Unified real-time price** — the analysis screen and the auto-trader compute indicators from the same intraday price through a single entry point (`indicators.apply_realtime_price`).
-- **WebSocket quotes and fill notifications** — KIS WS pushes prices and volume strength (automatic REST fallback when unsubscribed or disconnected), and fill notifications (AES256-CBC) wake fill confirmation immediately. A single connection caps at 41 subscriptions, so **holdings then buy candidates are always subscribed** and the remaining slots rotate. `USE_WEBSOCKET` applies without a restart.
+- **WebSocket quotes and fill notifications (KIS)** — KIS WS pushes prices and volume strength (automatic REST fallback when unsubscribed or disconnected), and fill notifications (AES256-CBC) wake fill confirmation immediately. A single connection caps at 41 subscriptions, so **holdings then buy candidates are always subscribed** and the remaining slots rotate. `USE_WEBSOCKET` applies without a restart.
+- **WebSocket order events (Toss, mode 3)** — Toss mode supports WebSocket too, but subscribes to **order events (`personal:order`) only**. An event is never trusted on its content: it wakes an order-history reconciliation so fills are confirmed immediately, and REST polling remains in place if the socket fails. **Quotes are not subscribed** — Toss realtime quotes merge NXT, so cumulative volume cannot be separated out. It needs no extra environment variables (the Toss app key is reused) and is toggled by the same `USE_WEBSOCKET`.
 - **Backtest/live data parity** — domestic backtests always use official KRX data (pykrx/FDR) regardless of mode, and a **warning** is raised when the retrieved window is shorter than requested, so truncation is never silent.
 
 **Observability & operations**
