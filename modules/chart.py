@@ -188,6 +188,10 @@ def open_image_viewer(file_path):
     즉시 반환하여 메뉴로 복귀할 수 있게 한다. (os.system은 뷰어 종료까지
     블로킹되어 프로그램이 멈춘 것처럼 보이므로 사용하지 않는다.)
     """
+    if getattr(config, 'WEBCHART_ACTIVE', False):
+        config.console.print(f"[cyan]🌐 웹 대시보드(--webchart)가 활성화되어 있습니다. 브라우저에서 접속하여 확인해주세요.[/cyan]")
+        return False
+
     import subprocess
     import shutil
     try:
@@ -201,26 +205,17 @@ def open_image_viewer(file_path):
             return True
         # Linux: GUI 세션이 없으면(SSH/헤드리스) 뷰어를 띄울 수 없다
         if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-            if getattr(config, 'WEBCHART_ACTIVE', False):
-                config.console.print(f"[cyan]🌐 웹 대시보드(--webchart)가 활성화되어 있습니다. 브라우저에서 접속하여 확인해주세요.[/cyan]")
-            else:
-                config.console.print(f"[yellow]GUI 환경이 아니어서 이미지 뷰어를 실행할 수 없습니다. 저장된 파일을 직접 확인해주세요: {file_path}[/yellow]")
+            config.console.print(f"[yellow]GUI 환경이 아니어서 이미지 뷰어를 실행할 수 없습니다. 저장된 파일을 직접 확인해주세요: {file_path}[/yellow]")
             return False
         if shutil.which("xdg-open") is None:
-            if getattr(config, 'WEBCHART_ACTIVE', False):
-                config.console.print(f"[cyan]🌐 웹 대시보드(--webchart)가 활성화되어 있습니다. 브라우저에서 접속하여 확인해주세요.[/cyan]")
-            else:
-                config.console.print(f"[yellow]이미지 뷰어(xdg-open)를 찾을 수 없습니다. 저장된 파일을 직접 확인해주세요: {file_path}[/yellow]")
+            config.console.print(f"[yellow]이미지 뷰어(xdg-open)를 찾을 수 없습니다. 저장된 파일을 직접 확인해주세요: {file_path}[/yellow]")
             return False
         subprocess.Popen(["xdg-open", file_path],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          start_new_session=True)
         return True
     except Exception as e:
-        if getattr(config, 'WEBCHART_ACTIVE', False):
-            config.console.print(f"[cyan]🌐 웹 대시보드(--webchart)가 활성화되어 있습니다. 브라우저에서 접속하여 확인해주세요.[/cyan]")
-        else:
-            config.console.print(f"[yellow]이미지 뷰어 실행에 실패했습니다({e}). 저장된 파일을 직접 확인해주세요: {file_path}[/yellow]")
+        config.console.print(f"[yellow]이미지 뷰어 실행에 실패했습니다({e}). 저장된 파일을 직접 확인해주세요: {file_path}[/yellow]")
         return False
 
 # [삭제 · 2026-08-29] pause_web_server_while_running
