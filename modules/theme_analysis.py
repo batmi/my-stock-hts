@@ -5,7 +5,6 @@ import sqlite3
 import concurrent.futures
 import math
 from contextlib import closing
-from bs4 import BeautifulSoup
 from datetime import datetime, timezone
 import time
 from rich.panel import Panel
@@ -121,44 +120,51 @@ def _load_theme_analysis():
         logger.error(f"테마 분석 로드 실패: {e}")
     return None
 
+_NAVER_THEME_API = "https://m.stock.naver.com/api/stocks/theme"
+_NAVER_THEME_HEADERS = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://stock.naver.com/'}
+_NAVER_THEME_PAGE_SIZE = 100        # 서버 상한 — 101 이상은 400
+
+
 def fetch_naver_themes():
-    """네이버 금융 테마 정보 크롤링"""
-    url = "https://finance.naver.com/sise/theme.naver"
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
-    
+    """네이버 증권 테마 목록 — JSON API 로 받는다.
+
+    [2026-09-13] `finance.naver.com/sise/theme.naver` HTML 은 302 로 SPA(stock.naver.com)에
+    넘겨져 `table.type_1` 이 더 이상 없다. 종목명 조회와 같은 이유·같은 날 끊겼다
+    (api/charts.get_stock_name_by_code 참조). 모바일 JSON API 는 등락률 내림차순으로
+    정렬돼 오며 페이지당 100건이 상한이라 totalCount 까지 넘긴다.
+
+    돌려주는 항목: name · rate(당일 등락률 %) · rise/fall/total(테마 내 상승·하락·전체 종목 수)
+    · no(테마 번호 — 구성종목 조회 키). 옛 HTML 이 주던 '3일 등락률'은 이 API 에 없다 —
+    0 으로 채우면 '보합'으로 읽히므로 항목 자체를 두지 않는다([[unknown-vs-empty]]).
+    """
+    themes = []
     try:
-        res = requests.get(url, headers=headers, timeout=5)
-        # 네이버 금융은 EUC-KR(CP949) 사용
-        soup = BeautifulSoup(res.content.decode('cp949', 'ignore'), 'html.parser')
-        
-        themes = []
-        # 테마 테이블 파싱 (table.type_1)
-        rows = soup.select('table.type_1 tr')
-        
-        for row in rows:
-            cols = row.select('td')
-            if len(cols) < 4: continue
-            
-            try:
-                # 테마명
-                name_tag = cols[0].select_one('a')
-                if not name_tag: continue
-                name = name_tag.text.strip()
-                link = name_tag['href']
-                
-                # 등락률 (col 1)
-                rate_txt = cols[1].text.strip().replace('%', '')
-                rate = float(rate_txt) if rate_txt else 0.0
-                
-                # 최근 3일 등락률 (col 2)
-                rate3_txt = cols[2].text.strip().replace('%', '')
-                rate3 = float(rate3_txt) if rate3_txt else 0.0
-                
-                themes.append({'name': name, 'rate': rate, 'rate3': rate3, 'link': link})
-            except Exception as e:
-                logger.debug(f"Theme parsing row error: {e}")
-                continue
-            
+        page, total = 1, None
+        while page <= 10:
+            res = requests.get(_NAVER_THEME_API, headers=_NAVER_THEME_HEADERS, timeout=5,
+                               params={'page': page, 'pageSize': _NAVER_THEME_PAGE_SIZE})
+            if res.status_code != 200:
+                logger.error(f"Naver theme API HTTP {res.status_code}")
+                break
+            data = res.json() or {}
+            groups = data.get('groups') or []
+            if total is None:
+                total = int(data.get('totalCount') or 0)
+            for g in groups:
+                try:
+                    themes.append({
+                        'name': str(g.get('name', '')).strip(),
+                        'rate': float(g.get('changeRate') or 0.0),
+                        'rise': int(g.get('riseCount') or 0),
+                        'fall': int(g.get('fallCount') or 0),
+                        'total': int(g.get('totalCount') or 0),
+                        'no': g.get('no'),
+                    })
+                except Exception as e:
+                    logger.debug(f"Theme parsing row error: {e}")
+            if not groups or len(themes) >= total or len(groups) < _NAVER_THEME_PAGE_SIZE:
+                break
+            page += 1
         return themes
     except Exception as e:
         logger.error(f"Naver theme crawling error: {e}")
@@ -229,45 +235,37 @@ def fetch_realtime_news(keyword, limit=10):
         return ""
 
 def _fetch_theme_detail(theme):
-    """(내부함수) 테마 상세 페이지에서 구성 종목 정보를 가져와 주도주(등락률 상위)를 추출"""
+    """(내부함수) 테마 구성종목을 받아 주도주(등락률 상위 2)를 채운다 — JSON API"""
     try:
-        url = f"https://finance.naver.com{theme['link']}"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
-        res = requests.get(url, headers=headers, timeout=3)
-        soup = BeautifulSoup(res.content.decode('cp949', 'ignore'), 'html.parser')
-        
+        no = theme.get('no')
+        if no is None:
+            theme['leading'] = "-"
+            return
+        res = requests.get(f"{_NAVER_THEME_API}/{no}", headers=_NAVER_THEME_HEADERS, timeout=3,
+                           params={'page': 1, 'pageSize': _NAVER_THEME_PAGE_SIZE})
+        if res.status_code != 200:
+            theme['leading'] = "-"
+            return
         stocks = []
-        # table.type_5 contains stock list
-        rows = soup.select('table.type_5 tr')
-        
-        for row in rows:
-            cols = row.select('td')
-            if len(cols) < 5: continue # Name, Desc, Price, Diff, Rate
-            
+        for s in (res.json() or {}).get('stocks') or []:
             try:
-                name_tag = cols[0].select_one('a')
-                if not name_tag: continue
-                name = name_tag.text.strip()
-                
-                # 종목코드 추출
-                href = name_tag['href']
-                code = href.split('code=')[-1]
-                
-                # Rate is usually in 4th index (0-based)
-                rate_txt = cols[4].text.strip().replace('%', '').strip()
-                rate = float(rate_txt) if rate_txt else 0.0
-                
+                code = str(s.get('itemCode') or '').strip()
+                name = str(s.get('stockName') or '').strip()
+                if not code or not name:
+                    continue
+                rate = float(str(s.get('fluctuationsRatio') or '0').replace(',', ''))
                 stocks.append({'name': name, 'code': code, 'rate': rate})
-            except Exception: continue
-            
+            except Exception:
+                continue
+
         # 등락률 순 정렬 (내림차순)
         stocks.sort(key=lambda x: x['rate'], reverse=True)
-        
+
         # 상위 2개 종목 선정
         leading = [f"{s['name']}({s['code']})" for s in stocks[:2]]
-        theme['leading'] = ", ".join(leading)
+        theme['leading'] = ", ".join(leading) or "-"
         theme['leading_stocks'] = stocks[:2]
-        
+
     except Exception as e:
         logger.debug(f"Theme detail fetch error: {e}")
         theme['leading'] = "-"
@@ -1206,20 +1204,26 @@ def _show_naver_themes():
     table.add_column("순위", justify="center", width=4)
     table.add_column("테마명", justify="left", overflow="fold")
     table.add_column("등락률", justify="right")
-    table.add_column("3일 등락", justify="right")
+    table.add_column("상승/하락", justify="right")
     table.add_column("주도주", justify="left", style="dim")
     
     stock_map = {}
     
     for i, t in enumerate(display_themes):
         rate_color = "[red]" if t['rate'] > 0 else ("[blue]" if t['rate'] < 0 else "[white]")
-        rate3_color = "[red]" if t['rate3'] > 0 else ("[blue]" if t['rate3'] < 0 else "[white]")
-        
+        # 테마 폭 — 옛 HTML 의 '3일 등락률'은 JSON API 가 주지 않는다. 상승/하락 종목 수는
+        #  한두 종목이 끌어올린 테마와 고르게 오른 테마를 갈라 주는, 오히려 더 쓸모 있는 열이다.
+        rise, fall, total = t.get('rise'), t.get('fall'), t.get('total')
+        if rise is None or fall is None:
+            breadth = "-"
+        else:
+            breadth = f"[red]{rise}▲[/] [blue]{fall}▼[/]" + (f" [dim]/{total}[/]" if total else "")
+
         table.add_row(
             str(i+1),
             t['name'],
             f"{rate_color}{t['rate']:+.2f}%[/]",
-            f"{rate3_color}{t['rate3']:+.2f}%[/]",
+            breadth,
             t.get('leading', '')
         )
         

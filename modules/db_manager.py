@@ -508,6 +508,29 @@ class DBManager:
                     )
                 ''')
 
+                # [체결 인지 지연 · 2026-09-13] 웹소켓이 값을 하는지는 백테스트로 못 잰다 —
+                #  이득이 전략이 아니라 **지연**에 있다. 그래서 체결이 '인지된' 순간마다
+                #  한 행을 남긴다: 웹소켓이 그 주문을 언제 먼저 알렸는지(못 알렸으면 NULL),
+                #  감시기가 언제 알아챘는지, 그 주기가 웹소켓에 깨워진 것인지.
+                #  recognized_at - ws_event_at 이 곧 '푸시 → 인지' 지연이고, poll_interval 은
+                #  웹소켓이 없었다면 최대 얼마나 기다렸을지다. 행은 하루 체결 수만큼이라
+                #  파이3에서도 부담이 없다. 실패해도 매매에 영향을 주지 않는다.
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS fill_latency (
+                        date TEXT,
+                        odno TEXT,
+                        broker TEXT,                 -- 'toss' | 'kis'
+                        code TEXT,
+                        side TEXT,
+                        ws_event_at REAL,            -- 그 주문의 첫 WS 이벤트(epoch). NULL = WS가 안 알림
+                        recognized_at REAL NOT NULL, -- 감시기가 체결을 알아챈 순간(epoch)
+                        woke_by_ws INTEGER DEFAULT 0,-- 이 주기가 WS 통보로 깨워졌는가
+                        poll_interval REAL,          -- 그 순간의 폴링 주기(초) — WS 없을 때의 최대 대기
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (date, odno, broker)
+                    )
+                ''')
+
                 # [마이그레이션 2026-08-19] is_sim 없이 만들어진 원장을 옮긴다.
                 #  PK가 (date, code) → (date, code, is_sim)로 바뀌므로 ALTER로는 안 되고
                 #  테이블을 다시 만들어야 한다. 기존 행은 전부 실전(0)으로 본다 —
@@ -1891,6 +1914,47 @@ class DBManager:
                 conn.commit()
             except Exception as e:
                 logger.warning(f"[Ledger] 신호 원장 기록 실패 (매매에는 영향 없음): {e}")
+
+    def record_fill_latency(self, date_str, odno, broker, code, side,
+                            ws_event_at, recognized_at, woke_by_ws, poll_interval):
+        """체결 하나가 인지된 순간을 한 행으로 남긴다(같은 주문은 첫 인지만).
+
+        실패해도 매매에 영향을 주지 않는다 — 계측은 매매를 막지 않는다.
+        """
+        sql = '''
+            INSERT OR IGNORE INTO fill_latency
+                (date, odno, broker, code, side, ws_event_at, recognized_at, woke_by_ws, poll_interval)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        '''
+        with self.lock:
+            try:
+                conn = self._get_conn()
+                conn.execute(sql, (date_str, str(odno), broker, code, side,
+                                   ws_event_at, float(recognized_at), 1 if woke_by_ws else 0,
+                                   poll_interval))
+                conn.commit()
+            except Exception as e:
+                logger.warning(f"[Ledger] 체결 지연 기록 실패 (매매에는 영향 없음): {e}")
+
+    def get_fill_latency(self, start_date=None, end_date=None, broker=None):
+        """기록된 체결 인지 지연 행. 실패는 None(빈 목록과 구분)."""
+        conds, params = [], []
+        if start_date:
+            conds.append("date >= ?"); params.append(start_date)
+        if end_date:
+            conds.append("date <= ?"); params.append(end_date)
+        if broker:
+            conds.append("broker = ?"); params.append(broker)
+        where = (" WHERE " + " AND ".join(conds)) if conds else ""
+        with self.lock:
+            try:
+                conn = self._get_conn()
+                cur = conn.execute(f"SELECT * FROM fill_latency{where} ORDER BY recognized_at", params)
+                cols = [d[0] for d in cur.description]
+                return [dict(zip(cols, r)) for r in cur.fetchall()]
+            except Exception as e:
+                logger.warning(f"[Ledger] 체결 지연 조회 실패: {e}")
+                return None
 
     def get_signal_ledger(self, start_date=None, end_date=None, code=None, is_sim=None):
         """신호 원장 조회. 감사 도구가 로그 파싱 대신 쓰는 경로.

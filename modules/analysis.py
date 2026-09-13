@@ -2625,6 +2625,52 @@ def _get_master_stock_list(market_type):
 # [추가] 마스터 코드 기반 시장 구분 캐시
 _MASTER_KOSDAQ_CODES = None
 _MASTER_KOSPI_CODES = None
+#  [종목명 · 2026-09-13] 마스터 레코드는 한글 종목명(line[21:61])을 이미 들고 있는데
+#   코드 집합만 굳혀 두고 이름은 버리고 있었다. 갤러리 카드가 이름을 네이버 HTML 에서
+#   긁다가(그 페이지가 SPA 로 바뀌어 죽었다) 코드만 남긴 사고의 근본 원인이다 —
+#   **정본이 로컬에 있는데 네트워크로 갔다.** 코드→이름 사전을 같은 자리에 둔다.
+_MASTER_NAMES = None
+
+def _load_master_sets():
+    """KOSPI/KOSDAQ 마스터를 한 번 읽어 코드 집합과 코드→이름 사전을 굳힌다(실패해도 빈 값).
+
+    실패를 빈 집합으로 굳히는 것은 여기서만 허용된다 — 호출부(_get_market_type_by_master)가
+    '둘 다 비었으면 판정 불가(None)'로 읽어 그 사실이 위로 전달된다([[unknown-vs-empty]]).
+    """
+    global _MASTER_KOSDAQ_CODES, _MASTER_KOSPI_CODES, _MASTER_NAMES
+    if _MASTER_KOSDAQ_CODES is not None and _MASTER_KOSPI_CODES is not None:
+        return
+    names = {}
+    if _MASTER_KOSDAQ_CODES is None:
+        try:
+            k_list = _get_master_stock_list("KOSDAQ")
+            _MASTER_KOSDAQ_CODES = set(s['code'] for s in k_list)
+            names.update((s['code'], s['name']) for s in k_list if s.get('name'))
+        except Exception as e:
+            logger.debug(f"KOSDAQ 마스터 목록 로드 실패: {e}")
+            _MASTER_KOSDAQ_CODES = set()
+    if _MASTER_KOSPI_CODES is None:
+        try:
+            p_list = _get_master_stock_list("KOSPI")
+            _MASTER_KOSPI_CODES = set(s['code'] for s in p_list)
+            names.update((s['code'], s['name']) for s in p_list if s.get('name'))
+        except Exception as e:
+            logger.debug(f"KOSPI 마스터 목록 로드 실패: {e}")
+            _MASTER_KOSPI_CODES = set()
+    _MASTER_NAMES = names
+
+
+def get_stock_name_from_master(code):
+    """마스터 파일의 한글 종목명. **모르면 None** — 코드를 대신 돌려주지 않는다.
+
+    네트워크 없이 답하는 정본이다. 갤러리·알림처럼 '이름을 보여 주는' 자리는 여기를
+    먼저 보고, 없을 때만 외부 조회로 간다.
+    """
+    if not code:
+        return None
+    _load_master_sets()
+    return (_MASTER_NAMES or {}).get(str(code).strip()) or None
+
 
 def _get_market_type_by_master(code):
     """마스터 파일(KOSPI/KOSDAQ)로 시장 구분을 판정한다. **모르면 None**이다.
@@ -2641,21 +2687,7 @@ def _get_market_type_by_master(code):
      시장 구분은 표시용이 아니다 — 시장 필터(80일선)와 적응형 임계값이 이 값으로 코스피
      지수를 볼지 코스닥 지수를 볼지 고른다. 모른다는 사실이 호출부에 도달해야 한다.
     """
-    global _MASTER_KOSDAQ_CODES, _MASTER_KOSPI_CODES
-    if _MASTER_KOSDAQ_CODES is None:
-        try:
-            k_list = _get_master_stock_list("KOSDAQ")
-            _MASTER_KOSDAQ_CODES = set(s['code'] for s in k_list)
-        except Exception as e:
-            logger.debug(f"KOSDAQ 마스터 목록 로드 실패: {e}")
-            _MASTER_KOSDAQ_CODES = set()
-    if _MASTER_KOSPI_CODES is None:
-        try:
-            p_list = _get_master_stock_list("KOSPI")
-            _MASTER_KOSPI_CODES = set(s['code'] for s in p_list)
-        except Exception as e:
-            logger.debug(f"KOSPI 마스터 목록 로드 실패: {e}")
-            _MASTER_KOSPI_CODES = set()
+    _load_master_sets()
 
     if code in _MASTER_KOSDAQ_CODES:
         return "KOSDAQ"

@@ -19,58 +19,27 @@ def setup_and_teardown():
 
 @patch('modules.theme_analysis.requests.get')
 def test_fetch_naver_themes_and_detail(mock_get):
-    """네이버 금융 테마 크롤링 및 주도주 파싱 로직 커버리지 확보"""
-    # 1. 테마 목록 HTML 모킹 (euc-kr 인코딩)
-    mock_theme_html = """
-    <html><body>
-        <table class="type_1 theme">
-            <tr>
-                <td class="col_type1"><a href="/sise/sise_group_detail.naver?type=theme&no=1">AI 반도체</a></td>
-                <td class="col_type2 number">+5.50%</td>
-                <td class="col_type3 number">+10.00%</td>
-                <td>더미데이터</td>
-            </tr>
-        </table>
-    </body></html>
-    """.encode('cp949')
-    
-    # 2. 테마 상세(주도주) HTML 모킹
-    mock_detail_html = """
-    <html><body>
-        <table class="type_5">
-            <tr>
-                <td class="name"><a href="/item/main.naver?code=005930">삼성전자</a></td>
-                <td>설명</td>
-                <td class="number">70,000</td>
-                <td>1,000</td>
-                <td>+1.50%</td>
-            </tr>
-            <tr>
-                <td class="name"><a href="/item/main.naver?code=000660">SK하이닉스</a></td>
-                <td>설명</td>
-                <td class="number">150,000</td>
-                <td>5,000</td>
-                <td>+5.00%</td>
-            </tr>
-        </table>
-    </body></html>
-    """.encode('cp949')
-    
-    # requests.get이 호출 순서대로 다른 HTML을 반환하도록 설정
+    """네이버 테마 목록·주도주 파싱 — JSON API (2026-09-13 HTML→JSON 전환)"""
+    theme_payload = {"totalCount": 1, "groups": [
+        {"no": 7, "name": "AI 반도체", "totalCount": 2, "changeRate": "5.50", "riseCount": 2, "fallCount": 0}]}
+    detail_payload = {"stocks": [
+        {"itemCode": "005930", "stockName": "삼성전자", "fluctuationsRatio": "1.50"},
+        {"itemCode": "000660", "stockName": "SK하이닉스", "fluctuationsRatio": "5.00"},
+    ]}
     mock_get.side_effect = [
-        MagicMock(status_code=200, content=mock_theme_html, text=mock_theme_html.decode('cp949')),
-        MagicMock(status_code=200, content=mock_detail_html, text=mock_detail_html.decode('cp949'))
+        MagicMock(status_code=200, json=lambda: theme_payload),
+        MagicMock(status_code=200, json=lambda: detail_payload),
     ]
-    
-    # 테마 목록 가져오기 테스트
+
     themes = theme_analysis.fetch_naver_themes()
     assert len(themes) == 1
     assert themes[0]['name'] == 'AI 반도체'
     assert themes[0]['rate'] == 5.50
-    
-    # 테마 상세(주도주) 가져오기 테스트
+
     theme_analysis._fetch_theme_detail(themes[0])
-    assert "SK하이닉스(000660)" in themes[0]['leading'] # 등락률(5.0%)이 더 높은 하이닉스가 먼저 와야 함
+    assert themes[0]['leading'].startswith("SK하이닉스(000660)")  # 등락률(5.0%)이 더 높은 하이닉스가 먼저
+    # 구성종목 조회는 테마 번호로 간다 — 옛 HTML 의 link 가 아니다
+    assert mock_get.call_args_list[1].args[0].endswith("/theme/7")
 
 @patch('rich.prompt.Prompt.ask', return_value='n')
 @patch('modules.theme_analysis.fetch_naver_themes')
@@ -78,7 +47,7 @@ def test_fetch_naver_themes_and_detail(mock_get):
 def test_show_naver_themes_ui(mock_detail, mock_fetch, mock_ask):
     """네이버 테마 리스트 터미널 출력(UI) 분기 테스트"""
     mock_fetch.return_value = [
-        {'name': '반도체', 'rate': 5.0, 'rate3': 10.0, 'link': '/link1', 'leading': '삼성전자'}
+        {'name': '반도체', 'rate': 5.0, 'rise': 3, 'fall': 1, 'total': 4, 'no': 1, 'leading': '삼성전자'}
     ]
     
     with patch('config.console.print') as mock_print:

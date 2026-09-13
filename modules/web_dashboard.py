@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import threading
+import time
 from datetime import datetime
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -205,10 +206,17 @@ def web_server_url():
 #   인덱스는 차트를 한 장 그릴 때마다 다시 쓰이므로, 캐시가 없으면 chart/ 안의
 #   **PNG 개수만큼** 외부 요청이 나간다. 텔레그램 /chart 는 폴링 스레드에서 이 경로를
 #   타므로 봇이 그 시간만큼 멈춘다(라즈베리파이).
-#  순서: ① 관심종목(stock.json) — 네트워크 0회 → ② 외부 조회 1회 → ③ 결과를 코드에 못박음.
-#   실패(None)도 캐시한다. 못 찾는 코드에 매번 3초 타임아웃을 태울 이유가 없다.
+#  순서: ① 관심종목(stock.json) — 네트워크 0회 → ② KIS 마스터 — 네트워크 0회
+#        → ③ 외부 조회 1회 → ④ 결과를 코드에 못박음.
+#
+#  [실패는 잠깐만 캐시한다 · 2026-09-13] 종전에는 실패(None)도 영구 캐시했다. 그런데
+#   기동 직후 첫 인덱스는 관심종목이 아직 로드되기 **전**에 만들어지고(main.py 의
+#   --webchart 초기 빌드가 preflight 보다 앞), 그 순간 외부 조회까지 실패하면 None 이
+#   프로세스가 사는 동안 굳는다 — 갤러리 네 장이 전부 코드만 보이던 사고다. 실패는
+#   짧은 TTL 로만 기억한다. 성공은 그대로 영구다(이름은 바뀌지 않는다).
 _NAME_CACHE = {}
 _NAME_CACHE_LOCK = threading.Lock()
+_NAME_FAIL_TTL_SEC = 300      # 실패 재시도 간격 — 매 빌드마다 3초 타임아웃을 태우진 않는다
 
 
 def _name_from_universe(code):
@@ -224,14 +232,32 @@ def _name_from_universe(code):
     return None
 
 
+def _name_from_master(code):
+    """KIS 마스터(로컬 파일)의 한글 종목명. 해외·미적재면 None."""
+    try:
+        from modules import analysis
+        return analysis.get_stock_name_from_master(code)
+    except Exception as e:
+        logger.debug(f"[webchart] 마스터 종목명 조회 실패({code}): {e}")
+        return None
+
+
 def resolve_stock_name(code, is_overseas):
-    """종목명을 돌려준다. 프로세스 수명 동안 코드당 외부 조회는 최대 1회."""
+    """종목명을 돌려준다. 성공은 영구 캐시, 실패는 잠깐(_NAME_FAIL_TTL_SEC)만 기억한다."""
     key = (code, bool(is_overseas))
+    now = time.time()
     with _NAME_CACHE_LOCK:
-        if key in _NAME_CACHE:
-            return _NAME_CACHE[key]
+        hit = _NAME_CACHE.get(key)
+        if hit is not None:
+            name, failed_at = hit
+            if name is not None:
+                return name
+            if now - failed_at < _NAME_FAIL_TTL_SEC:
+                return None
 
     name = _name_from_universe(code)
+    if not name and not is_overseas:
+        name = _name_from_master(code)
     if not name:
         try:
             import api
@@ -244,7 +270,7 @@ def resolve_stock_name(code, is_overseas):
             name = None
 
     with _NAME_CACHE_LOCK:
-        _NAME_CACHE[key] = name
+        _NAME_CACHE[key] = (name, now)
     return name
 
 
@@ -590,8 +616,10 @@ def update_chart_index(chart_dir):
 
         code, subtitle = parse_chart_filename(filename)
         if code:
-            # 6자리 숫자가 아니면 해외 티커로 본다(국내 코드 규약).
-            stock_name = resolve_stock_name(code, not code.isdigit())
+            # [2026-09-13] 종전 `not code.isdigit()` 은 0080G0 같은 문자 포함 국내 코드를
+            #  해외로 보내 이름 조회가 전부 빗나갔다. 국내 판정은 한 곳(krx_daily)만 쓴다.
+            from modules import krx_daily
+            stock_name = resolve_stock_name(code, not krx_daily.is_domestic_code(code))
             head = f"{stock_name} {code}" if stock_name else code
             alt_text = f"{head} ({subtitle})"
             title_html = (f"{html.escape(head)}<br>"

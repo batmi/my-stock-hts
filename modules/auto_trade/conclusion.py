@@ -254,6 +254,7 @@ class ConclusionMonitor:
         try:
             if notice.get('rejected'):
                 return  # 거부 통보는 폴링이 처리(미체결 정리 경로)
+            self._ws_wake_pending = True   # 다음 주기가 'WS가 깨운 것'임을 계측에 알린다
             self.check_now()  # 집중 감시 모드 진입 + 즉시 폴링 1회
         except Exception as e:
             logger.debug(f"[Monitor] 체결통보 처리 오류: {e}")
@@ -265,6 +266,28 @@ class ConclusionMonitor:
         self.event.set() # 대기 해제
         if self.thread and self.thread is not threading.current_thread():
             self.thread.join(timeout=2)
+
+    def _record_fill_latency(self, odno, code, side, date_str):
+        """체결을 알아챈 순간을 한 행으로 남긴다(계측 — 실패해도 매매에 영향 없음).
+
+        [무엇을 재는가] 웹소켓의 값어치는 백테스트로 못 잰다 — 이득이 전략이 아니라
+         **지연**에 있다. 그래서 세 시각을 한 행에 둔다:
+           ws_event_at   : WS가 그 주문을 처음 알린 순간 (없으면 NULL — '못 알림'이지 0이 아니다)
+           recognized_at : 지금
+           poll_interval : 이 주기의 대기 시간 — WS가 없었다면 최대 이만큼 늦었을 것
+         recognized_at - ws_event_at 가 '푸시 → 인지' 지연이다. 읽는 도구:
+         tools/audit_ws_latency.py
+        """
+        try:
+            from brokers import realtime
+            broker = 'toss' if getattr(config.session, 'is_toss', False) else 'kis'
+            db_manager.db.record_fill_latency(
+                date_str, odno, broker, code, side,
+                realtime.exec_event_first_seen(odno), time.time(),
+                bool(getattr(self, '_cycle_woke_by_ws', False)),
+                getattr(self, '_cycle_poll_interval', None))
+        except Exception as e:      # noqa: BLE001 - 계측은 매매를 막지 않는다
+            logger.debug(f"[Monitor] 체결 지연 기록 실패: {e}")
 
     def check_now(self):
         """즉시 체결 확인 요청"""
@@ -375,6 +398,12 @@ class ConclusionMonitor:
             
                     # [수정] 초기화 상태에 따라 모드 결정 (초기화 실패 시 재시도 보장)
                     is_initial_run = not self.initialized
+
+                    #  [계측] 이 주기가 WS 통보에 깨워진 것인지, 안 깨워졌다면 얼마나 기다렸을지.
+                    #   _check_conclusions 안에서 체결을 알아챌 때 이 둘을 한 행에 적는다.
+                    self._cycle_woke_by_ws = bool(getattr(self, '_ws_wake_pending', False))
+                    self._ws_wake_pending = False
+                    self._cycle_poll_interval = float(wait_time)
 
                     try:
                         # 초기화가 안 되었다면 initial=True로 호출하여 알림 없이 상태만 동기화
@@ -673,6 +702,10 @@ class ConclusionMonitor:
                                     new_qty = tot_ccld_qty - prev_qty
                                     name = item.get('prdt_name') or item.get('ovrs_item_name') or item.get('item_nm')
                                     code = item.get('pdno')
+                                    #  [계측] 기동 직후 동기화(initial)는 '인지'가 아니다 — 지난 체결을
+                                    #   읽어 들이는 것이라 지연으로 세면 수치가 오염된다.
+                                    if not initial:
+                                        self._record_fill_latency(odno, code, type_name, key_date)
                                 
                                     # [추가] 매매일시 정보 추출 (DB 저장용)
                                     ord_dt = item.get('ord_dt', '')

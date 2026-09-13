@@ -140,6 +140,37 @@ def parse_h0stcni(plain_body):
 
 
 # ==========================================================
+# [계측] 주문별 첫 WS 이벤트 수신 시각 — 체결 인지 지연을 재는 데 쓴다
+# ==========================================================
+#  체결 감시(ConclusionMonitor)가 체결을 알아채는 순간, 그 주문을 WS가 언제 먼저 알렸는지
+#  묻는다. 두 시각의 차가 '푸시 → 인지' 지연이다. KIS·토스 피드가 함께 쓰므로 모듈에 둔다.
+#  하루가 지난 항목은 버린다 — 주문번호는 당일 채번이라 날짜를 넘기면 유일하지 않다
+#  ([[odno-daily-reset]]).
+_EXEC_SEEN = {}            # odno -> (first_ts, day)
+_EXEC_SEEN_LOCK = threading.Lock()
+
+
+def _note_exec_event(notice):
+    odno = (notice or {}).get('odno')
+    if not odno:
+        return
+    now = time.time()
+    day = time.strftime('%Y%m%d', time.localtime(now))
+    with _EXEC_SEEN_LOCK:
+        stale = [k for k, (_t, d) in _EXEC_SEEN.items() if d != day]
+        for k in stale:
+            _EXEC_SEEN.pop(k, None)
+        _EXEC_SEEN.setdefault(str(odno), (now, day))
+
+
+def exec_event_first_seen(odno):
+    """그 주문번호의 첫 WS 이벤트 시각(epoch). WS가 알린 적 없으면 None."""
+    with _EXEC_SEEN_LOCK:
+        hit = _EXEC_SEEN.get(str(odno))
+    return hit[0] if hit else None
+
+
+# ==========================================================
 # 구독 관리자: 41건 한도 내에서 보유 우선 + 관심 로테이션 계획을 만든다.
 # ==========================================================
 class SubscriptionManager:
@@ -412,6 +443,7 @@ class TossWsFeed(RealtimeFeed):
                 self._exec_callbacks.append(fn)
 
     def _invoke_exec_callbacks(self, notice):
+        _note_exec_event(notice)
         with self._cb_lock:
             callbacks = list(self._exec_callbacks)
         for fn in callbacks:
@@ -874,6 +906,7 @@ class KisRealtimeFeed(RealtimeFeed):
         return TR_EXEC_REAL
 
     def _invoke_exec_callbacks(self, notice):
+        _note_exec_event(notice)
         with self._cb_lock:
             callbacks = list(self._exec_callbacks)
         for fn in callbacks:

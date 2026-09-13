@@ -57,41 +57,37 @@ def test_db_operations(temp_db):
     assert 'updated_at' in result
 
 def test_fetch_naver_themes_success():
-    """네이버 금융 테마 크롤링 성공 테스트"""
-    # 가짜 HTML 응답 생성 (CP949 인코딩 필요)
-    html_content = """
-    <html>
-    <body>
-    <table class="type_1">
-        <tr>
-            <td class="col_type1"><a href="/sise/sise_group_detail.naver?type=theme&no=1">2차전지</a></td>
-            <td class="col_type1">2.5%</td>
-            <td class="col_type1">5.0%</td>
-            <td>...</td>
-        </tr>
-        <tr>
-            <td class="col_type1"><a href="/sise/sise_group_detail.naver?type=theme&no=2">반도체</a></td>
-            <td class="col_type1">-1.2%</td>
-            <td class="col_type1">0.5%</td>
-            <td>...</td>
-        </tr>
-    </table>
-    </body>
-    </html>
-    """
-    
+    """네이버 테마 목록 — JSON API 응답을 파싱한다 (2026-09-13 HTML→JSON 전환)"""
+    payload = {"totalCount": 2, "page": 1, "pageSize": 100, "groups": [
+        {"no": 1, "name": "2차전지", "totalCount": 10, "changeRate": "2.5", "riseCount": 7, "fallCount": 2, "steadyCount": 1},
+        {"no": 2, "name": "반도체", "totalCount": 20, "changeRate": "-1.2", "riseCount": 5, "fallCount": 14, "steadyCount": 1},
+    ]}
     with patch('requests.get') as mock_get:
-        mock_response = MagicMock()
-        mock_response.content = html_content.encode('cp949')
-        mock_get.return_value = mock_response
-        
+        mock_get.return_value = MagicMock(status_code=200, json=lambda: payload)
         themes = theme_analysis.fetch_naver_themes()
-        
+
         assert len(themes) == 2
         assert themes[0]['name'] == "2차전지"
         assert themes[0]['rate'] == 2.5
+        assert themes[0]['rise'] == 7 and themes[0]['fall'] == 2 and themes[0]['total'] == 10
+        assert themes[0]['no'] == 1
         assert themes[1]['name'] == "반도체"
         assert themes[1]['rate'] == -1.2
+        assert 'rate3' not in themes[0]          # 3일 등락률은 API 에 없다 — 0 으로 지어내지 않는다
+
+
+def test_fetch_naver_themes_pages_until_total():
+    """페이지 상한(100)을 넘는 목록은 totalCount 까지 이어 받는다"""
+    def page(n, count):
+        return {"totalCount": 150, "groups": [
+            {"no": i, "name": f"T{i}", "totalCount": 1, "changeRate": "0", "riseCount": 0, "fallCount": 0}
+            for i in range((n - 1) * 100, (n - 1) * 100 + count)]}
+    with patch('requests.get') as mock_get:
+        mock_get.side_effect = [MagicMock(status_code=200, json=lambda: page(1, 100)),
+                                MagicMock(status_code=200, json=lambda: page(2, 50))]
+        themes = theme_analysis.fetch_naver_themes()
+    assert len(themes) == 150 and mock_get.call_count == 2
+
 
 def test_fetch_naver_themes_failure():
     """크롤링 실패 시 빈 리스트 반환 테스트"""
@@ -184,39 +180,28 @@ def test_analyze_market_trends_no_api_key():
     config.GEMINI_API_KEY = original_key
 
 def test_fetch_theme_detail_success():
-    """테마 상세 페이지 크롤링 테스트"""
-    html = """
-    <html>
-    <table class="type_5">
-        <tr>
-            <td><a href="/item/main.naver?code=005930">삼성전자</a></td>
-            <td>설명</td>
-            <td>가격</td>
-            <td>대비</td>
-            <td>+1.5%</td>
-        </tr>
-        <tr>
-            <td><a href="/item/main.naver?code=000660">SK하이닉스</a></td>
-            <td>설명</td>
-            <td>가격</td>
-            <td>대비</td>
-            <td>+2.0%</td>
-        </tr>
-    </table>
-    </html>
-    """
-    theme = {'name': '반도체', 'link': '/theme/detail'}
+    """테마 구성종목 — JSON API 로 받아 등락률 상위 2 를 주도주로 채운다"""
+    payload = {"stocks": [
+        {"itemCode": "005930", "stockName": "삼성전자", "fluctuationsRatio": "1.5"},
+        {"itemCode": "000660", "stockName": "SK하이닉스", "fluctuationsRatio": "2.0"},
+        {"itemCode": "000000", "stockName": "꼴찌", "fluctuationsRatio": "-3.0"},
+    ]}
+    theme = {'name': '반도체', 'no': 12}
     with patch('requests.get') as mock_get:
-        mock_resp = MagicMock()
-        mock_resp.content = html.encode('cp949')
-        mock_get.return_value = mock_resp
-        
+        mock_get.return_value = MagicMock(status_code=200, json=lambda: payload)
         theme_analysis._fetch_theme_detail(theme)
-        
-        assert 'leading' in theme
-        # 등락률 순 정렬 (2.0% > 1.5%)
-        assert 'SK하이닉스' in theme['leading']
-        assert '삼성전자' in theme['leading']
+
+    # 등락률 순 정렬 (2.0% > 1.5%) · 상위 2 만
+    assert theme['leading'] == "SK하이닉스(000660), 삼성전자(005930)"
+    assert [s['code'] for s in theme['leading_stocks']] == ["000660", "005930"]
+
+
+def test_fetch_theme_detail_without_no_is_dash():
+    """테마 번호가 없으면(옛 항목) 조회하지 않고 '-' 로 둔다"""
+    theme = {'name': '반도체'}
+    with patch('requests.get') as mock_get:
+        theme_analysis._fetch_theme_detail(theme)
+    assert theme['leading'] == "-" and not mock_get.called
 
 def test_analyze_chart_image_sends_sdk_part(tmp_path):
     """차트 이미지 입력이 신 SDK 가 받는 Part 로 전달되는지 검증.

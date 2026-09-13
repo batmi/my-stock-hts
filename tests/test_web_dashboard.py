@@ -53,6 +53,8 @@ def universe(monkeypatch):
         "stocks_kr": [{"name": "삼성전자", "code": "005930", "exchange": "KOSPI"}],
         "etfs_kr": [], "stocks_us": [{"name": "Apple Inc.", "code": "AAPL"}], "etfs_us": [],
     }, raising=False)
+    # 마스터 파일은 테스트에서 읽지 않는다(없으면 다운로드를 시도한다). 기본은 '모름'.
+    monkeypatch.setattr(wd, "_name_from_master", lambda c: None)
     wd.clear_name_cache()
     yield
     wd.clear_name_cache()
@@ -78,6 +80,66 @@ def test_unknown_code_hits_network_once_then_caches(universe, monkeypatch):
     for _ in range(5):
         assert wd.resolve_stock_name("999999", False) is None
     assert len(calls) == 1, f"외부 조회가 {len(calls)}회 발생했다 — 캐시가 듣지 않는다"
+
+
+def test_master_names_come_before_network(universe, monkeypatch):
+    """[2026-09-13] 관심종목에 없어도 KIS 마스터에 있으면 외부를 부르지 않는다.
+
+    갤러리 네 장이 전부 코드만 보이던 사고 — 정본이 로컬(마스터)에 있는데 죽은 네이버
+    HTML 로 갔고, 그 실패를 영구 캐시했다.
+    """
+    import api
+    calls = []
+    monkeypatch.setattr(wd, "_name_from_master",
+                        lambda c: {"012330": "현대모비스"}.get(c))
+    monkeypatch.setattr(api, "get_stock_name_by_code",
+                        lambda c, o: calls.append(c) or None)
+    assert wd.resolve_stock_name("012330", False) == "현대모비스"
+    assert calls == []
+
+
+def test_failure_is_retried_after_ttl(universe, monkeypatch):
+    """실패는 영구가 아니라 잠깐만 기억한다.
+
+    기동 직후 첫 인덱스는 관심종목이 로드되기 전에 만들어진다. 그 순간의 실패가
+    프로세스 수명 동안 굳으면, 그 뒤 관심종목이 들어와도 카드는 영원히 코드만 보인다.
+    """
+    import api
+    answers = iter([None, "SK하이닉스"])
+    monkeypatch.setattr(api, "get_stock_name_by_code", lambda c, o: next(answers))
+    assert wd.resolve_stock_name("000660", False) is None
+    assert wd.resolve_stock_name("000660", False) is None      # TTL 안 — 재조회 없음
+    now = wd.time.time()
+    monkeypatch.setattr(wd.time, "time", lambda: now + wd._NAME_FAIL_TTL_SEC + 1)
+    assert wd.resolve_stock_name("000660", False) == "SK하이닉스"
+
+
+def test_success_is_permanent(universe, monkeypatch):
+    import api
+    calls = []
+    monkeypatch.setattr(api, "get_stock_name_by_code",
+                        lambda c, o: calls.append(c) or "현대차")
+    assert wd.resolve_stock_name("005380", False) == "현대차"
+    now = wd.time.time()
+    monkeypatch.setattr(wd.time, "time", lambda: now + 10 * wd._NAME_FAIL_TTL_SEC)
+    assert wd.resolve_stock_name("005380", False) == "현대차"
+    assert len(calls) == 1
+
+
+def test_alphanumeric_domestic_code_is_not_treated_as_overseas(universe, monkeypatch, tmp_path):
+    """0080G0 같은 문자 포함 국내 코드가 해외로 분류되면 이름 조회가 전부 빗나간다.
+
+    NXT 게이트에서 2026-09-09 에 고친 것과 같은 결함(isdigit)이 카드 코드에도 있었다.
+    """
+    import api
+    seen = []
+    monkeypatch.setattr(api, "get_stock_name_by_code",
+                        lambda c, o: seen.append((c, o)) or "KODEX 방산TOP10")
+    (tmp_path / "analysis_0080G0_daily.png").write_bytes(b"png")
+    monkeypatch.setattr(wd, "_thumb_src", lambda d, f, m: f)
+    wd.update_chart_index(str(tmp_path))
+    assert seen and seen[0] == ("0080G0", False), f"해외로 분류됐다: {seen}"
+    assert "KODEX 방산TOP10 0080G0" in (tmp_path / "index.html").read_text()
 
 
 def test_index_generation_makes_no_network_call_per_file(universe, monkeypatch, tmp_path):

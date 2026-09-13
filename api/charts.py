@@ -32,22 +32,28 @@ def _api():
 def get_stock_name_by_code(code, is_overseas):
     final_name = None
     if not is_overseas:
-        url = f"https://finance.naver.com/item/main.naver?code={code}"
+        # [정본은 로컬에 있다 · 2026-09-13] KIS 마스터가 한글 종목명을 들고 있다. 네트워크
+        #  없이 답하므로 먼저 본다. 신규 상장처럼 마스터에 아직 없는 코드만 아래로 간다.
         try:
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            r = _api().session.get(url, headers=headers, timeout=3)
-            m_og = re.search(r'meta property="og:title" content="(.*?)"', r.text)
-            if m_og:
-                raw_title = m_og.group(1).strip()
-                if "페이지를 찾을 수 없습니다" not in raw_title:
-                    clean_name = re.sub(r'\s*\(\d{6}\)', '', raw_title)
-                    clean_name = re.sub(r'\s*[:|-]\s*(Npay|네이버|Naver|금융|증권).*', '', clean_name, flags=re.IGNORECASE)
-                    final_name = clean_name.strip()
-                if final_name in ["Npay 증권", "네이버 페이 증권", "증권", "금융", "네이버 금융"]: final_name = None
-            else: final_name = code
+            from modules import analysis
+            final_name = analysis.get_stock_name_from_master(code)
         except Exception as e:
-            logger.debug(f"Naver stock name parsing error: {e}")
-            final_name = code
+            logger.debug(f"마스터 종목명 조회 실패({code}): {e}")
+        if not final_name:
+            # [2026-09-13] 종전 finance.naver.com/item/main.naver 는 stock.naver.com(SPA)로
+            #  302 되고, 그 페이지의 og:title 은 종목명이 아니라 "Npay 증권"이다 — 그래서
+            #  모든 국내 종목명이 실패했다. 같은 사이트의 JSON API 로 바꾼다. 0080G0 같은
+            #  문자 포함 코드도 답한다.
+            url = f"https://m.stock.naver.com/api/stock/{code}/basic"
+            try:
+                headers = {'User-Agent': 'Mozilla/5.0'}
+                r = _api().session.get(url, headers=headers, timeout=3)
+                if r.status_code == 200:
+                    nm = (r.json() or {}).get('stockName')
+                    if nm and str(nm).strip():
+                        final_name = str(nm).strip()
+            except Exception as e:
+                logger.debug(f"Naver stock name fetch error({code}): {e}")
     else:
         # 1. TradingView Screener 우선 조회 (속도 개선)
         try:

@@ -108,9 +108,8 @@ def test_evaluate_market_indicator():
 @patch('modules.theme_analysis.requests.get')
 def test_fetch_naver_themes(mock_get):
     """네이버 테마 크롤링 파싱 검증"""
-    mock_resp = MagicMock()
-    mock_resp.content = b'<html><table class="type_1"><tr><td><a href="/link">Test Theme</a></td><td>1.5%</td><td>2.0%</td><td>Dummy</td></tr></table></html>'
-    mock_get.return_value = mock_resp
+    mock_get.return_value = MagicMock(status_code=200, json=lambda: {"totalCount": 1, "groups": [
+        {"no": 1, "name": "Test Theme", "totalCount": 3, "changeRate": "1.5", "riseCount": 2, "fallCount": 1}]})
     themes = theme_analysis.fetch_naver_themes()
     assert len(themes) > 0
     assert themes[0]['name'] == 'Test Theme'
