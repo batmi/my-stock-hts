@@ -4,7 +4,8 @@
 마감된 KRX 확정 종가다. 값만으로는 구분이 안 되므로 표 제목에 세션을 붙여 오독을 막는다.
 
 세션 경계는 기존 판정과 어긋나면 안 된다.
-  - 국내: api._nxt_quote_phase() (프리 08:00~09:00 / 정규 09:00~15:30 / 애프터 15:30~20:00)
+  - 국내: api._nxt_quote_phase() (프리 08:00~09:00 / 정규 09:00~15:30 / NXT 단독 15:30~16:00 /
+          KRX 애프터 16:00~20:00 — 2026-09-14 KRX 애프터마켓 도입, NXT 애프터는 이용하지 않는다)
   - 미국: modules/trading.py 주문 세션 자동판별 (ET 04:00/09:30/16:00/20:00)
 """
 from datetime import datetime
@@ -40,8 +41,10 @@ def _freeze_kr(dt, holiday=False):
     (8, 59, 'nxt_pre'),
     (9, 0, 'krx'),          # KRX 정규장 시작
     (15, 29, 'krx'),
-    (15, 30, 'nxt_after'),  # KRX 마감 → NXT 애프터마켓
-    (20, 0, 'nxt_after'),   # 애프터마켓 종료 시각(포함) — _nxt_quote_phase와 동일
+    (15, 30, 'nxt_after'),  # KRX 휴게 → NXT 단독 구간(미이용)
+    (15, 59, 'nxt_after'),
+    (16, 0, 'krx_after'),   # KRX 애프터마켓 개장
+    (20, 0, 'krx_after'),   # 애프터마켓 종료 시각(포함) — _nxt_quote_phase와 동일
     (20, 1, 'closed'),
     (23, 30, 'closed'),
 ])
@@ -60,7 +63,7 @@ def test_domestic_session_phase_holiday_overrides_clock():
 
 def test_domestic_phase_matches_nxt_quote_phase():
     """표기 경계와 시세 처리 경계(_nxt_quote_phase)가 어긋나지 않는다."""
-    mapping = {'nxt_pre': 'active', 'nxt_after': 'active',
+    mapping = {'nxt_pre': 'active', 'nxt_after': 'break', 'krx_after': 'krx_after',
                'krx': 'skip', 'closed': 'offhours', 'holiday': 'offhours'}
     for hh in range(24):
         for mm in (0, 29, 30, 59):
@@ -84,7 +87,8 @@ def test_domestic_label_regular_is_krx():
 
 @pytest.mark.parametrize("hh, mm, expect", [
     (8, 30, "NXT 프리마켓 · KRX 개장 전"),
-    (16, 0, "NXT 애프터마켓 · KRX 마감"),
+    (16, 0, "KRX 애프터마켓"),
+    (19, 59, "KRX 애프터마켓"),
 ])
 def test_domestic_label_nxt_windows(hh, mm, expect):
     a, b = _freeze_kr(datetime(2026, 7, 28, hh, mm))
@@ -94,9 +98,19 @@ def test_domestic_label_nxt_windows(hh, mm, expect):
     assert style == "yellow"
 
 
+def test_domestic_label_nxt_only_window_is_dim_and_says_regular_close():
+    """15:30~16:00 은 NXT 만 연다. 이 시스템은 NXT 애프터를 쓰지 않으므로 '거래 중'처럼
+    보이면 안 된다 — 값이 정규장 종가에 멈춰 있음을 라벨이 말한다."""
+    a, b = _freeze_kr(datetime(2026, 7, 28, 15, 45))
+    with a, b:
+        text, style = api.market_session_label(False)
+    assert "15:30~16:00" in text and "정규장 종가" in text
+    assert style == "dim"
+
+
 @pytest.mark.parametrize("krx_fixed, expect_basis", [
-    (True, "KRX 종가"),      # USE_KRX_CLOSE_AFTER_HOURS=True
-    (False, "NXT 최종가"),   # 끄면 마지막 실거래가(전날 NXT 종가)를 그대로 노출
+    (True, "KRX 정규장 종가"),    # USE_KRX_CLOSE_AFTER_HOURS=True
+    (False, "KRX 애프터 최종가"),  # 끄면 마지막 실거래가(그날 KRX 애프터 최종가)를 그대로 노출
 ])
 def test_domestic_label_closed_shows_price_basis(krx_fixed, expect_basis):
     a, b = _freeze_kr(datetime(2026, 7, 28, 22, 0))
@@ -112,10 +126,10 @@ def test_domestic_label_closed_shows_price_basis(krx_fixed, expect_basis):
 
 @pytest.mark.parametrize("hh, mm, session", [
     (8, 30, "NXT 프리마켓"),
-    (16, 0, "NXT 애프터마켓"),
+    (16, 0, "KRX 애프터마켓"),   # [2026-09-14] KRX 애프터도 ETF/ETN 미지원(일반 주권만)
 ])
 def test_domestic_etf_label_marks_nxt_untraded(hh, mm, session):
-    """NXT는 ETF/ETN을 취급하지 않는다 — 세션은 열려도 값은 KRX 종가에서 멈춘다.
+    """NXT도 KRX 애프터마켓도 ETF/ETN을 취급하지 않는다 — 세션은 열려도 값은 KRX 종가에서 멈춘다.
     세션 이름만 띄우면 '지금 거래 중'으로 오독되므로 미거래를 명시하고 dim 처리한다."""
     a, b = _freeze_kr(datetime(2026, 7, 28, hh, mm))
     with a, b:
@@ -136,7 +150,7 @@ def test_domestic_etf_label_closed_always_krx_basis():
     a, b = _freeze_kr(datetime(2026, 7, 28, 22, 0))
     with a, b, patch.object(api, 'display_price_krx_fixed', lambda _=False: False):
         text, _style = api.market_session_label(False, is_domestic_etf=True)
-    assert text == "장 마감 · KRX 종가"
+    assert text == "장 마감 · KRX 정규장 종가"
 
 
 def test_us_label_ignores_domestic_etf_flag():
@@ -167,8 +181,8 @@ def test_session_phase_key_folds_closed_and_holiday():
     from modules.auto_trade.trader import session_phase_key
     assert session_phase_key('closed') == session_phase_key('holiday')
     # 거래 있는 단계는 서로/idle과 구분된 채로 남아야 한다
-    live = {session_phase_key(p) for p in ('nxt_pre', 'krx', 'nxt_after')}
-    assert live == {'nxt_pre', 'krx', 'nxt_after'}
+    live = {session_phase_key(p) for p in ('nxt_pre', 'krx', 'nxt_after', 'krx_after')}
+    assert live == {'nxt_pre', 'krx', 'nxt_after', 'krx_after'}
     assert session_phase_key('closed') not in live
 
 
@@ -185,7 +199,7 @@ def test_session_phase_key_midnight_rollover_is_silent():
 
 
 def test_session_phase_key_market_close_still_notifies():
-    """20:00 애프터마켓 → 20:01 마감은 진짜 전환 — 알림이 살아 있어야 한다."""
+    """20:00 KRX 애프터마켓 → 20:01 마감은 진짜 전환 — 알림이 살아 있어야 한다."""
     from modules.auto_trade.trader import session_phase_key
     a, b = _freeze_kr(datetime(2026, 7, 28, 20, 0))
     with a, b:
@@ -193,7 +207,7 @@ def test_session_phase_key_market_close_still_notifies():
     a, b = _freeze_kr(datetime(2026, 7, 28, 20, 1))
     with a, b:
         after = session_phase_key(api.domestic_session_phase())
-    assert before == 'nxt_after' and after == 'idle'
+    assert before == 'krx_after' and after == 'idle'
 
 
 # ==========================================================

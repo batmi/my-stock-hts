@@ -5626,19 +5626,21 @@ class AutoTrader:
                 return
             self.stuck_pending_streak.pop(code, None)
 
-            # [추가] 대체거래소(NXT) 운영 시간에는 ETF 및 NXT 비거래 종목 매도 스킵
+            # [추가] 연장거래 시간에는 그 시장이 취급하지 않는 종목의 매도를 스킵한다.
+            #  NXT 창: ETF 및 NXT 비거래 종목. KRX 애프터(16:00~20:00): ETF/ETN(일반 주권만 거래).
             is_nxt_market = api.nxt_order_window()
+            etf_untraded = api.domestic_etf_untraded_window()
             is_overseas_stock = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
             
             # [수정] ETF 판정을 관심목록뿐 아니라 종목명 휴리스틱까지 포함하도록 일원화
             #  (보유만 하고 관심목록에 없는 ETF/ETN도 식별)
             is_domestic_etf = (not is_overseas_stock) and api.is_domestic_etf_etn(code, name)
 
-            if is_nxt_market and not is_overseas_stock:
-                if is_domestic_etf or (hasattr(api, 'is_nxt_tradeable') and not api.is_nxt_tradeable(code)):
+            if etf_untraded and not is_overseas_stock:
+                if is_domestic_etf or (is_nxt_market and hasattr(api, 'is_nxt_tradeable') and not api.is_nxt_tradeable(code)):
                     self.set_stock_state(code, None)
                     # [앵커 복원] 이 분기는 아래 ETF 제외보다 **먼저** 걸린다. 여기서 그냥
-                    #  돌아서면 NXT 시간대(15:30~20:00·08:00~08:50)에만 봇을 켜는 운용에서는
+                    #  돌아서면 NXT 프리마켓(08:00~08:50)에만 봇을 켜는 운용에서는
                     #  ETF 앵커가 영영 복원되지 않는다. 주문과 무관한 기록이므로 여기서도 남긴다.
                     self._restore_trailing_anchor(
                         code, name,
@@ -6472,15 +6474,18 @@ class AutoTrader:
                 self.set_stock_state(code, None)
                 return {'type': 'restricted_skip', 'name': name}
 
-            # [추가] 대체거래소(NXT) 운영 시간에는 ETF 및 NXT 비거래 종목 스킵
+            # [추가] 연장거래 시간에는 그 시장이 취급하지 않는 종목을 스킵한다.
+            #  NXT 창: ETF 및 NXT 비거래 종목. KRX 애프터(16:00~20:00): ETF/ETN(일반 주권만 거래).
             is_nxt_market = api.nxt_order_window()
+            etf_untraded = api.domestic_etf_untraded_window()
             is_overseas_stock = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
             
-            if is_nxt_market and not is_overseas_stock:
+            if etf_untraded and not is_overseas_stock:
                 is_etf = item.get('group') == 'etfs_kr'
-                if is_etf or (hasattr(api, 'is_nxt_tradeable') and not api.is_nxt_tradeable(code)):
+                if is_etf or (is_nxt_market and hasattr(api, 'is_nxt_tradeable') and not api.is_nxt_tradeable(code)):
                     self.set_stock_state(code, None)
-                    return {'type': 'log_only', 'log': f"[NXT스킵] {name}({code}): 대체거래소(NXT) 거래 불가 종목(ETF 포함)으로 분석을 스킵합니다."}
+                    where = "대체거래소(NXT)" if is_nxt_market else "KRX 애프터마켓"
+                    return {'type': 'log_only', 'log': f"[연장거래스킵] {name}({code}): {where} 거래 불가 종목(ETF 포함)으로 분석을 스킵합니다."}
             
             # 2. 진행 중인 주문 체크
             if self.order_manager.is_pending(code):

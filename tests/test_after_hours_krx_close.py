@@ -55,8 +55,9 @@ def _default_on():
     (9, 0, True),    # KRX 정규장 시작
     (10, 0, True),   # 정규장
     (8, 30, True),   # NXT 프리마켓
-    (16, 0, True),   # NXT 애프터마켓
-    (19, 59, True),  # NXT 애프터마켓 종료 직전
+    (15, 45, False), # [2026-09-14] NXT 단독 구간 — 이 시스템은 NXT 애프터를 쓰지 않는다
+    (16, 0, True),   # KRX 애프터마켓
+    (19, 59, True),  # KRX 애프터마켓 종료 직전
     (20, 30, False),  # 모든 장 종료
     (23, 0, False),  # 야간
     (7, 0, False),   # NXT 프리마켓 개장 전
@@ -275,9 +276,42 @@ def test_auto_trade_window_defaults_to_krx_session():
             assert is_system_market_open() is want, f"{hh:02d}:{mm:02d}"
 
 
+def test_auto_trade_window_extended_to_after_market_skips_the_nxt_only_gap():
+    """[2026-09-14] 거래 종료를 2000 으로 넓히면 KRX 애프터(16:00~20:00)가 열린다.
+    그래도 15:30~16:00 은 닫힌다 — KRX 가 쉬고 NXT 만 여는 구간인데 NXT 애프터는 쓰지 않는다.
+    단일 구간 비교만으로는 그 30분이 함께 열려 버린다(그 구간의 주문은 SOR 이 NXT 로 보낸다)."""
+    from modules.auto_trade.common import is_system_market_open
+    saved = config.settings.SYSTEM_TRADING_END_TIME
+    config.settings.SYSTEM_TRADING_END_TIME = "2000"
+    try:
+        expected = {(15, 19): True, (15, 20): False, (15, 30): False, (15, 31): False,
+                    (15, 59): False, (16, 0): True, (18, 0): True, (20, 0): True, (20, 1): False}
+        for (hh, mm), want in expected.items():
+            with patch('modules.auto_trade.common.datetime') as m, \
+                 patch('modules.auto_trade.common.api.is_holiday_today', return_value=False):
+                m.now.return_value = datetime(2026, 9, 14, hh, mm)
+                assert is_system_market_open() is want, f"{hh:02d}:{mm:02d}"
+    finally:
+        config.settings.SYSTEM_TRADING_END_TIME = saved
+
+
+def test_nxt_only_gap_is_fixed_to_regular_close_regardless_of_setting():
+    """15:30~16:00: 살아 있는 시장은 NXT 뿐인데 쓰지 않으므로, 설정을 꺼도 정규장 종가에 고정한다."""
+    for setting in (True, False):
+        config.settings.USE_KRX_CLOSE_AFTER_HOURS = setting
+        md, hp, dt = _at(datetime(2026, 9, 14, 15, 45), holiday=False)
+        with md as m, hp:
+            m.now.return_value = dt
+            m.strptime = datetime.strptime
+            assert api._nxt_quote_phase() == 'break'
+            assert api.display_price_krx_fixed(False) is True, f"setting={setting}"
+            assert api.chart_overlay_enabled(False) is False
+
+
 @pytest.mark.parametrize("hh,mm", [(8, 30), (16, 0), (19, 30)])
 def test_nxt_session_shows_live_price_but_not_in_indicators(hh, mm):
-    """NXT 거래시간: 표시는 실시간(NXT)가, 지표는 KRX 확정 봉.
+    """연장거래 시간(NXT 프리 · KRX 애프터): 표시는 실시간가, 지표는 KRX 확정 봉.
+    [2026-09-14] 16:00~20:00 은 같은 KRX 라도 정규장 밖 체결 — 지표에 넣지 않는 건 NXT 와 같다.
 
     표시 게이트가 '고정 아님'을 돌려주면 호출부가 실시간가를 현재가로 쓴다.
     """
@@ -371,3 +405,114 @@ def test_table_row_predawn_keeps_nxt_when_setting_off():
     """새벽에 설정 False면 마지막 실거래가(NXT)가 그대로 보인다."""
     cells = _table_row(False, when=datetime(2026, 7, 27, 1, 13), holiday=False)
     assert "99,700" in cells[3]
+
+
+# ==========================================================
+# 8. [2026-09-14] KRX 애프터마켓 — 시세 병합 경로
+# ==========================================================
+
+def _price_env(monkeypatch, j_price, nx_price, remembered):
+    """현재가(J)·NXT(NX)·기억한 연장거래가를 고정하고, 어느 소스를 물었는지 기록한다."""
+    seen = []
+
+    def _call_api(url, market, category, name, params=None, **kw):
+        seen.append(params.get('fid_cond_mrkt_div_code'))
+        return {'rt_cd': '0', 'output': {'stck_prpr': str(j_price), 'w52_hgpr': '0'}}
+
+    def _fetch_nxt(code):
+        seen.append('NX')
+        return nx_price
+
+    monkeypatch.setattr(api, 'call_api', _call_api)
+    monkeypatch.setattr(api, 'fetch_nxt_price', _fetch_nxt)
+    monkeypatch.setattr(api, '_nxt_recalled_close', lambda code: remembered)
+    monkeypatch.setattr(api, '_nxt_remember_close', lambda code, price: remembered_calls.append(price))
+    monkeypatch.setattr(api, '_get_micro_cache', lambda *a, **k: None)
+    monkeypatch.setattr(api, '_set_micro_cache', lambda *a, **k: None)
+    monkeypatch.setattr(api.config.session, 'is_toss', False, raising=False)
+    monkeypatch.setattr(api.config, 'USE_WEBSOCKET', False, raising=False)
+    return seen
+
+
+remembered_calls = []
+
+
+def _price_at(monkeypatch, dt, **env):
+    remembered_calls.clear()
+    seen = _price_env(monkeypatch, **env)
+    md, hp, _ = _at(dt, holiday=False)
+    with md as m, hp:
+        m.now.return_value = dt
+        m.strptime = datetime.strptime
+        return api.get_current_price("005930", False), seen
+
+
+def test_krx_after_market_price_is_krx_and_never_asks_nxt(monkeypatch):
+    """16:00~20:00: 현재가는 KRX(J) 그대로, NX 는 묻지 않으며, 그 값을 야간용으로 기억한다."""
+    price, seen = _price_at(monkeypatch, datetime(2026, 9, 14, 17, 0),
+                            j_price=70500, nx_price=70900, remembered=0)
+    assert price == 70500
+    assert 'NX' not in seen
+    assert remembered_calls == [70500]
+
+
+def test_nxt_only_gap_price_is_regular_close_and_never_asks_nxt(monkeypatch):
+    """15:30~16:00: NXT 가 살아 있어도 묻지 않는다 — J(정규장 종가)만 쓴다."""
+    price, seen = _price_at(monkeypatch, datetime(2026, 9, 14, 15, 45),
+                            j_price=70000, nx_price=70900, remembered=0)
+    assert price == 70000
+    assert 'NX' not in seen
+    assert remembered_calls == []
+
+
+def test_night_recalls_krx_after_last_price_not_live_nxt(monkeypatch):
+    """야간(USE_KRX_CLOSE_AFTER_HOURS=False 의 '마지막 실거래가'): 기억한 KRX 애프터 최종가다.
+    종전처럼 라이브 NXT 를 물으면 NXT 20:00 종가가 온다 — 그건 이 시스템이 쓰지 않는 시장이다."""
+    config.settings.USE_KRX_CLOSE_AFTER_HOURS = False
+    price, seen = _price_at(monkeypatch, datetime(2026, 9, 14, 22, 0),
+                            j_price=70000, nx_price=70900, remembered=70500)
+    assert price == 70500
+    assert 'NX' not in seen
+
+
+def test_premarket_still_merges_nxt(monkeypatch):
+    """프리마켓(08:00~09:00)은 정책 변경 밖 — NXT 병합이 그대로다."""
+    price, seen = _price_at(monkeypatch, datetime(2026, 9, 14, 8, 30),
+                            j_price=70000, nx_price=70900, remembered=0)
+    assert price == 70900
+    assert 'NX' in seen
+    assert remembered_calls == [70900]
+
+
+# ==========================================================
+# 9. [2026-09-14] 연장거래는 ETF/ETN 을 취급하지 않는다(NXT · KRX 애프터 모두)
+# ==========================================================
+
+@pytest.mark.parametrize("hh,mm,expected", [
+    (8, 30, True),    # NXT 프리
+    (10, 0, False),   # 정규장 — ETF 정상 거래
+    (15, 45, True),   # NXT 단독
+    (16, 0, True),    # KRX 애프터
+    (20, 0, True),
+    (20, 1, False),   # 장 종료(거래 자체가 없다 — 이 게이트의 질문이 아니다)
+])
+def test_etf_untraded_window(hh, mm, expected):
+    assert api.domestic_etf_untraded_window(datetime(2026, 9, 14, hh, mm)) is expected
+
+
+def test_reserved_etf_order_waits_out_the_after_market(monkeypatch):
+    """16~20시 ETF 예약은 발동하지 않는다 — 발동하면 거부돼 FAILED 로 굳고 예약이 소진된다."""
+    from modules import reserved_order_monitor as rom
+    src = open(rom.__file__, encoding='utf-8').read()
+    assert "api.domestic_etf_untraded_window()" in src and "api.is_domestic_etf_etn(order['code']" in src
+
+
+def test_auto_trader_skips_etf_in_krx_after_market():
+    """자동매매 두 분기(매도 점검·후보 분석)가 NXT 창이 아니라 'ETF 미거래 창'을 본다.
+    NXT 창만 보면 16~20시 보유 ETF 의 손절 주문이 KRX 애프터로 나가 거부된다."""
+    import inspect
+    from modules.auto_trade import trader as _t
+    for fn in (_t.AutoTrader._check_sell_conditions, _t.AutoTrader._analyze_candidate_worker):
+        src = inspect.getsource(fn)
+        assert "etf_untraded = api.domestic_etf_untraded_window()" in src, fn.__name__
+        assert "if etf_untraded and not is_overseas_stock:" in src, fn.__name__

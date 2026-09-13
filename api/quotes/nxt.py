@@ -32,16 +32,13 @@ def _nxt_quote_window():
 
     정규장(09:00~15:30)에는 KRX가 대표가이고 NXT와 사실상 동일하므로, 종목당 NXT 보조
     호출을 생략해 전역 TPS 부담을 줄인다(분석 속도 개선). KRX가 닫혀 NXT 시세가 유일하게
-    유효한 NXT 단독 거래시간(프리 08:00~09:00, 애프터 15:30~20:00)에만 조회한다.
-    그 외 시간(야간)·휴장일은 NXT가 닫혀 빈 응답이므로 생략한다.
+    유효한 프리마켓(08:00~09:00)에만 조회한다.
+
+    [2026-09-14 KRX 애프터마켓] 15:30 이후는 더 이상 NXT 를 보지 않는다 — 16:00~20:00 은
+    KRX 애프터마켓이 대표 시장이고(J 현재가), 15:30~16:00 은 NXT 만 여는 휴게 구간인데
+    이 시스템은 NXT 애프터를 이용하지 않는다. 야간·휴장일도 생략한다.
     """
-    try:
-        if _api().is_holiday_today():
-            return False
-    except Exception:
-        pass
-    now = datetime.now().strftime("%H%M")
-    return ("0800" <= now < "0900") or ("1530" <= now <= "2000")
+    return _nxt_quote_phase() == 'active'
 
 def fetch_nxt_price(code):
     """NXT(대체거래소) 현재가만 단독 조회한다. (모의투자/오류/미체결 시 0 반환)
@@ -64,10 +61,11 @@ def fetch_nxt_price(code):
     return 0
 
 # ==========================================================
-# NXT(대체거래소) 마지막 종가 기억 — 야간/주말/휴장 시 현재가 표시용 (실전 전용)
-#  거래시간(프리 08:00~09:00, 애프터 15:30~20:00) 동안 받은 NXT 현재가를 보관했다가,
-#  거래가 없는 시간대(야간 20:00~익일 08:00 / 주말 / 휴장일)에는 KRX 정규장 종가 대신
-#  '마지막 NXT 종가'를 현재가로 노출한다(다음 거래일 개장 전까지). 디스크에 영속하여 재시작에도 보존.
+# 연장거래 마지막가 기억 — 야간/주말/휴장 시 현재가 표시용 (실전 전용)
+#  프리마켓(NXT 08:00~09:00)·KRX 애프터마켓(16:00~20:00) 동안 받은 현재가를 보관했다가,
+#  거래가 없는 시간대(야간 20:00~익일 08:00 / 주말 / 휴장일)에 USE_KRX_CLOSE_AFTER_HOURS=False 면
+#  '마지막 연장거래가'(= 그날 KRX 애프터 최종가)를 현재가로 노출한다. 디스크에 영속하여 재시작에도 보존.
+#  [2026-09-14] 종전에는 NXT 애프터(15:30~20:00) 체결가를 기억했다. 이제 NXT 애프터는 이용하지 않는다.
 #  모의투자(VTS)는 NXT 미지원이므로 이 경로를 타지 않는다(항상 KRX 종가).
 # ==========================================================
 _nxt_last_close = {}
@@ -116,7 +114,12 @@ def _nxt_save_last_close(force=False):
         logger.debug(f"[NXT] 마지막 종가 캐시 저장 실패: {e}")
 
 def _nxt_remember_close(code, price):
-    """거래시간에 받은 NXT 현재가를 '마지막 종가'로 기억한다."""
+    """연장거래 시간에 받은 현재가를 '마지막 연장거래가'로 기억한다.
+
+    [2026-09-14] 기억하는 값은 두 종류다 — 프리마켓(08:00~09:00)의 NXT 체결가와
+    KRX 애프터마켓(16:00~20:00)의 KRX 체결가. 하루의 마지막 기록은 언제나 뒤의 것이므로,
+    야간에 회상하는 값은 **KRX 애프터마켓 최종가**다(USE_KRX_CLOSE_AFTER_HOURS=False 표시 기준).
+    """
     global _nxt_last_close_dirty
     try:
         p = int(price)
@@ -131,7 +134,7 @@ def _nxt_remember_close(code, price):
     _nxt_save_last_close()
 
 def _nxt_recalled_close(code):
-    """야간/주말/휴장 시 보여줄 NXT 마지막 종가. 너무 오래된(>5일) 값은 폐기(0 반환)."""
+    """야간/주말/휴장 시 보여줄 마지막 연장거래가(KRX 애프터 최종가). 너무 오래된(>5일) 값은 폐기(0 반환)."""
     _nxt_load_last_close()
     with _nxt_last_close_lock:
         e = _nxt_last_close.get(code)
@@ -146,21 +149,32 @@ def _nxt_recalled_close(code):
         return 0
 
 def _nxt_quote_phase():
-    """실전 NXT 시세 처리 단계를 '한 번의 휴장 판정'으로 결정한다(중복 휴장조회 방지).
-       'active'   : NXT 거래시간(프리 08:00~09:00 / 애프터 15:30~20:00) → 라이브 NXT 사용
-       'offhours' : 야간(20:00~익일 08:00)·주말·휴장 → 라이브 NXT 시도 후 없으면 마지막 종가
-       'skip'     : 정규장(09:00~15:30) 등 → KRX 대표가만 사용
+    """국내 연장거래 시세 처리 단계를 '한 번의 휴장 판정'으로 결정한다(중복 휴장조회 방지).
+       'active'    : NXT 프리마켓(08:00~09:00) → 라이브 NXT(NX) 병합
+       'skip'      : KRX 정규장(09:00~15:30) → KRX 대표가(J)만 사용 · 지표 오버레이 허용
+       'break'     : 15:30~16:00 — NXT 만 여는 휴게 구간. 이 시스템은 NXT 애프터를 쓰지 않으므로
+                     KRX 정규장 종가에 고정한다(NX 조회·회상 없음)
+       'krx_after' : KRX 애프터마켓(16:00~20:00) → KRX 현재가(J)가 살아 있는 대표가.
+                     지표에는 반영하지 않는다(chart_overlay_enabled 는 'skip' 만 허용)
+       'offhours'  : 야간(20:00~익일 08:00)·주말·휴장 → 기억한 마지막 연장거래가(KRX 애프터 최종가)
+
+    [2026-09-14 KRX 애프터마켓 도입] 종전에는 15:30~20:00 이 'active'(NXT) 였다. 16:00~20:00 의
+     대표 시장이 KRX 로 바뀌었고, 시세·주문 모두 KRX 애프터를 쓰기로 했다(NXT 애프터 미이용).
     """
     try:
         holiday = _api().is_holiday_today()   # 주말·공휴일 포함
     except Exception:
         holiday = False
     now = datetime.now().strftime("%H%M")
-    if not holiday and (("0800" <= now < "0900") or ("1530" <= now <= "2000")):
-        return 'active'
-    if holiday or now >= "2000" or now < "0800":
+    if holiday or now >= "2001" or now < "0800":
         return 'offhours'
-    return 'skip'
+    if now < "0900":
+        return 'active'
+    if now < "1530":
+        return 'skip'
+    if now < "1600":
+        return 'break'
+    return 'krx_after'
 
 # [최적화] 관심종목 멀티시세 세션 비활성 플래그 (TR 미지원 서버에서 1회 실패 후 재시도 방지)
 _MULTI_PRICE_DISABLED = False
@@ -297,7 +311,7 @@ def _fetch_multi_nxt_raw(codes):
         return {}
 
 def get_multi_current_prices_nxt(codes):
-    """KRX(J) 멀티시세에 NXT(NX) 멀티시세를 병합해 반환(장전 08:00~09:00·장후 15:30~20:00용).
+    """KRX(J) 멀티시세에 NXT(NX) 멀티시세를 병합해 반환(프리마켓 08:00~09:00 용).
 
     종목별 fetch_nxt_price(NX 단건) 팬아웃이 EGW00201(초당 거래건수 초과)을 유발해 현재가가
     전일종가로 stale 폴백되던 문제를, NX도 30종목/1콜 배치로 바꿔 콜 수를 대폭 줄인다.

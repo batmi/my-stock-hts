@@ -29,9 +29,11 @@ def _at(hm):
     ("0900", False),   # KRX 정규장
     ("1200", False),
     ("1529", False),
-    ("1530", True),    # NXT 애프터마켓
-    ("1900", True),
-    ("2000", True),
+    ("1530", True),    # NXT 단독 구간(KRX 휴게) — 이 시스템은 이용하지 않지만 '주문이 NXT 로 나가는 시각'인 건 사실이다
+    ("1559", True),
+    ("1600", False),   # [2026-09-14] KRX 애프터마켓 개장 — 주문은 KRX 가 받는다(SOR)
+    ("1900", False),
+    ("2000", False),
     ("2001", False),
 ])
 def test_the_order_window_is_nxt_hours_not_quote_hours(hm, expected):
@@ -68,7 +70,8 @@ def test_the_two_authorities_never_name_two_different_markets_at_once(hm, monkey
 def test_the_market_order_notice_matches_the_window():
     """화면 안내문('08:00~08:50')과 실제 구간이 갈라지면 안내가 거짓말이 된다."""
     src = open("modules/trading.py", encoding='utf-8').read()
-    assert "NXT장(08:00~08:50, 15:30~20:00)" in src
+    assert "NXT장(08:00~08:50, 15:30~16:00)" in src
+    assert "15:30~20:00" not in src, "KRX 애프터마켓(16:00~) 을 NXT 구간이라고 안내하면 거짓말이다"
     lo, hi = api.NXT_ORDER_WINDOWS[0]
     #  안내문의 '~08:50'은 '08:50 직전까지'라는 뜻이다(마지막 분은 08:49).
     assert lo == "0800" and hi == "0849"

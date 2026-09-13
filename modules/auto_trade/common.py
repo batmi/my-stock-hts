@@ -766,7 +766,13 @@ def save_daily_initial_asset(account_key, asset_value, principal=None):
 #  - ConclusionMonitor._is_market_open / AutoTrader.is_market_open 이 동일 로직을
 #    각자 들고 있던 중복을 제거하고 이 함수로 위임한다.
 def is_system_market_open():
-    """국내 정규장/시스템 트레이딩 운영 시간 확인 (config 설정 시간 따름)"""
+    """국내 정규장/시스템 트레이딩 운영 시간 확인 (config 설정 시간 따름)
+
+    [2026-09-14 KRX 애프터마켓] 거래 종료 시간을 "2000" 으로 넓히면 16:00~20:00 KRX 애프터에서도
+    진입·청산이 그대로 돈다(운용 범위는 이 설정 하나가 정한다). 다만 15:30~16:00 은 설정과
+    무관하게 **항상 닫는다** — KRX 는 쉬고 NXT 만 여는 구간인데 이 시스템은 NXT 애프터를
+    이용하지 않는다. 단일 구간 비교(start<=t<=end)만으로는 그 30분이 함께 열려 버린다.
+    """
     if api.is_holiday_today(): return False # 주말 및 공휴일(휴장일) 처리
 
     current_time = datetime.now().strftime("%H%M")
@@ -774,6 +780,9 @@ def is_system_market_open():
     end_time = getattr(config, 'SYSTEM_TRADING_END_TIME', "1530")
 
     if start_time <= current_time <= end_time:
+        # KRX 휴게(15:30~16:00, NXT 단독 거래) — 종료 시간을 애프터까지 늘렸을 때만 닿는 구간.
+        #  아래 종가 단일가 배제(15:20~15:30)와 이어져 실효 구간은 09:00~15:20 · 16:00~20:00 이다.
+        if "1530" < current_time < "1600": return False
         # 단일가(동시호가) 구간 회피. 08:50~09:00은 NXT 프리마켓이 KRX 시가 단일가에 맞춰 쉬는
         # 시간이고(설정을 0800으로 넓힌 경우에만 해당), 15:20~15:30은 KRX 종가 단일가 구간이라
         # 체결가를 예측할 수 없어 진입/청산 판단을 보류한다.

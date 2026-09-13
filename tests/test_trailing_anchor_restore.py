@@ -365,6 +365,7 @@ def _run_etf_cycle(trader, df, clock=None, nxt=False):
          patch('modules.auto_trade.load_restricted_stocks', return_value={}), \
          patch('modules.auto_trade.api.is_domestic_etf_etn', return_value=True), \
          patch('modules.auto_trade.api.nxt_order_window', return_value=nxt), \
+         patch('modules.auto_trade.api.domestic_etf_untraded_window', return_value=nxt), \
          patch.object(config, 'SYSTEM_INCLUDE_ETF', False), \
          patch('modules.auto_trade.api.fetch_sellable_quantity', return_value=229), \
          patch('modules.auto_trade.api.get_chart_data', return_value=df) as chart, \

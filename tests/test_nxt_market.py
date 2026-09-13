@@ -185,10 +185,20 @@ def test_vol_strength_regular_hours_uses_krx(monkeypatch, vol_strength_env):
 
 
 def test_vol_strength_nxt_hours_uses_nxt(monkeypatch, vol_strength_env):
-    """7. NXT 단독시간(애프터마켓)에는 KRX가 닫혀 있으므로 NXT 체결강도를 채택한다."""
-    monkeypatch.setattr(api, 'datetime', MagicMock(now=lambda: datetime(2026, 6, 11, 16, 0)))
+    """7. NXT 단독시간(프리마켓)에는 KRX가 닫혀 있으므로 NXT 체결강도를 채택한다."""
+    monkeypatch.setattr(api, 'datetime', MagicMock(now=lambda: datetime(2026, 6, 11, 8, 30)))
     mock_api, seen = _vol_api_recorder(j_value=0, nx_value=180.0)
     monkeypatch.setattr(api, 'call_api', mock_api)
 
     assert api.get_realtime_vol_strength("035720") == 180.0
     assert "NX" in seen
+
+
+def test_vol_strength_krx_after_hours_uses_krx_not_nxt(monkeypatch, vol_strength_env):
+    """7-1. [2026-09-14] KRX 애프터마켓(16:00~20:00)은 KRX(J)가 대표 — NXT 를 묻지 않는다."""
+    monkeypatch.setattr(api, 'datetime', MagicMock(now=lambda: datetime(2026, 9, 14, 16, 0)))
+    mock_api, seen = _vol_api_recorder(j_value=125.0, nx_value=180.0)
+    monkeypatch.setattr(api, 'call_api', mock_api)
+
+    assert api.get_realtime_vol_strength("035720") == 125.0
+    assert "NX" not in seen, f"KRX 애프터에 NXT 체결강도를 조회했다: {seen}"

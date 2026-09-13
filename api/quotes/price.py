@@ -90,25 +90,33 @@ def get_current_price_data(code, is_overseas, include_nxt=True, cache_ttl=3.0, f
             except Exception as e:
                 logger.debug(f"[API] 52주 고가 보정 중 오류: {e}")
 
-            # [추가] NXT(대체거래소) 시세 조회 및 병합 (NX 코드 사용)
-            # [수정] 모의투자(VTS)는 NXT 미지원이라 fetch_nxt_price가 0을 반환한다.
+            # [추가] 연장거래 시세 병합.
             # [최적화] 정규장(09:00~15:30)엔 KRX가 대표가이므로 NXT 보조호출을 생략(_nxt_quote_window)해
-            #  종목당 호출을 절반으로 줄인다. NXT 단독시간(프리/애프터)에만 NXT를 조회한다.
+            #  종목당 호출을 절반으로 줄인다.
+            # [2026-09-14 KRX 애프터마켓] 단계별 처리:
+            #   active(프리 08:00~09:00)  : NXT(NX) 현재가를 ats_prpr 로 병합 · 기억
+            #   krx_after(16:00~20:00)    : KRX(J) 현재가가 곧 대표가 — 병합할 것이 없다. 다만 그 값을
+            #                               '마지막 연장거래가'로 기억해 둔다(야간 표시용)
+            #   break(15:30~16:00)        : NXT 만 여는 구간 — 이 시스템은 NXT 애프터를 쓰지 않으므로
+            #                               아무것도 병합하지 않는다(J = KRX 정규장 종가)
+            #   offhours(야간·휴장)       : 라이브 NXT 를 **묻지 않는다**(물으면 NXT 20:00 종가가 온다).
+            #                               기억한 KRX 애프터 최종가를 ats_prpr 로 노출한다
+            #                               (USE_KRX_CLOSE_AFTER_HOURS=False 의 '마지막 실거래가').
+            # 모의투자(VTS)는 NXT 미지원 → fetch_nxt_price 가 0 이라 프리마켓 병합만 자연히 빠진다.
             out = res.get('output', {})
-            # 모의투자(VTS)는 NXT 미지원 → 항상 KRX 종가. 실전만 NXT 병합/회상.
             if include_nxt:
                 phase = _api()._nxt_quote_phase()
-                if phase in ('active', 'offhours'):
-                    # 거래시간이든 야간이든 KIS 라이브 NXT가를 먼저 시도한다.
+                if phase == 'active':
                     nxt_price = _api().fetch_nxt_price(code)
                     if nxt_price > 0:
                         out['ats_prpr'] = str(nxt_price)
                         _api()._nxt_remember_close(code, nxt_price)         # 받은 값은 항상 기억
-                    elif phase == 'offhours':
-                        # 야간에 KIS가 NXT를 안 주면 기억한 마지막 NXT 종가를 노출(다음 개장 전까지)
-                        recalled = _api()._nxt_recalled_close(code)
-                        if recalled > 0:
-                            out['ats_prpr'] = str(recalled)
+                elif phase == 'krx_after':
+                    _api()._nxt_remember_close(code, _api().safe_int(out.get('stck_prpr')))
+                elif phase == 'offhours':
+                    recalled = _api()._nxt_recalled_close(code)
+                    if recalled > 0:
+                        out['ats_prpr'] = str(recalled)
 
             _api()._set_micro_cache(cache_key, res)
         return res
@@ -585,9 +593,9 @@ def get_realtime_vol_strength(code, is_overseas=False, exchange_code=None, inclu
         #  종목만 이종 기준으로 판정되는 비일관 상태를 만든다.
         #  → KRX 기준을 못 구하면 None으로 두어 '판단 불가=보류'로 넘긴다(다음 주기 재조회).
         #    캐시에도 저장하지 않으므로 다음 주기에 정상적으로 다시 조회된다.
-        #  - phase=='active'(프리/애프터): NXT가 유일한 거래 시장 → NX가 정당한 대표값.
-        #  - phase=='skip'(정규장): NX 조회 생략(TPS 절감 겸용).
-        #  - phase=='offhours'(야간·휴장): NXT 미개장 → 조회 생략.
+        #  - phase=='active'(프리마켓): NXT가 유일한 거래 시장 → NX가 정당한 대표값.
+        #  - phase=='skip'(정규장)·'krx_after'(KRX 애프터): KRX(J)가 대표 → NX 조회 생략.
+        #  - phase=='break'(15:30~16:00, NXT 미이용)·'offhours'(야간·휴장): 조회 생략.
         _nxt_phase = _api()._nxt_quote_phase()
         if include_nxt and _nxt_phase == 'active':
             # [수정] retries=1: NXT 단독시간대엔 NX가 유일한 유효 체결강도 소스인데, 개요 팬아웃(다워커

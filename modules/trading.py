@@ -740,6 +740,31 @@ def send_order(order_type):
             config.console.print("[red]단가는 숫자만 입력 가능합니다.[/red]")
             return False
 
+        # [2026-09-14 KRX 애프터마켓] 15:30~16:00 은 KRX 가 쉬고 NXT 만 연다. 이 시스템은 NXT
+        #  애프터를 이용하지 않기로 했으므로(시세·주문 모두 KRX 애프터 16:00~20:00), 이 구간의
+        #  국내 수동 발주는 사용자가 알고 택했을 때만 내보낸다. 자동매매·예약 감시는 이 구간을 닫는다.
+        if not is_overseas and api.nxt_only_after_window():
+            config.console.print(
+                "\n[bold yellow]⚠️ 지금은 KRX 휴게 구간(15:30~16:00)입니다 — NXT(대체거래소)만 거래 중이며, "
+                "이 시스템은 NXT 애프터마켓을 이용하지 않습니다.[/bold yellow]")
+            config.console.print("[dim]16:00 부터 KRX 애프터마켓이 열립니다. 지금 보내면 NXT 로 접수됩니다.[/dim]")
+            utils.print_breadcrumb()
+            if Prompt.ask("그래도 NXT 로 주문을 보내시겠습니까?", choices=["y", "n"], default="n") != "y":
+                config.console.print("[yellow]주문이 취소되었습니다.[/yellow]")
+                return False
+
+        # [2026-09-14] 연장거래(NXT 창 · KRX 애프터 16:00~20:00)는 ETF/ETN 을 취급하지 않는다(일반 주권만).
+        #  거부될 주문을 말없이 보내지 않는다 — 사용자가 알고 택했을 때만.
+        if (not is_overseas and api.domestic_etf_untraded_window()
+                and api.is_domestic_etf_etn(stock_code, stock_name)):
+            config.console.print(
+                "\n[bold yellow]⚠️ 지금은 연장거래 시간이며, NXT·KRX 애프터마켓 모두 ETF/ETN 을 거래하지 "
+                "않습니다.[/bold yellow] [dim]주문을 보내면 거부될 가능성이 높습니다.[/dim]")
+            utils.print_breadcrumb()
+            if Prompt.ask("그래도 주문을 진행하시겠습니까?", choices=["y", "n"], default="n") != "y":
+                config.console.print("[yellow]주문이 취소되었습니다.[/yellow]")
+                return False
+
         # 6. 가격 처리 및 주문 구분 설정
         ord_dvsn = "00"
         calc_price = 0
@@ -812,6 +837,8 @@ def send_order(order_type):
                 #  시세 쪽 경계(domestic_session_phase 의 nxt_pre = 08:00~09:00)를 쓰면 안 된다 —
                 #  08:50~09:00 은 NXT 가 KRX 시가 단일가에 맞춰 쉬는 시간이라, 그때 주문은
                 #  KRX 동시호가로 들어가고 시장가가 정상 접수된다.
+                # [2026-09-14] KRX 애프터마켓(16:00~20:00)은 이 창 밖이다 — 시장가는 정규장과
+                #  같이 그대로 나간다(KRX 가 받는 시간이므로 지정가로 바꾸지 않는다).
                 is_nxt_market = api.nxt_order_window()
                 
                 if curr_price == 0:
@@ -823,7 +850,7 @@ def send_order(order_type):
                     ord_dvsn = "00"
                     display_price = f"{curr_price:,}원 (NXT현재가 자동변환)"
                     price = str(int(curr_price))
-                    config.console.print(f"[yellow]안내: NXT장(08:00~08:50, 15:30~20:00)은 시장가 주문이 불가능하여 현재가({curr_price:,}원) 지정가로 자동 변환됩니다.[/yellow]")
+                    config.console.print(f"[yellow]안내: NXT장(08:00~08:50, 15:30~16:00)은 시장가 주문이 불가능하여 현재가({curr_price:,}원) 지정가로 자동 변환됩니다.[/yellow]")
                 else:
                     ord_dvsn = "01"
                     display_price = "시장가(0)"
@@ -1291,7 +1318,7 @@ def modify_order():
                     p = api.get_current_price(pdno, is_overseas=False)
                     if p > 0: price = str(int(p))
                 except Exception: pass
-                config.console.print(f"[yellow]안내: NXT장(08:00~08:50, 15:30~20:00)은 시장가 정정이 불가능하여 현재가({price}원) 지정가로 자동 변환됩니다.[/yellow]")
+                config.console.print(f"[yellow]안내: NXT장(08:00~08:50, 15:30~16:00)은 시장가 정정이 불가능하여 현재가({price}원) 지정가로 자동 변환됩니다.[/yellow]")
             else:
                 ord_dvsn = "01"
         else:

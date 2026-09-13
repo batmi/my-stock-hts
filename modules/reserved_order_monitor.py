@@ -300,7 +300,8 @@ class ReservedOrderMonitor:
                 #  종전엔 SYSTEM_TRADING_START/END_TIME(자동매매 운용시간)에 연동했으나, 그 기본값이
                 #  KRX 정규장(09:00~15:30)으로 좁아지면서 NXT 프리/애프터에 걸린 예약 주문이 발동하지
                 #  않게 된다. 예약 주문은 사용자가 직접 건 주문이므로 자동매매 운용시간과 무관하게
-                #  '국내 시장이 열려 있는 동안'(NXT 포함 08:00~20:00) 항상 감시한다.
+                #  '이 시스템이 쓰는 국내 시장이 열려 있는 동안'(NXT 프리 08:00~09:00 · KRX 정규장 ·
+                #  KRX 애프터 16:00~20:00) 항상 감시한다. 15:30~16:00(NXT 단독)은 닫힌다 — NXT 애프터 미이용.
                 #
                 # [Fix 2026-09-04] 이 게이트들이 TIME 조건에는 걸리지 않았다. TIME 은 시세를 안 보므로
                 #  자원 절약과 무관하다는 이유였는데, 판정은 `지금 >= 지정시각` 뿐이라 **지정 시각이
@@ -314,6 +315,11 @@ class ReservedOrderMonitor:
                 #  경계를 직접 들지 않고 auto_trade.common 의 정본을 부른다 — 08:50~09:00(시가)
                 #  과 15:20~15:30(종가)은 자동매매가 진입·청산을 보류하는 구간과 같아야 한다.
                 if not is_overseas and _at_common().is_single_price_break():
+                    continue
+                # [2026-09-14] 연장거래(NXT 창 · KRX 애프터 16:00~20:00)는 ETF/ETN 을 취급하지 않는다.
+                #  이때 발동하면 거부되어 FAILED 로 굳고 예약 한 건이 소진된다 — 정규장까지 미룬다.
+                if (not is_overseas and api.domestic_etf_untraded_window()
+                        and api.is_domestic_etf_etn(order['code'], order.get('name'))):
                     continue
                 # 해외 주식은 한국 시간 기준 주간(08:00 ~ 16:00)에 감시 생략 (서머타임 넉넉히 고려)
                 if is_overseas and ("0800" <= now_time_str_short < "1600"):

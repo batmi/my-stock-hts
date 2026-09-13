@@ -267,7 +267,7 @@ def test_nxt_market_skip_logic(mock_nxt_tradeable, mock_window):
     # NXT 거래 불가 종목이므로 스킵 로그 객체 반환 확인
     assert res is not None
     assert res.get('type') == 'log_only'
-    assert 'NXT스킵' in res.get('log')
+    assert '대체거래소(NXT) 거래 불가' in res.get('log')
     
     # 2. 매도 후보 분석 로직 스킵 테스트
     holdings = [{'pdno': '000660', 'prdt_name': 'SK하이닉스', 'ord_psbl_qty': '10', 'evlu_pfls_rt': '5.0', 'prpr': '60000', 'pchs_avg_pric': '55000'}]

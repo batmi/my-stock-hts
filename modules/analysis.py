@@ -2982,7 +2982,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         prev_rsi = ind.get('prev_rsi') if df is not None and not df.empty and len(df) >= 16 else None
 
         current_price = float(df.iloc[-1]['close'])   # [판단 기준] 지표·상태·점수·이격도·52주 위치
-        # [표시 전용] NXT 거래시간(프리 08:00~09:00 / 애프터 15:30~20:00)에는 살아있는 실시간가를
+        # [표시 전용] 연장거래 시간(NXT 프리 08:00~09:00 / KRX 애프터 16:00~20:00)에는 살아있는 실시간가를
         #  현재가로 보여준다. 다만 지표는 KRX 확정 봉으로 계산하므로, 같은 화면에서 기준이 갈리는
         #  것을 감추지 않도록 (NXT) 표기를 함께 붙인다.
         display_price = current_price
@@ -2990,7 +2990,12 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         if rt_price > 0 and not is_overseas and not api.chart_overlay_enabled(False) \
                 and not api.display_price_krx_fixed(False):
             display_price = rt_price
-            display_tag = " [dim](NXT)[/dim]"
+            #  [2026-09-14] 16:00~20:00 의 실시간가는 KRX 애프터 체결가다 — 'NXT' 라고 적으면 거짓말.
+            try:
+                _live_tag = "애프터" if api._nxt_quote_phase() == 'krx_after' else "NXT"
+            except Exception:      # noqa: BLE001 - 표기는 부가정보
+                _live_tag = "NXT"
+            display_tag = f" [dim]({_live_tag})[/dim]"
         # 등락 기준봉: 마지막 봉이 '최신 확정 세션'이면 직전 봉과 비교하고, 아직 그 봉이 없으면
         #  (프리마켓 등) 마지막 봉 자체가 직전 종가다 — 그대로 두면 등락이 하루 밀린다.
         #  [Fix 2026-07-28] 국내는 market_today 대신 krx_last_settled_day를 쓴다. 자정~개장 전에는
@@ -5896,11 +5901,15 @@ def print_table(title, data_list, is_overseas=False, market_regime_adj=None, is_
             _codes = [c for _, c in data_list]
             try:
                 _phase = api._nxt_quote_phase()
-                if _phase == 'skip':        # 정규장: KRX 대표가
+                if _phase in ('skip', 'krx_after', 'break'):   # 정규장·KRX 애프터·휴게: KRX 대표가
                     multi_prices = api.get_multi_current_prices(_codes)
-                elif _phase == 'active':     # 장전/장후 NXT 시간: KRX+NXT 배치 병합
+                    #  [2026-09-14] krx_after 의 배치값은 야간 회상용으로 기억해 둔다(종목별 경로와 동일).
+                    if _phase == 'krx_after' and multi_prices:
+                        for _c, _o in multi_prices.items():
+                            api._nxt_remember_close(_c, api.safe_int((_o or {}).get('stck_prpr')))
+                elif _phase == 'active':     # 프리마켓 NXT 시간: KRX+NXT 배치 병합
                     multi_prices = api.get_multi_current_prices_nxt(_codes)
-                    # offhours(야간·주말): 종목별 조회 유지
+                    # offhours(야간·주말): 종목별 조회 유지(기억한 KRX 애프터 최종가 회상)
             except Exception:
                 multi_prices = None
 

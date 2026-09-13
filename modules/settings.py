@@ -603,7 +603,7 @@ def view_system_config(group=None):
         subheader("5-3. 데이터·통신")
         row("차트 캐시 시간(분)", "일봉 데이터 메모리 캐시 유지", "CHART_CACHE_TTL_MINUTES", f"{getattr(config.settings, 'CHART_CACHE_TTL_MINUTES', 360)}")
         row("실시간 WebSocket 사용", "KIS 실시간 시세 push(끄면 REST 폴링). 토스 미지원", "USE_WEBSOCKET", f"{getattr(config.settings, 'USE_WEBSOCKET', True)}")
-        row("장 종료 후 KRX 종가 기준", "모든 장 마감 후 현재가를 KRX 정규장 종가로 고정", "USE_KRX_CLOSE_AFTER_HOURS", f"{getattr(config.settings, 'USE_KRX_CLOSE_AFTER_HOURS', True)}")
+        row("장 종료 후 KRX 정규장 종가 기준", "모든 장 마감 후 현재가를 KRX 정규장 종가로 고정", "USE_KRX_CLOSE_AFTER_HOURS", f"{getattr(config.settings, 'USE_KRX_CLOSE_AFTER_HOURS', True)}")
         row("매매일지 웹서버 연동", "체결 내역을 원격 매매일지 서버로 전송", "JOURNAL_SYNC_USE", f"{getattr(config.settings, 'JOURNAL_SYNC_USE', False)}")
 
         subheader("5-4. 텔레그램 및 AI 브리핑")
@@ -1685,7 +1685,7 @@ def _trading_cycle_items():
     items = [
         {"desc": "거래 시작 시간", "help": "매매 허용 시작 시각 (HHMM). 기본값은 KRX 정규장 개장(0900). NXT 프리마켓까지 운용하려면 0800", "name": "SYSTEM_TRADING_START_TIME", "type": "time", "section": "5-1. 거래 시간·주기",
          "get": lambda: getattr(config.settings, 'SYSTEM_TRADING_START_TIME', "0900"), "set": lambda v: setattr(config.settings, 'SYSTEM_TRADING_START_TIME', v)},
-        {"desc": "거래 종료 시간", "help": "매매 허용 종료 시각 (HHMM). 기본값은 KRX 정규장 마감(1530)이며, 종가 단일가(동시호가) 15:20~15:30은 자동 회피하므로 실효 매매는 15:20까지다. NXT 애프터마켓까지 운용하려면 2000", "name": "SYSTEM_TRADING_END_TIME", "type": "time", "section": "5-1. 거래 시간·주기",
+        {"desc": "거래 종료 시간", "help": "매매 허용 종료 시각 (HHMM). 기본값은 KRX 정규장 마감(1530)이며, 종가 단일가(동시호가) 15:20~15:30은 자동 회피하므로 실효 매매는 15:20까지다. KRX 애프터마켓(16:00~20:00)까지 운용하려면 2000 — 15:30~16:00(NXT 단독, 미이용)은 설정과 무관하게 닫힌다", "name": "SYSTEM_TRADING_END_TIME", "type": "time", "section": "5-1. 거래 시간·주기",
          "get": lambda: getattr(config.settings, 'SYSTEM_TRADING_END_TIME', "1530"), "set": lambda v: setattr(config.settings, 'SYSTEM_TRADING_END_TIME', v)},
         {"desc": "모니터링 주기 (초)", "help": "자동매매 루프 실행 간격", "name": "SYSTEM_TRADING_INTERVAL", "type": "int", "section": "5-1. 거래 시간·주기",
          "get": lambda: getattr(config.settings, 'SYSTEM_TRADING_INTERVAL', 60), "set": lambda v: setattr(config.settings, 'SYSTEM_TRADING_INTERVAL', v)},
@@ -1708,7 +1708,7 @@ def _trading_cycle_items():
          "get": lambda: getattr(config.settings, 'CHART_CACHE_TTL_MINUTES', 360), "set": lambda v: setattr(config.settings, 'CHART_CACHE_TTL_MINUTES', v)},
         {"desc": "실시간 WebSocket 사용", "help": "KIS 실시간 시세 push 사용(끄면 REST 폴링). 미구독/끊김 시 자동 REST 폴백. 토스는 미지원", "name": "USE_WEBSOCKET", "type": "bool", "choices": ["y", "n"], "section": "5-3. 데이터·통신",
          "get": lambda: getattr(config.settings, 'USE_WEBSOCKET', True), "set": lambda v: setattr(config.settings, 'USE_WEBSOCKET', v)},
-        {"desc": "장 종료 후 KRX 종가 기준", "help": "모든 장(NXT 애프터마켓 20:00)이 끝난 뒤 화면 '현재가'를 KRX 정규장 확정 종가로 고정합니다. 끄면 마지막 실거래가(전날 NXT 종가)가 다음 개장까지 그대로 보입니다. NXT 거래시간(08:00~09:00, 15:30~20:00)에는 설정과 무관하게 NXT 현재가를 표시합니다. ※ 지표는 이 설정과 무관하게 항상 KRX 정규장 확정 봉으로 계산하며, 주문 가격과 손절·트레일링 트리거도 항상 실시간가를 씁니다.", "name": "USE_KRX_CLOSE_AFTER_HOURS", "type": "bool", "choices": ["y", "n"], "section": "5-3. 데이터·통신",
+        {"desc": "장 종료 후 KRX 정규장 종가 기준", "help": "모든 장(KRX 애프터마켓 20:00)이 끝난 뒤 화면 '현재가'를 KRX 정규장 확정 종가로 고정합니다. 끄면 마지막 실거래가(그날 KRX 애프터마켓 최종가)가 다음 개장까지 그대로 보입니다. 살아있는 시장(NXT 프리 08:00~09:00 · KRX 정규장 · KRX 애프터 16:00~20:00)에서는 설정과 무관하게 그 시장의 현재가를 표시하고, 15:30~16:00(NXT 단독 구간, 미이용)은 정규장 종가에 고정합니다. ※ 지표는 이 설정과 무관하게 항상 KRX 정규장 확정 봉으로 계산하며, 주문 가격과 손절·트레일링 트리거도 항상 실시간가를 씁니다.", "name": "USE_KRX_CLOSE_AFTER_HOURS", "type": "bool", "choices": ["y", "n"], "section": "5-3. 데이터·통신",
          "get": lambda: getattr(config.settings, 'USE_KRX_CLOSE_AFTER_HOURS', True), "set": lambda v: setattr(config.settings, 'USE_KRX_CLOSE_AFTER_HOURS', v)},
         {"desc": "매매일지 웹서버 연동", "help": "체결 내역을 원격 매매일지 웹서버(stock-memo)로 자동 전송합니다. 켜려면 환경변수 JOURNAL_API_URL·JOURNAL_API_KEY 가 모두 필요하며(~/.htsrc 에 export 후 재시작), 둘 중 하나라도 없으면 켜도 동작하지 않습니다. 전송은 체결 기록과 같은 트랜잭션으로 대기열에 쌓고 백그라운드 워커가 배치로 보내므로 매매 루프가 네트워크에 지연되지 않습니다. 끄면 대기열 적재도 워커 기동도 하지 않습니다. 가상투자(모드 1)에서도 같은 스위치로 켜고 끄지만, 가상투자는 웹저널 계정 자체를 따로 쓰므로(그 기기의 ~/.htsrc 에 별도 JOURNAL_API_KEY) 실거래 기록과 서버에서 섞이지 않습니다. 체결에는 isSimulated=true 도 함께 실립니다. 설정은 모드별로 갈리므로 가상에서 켠 것이 실전으로 새지 않습니다. (기본 OFF)", "name": "JOURNAL_SYNC_USE", "type": "bool", "choices": ["y", "n"], "section": "5-3. 데이터·통신",
          "get": lambda: getattr(config.settings, 'JOURNAL_SYNC_USE', False), "set": _set_journal_sync_use},
@@ -2239,7 +2239,7 @@ def manage_custom_settings():
             "UNFILLED_ORDER_CANCEL_SECONDS": "미체결 취소 대기(초)",
             "CHART_CACHE_TTL_MINUTES": "차트 캐시 시간(분)",
             "USE_WEBSOCKET": "실시간 WebSocket 사용",
-            "USE_KRX_CLOSE_AFTER_HOURS": "장 종료 후 KRX 종가 기준",
+            "USE_KRX_CLOSE_AFTER_HOURS": "장 종료 후 KRX 정규장 종가 기준",
             "JOURNAL_SYNC_USE": "매매일지 웹서버 연동",
             "ENABLE_TELEGRAM": "사용 여부",
             "TELEGRAM_INSTANCE_NAME": "인스턴스 이름",
