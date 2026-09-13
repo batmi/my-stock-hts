@@ -148,12 +148,66 @@ def test_the_floor_is_low_enough_for_a_small_account():
 
 
 def test_the_recording_path_actually_applies_the_floor():
-    """산식이 아니라 **그 자리**에 문턱이 걸렸는지 본다 — 종전엔 여기만 비어 있었다."""
+    """산식이 아니라 **그 자리**에 문턱이 걸렸는지 본다 — 종전엔 여기만 비어 있었다.
+
+    [2026-09-13] 바닥(100원)만 걸면 매수 2건 이상인 날의 수수료 합(−119·−437)과 수동
+    매도 손익 기준 차이(−11,444)가 그대로 '출금'으로 기록된다(파이 가상계좌 실측).
+    오프라인 경로와 같은 함수(_offline_transfer_threshold: 계좌 규모 비례, 바닥 100원)를
+    써야 한다 — 같은 판정이면 같은 문턱.
+    """
     import inspect
     from modules.auto_trade import trader as tr
 
     src = inspect.getsource(tr)
     i = src.index("_net = int(current_principal - self.baseline_principal)")
-    window = src[i:i + 1400]
-    assert "abs(_net) < OFFLINE_TRANSFER_FLOOR" in window, \
-        "장중 net_transfer 기록 경로에 잡음 바닥이 없다"
+    window = src[i:i + 2200]
+    assert "abs(_net) < self._offline_transfer_threshold(self.baseline_principal)" in window, \
+        "장중 net_transfer 기록 경로가 오프라인 경로와 다른 문턱을 쓴다"
+
+
+def test_fee_sized_residuals_are_filtered_but_small_account_withdrawals_are_not():
+    """실측 잔차(−119·−437·−11,444 / 원금 1,000만)는 거르고, 10,027원 계좌의 1만원 출금은 잡는다."""
+    from modules.auto_trade.trader import AutoTrader
+
+    th_big = AutoTrader._offline_transfer_threshold(10_000_000)
+    for residual in (77, -119, -437, -11_444):
+        assert abs(residual) < th_big, f"{residual}원 잔차가 입출금으로 기록된다"
+    th_small = AutoTrader._offline_transfer_threshold(10_027)
+    assert abs(-10_000) >= th_small, "소액 계좌의 진짜 출금이 문턱에 걸려 사라진다"
+
+
+# ==========================================================
+# 2026-09-13 파이 가상계좌 검증에서 나온 나머지 두 자리
+# ==========================================================
+
+def test_manual_sell_records_net_profit_like_auto_sell():
+    """수동 매도 손익도 자동 매도와 같은 SSOT(왕복 비용 차감)로 적는다.
+
+    종전엔 qty×(매도가−매입가) 총액이라 같은 날 '오늘 실현 손익'과 원금 불변량이
+    두 기준을 섞었다(2026-09-04 파이: trades −12,500 vs 원장 −23,978).
+    """
+    import inspect
+    from modules import trading
+
+    src = inspect.getsource(trading.send_order)
+    i = src.index("if order_type == 'sell' and stock_info:")
+    window = src[i:i + 1500]
+    assert "trading_cost.net_realized_profit(" in window, \
+        "수동 매도 손익이 거래비용 SSOT 를 거치지 않는다"
+    assert "est_sell_amt - est_buy_amt" not in window, "총액 산식이 남아 있다"
+
+
+def test_heartbeat_holdings_seeded_at_startup():
+    """기동 시 조회한 잔고로 last_holdings_count 를 바로 채운다.
+
+    하트비트 사망 알림의 '보유 N개 무방비' 줄이 이 값을 본다. 첫 매매 주기에서만
+    갱신하면 휴장일 재기동 뒤 다음 거래일 09:00까지 0이다(2026-09-13 파이 실측).
+    """
+    import inspect
+    from modules.auto_trade import trader as tr
+
+    src = inspect.getsource(tr)
+    i = src.index("self.initial_holdings = holdings")
+    window = src[i:i + 900]
+    assert "self.last_holdings_count = len(holdings)" in window, \
+        "기동 시 보유 종목 수 씨딩이 없다"

@@ -1018,10 +1018,17 @@ def send_order(order_type):
                     try:
                         buy_price = float(stock_info.get('buy_price', 0))
                         if buy_price > 0:
-                            est_sell_amt = float(qty) * calc_price
-                            est_buy_amt = float(qty) * buy_price
-                            profit_amt = int(est_sell_amt - est_buy_amt)
-                            profit_rate = ((calc_price - buy_price) / buy_price) * 100
+                            # [Fix 2026-09-13] 종전에는 qty×(매도가−매입가) 총액이었다. 자동 매도
+                            #  (trader)는 core.trading_cost.net_realized_profit 로 왕복 비용을 뺀
+                            #  순손익을 적는데 수동 매도만 총액이라, 같은 날의 '오늘 실현 손익'과
+                            #  원금 불변량(입출금 감지)이 두 기준을 섞었다 — 실측 2026-09-04 파이
+                            #  가상계좌: trades −12,500 vs 원장 −23,978, 차이 11,444원이 '출금'으로
+                            #  기록됐다. 자동 매도와 같은 SSOT 를 쓴다.
+                            from core import trading_cost
+                            _p, _r = trading_cost.net_realized_profit(
+                                buy_price, calc_price, qty, is_overseas=is_overseas)
+                            profit_amt = int(_p)
+                            profit_rate = _r
                     except Exception: pass
                 
                 # [수정] 종전엔 int(qty) >= int(max_qty)를 두 곳에서 그때그때 계산했다.
