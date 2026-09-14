@@ -266,7 +266,14 @@ def send_telegram_message(message, reply_markup=None, is_urgent=False, sync=Fals
             success_chunk = False
             for attempt in range(max_retries):
                 try:
-                    current_timeout = 1 + (attempt * 0.5)
+                    # [Fix 2026-09-14] 읽기 타임아웃이 1.0초였다. 텔레그램이 메시지를 받아 배달까지
+                    #  마쳤는데 응답만 1초를 넘긴 경우를 '실패'로 보고 다시 보내 **같은 체결 알림이
+                    #  두 번** 갔다(16:52 한온시스템 매수 체결 · 로그 "Read timed out (read timeout=1.0)").
+                    #  타임아웃은 실패가 아니라 '모름'이다([[order-timeout-no-resend]]와 같은 원리).
+                    #  알림은 유실이 중복보다 비싸므로 재시도는 남기되, 응답을 기다리는 시간을
+                    #  현실적으로 늘려 '받았는데 모름'이 드물게 한다. 접속(connect)은 짧게 유지한다 —
+                    #  네트워크 단절은 빨리 알아야 하고, 그 경우엔 재전송해도 중복이 아니다.
+                    current_timeout = (3.0, 5.0 + attempt * 2.5)     # (connect, read)
                     res = requests.post(url, data=data, timeout=current_timeout)
                     
                     if context.is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:

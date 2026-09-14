@@ -37,7 +37,33 @@ def _api():
 #  주문이 '접수되기 전' 검증 단계에서 반려된 것이라 재시도해도 이중 주문이 되지 않는다.
 #  다른 실패(잔고 부족·시간 외·통신 오류 등)에는 절대 재시도하지 않는다 — 그쪽은
 #  주문이 이미 접수됐을 가능성이 있어 재시도가 곧 이중 주문이다.
-_EXCHANGE_REJECT_CODES = ("APBK3026",)
+# [2026-09-14 KRX 애프터마켓] 애프터는 정규장과 분리된 시장이라 주문 유형코드가 따로 있다
+#  (KIS 공지 2026-09-09: "애프터마켓 호가 유형선택 필수"). 정규장 코드로 보내면 APBK3061
+#  "[애프터마켓] 애프터 지정가/최유리/최우선 주문만 가능합니다" — 16:43 한온시스템·코오롱티슈진 실측.
+#   41 KRX애프터마켓지정가 · 42/43 지정가 IOC/FOK · 44 최유리지정가 · 45/46 최유리 IOC/FOK · 47 최우선지정가
+#  시장가는 애프터에 없다 → 최유리지정가(44, 단가 0)로 보낸다(상대 최우선 호가에 체결 — 가장 가깝다).
+#  ETP(ETF/ETN)는 애프터 거래 불가(호출부 domestic_etf_untraded_window 가 먼저 거른다).
+_AFTER_MARKET_ORD_DVSN = {"00": "41", "01": "44", "03": "44", "04": "47",
+                          "11": "42", "12": "43", "15": "45", "16": "46"}
+_AFTER_MARKET_CODES = frozenset(_AFTER_MARKET_ORD_DVSN.values())
+
+
+def after_market_ord_dvsn(ord_dvsn):
+    """지금이 KRX 애프터마켓이면 정규장 주문 유형코드를 애프터 전용 코드로 바꾼다. 아니면 그대로."""
+    code = str(ord_dvsn or "")
+    if code in _AFTER_MARKET_CODES or not _api().krx_after_window():
+        return code
+    mapped = _AFTER_MARKET_ORD_DVSN.get(code)
+    if mapped is None:
+        logger.warning(f"[애프터마켓] 주문 유형코드 {code} 의 애프터 대응 코드를 모릅니다 — 그대로 보냅니다(거부될 수 있음)")
+        return code
+    return mapped
+
+
+#  APBK3026: 종목정보 없음(NXT 미취급 종목에 SOR) · APBK3009: "SOR 시장에서 거래가 불가능한 종목
+#  [경쟁매매 거래 불가 종목]" — 2026-09-14 16:40 KRX 애프터마켓에서 실측(NXT 가 닫혀 SOR 이 성립하지
+#  않는 시간). 둘 다 '거래소 코드를 잘못 골랐다'는 뜻이므로 KRX 로 다시 보낸다.
+_EXCHANGE_REJECT_CODES = ("APBK3026", "APBK3009")
 _EXCHANGE_REJECT_HINTS = ("종목정보", "거래소구분", "EXCG")
 
 
@@ -50,6 +76,8 @@ def _is_exchange_routing_reject(res):
         return True
     # msg_cd가 비어 오는 경우를 대비해 문구도 본다. 단 '종목정보 없음' 계열로 한정한다.
     msg1 = str(res.get('msg1', '') or '')
+    if "SOR 시장에서 거래가 불가능" in msg1:
+        return True
     return any(h in msg1 for h in _EXCHANGE_REJECT_HINTS) and "없" in msg1
 
 
@@ -276,14 +304,21 @@ def _place_order_impl(market, action, code, qty, price, ord_dvsn, exchange_code=
             
         data = {
             "CANO": cano, "ACNT_PRDT_CD": acnt, 
-            "PDNO": code, "ORD_DVSN": ord_dvsn, 
+            "PDNO": code, "ORD_DVSN": after_market_ord_dvsn(ord_dvsn), 
             "ORD_QTY": str(qty), "ORD_UNPR": str(price)
         }
         
         # [추가] 거래소 코드 적용
         # NXT 거래 가능 종목은 SOR(최적주문집행, KRX+NXT 통합 라우팅), 미지원 종목(ETF 등)은
         # KRX로 지정한다. NXT 미지원 종목에 SOR을 쓰면 APBK3026(종목정보 없음) 오류가 발생한다.
-        data["EXCG_ID_DVSN_CD"] = "SOR" if _api().is_nxt_tradeable(code) else "KRX"
+        # [2026-09-14 KRX 애프터마켓] 16:00~20:00 은 KRX 로 직행한다. NXT 가 닫힌 시간이라 SOR 이
+        #  고를 두 번째 시장이 없고, 실측(16:40 코오롱티슈진)에서 SOR 이 APBK3009 로 거부됐다.
+        #  폴백에 맡기면 왕복이 하나 늘 뿐 아니라, 거부 학습 캐시(_NXT_REJECTED_CACHE)가 그 종목을
+        #  'NXT 불가'로 잘못 기억해 **다음 날 프리마켓 주문까지 KRX 로 보낸다**(그 시간 KRX 는 닫혀 있다).
+        if _api().krx_after_window():
+            data["EXCG_ID_DVSN_CD"] = "KRX"
+        else:
+            data["EXCG_ID_DVSN_CD"] = "SOR" if _api().is_nxt_tradeable(code) else "KRX"
         # 마스터 로드 실패로 낙관 배정한 SOR이 거부되면 KRX로 1회 재시도한다.
         # (가상투자는 주문을 가로채므로 이 경로가 실행되지 않는다)
         if data["EXCG_ID_DVSN_CD"] == "SOR":
@@ -363,7 +398,7 @@ def revise_cancel_order(market, action, org_no, code, qty, price, type_cd, ord_d
         category = "modify"
             
         qty_all_yn = "Y" if qty == 0 else "N" # 0이면 전량으로 간주 (호출부 로직에 따름)
-        data = {"CANO": cano, "ACNT_PRDT_CD": acnt, "KRX_FWDG_ORD_ORGNO": "", "ORGN_ODNO": org_no, "ORD_DVSN": ord_dvsn, "RVSE_CNCL_DVSN_CD": type_cd, "ORD_QTY": str(qty), "ORD_UNPR": str(price), "QTY_ALL_ORD_YN": qty_all_yn}
+        data = {"CANO": cano, "ACNT_PRDT_CD": acnt, "KRX_FWDG_ORD_ORGNO": "", "ORGN_ODNO": org_no, "ORD_DVSN": after_market_ord_dvsn(ord_dvsn), "RVSE_CNCL_DVSN_CD": type_cd, "ORD_QTY": str(qty), "ORD_UNPR": str(price), "QTY_ALL_ORD_YN": qty_all_yn}
         
         # [추가] 거래소 코드 적용 (NXT 미지원 종목은 KRX, place_order와 동일)
         data["EXCG_ID_DVSN_CD"] = "SOR" if _api().is_nxt_tradeable(code) else "KRX"

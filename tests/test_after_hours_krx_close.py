@@ -55,7 +55,7 @@ def _default_on():
     (9, 0, True),    # KRX 정규장 시작
     (10, 0, True),   # 정규장
     (8, 30, True),   # NXT 프리마켓
-    (15, 45, False), # [2026-09-14] NXT 단독 구간 — 이 시스템은 NXT 애프터를 쓰지 않는다
+    (15, 45, False), # [2026-09-14] KRX 휴게 — 어느 시장도 없다(NXT 는 프리마켓만)
     (16, 0, True),   # KRX 애프터마켓
     (19, 59, True),  # KRX 애프터마켓 종료 직전
     (20, 30, False),  # 모든 장 종료
@@ -278,8 +278,8 @@ def test_auto_trade_window_defaults_to_krx_session():
 
 def test_auto_trade_window_extended_to_after_market_skips_the_nxt_only_gap():
     """[2026-09-14] 거래 종료를 2000 으로 넓히면 KRX 애프터(16:00~20:00)가 열린다.
-    그래도 15:30~16:00 은 닫힌다 — KRX 가 쉬고 NXT 만 여는 구간인데 NXT 애프터는 쓰지 않는다.
-    단일 구간 비교만으로는 그 30분이 함께 열려 버린다(그 구간의 주문은 SOR 이 NXT 로 보낸다)."""
+    그래도 15:30~16:00 은 닫힌다 — 정규장과 애프터 사이의 휴게로 어느 시장도 없다.
+    단일 구간 비교만으로는 그 30분이 함께 열려 버린다(그 구간의 주문은 거부된다)."""
     from modules.auto_trade.common import is_system_market_open
     saved = config.settings.SYSTEM_TRADING_END_TIME
     config.settings.SYSTEM_TRADING_END_TIME = "2000"
@@ -296,7 +296,7 @@ def test_auto_trade_window_extended_to_after_market_skips_the_nxt_only_gap():
 
 
 def test_nxt_only_gap_is_fixed_to_regular_close_regardless_of_setting():
-    """15:30~16:00: 살아 있는 시장은 NXT 뿐인데 쓰지 않으므로, 설정을 꺼도 정규장 종가에 고정한다."""
+    """15:30~16:00: 시장이 없는 휴게 — 설정을 꺼도 정규장 종가에 고정한다."""
     for setting in (True, False):
         config.settings.USE_KRX_CLOSE_AFTER_HOURS = setting
         md, hp, dt = _at(datetime(2026, 9, 14, 15, 45), holiday=False)
@@ -457,7 +457,8 @@ def test_krx_after_market_price_is_krx_and_never_asks_nxt(monkeypatch):
 
 
 def test_nxt_only_gap_price_is_regular_close_and_never_asks_nxt(monkeypatch):
-    """15:30~16:00: NXT 가 살아 있어도 묻지 않는다 — J(정규장 종가)만 쓴다."""
+    """15:30~16:00: KIS 가 NX 값을 돌려주더라도 묻지 않는다(실측 2026-09-14 16:10 SK하이닉스 NX≠J,
+    출처 불명) — J(정규장 종가)만 쓴다."""
     price, seen = _price_at(monkeypatch, datetime(2026, 9, 14, 15, 45),
                             j_price=70000, nx_price=70900, remembered=0)
     assert price == 70000
@@ -491,7 +492,7 @@ def test_premarket_still_merges_nxt(monkeypatch):
 @pytest.mark.parametrize("hh,mm,expected", [
     (8, 30, True),    # NXT 프리
     (10, 0, False),   # 정규장 — ETF 정상 거래
-    (15, 45, True),   # NXT 단독
+    (15, 45, True),   # 휴게 — 시장 자체가 없다
     (16, 0, True),    # KRX 애프터
     (20, 0, True),
     (20, 1, False),   # 장 종료(거래 자체가 없다 — 이 게이트의 질문이 아니다)
@@ -516,3 +517,13 @@ def test_auto_trader_skips_etf_in_krx_after_market():
         src = inspect.getsource(fn)
         assert "etf_untraded = api.domestic_etf_untraded_window()" in src, fn.__name__
         assert "if etf_untraded and not is_overseas_stock:" in src, fn.__name__
+
+
+def test_break_window_is_the_only_domestic_gap():
+    """[2026-09-14] 15:30~16:00 은 어느 시장도 없다 — 주문 창(NXT)·휴게 창·애프터 창이 서로 겹치지 않는다."""
+    for hm, nxt, brk in [("0830", True, False), ("1000", False, False), ("1530", False, True),
+                         ("1559", False, True), ("1600", False, False), ("1900", False, False)]:
+        t = datetime(2026, 9, 14, int(hm[:2]), int(hm[2:]))
+        assert api.nxt_order_window(t) is nxt, hm
+        assert api.domestic_break_window(t) is brk, hm
+    assert api.NXT_ORDER_WINDOWS == (("0800", "0849"),), "NXT 는 프리마켓만 운영한다"

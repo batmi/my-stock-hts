@@ -149,9 +149,9 @@ def market_today(is_overseas=False):
 def domestic_trading_session_open():
     """국내에서 지금 **이 시스템이 쓰는** 시장이 열려 있는가(NXT 프리 · KRX 정규장 · KRX 애프터).
 
-    거래일 08:00~15:30, 16:00~20:00 이면 True. 15:30~16:00 은 NXT 만 여는 구간인데 이 시스템은
-    NXT 애프터를 이용하지 않으므로 False 다 — 예약 주문이 이 구간에 발동하면 시장 없는
-    곳으로 나간다. 야간(20:00~익일 08:00)·주말·공휴일도 False.
+    거래일 08:00~15:30, 16:00~20:00 이면 True. 15:30~16:00 은 어느 시장도 열려 있지 않은
+    휴게라 False 다 — 예약 주문이 이 구간에 발동하면 거부된다. 야간(20:00~익일 08:00)·
+    주말·공휴일도 False.
     """
     try:
         return _api()._nxt_quote_phase() not in ('offhours', 'break')
@@ -160,7 +160,8 @@ def domestic_trading_session_open():
 
 
 # NXT(넥스트레이드) 단독 거래시간 — **주문 구간**의 정본.
-#  프리 08:00~08:50 / NXT 단독 15:30~16:00. 시세 쪽 경계(_nxt_quote_phase / domestic_session_phase
+#  프리 08:00~08:50 뿐이다(2026-09-14 실측·운용자 확인: NXT 는 현재 프리마켓만 운영한다).
+#  시세 쪽 경계(_nxt_quote_phase / domestic_session_phase
 #  의 'nxt_pre' = 08:00~09:00)와 **일부러 다르다**: 08:50~09:00 은 NXT 가 KRX 시가 단일가에
 #  맞춰 쉬는 시간이라(auto_trade.common.is_single_price_break 와 같은 경계) 주문은 NXT 가 아니라
 #  KRX 동시호가로 들어간다 — 그 구간에서 시장가는 정상 접수된다.
@@ -175,11 +176,14 @@ def domestic_trading_session_open():
 #    KRX 동시호가로 들어가 정상 접수되는데, 여기서 True 가 나오는 바람에 현재가 지정가로
 #    바뀌었다(단일가에서 지정가는 체결을 보장하지 않는다). 화면 안내문과 이 상수의
 #    주석이 처음부터 '08:00~08:50'이라 적고 있었으니 구현만 한 칸 어긋나 있었다.
-#  [2026-09-14 KRX 애프터마켓] 16:00~20:00 은 KRX 가 다시 연다. 그 구간의 주문은 SOR 로
-#   나가되 KRX 가 받는 시간이므로 '시장가를 못 받는 NXT 단독 구간'이 아니다 — 창을
-#   15:30~15:59 로 좁힌다. 남은 15:30~15:59 는 NXT 만 여는 구간이고 이 시스템은 NXT 애프터를
-#   쓰지 않는다(자동매매·예약은 닫힘, 수동 발주는 확인 뒤에만).
-NXT_ORDER_WINDOWS = (("0800", "0849"), ("1530", "1559"))
+#  [2026-09-14 KRX 애프터마켓] 16:00~20:00 은 KRX 가 다시 연다(주문은 SOR, 시장가 그대로).
+#   종전의 NXT 애프터 창(15:30~20:00)은 없앤다 — NXT 는 프리마켓만 운영하고, 15:30~16:00 은
+#   **어느 시장도 열려 있지 않은 휴게**다(KRX_BREAK_WINDOW). 그 구간은 자동매매·예약이 닫히고
+#   수동 발주는 확인 뒤에만 나간다(보내면 거부된다).
+NXT_ORDER_WINDOWS = (("0800", "0849"),)
+
+# KRX 휴게(15:30~16:00, 양끝 포함 '분'). 정규장 마감 뒤 애프터마켓 개장 전 — 거래 시장이 없다.
+KRX_BREAK_WINDOW = ("1530", "1559")
 
 
 def nxt_order_window(now=None):
@@ -194,24 +198,35 @@ def nxt_order_window(now=None):
 def domestic_etf_untraded_window(now=None):
     """지금이 국내 ETF/ETN 이 **어느 시장에서도** 거래되지 않는 연장거래 구간인가.
 
-    NXT(프리 08:00~08:49 · 단독 15:30~15:59)도, KRX 애프터마켓(16:00~20:00)도 ETF/ETN 을
-    취급하지 않는다 — 일반 주권만이다. 이 구간의 ETF 주문은 어디로 보내도 거부되므로
-    자동매매는 분석·주문을 건너뛰고, 예약은 발동을 미루고, 수동 발주는 확인을 받는다.
-    (2026-09-14 KRX 애프터마켓 도입 — 운용자 확인: ETF/ETN 미지원, 일반 종목만.)
+    NXT 프리마켓(08:00~08:49)도, KRX 애프터마켓(16:00~20:00)도 ETF/ETN 을 취급하지
+    않는다 — 일반 주권만이다. 휴게(15:30~16:00)는 아예 시장이 없다. 이 구간의 ETF 주문은
+    어디로 보내도 거부되므로 자동매매는 분석·주문을 건너뛰고, 예약은 발동을 미루고,
+    수동 발주는 확인을 받는다. (2026-09-14 운용자 확인: 애프터는 ETF/ETN 미지원, 일반 종목만.)
     """
-    if _api().nxt_order_window(now):
+    if _api().nxt_order_window(now) or domestic_break_window(now):
         return True
     hm = (now or datetime.now()).strftime("%H%M")
     return "1600" <= hm <= "2000"
 
 
-def nxt_only_after_window(now=None):
-    """지금이 NXT 만 여는 15:30~16:00 구간인가 — 이 시스템은 NXT 애프터를 이용하지 않는다.
+def krx_after_window(now=None):
+    """지금이 KRX 애프터마켓 주문 구간(16:00~20:00)인가 — 시각만 본다(주문 구간 정본은 휴장을 안 본다).
 
-    자동매매·예약은 이 구간을 닫고, 수동 발주는 '그래도 NXT 로 보낼지' 확인을 받는다.
+    [실측 2026-09-14 16:40] 이 구간에 SOR 로 낸 주문이 APBK3009("SOR 시장에서 거래가 불가능한
+     종목 · 경쟁매매 거래 불가")로 거부됐다. NXT 가 닫힌 시간이라 SOR 이 고를 두 번째 시장이
+     없다. 주문 경로는 이 구간에 거래소를 KRX 로 직접 지정한다(api/orders.py).
     """
     hm = (now or datetime.now()).strftime("%H%M")
-    lo, hi = NXT_ORDER_WINDOWS[1]
+    return "1600" <= hm <= "2000"
+
+
+def domestic_break_window(now=None):
+    """지금이 KRX 휴게(15:30~16:00)인가 — 정규장은 끝났고 애프터마켓은 아직이며, NXT 도 없다.
+
+    자동매매·예약은 이 구간을 닫고, 수동 발주는 '거부될 주문을 그래도 보낼지' 확인을 받는다.
+    """
+    hm = (now or datetime.now()).strftime("%H%M")
+    lo, hi = KRX_BREAK_WINDOW
     return lo <= hm <= hi
 
 
@@ -225,7 +240,8 @@ def domestic_session_phase():
     """국내 시장 세션 단계.
        'nxt_pre'   : NXT 프리마켓 (08:00~09:00)
        'krx'       : KRX 정규장  (09:00~15:30)
-       'nxt_after' : NXT 단독 구간 (15:30~16:00) — 이 시스템은 이용하지 않는다(값은 KRX 정규장 종가)
+       'nxt_after' : KRX 휴게 (15:30~16:00) — 거래 시장 없음(NXT 는 프리마켓만 운영). 값은 정규장 종가.
+                     (이름은 알림 키·테스트 호환을 위해 남겼다)
        'krx_after' : KRX 애프터마켓 (16:00~20:00)
        'closed'    : 거래일 야간 (20:00~익일 08:00)
        'holiday'   : 주말·공휴일
@@ -309,7 +325,7 @@ def market_session_label(is_overseas=False, is_domestic_etf=False):
             return ("KRX 애프터마켓 · ETF 미거래(KRX 종가)", "dim")
         return ("KRX 애프터마켓", "yellow")
     if phase == 'nxt_after':
-        # NXT 만 여는 15:30~16:00 — 이 시스템은 NXT 애프터를 쓰지 않으므로 값은 KRX 정규장 종가다
+        # KRX 휴게 15:30~16:00 — 어느 시장도 열려 있지 않다. 값은 정규장 종가에 멈춰 있다.
         return ("KRX 휴게(15:30~16:00) · 정규장 종가", "dim")
     if phase == 'nxt_pre':
         # ETF/ETN은 NXT 비거래 → 세션은 열려 있어도 이 표의 값은 KRX 종가에서 멈춰 있다
@@ -427,8 +443,7 @@ def display_price_krx_fixed(is_overseas=False):
     '마지막 실거래가'(= 그날 KRX 애프터마켓 최종가)를 그대로 노출한다.
 
     살아있는 시장(NXT 프리 08:00~09:00 / KRX 정규장 / KRX 애프터 16:00~20:00)에서는 설정과
-    무관하게 그 시장의 현재가를 보여준다. 15:30~16:00 은 NXT 만 여는데 이 시스템은 NXT 애프터를
-    쓰지 않으므로 그 구간도 정규장 종가에 고정한다.
+    무관하게 그 시장의 현재가를 보여준다. 15:30~16:00 은 시장이 없는 휴게라 정규장 종가에 고정한다.
 
     ※ 지표는 이 설정과 무관하게 항상 KRX 확정 봉으로 계산한다(chart_overlay_enabled).
     ※ 주문 가격도 이 설정과 무관하게 항상 실시간가를 쓴다(체결 보장).
@@ -440,7 +455,7 @@ def display_price_krx_fixed(is_overseas=False):
     except Exception:      # noqa: BLE001 - 판정 실패 시 고정하지 않음(실시간가 노출)
         return False
     if phase == 'break':
-        return True          # NXT 단독 구간 — 설정과 무관하게 정규장 종가
+        return True          # KRX 휴게(시장 없음) — 설정과 무관하게 정규장 종가
     if not getattr(config, 'USE_KRX_CLOSE_AFTER_HOURS', True):
         return False
     try:

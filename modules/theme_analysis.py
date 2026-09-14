@@ -1204,11 +1204,17 @@ def _show_naver_themes():
     table.add_column("순위", justify="center", width=4)
     table.add_column("테마명", justify="left", overflow="fold")
     table.add_column("등락률", justify="right")
-    table.add_column("상승/하락", justify="right")
+    table.add_column("상승/하락", justify="left")      # 자릿수를 고정하므로 왼쪽 정렬이 줄을 맞춘다
     table.add_column("주도주", justify="left", style="dim")
     
     stock_map = {}
-    
+
+    # 상승/하락 열은 숫자마다 자릿수를 고정해 ▲·▼·/ 가 세로로 줄 맞게 한다
+    #  (우측 정렬만으로는 '2▲ 2▼' 와 '12▲ 1▼' 의 화살표가 어긋난다).
+    def _width(key):
+        return max((len(str(t.get(key))) for t in display_themes if t.get(key) is not None), default=1)
+    w_rise, w_fall = _width('rise'), _width('fall')
+
     for i, t in enumerate(display_themes):
         rate_color = "[red]" if t['rate'] > 0 else ("[blue]" if t['rate'] < 0 else "[white]")
         # 테마 폭 — 옛 HTML 의 '3일 등락률'은 JSON API 가 주지 않는다. 상승/하락 종목 수는
@@ -1217,7 +1223,9 @@ def _show_naver_themes():
         if rise is None or fall is None:
             breadth = "-"
         else:
-            breadth = f"[red]{rise}▲[/] [blue]{fall}▼[/]" + (f" [dim]/{total}[/]" if total else "")
+            breadth = f"[red]{rise:>{w_rise}}▲[/] [blue]{fall:>{w_fall}}▼[/]"
+            if total:
+                breadth += f" [dim]/{total}[/]"
 
         table.add_row(
             str(i+1),

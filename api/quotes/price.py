@@ -97,8 +97,8 @@ def get_current_price_data(code, is_overseas, include_nxt=True, cache_ttl=3.0, f
             #   active(프리 08:00~09:00)  : NXT(NX) 현재가를 ats_prpr 로 병합 · 기억
             #   krx_after(16:00~20:00)    : KRX(J) 현재가가 곧 대표가 — 병합할 것이 없다. 다만 그 값을
             #                               '마지막 연장거래가'로 기억해 둔다(야간 표시용)
-            #   break(15:30~16:00)        : NXT 만 여는 구간 — 이 시스템은 NXT 애프터를 쓰지 않으므로
-            #                               아무것도 병합하지 않는다(J = KRX 정규장 종가)
+            #   break(15:30~16:00)        : KRX 휴게 — 어느 시장도 없다(NXT 는 프리마켓만). 아무것도
+            #                               병합하지 않는다(J = KRX 정규장 종가)
             #   offhours(야간·휴장)       : 라이브 NXT 를 **묻지 않는다**(물으면 NXT 20:00 종가가 온다).
             #                               기억한 KRX 애프터 최종가를 ats_prpr 로 노출한다
             #                               (USE_KRX_CLOSE_AFTER_HOURS=False 의 '마지막 실거래가').

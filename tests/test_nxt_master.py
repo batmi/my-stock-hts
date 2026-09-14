@@ -153,9 +153,35 @@ def real_account():
     with patch.object(api.config.session, 'is_toss', False), \
          patch.object(api, '_paper_active', return_value=False), \
          patch.object(api, '_prepare_account_params', return_value=("12345678", "01")), \
+         patch.object(api, 'krx_after_window', return_value=False), \
          patch.object(api, 'is_nxt_tradeable', return_value=True):
         yield
     api._NXT_REJECTED_CACHE.clear()
+
+
+SOR_UNAVAILABLE = {'rt_cd': '7', 'msg_cd': 'APBK3009',
+                   'msg1': 'SOR 시장에서 거래가 불가능한 종목입니다. [경쟁매매 거래 불가 종목]', 'output': {}}
+
+
+def test_after_market_orders_go_straight_to_krx(real_account):
+    """[2026-09-14 실측] 16:00~20:00 은 NXT 가 닫혀 SOR 이 APBK3009 로 거부된다 — 처음부터 KRX 로.
+    폴백에 맡기면 거부 학습 캐시가 그 종목을 'NXT 불가'로 굳혀 다음 날 프리마켓 주문까지 KRX 로 나간다."""
+    with patch.object(api, 'krx_after_window', return_value=True), \
+         patch.object(api, 'call_api', side_effect=[ACCEPT]) as call:
+        res = _order("sell")
+    assert call.call_count == 1
+    assert call.call_args_list[0].kwargs['data']['EXCG_ID_DVSN_CD'] == "KRX"
+    assert res['rt_cd'] == '0'
+    assert "069500" not in api._NXT_REJECTED_CACHE, "KRX 직행은 NXT 에 대해 아무것도 배운 게 없다"
+
+
+def test_apbk3009_is_an_exchange_routing_reject_too(real_account):
+    """SOR 이 성립하지 않는 시간·종목의 거부(APBK3009)도 KRX 재시도 대상이다 — 그냥 실패로 끝내면 청산이 막힌다."""
+    with patch.object(api, 'call_api', side_effect=[SOR_UNAVAILABLE, ACCEPT]) as call:
+        res = _order("sell")
+    assert call.call_count == 2
+    assert call.call_args_list[1].kwargs['data']['EXCG_ID_DVSN_CD'] == "KRX"
+    assert res['rt_cd'] == '0'
 
 
 def _order(action="sell"):
@@ -275,3 +301,39 @@ def test_nxt_market_skip_logic(mock_nxt_tradeable, mock_window):
         trader._check_sell_conditions(holdings)
         # NXT 불가 종목으로 스킵되며, 상태가 None으로 세팅되었는지 확인
         mock_set_state.assert_called_with('000660', None)
+
+# ----------------------------------------------------------------------------
+# [2026-09-14] KRX 애프터마켓 주문 유형코드 — 정규장 코드는 APBK3061 로 거부된다(16:43 실측)
+# ----------------------------------------------------------------------------
+
+@pytest.mark.parametrize("regular, after", [("00", "41"), ("01", "44"), ("03", "44"), ("04", "47")])
+def test_after_market_maps_regular_order_types(regular, after):
+    with patch.object(api, 'krx_after_window', return_value=True):
+        assert api.after_market_ord_dvsn(regular) == after
+    with patch.object(api, 'krx_after_window', return_value=False):
+        assert api.after_market_ord_dvsn(regular) == regular, "정규장에서는 손대지 않는다"
+
+
+def test_after_market_code_is_not_double_mapped():
+    with patch.object(api, 'krx_after_window', return_value=True):
+        assert api.after_market_ord_dvsn("41") == "41"
+        assert api.after_market_ord_dvsn("44") == "44"
+
+
+def test_place_order_sends_after_market_code_and_krx(real_account):
+    """애프터에 낸 지정가(00)는 41 로, 거래소는 KRX 로 나간다 — 시장가(01)는 최유리(44)·단가 0."""
+    with patch.object(api, 'krx_after_window', return_value=True), \
+         patch.object(api, 'call_api', side_effect=[ACCEPT, ACCEPT]) as call:
+        api.place_order("domestic", "buy", "018880", 1, 3400, "00")
+        api.place_order("domestic", "buy", "018880", 1, 0, "01")
+    d0 = call.call_args_list[0].kwargs['data']; d1 = call.call_args_list[1].kwargs['data']
+    assert (d0['ORD_DVSN'], d0['EXCG_ID_DVSN_CD'], d0['ORD_UNPR']) == ("41", "KRX", "3400")
+    assert (d1['ORD_DVSN'], d1['EXCG_ID_DVSN_CD'], d1['ORD_UNPR']) == ("44", "KRX", "0")
+
+
+def test_revise_cancel_uses_after_market_code_too(real_account):
+    """정정취소도 같은 ORD_DVSN 필드를 쓴다(KIS 공지) — 미체결 자동취소가 애프터에서 거부되면 주문이 매달린다."""
+    with patch.object(api, 'krx_after_window', return_value=True), \
+         patch.object(api, 'call_api', return_value={'rt_cd': '0', 'output': {'ODNO': 'C1'}}) as call:
+        api.revise_cancel_order("domestic", "cancel", "0001", "018880", 1, "0", "02", "00")
+    assert call.call_args.kwargs['data']['ORD_DVSN'] == "41"

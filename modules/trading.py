@@ -740,16 +740,16 @@ def send_order(order_type):
             config.console.print("[red]단가는 숫자만 입력 가능합니다.[/red]")
             return False
 
-        # [2026-09-14 KRX 애프터마켓] 15:30~16:00 은 KRX 가 쉬고 NXT 만 연다. 이 시스템은 NXT
-        #  애프터를 이용하지 않기로 했으므로(시세·주문 모두 KRX 애프터 16:00~20:00), 이 구간의
-        #  국내 수동 발주는 사용자가 알고 택했을 때만 내보낸다. 자동매매·예약 감시는 이 구간을 닫는다.
-        if not is_overseas and api.nxt_only_after_window():
+        # [2026-09-14 KRX 애프터마켓] 15:30~16:00 은 정규장이 끝나고 애프터마켓(16:00~20:00)이 열리기
+        #  전의 휴게다 — NXT 도 프리마켓만 운영하므로 어느 시장도 없다. 보내면 거부되므로 사용자가
+        #  알고 택했을 때만 내보낸다. 자동매매·예약 감시는 이 구간을 닫는다.
+        if not is_overseas and api.domestic_break_window():
             config.console.print(
-                "\n[bold yellow]⚠️ 지금은 KRX 휴게 구간(15:30~16:00)입니다 — NXT(대체거래소)만 거래 중이며, "
-                "이 시스템은 NXT 애프터마켓을 이용하지 않습니다.[/bold yellow]")
-            config.console.print("[dim]16:00 부터 KRX 애프터마켓이 열립니다. 지금 보내면 NXT 로 접수됩니다.[/dim]")
+                "\n[bold yellow]⚠️ 지금은 KRX 휴게 구간(15:30~16:00)입니다 — 정규장은 끝났고 애프터마켓은 "
+                "16:00 에 열립니다. 어느 시장도 열려 있지 않습니다.[/bold yellow]")
+            config.console.print("[dim]지금 보내면 증권사가 거부할 가능성이 높습니다.[/dim]")
             utils.print_breadcrumb()
-            if Prompt.ask("그래도 NXT 로 주문을 보내시겠습니까?", choices=["y", "n"], default="n") != "y":
+            if Prompt.ask("그래도 주문을 보내시겠습니까?", choices=["y", "n"], default="n") != "y":
                 config.console.print("[yellow]주문이 취소되었습니다.[/yellow]")
                 return False
 
@@ -850,10 +850,14 @@ def send_order(order_type):
                     ord_dvsn = "00"
                     display_price = f"{curr_price:,}원 (NXT현재가 자동변환)"
                     price = str(int(curr_price))
-                    config.console.print(f"[yellow]안내: NXT장(08:00~08:50, 15:30~16:00)은 시장가 주문이 불가능하여 현재가({curr_price:,}원) 지정가로 자동 변환됩니다.[/yellow]")
+                    config.console.print(f"[yellow]안내: NXT장(08:00~08:50)은 시장가 주문이 불가능하여 현재가({curr_price:,}원) 지정가로 자동 변환됩니다.[/yellow]")
                 else:
                     ord_dvsn = "01"
                     display_price = "시장가(0)"
+                    # [2026-09-14] 애프터마켓엔 시장가가 없다 — api 계층이 최유리지정가(44)로 바꿔 보낸다.
+                    if api.krx_after_window():
+                        display_price = "애프터 최유리지정가(0)"
+                        config.console.print("[yellow]안내: KRX 애프터마켓은 시장가 주문이 없어 최유리지정가(상대 최우선 호가)로 접수됩니다.[/yellow]")
                     
                 calc_price = curr_price
             else:
@@ -1325,7 +1329,7 @@ def modify_order():
                     p = api.get_current_price(pdno, is_overseas=False)
                     if p > 0: price = str(int(p))
                 except Exception: pass
-                config.console.print(f"[yellow]안내: NXT장(08:00~08:50, 15:30~16:00)은 시장가 정정이 불가능하여 현재가({price}원) 지정가로 자동 변환됩니다.[/yellow]")
+                config.console.print(f"[yellow]안내: NXT장(08:00~08:50)은 시장가 정정이 불가능하여 현재가({price}원) 지정가로 자동 변환됩니다.[/yellow]")
             else:
                 ord_dvsn = "01"
         else:
