@@ -364,7 +364,21 @@ class ConclusionMonitor:
                      "감시 대상이 되지 못합니다). 신규 주문은 차단됩니다.")
 
     def _is_market_open(self):
-        """국내 정규장 운영 시간 확인 (공용 판정 함수 위임)"""
+        """체결이 생길 수 있는 시장이 열려 있는가.
+
+        [2026-09-14] 종전엔 is_system_market_open()(거래 시간 설정, 기본 09:00~15:30)에 묶여
+         있었다. 그 설정은 **자동매매 운용 범위**지 체결이 생기는 범위가 아니다 — 앱/HTS 에서
+         낸 NXT 프리(08:00~09:00)·KRX 애프터(16:00~20:00) 체결은 프로그램이 안 보는 사이에
+         생기고, 주문번호가 당일 채번이라 다음날엔 조회도 안 된다([[odno-daily-reset]]) →
+         원장 누락(손절·트레일링 대상 탈락, 원금 불변량이 그 금액을 입출금으로 오판).
+         살아있는 국내 시장이 있으면 본다(유휴 주기 300초라 부하는 미미). 해외는 종전대로
+         pending 주문이 있을 때만.
+        """
+        try:
+            if api.domestic_trading_session_open():
+                return True
+        except Exception:
+            pass
         return is_system_market_open()
 
     def _run_loop(self):

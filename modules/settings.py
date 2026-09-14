@@ -1369,7 +1369,7 @@ def modify_telegram_settings():
          "get": lambda: getattr(config.settings, 'AUTO_MORNING_BRIEFING_TIME', "0830"), "set": lambda v: setattr(config.settings, 'AUTO_MORNING_BRIEFING_TIME', v)},
         {"desc": "서킷브레이커(CB) 알림 사용", "help": "시장 전체 거래정지 감지 (KIS 대표종목 바스켓 REST 폴링)", "name": "MARKET_HALT_ALERT_USE", "type": "bool", "choices": ["y", "n"],
          "get": lambda: getattr(config.settings, 'MARKET_HALT_ALERT_USE', True), "set": lambda v: setattr(config.settings, 'MARKET_HALT_ALERT_USE', v)},
-        {"desc": "VI 발동 알림 사용", "help": "보유+관심 종목별 VI 발동/해제 감지 (REST 폴링, 기본 OFF)", "name": "MARKET_HALT_VI_USE", "type": "bool", "choices": ["y", "n"],
+        {"desc": "VI 발동 알림 사용", "help": "보유+관심 종목별 VI 발동/해제 감지 (REST 폴링, 기본 OFF). KRX 정규장과 애프터마켓(16:00~20:00) 모두 감시하며, 서킷브레이커(CB)는 정규장에만 있어 정규장에서만 봅니다.", "name": "MARKET_HALT_VI_USE", "type": "bool", "choices": ["y", "n"],
          "get": lambda: getattr(config.settings, 'MARKET_HALT_VI_USE', False), "set": lambda v: setattr(config.settings, 'MARKET_HALT_VI_USE', v)}
     ]
     return _edit_config_table("텔레그램 설정 (Telegram)", items)
@@ -1708,7 +1708,7 @@ def _trading_cycle_items():
          "get": lambda: getattr(config.settings, 'CHART_CACHE_TTL_MINUTES', 360), "set": lambda v: setattr(config.settings, 'CHART_CACHE_TTL_MINUTES', v)},
         {"desc": "실시간 WebSocket 사용", "help": "KIS 실시간 시세 push 사용(끄면 REST 폴링). 미구독/끊김 시 자동 REST 폴백. 토스는 미지원", "name": "USE_WEBSOCKET", "type": "bool", "choices": ["y", "n"], "section": "5-3. 데이터·통신",
          "get": lambda: getattr(config.settings, 'USE_WEBSOCKET', True), "set": lambda v: setattr(config.settings, 'USE_WEBSOCKET', v)},
-        {"desc": "장 종료 후 KRX 정규장 종가 기준", "help": "모든 장(KRX 애프터마켓 20:00)이 끝난 뒤 화면 '현재가'를 KRX 정규장 확정 종가로 고정합니다. 끄면 마지막 실거래가(그날 KRX 애프터마켓 최종가)가 다음 개장까지 그대로 보입니다. 살아있는 시장(NXT 프리 08:00~09:00 · KRX 정규장 · KRX 애프터 16:00~20:00)에서는 설정과 무관하게 그 시장의 현재가를 표시하고, 15:30~16:00(휴게, 시장 없음)은 정규장 종가에 고정합니다. ※ 지표는 이 설정과 무관하게 항상 KRX 정규장 확정 봉으로 계산하며, 주문 가격과 손절·트레일링 트리거도 항상 실시간가를 씁니다.", "name": "USE_KRX_CLOSE_AFTER_HOURS", "type": "bool", "choices": ["y", "n"], "section": "5-3. 데이터·통신",
+        {"desc": "장 종료 후 KRX 정규장 종가 기준", "help": "모든 장(KRX 애프터마켓 20:00)이 끝난 뒤 화면 '현재가'를 KRX 정규장 확정 종가로 고정합니다. 끄면 마지막 실거래가(그날 KRX 애프터마켓 최종가)가 다음 개장까지 그대로 보입니다. 살아있는 시장(NXT 프리 08:00~09:00 · KRX 정규장 · KRX 애프터 16:00~20:00)에서는 설정과 무관하게 그 시장의 현재가를 표시하고, 15:30~16:00(휴게, 시장 없음)은 정규장 종가에 고정합니다. ※ 이 설정은 표시가만 정합니다. 지표는 한투 모드에선 KIS 일봉(정규장 확정 봉), 토스 모드에선 KRX 공식 일봉(pykrx·2026-09-14부터 애프터 체결 포함)으로 계산하며, 주문 가격과 손절·트레일링 트리거는 항상 실시간가를 씁니다.", "name": "USE_KRX_CLOSE_AFTER_HOURS", "type": "bool", "choices": ["y", "n"], "section": "5-3. 데이터·통신",
          "get": lambda: getattr(config.settings, 'USE_KRX_CLOSE_AFTER_HOURS', True), "set": lambda v: setattr(config.settings, 'USE_KRX_CLOSE_AFTER_HOURS', v)},
         {"desc": "매매일지 웹서버 연동", "help": "체결 내역을 원격 매매일지 웹서버(stock-memo)로 자동 전송합니다. 켜려면 환경변수 JOURNAL_API_URL·JOURNAL_API_KEY 가 모두 필요하며(~/.htsrc 에 export 후 재시작), 둘 중 하나라도 없으면 켜도 동작하지 않습니다. 전송은 체결 기록과 같은 트랜잭션으로 대기열에 쌓고 백그라운드 워커가 배치로 보내므로 매매 루프가 네트워크에 지연되지 않습니다. 끄면 대기열 적재도 워커 기동도 하지 않습니다. 가상투자(모드 1)에서도 같은 스위치로 켜고 끄지만, 가상투자는 웹저널 계정 자체를 따로 쓰므로(그 기기의 ~/.htsrc 에 별도 JOURNAL_API_KEY) 실거래 기록과 서버에서 섞이지 않습니다. 체결에는 isSimulated=true 도 함께 실립니다. 설정은 모드별로 갈리므로 가상에서 켠 것이 실전으로 새지 않습니다. (기본 OFF)", "name": "JOURNAL_SYNC_USE", "type": "bool", "choices": ["y", "n"], "section": "5-3. 데이터·통신",
          "get": lambda: getattr(config.settings, 'JOURNAL_SYNC_USE', False), "set": _set_journal_sync_use},

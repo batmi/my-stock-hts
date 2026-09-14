@@ -245,13 +245,24 @@ def sync_today_trades():
                                         origin_trade = db_manager.db.get_trade_by_odno(odno, on_date=_scope)
                                         profit_amt = 0
                                         profit_rate = 0.0
+                                        _cost_amt = 0.0
+                                        _bp = 0.0
                                         score = 0
                                         stop_loss_rate = 0.0
+                                        #  [2026-09-14] 체결 감시(conclusion)와 같은 손익 규칙을 쓴다 — 이 경로는
+                                        #   그것의 복제본이었는데 실제 체결가 재계산·매입가·비용이 빠져 있었다.
+                                        #   외부 매도는 원장 평단으로 메운다(_ledger_buy_price).
+                                        from modules.auto_trade import conclusion as _concl
                                     
                                         if origin_trade:
                                             type_str = origin_trade['type'] # 기존 타입 유지
                                             profit_amt = origin_trade.get('profit_amt', 0)
                                             profit_rate = origin_trade.get('profit_rate', 0.0)
+                                            profit_amt, profit_rate, _cost_amt = _concl._recalc_realized(
+                                                origin_trade, avg_price, tot_qty, is_overseas_trade, profit_amt, profit_rate)
+                                            if _cost_amt is None:
+                                                _cost_amt = api.safe_float(origin_trade.get('cost_amt'), default=0.0)
+                                            _bp = api.safe_float(origin_trade.get('buy_price'), default=0.0)
                                             score = origin_trade.get('strategy_score', 0)
                                             stop_loss_rate = api.safe_float(origin_trade.get('stop_loss_rate'), default=0.0)
                                             orig_reason = origin_trade.get('reason', '')
@@ -285,6 +296,18 @@ def sync_today_trades():
                                                     reason_to_save = f"체결 확인 ({res_reason})"
                                             except Exception as e:
                                                 logger.debug(f"[Account] 예약 주문 조회 실패: {e}")
+
+                                        if ("매도" in type_str or "sell" in type_str.lower()) and _bp <= 0 and not profit_amt \
+                                                and avg_price > 0 and tot_qty > 0:
+                                            _bp = _concl._ledger_buy_price(item.get('pdno'), f"{cano}-{acnt}")
+                                            if _bp > 0:
+                                                try:
+                                                    _amt, _rate, _cost = trading_cost.realized_profit(
+                                                        _bp, avg_price, tot_qty, is_overseas_trade)
+                                                    profit_amt, profit_rate, _cost_amt = int(_amt), _rate, _cost
+                                                except Exception as _pe:
+                                                    logger.debug(f"[Account] {odno} 외부 매도 손익 계산 실패: {_pe}")
+                                                    _bp = 0.0
                                     
                                         db_manager.db.insert_trade(
                                             type_str, item.get('pdno'), item.get('prdt_name') or item.get('ovrs_item_name') or item.get('item_nm'), 
@@ -292,7 +315,8 @@ def sync_today_trades():
                                             order_status="체결", custom_time=trade_time,
                                             reason=reason_to_save,
                                             profit_amt=profit_amt, profit_rate=profit_rate, score=score,
-                                            stop_loss_rate=stop_loss_rate
+                                            stop_loss_rate=stop_loss_rate,
+                                            buy_price=_bp, cost_amt=_cost_amt
                                         )
                                         # [추가] 시장가 주문 등의 경우를 위해 원 주문(접수)의 단가도 체결가로 업데이트
                                         # [수정] 원본 주문 보존을 위해 업데이트 제거

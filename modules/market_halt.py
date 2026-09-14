@@ -96,14 +96,16 @@ class MarketHaltMonitor:
         vi_on = getattr(config, "MARKET_HALT_VI_USE", False)
         if not (cb_on or vi_on):
             return
-        if not self._is_kr_market_hours():
+        phase = self._kr_phase()
+        if phase not in ('krx', 'krx_after'):
             return
         try:
             is_toss = getattr(config.session, "is_toss", False)
             now = time.time()
 
             # CB(서킷브레이커): 시장 전체 정지 감지. KIS 전용, 대표 유동주 바스켓 REST 폴링.
-            if cb_on and not is_toss and (now - self.last_cb_check) >= getattr(config, "MARKET_HALT_CB_INTERVAL", 20):
+            #  CB 는 정규장 제도다(코스피/코스닥 지수 급락) — 애프터마켓에는 없다.
+            if cb_on and not is_toss and phase == 'krx' and (now - self.last_cb_check) >= getattr(config, "MARKET_HALT_CB_INTERVAL", 20):
                 self.last_cb_check = now
                 self._check_cb_kis()
 
@@ -117,19 +119,21 @@ class MarketHaltMonitor:
             logger.error(f"[MarketHalt] 점검 오류: {e}")
 
     # ---- 공통 ----
-    def _is_kr_market_hours(self):
-        now = datetime.now()
-        if now.weekday() >= 5:
-            return False
-        hhmm = now.strftime("%H%M")
-        if not ("0900" <= hhmm <= "1530"):
-            return False
+    def _kr_phase(self):
+        """국내 세션 단계(api.domestic_session_phase). 판정 실패는 'closed'.
+
+        [2026-09-14] 종전 09:00~15:30 고정 창이었다. KRX 애프터마켓(16:00~20:00)에도 VI 가
+         적용된다(운용자 확인) — 거래 종료 시간을 2000 으로 넓혀 애프터에서 자동매매를 돌리면
+         VI 감시 없이 도는 구멍이었다. CB 는 정규장 제도라 호출부에서 'krx' 로 다시 거른다.
+         NXT 프리마켓은 KIS VI 필드가 KRX 기준이라 보지 않는다(종전과 같음).
+        """
         try:
-            if api.is_holiday_today():
-                return False
+            return api.domestic_session_phase()
         except Exception:
-            pass
-        return True
+            return 'closed'
+
+    def _is_kr_market_hours(self):
+        return self._kr_phase() in ('krx', 'krx_after')
 
     def _domestic_targets(self):
         """VI 감시 대상(보유+관심종목) dict(code->name). 국내 종목만.

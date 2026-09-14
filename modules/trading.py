@@ -2521,9 +2521,16 @@ def register_reserved_order():
                 continue
 
             # [추가] 장 마감 후에 '당일'을 고르면 사실상 감시 시간이 남지 않는다.
-            if v == "1" and datetime.now().strftime("%H%M") >= "1530" and not state['is_overseas']:
-                config.console.print("[yellow]⚠️ 이미 정규장이 끝난 시각입니다. '당일'은 오늘 안에 발동하지 않으면 "
-                                     "내일 만료 처리됩니다.[/yellow]")
+            #  [2026-09-14] 예약 감시는 KRX 애프터마켓(16:00~20:00)에도 발동한다 — 경계는 20:00 이고,
+            #   15:30~16:00 휴게에는 "16시부터 발동 가능"으로 안내한다(ETF/ETN 은 애프터 미거래).
+            _hm_now = datetime.now().strftime("%H%M")
+            if v == "1" and not state['is_overseas']:
+                if _hm_now > "2000":
+                    config.console.print("[yellow]⚠️ 오늘 장(KRX 애프터마켓 20:00)이 모두 끝난 시각입니다. '당일'은 "
+                                         "오늘 안에 발동하지 않으면 내일 만료 처리됩니다.[/yellow]")
+                elif "1530" <= _hm_now < "1600":
+                    config.console.print("[yellow]ℹ️ 정규장은 끝났고 16:00 KRX 애프터마켓(~20:00)에서 발동할 수 있습니다. "
+                                         "ETF/ETN 은 애프터 미거래라 오늘은 발동하지 않습니다.[/yellow]")
             state['expire_dt'] = expire_dt
             step += 1
             marks[step] = len(context.USER_ACTION_BREADCRUMB)
