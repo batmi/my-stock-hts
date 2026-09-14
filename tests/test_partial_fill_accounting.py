@@ -197,13 +197,13 @@ def test_partial_sell_profit_follows_the_accumulated_quantity(monitor, sell_orde
     _poll(monitor, _sell_history(ord_qty=100, ccld_qty=30, rmn_qty=70))
     first = _sell_row()
     assert first is not None, "1차 부분체결이 기록되지 않았다"
-    expected_30 = int(trading_cost.net_realized_profit(BUY_PRICE, SELL_PRICE, 30)[0])
+    expected_30 = int(trading_cost.realized_profit(BUY_PRICE, SELL_PRICE, 30)[0])  # 실거래는 총차익(2026-09-14 정책)
     assert abs(int(first['profit_amt']) - expected_30) <= 1, (
         f"1차 손익이 30주 기준이 아니다: {first['profit_amt']}")
 
     _poll(monitor, _sell_history(ord_qty=100, ccld_qty=100, rmn_qty=0))
     final = _sell_row()
-    expected_100 = int(trading_cost.net_realized_profit(BUY_PRICE, SELL_PRICE, 100)[0])
+    expected_100 = int(trading_cost.realized_profit(BUY_PRICE, SELL_PRICE, 100)[0])
     assert int(final['qty']) == 100
     assert abs(int(final['profit_amt']) - expected_100) <= 1, (
         f"실현손익이 첫 관측 수량에 굳었다: {final['profit_amt']} (기대 {expected_100}). "

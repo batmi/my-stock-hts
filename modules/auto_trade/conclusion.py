@@ -102,6 +102,36 @@ def _recalc_realized(origin_trade, fill_price, fill_qty, is_overseas, fallback_a
         return fallback_amt, fallback_rate, None
 
 
+def _ledger_buy_price(code, account):
+    """원장에서 '현재 보유분'의 수량가중 평균 매입가를 구한다. 모르면 0.0.
+
+    [2026-09-14] 앱/HTS 외부 주문·예약 주문의 매도 체결은 접수 행이 없어(buy_price 를 실어
+     나를 원 주문이 없다) 실현손익이 **0원으로 굳었다**. 실측(파이5B가 맥북의 토스 주문을
+     외부 주문으로 감지): 3,455 매수 → 3,445 매도 1주가 거래 평가에 '+0원 (+0.00%)' 으로
+     찍히고 승패도 0승 1패로 엇갈렸다. 그런데 같은 원장에 그 매수 체결 행(3,455)이 있다 —
+     모르는 게 아니라 안 본 것이다. 마지막 매도 이후의 매수 체결(같은 계좌)로 평단을 만든다.
+     체결 행이 없으면 접수 행(주문번호별 1건)으로, 그것도 없으면 0 — 추측하지 않는다.
+    """
+    try:
+        rows = (db_manager.db.get_buy_trades_for_current_holdings([code], account=account) or {}).get(code) or []
+        filled = [r for r in rows if '체결' in str(r.get('order_status') or '')
+                  and api.safe_float(r.get('price'), default=0.0) > 0 and api.safe_int(r.get('qty')) > 0]
+        if not filled:
+            seen = {}
+            for r in rows:
+                if api.safe_float(r.get('price'), default=0.0) <= 0 or api.safe_int(r.get('qty')) <= 0:
+                    continue
+                seen.setdefault(str(r.get('odno') or id(r)), r)
+            filled = list(seen.values())
+        tot_qty = sum(api.safe_int(r.get('qty')) for r in filled)
+        if tot_qty <= 0:
+            return 0.0
+        return sum(api.safe_float(r.get('price'), default=0.0) * api.safe_int(r.get('qty')) for r in filled) / tot_qty
+    except Exception as e:
+        logger.debug(f"[체결] {code} 원장 매입가 조회 실패: {e}")
+        return 0.0
+
+
 def _odno_scope_date(item, trade_time_str=None):
     """이 체결 행이 저장될 날짜('YYYY-MM-DD').
 
@@ -718,17 +748,19 @@ class ConclusionMonitor:
                                         trade_time_str = f"{ord_dt[:4]}-{ord_dt[4:6]}-{ord_dt[6:]} {ord_tmd[:2]}:{ord_tmd[2:4]}:{ord_tmd[4:]}"
                                 
                                     # 원 주문 유형 조회 (수동/자동 태그 반영)
+                                    origin_trade = None
+                                    db_type_name = type_name
+                                    profit_amt = 0
+                                    profit_rate = 0.0
+                                    _cost_amt = 0.0
+                                    score = 0
+                                    stop_loss_rate = 0.0
+                                    fill_price = avg_price
+                                    reason_to_save = "체결 확인"
+                                    actual_reason = ""
                                     try:
                                         origin_trade = db_manager.db.get_trade_by_odno(
                                             odno, on_date=_odno_scope_date(item, trade_time_str))
-                                        db_type_name = type_name
-                                        profit_amt = 0
-                                        profit_rate = 0.0
-                                        _cost_amt = 0.0
-                                        score = 0
-                                        stop_loss_rate = 0.0
-                                        reason_to_save = "체결 확인"
-                                        actual_reason = ""
 
                                         #  [체결가 복구 · 2026-09-07] 같은 복구가 취소 경로에는
                                         #   있었는데(price_val) 정작 원장에 체결을 적는 쪽은
@@ -812,6 +844,22 @@ class ConclusionMonitor:
                                         stop_loss_rate = 0.0
                                         reason_to_save = "체결 확인 (앱/HTS 외부 주문)"
                                         actual_reason = "앱(MTS)/HTS 외부 주문 감지"
+
+                                    #  [2026-09-14] 매도 체결인데 매입가를 실어 온 원 주문이 없으면(외부·예약·
+                                    #   구버전 접수 행) 원장의 보유분 매수 체결로 평단을 구해 손익을 적는다.
+                                    #   여기서 0원으로 두면 거래 평가·승률·원금 불변량이 그대로 틀린다.
+                                    _bp = api.safe_float((origin_trade or {}).get('buy_price'), default=0.0)
+                                    if "매도" in type_name and _bp <= 0 and not profit_amt \
+                                            and fill_price > 0 and tot_ccld_qty > 0:
+                                        _bp = _ledger_buy_price(code, f"{cano}-{acnt}")
+                                        if _bp > 0:
+                                            try:
+                                                _amt, _rate, _cost = trading_cost.realized_profit(
+                                                    _bp, fill_price, tot_ccld_qty, is_overseas_trade)
+                                                profit_amt, profit_rate, _cost_amt = int(_amt), _rate, _cost
+                                            except Exception as _pe:
+                                                logger.debug(f"[체결] {code} 외부 매도 손익 계산 실패: {_pe}")
+                                                _bp = 0.0
                                 
                                     # [추가] 매도 체결 시 실현 손익 및 사유 조회
                                     profit_msg = ""
@@ -840,6 +888,10 @@ class ConclusionMonitor:
                                                 if found_record.get('reason'):
                                                     reason_msg = f"\n사유: {found_record['reason']}"
                                         except Exception: pass
+                                        #  원 주문이 없어 원장 평단으로 손익을 막 구한 매도(외부·예약)는
+                                        #  찾을 기록이 없다 — 방금 계산한 값을 그대로 알린다.
+                                        if not profit_msg and _bp > 0:
+                                            profit_msg = f"\n손익: {int(profit_amt):+,}원 ({float(profit_rate):+.2f}%)"
                                 
                                     # [추가] 매도 사유 조회가 안 되었거나 매수인 경우 actual_reason 활용
                                     if not reason_msg and actual_reason:
@@ -1041,7 +1093,7 @@ class ConclusionMonitor:
                                                 f"없습니다. 평단·실현손익·손절선이 이 행을 근거로 삼습니다.")
                                         #  [2026-09-14] 체결 행에도 매입가를 남긴다 — 거래 히스토리가 총차익
                                         #   (매입가·체결가·수량)을 그 자리에서 계산해 보이기 때문이다.
-                                        _bp = api.safe_float((origin_trade or {}).get('buy_price'), default=0.0)
+                                        #   외부·예약 매도는 위에서 원장 평단(_bp)을 구해 두었다.
                                         db_manager.db.insert_trade(db_type_name, code, name, tot_ccld_qty, fill_price, odno, order_status="체결", reason=reason_to_save, custom_time=trade_time_str, profit_amt=profit_amt, profit_rate=profit_rate, score=score, stop_loss_rate=stop_loss_rate, buy_price=_bp, cost_amt=_cost_amt)
 
                                         # [추가] 매매일지 웹서버로 즉시 전송을 깨운다.
