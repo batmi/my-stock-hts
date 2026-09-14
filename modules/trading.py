@@ -856,10 +856,15 @@ def send_order(order_type):
                 else:
                     ord_dvsn = "01"
                     display_price = "시장가(0)"
-                    # [2026-09-14] 애프터마켓엔 시장가가 없다 — api 계층이 최유리지정가(44)로 바꿔 보낸다.
+                    # [2026-09-14] 애프터마켓엔 시장가가 없다 — api 계층이 바꿔 보낸다
+                    #  (한투: 최유리지정가 44 · 토스: 현재가 지정가 — 토스 주문엔 최유리 유형이 없다).
                     if api.krx_after_window():
-                        display_price = "애프터 최유리지정가(0)"
-                        config.console.print("[yellow]안내: KRX 애프터마켓은 시장가 주문이 없어 최유리지정가(상대 최우선 호가)로 접수됩니다.[/yellow]")
+                        if config.session.is_toss:
+                            display_price = f"{curr_price:,}원 (애프터 현재가 지정가)"
+                            config.console.print(f"[yellow]안내: KRX 애프터마켓은 시장가 주문이 없어 현재가({curr_price:,}원) 지정가로 접수됩니다.[/yellow]")
+                        else:
+                            display_price = "애프터 최유리지정가(0)"
+                            config.console.print("[yellow]안내: KRX 애프터마켓은 시장가 주문이 없어 최유리지정가(상대 최우선 호가)로 접수됩니다.[/yellow]")
                     
                 calc_price = curr_price
             else:

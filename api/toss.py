@@ -1521,6 +1521,18 @@ def _toss_place_order(market, action, code, qty, price, ord_dvsn):
     side = 'BUY' if action == 'buy' else 'SELL'
     # KIS ord_dvsn: '01'=국내 시장가 → 토스 MARKET, 그 외 지정가
     is_market = (market == 'domestic' and str(ord_dvsn) == '01')
+    # [2026-09-14 KRX 애프터마켓] 애프터(16:00~20:00)엔 시장가 주문 유형이 없다(지정가·최유리·최우선만).
+    #  토스 주문에는 거래소·세션 인자가 없어 KIS 경로의 '01→44(최유리)' 매핑이 닿지 않으므로,
+    #  여기서 현재가 지정가로 바꿔 보낸다. 현재가를 못 구하면 그대로 MARKET 으로 보내 거부 사유가
+    #  응답에 남게 한다(조용히 실패하는 것보다 낫다).
+    if is_market and _api().krx_after_window():
+        try:
+            cur = float(_api().get_current_price(code, False) or 0)
+        except Exception:      # noqa: BLE001
+            cur = 0.0
+        if cur > 0:
+            is_market, price = False, int(cur)
+            logger.info(f"[Toss] KRX 애프터마켓 — 시장가를 현재가 지정가({price:,}원)로 바꿔 보냅니다: {code}")
     order_type = 'MARKET' if is_market else 'LIMIT'
     order_price = None if is_market else price
     try:
@@ -1544,7 +1556,10 @@ def _toss_place_order(market, action, code, qty, price, ord_dvsn):
         #  place_order 가 재전송 대신 조회로 대사하게 한다.
         raise _api().OrderOutcomeUnknown(str(e.message or e)) from e
     except toss_api.TossApiError as e:
-        logger.error(f"[Toss] 주문 실패: {e}")
+        #  요청 유형·단가를 함께 남긴다 — 'order-type-not-allowed' 가 MARKET 때문인지 애프터
+        #  자체를 안 받는 것인지는 이 줄로만 가른다(2026-09-14 애프터마켓 첫날 실측 필요).
+        logger.error(f"[Toss] 주문 실패: {side} {code} {qty}주 {order_type} @{order_price} "
+                     f"(ord_dvsn={ord_dvsn}, after={_api().krx_after_window()}) — {e}")
         return {'rt_cd': '1', 'msg_cd': str(e.code or ''), 'msg1': str(e.message or e), 'output': {}}
 
 

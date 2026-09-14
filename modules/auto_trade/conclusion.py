@@ -955,7 +955,13 @@ class ConclusionMonitor:
                                             context.SYSTEM_LOGGER(f"[체결 확인] {type_name} {name}({code}) {new_qty}주 (단가: {price_str})")
                                     
                                         # [추가] 매도 체결 시 AI 매매 복기 실행
-                                        if type_name == "매도" and found_record:
+                                        #  [2026-09-14] **자동매매(AUTO) 매도에만** 보낸다. 프롬프트는 모든 거래를
+                                        #   시스템 매매로 전제하므로, 수동·예약·외부 매도는 운용자 판단인데도
+                                        #   "점수 0점 종목의 시간외 비정상 진입·프로세스 결함"으로 읽힌다(실측:
+                                        #   애프터마켓 테스트 수동 매매 1주). 그런 리포트가 쌓이면 진짜 결함이 묻힌다.
+                                        #   판정은 is_system_trade 하나(재기동에도 살아남는 '(AUTO)' 표기).
+                                        if type_name == "매도" and found_record \
+                                                and is_system_trade(found_record.get('type'), odno):
                                             #  [Fix 2026-09-04] 계좌 컨텍스트를 제출 스레드에서
                                             #   싸서 넘긴다. 복기는 db.get_latest_buy_trade 로
                                             #   매수 시점·점수를 읽는데, 그 조회는 계좌로 갈린다

@@ -337,3 +337,21 @@ def test_revise_cancel_uses_after_market_code_too(real_account):
          patch.object(api, 'call_api', return_value={'rt_cd': '0', 'output': {'ODNO': 'C1'}}) as call:
         api.revise_cancel_order("domestic", "cancel", "0001", "018880", 1, "0", "02", "00")
     assert call.call_args.kwargs['data']['ORD_DVSN'] == "41"
+
+
+def test_toss_after_market_market_order_becomes_limit_at_current_price():
+    """[2026-09-14] 토스 경로엔 KIS 의 01→44 매핑이 닿지 않는다 — 16~20시 MARKET 은 현재가 지정가로."""
+    with patch.object(api.config.session, 'is_toss', True), \
+         patch.object(api, 'krx_after_window', return_value=True), \
+         patch.object(api, 'get_current_price', return_value=3455), \
+         patch('api.toss.toss_api.create_order', return_value={'orderId': 'T1'}) as co:
+        res = api._toss_place_order("domestic", "sell", "018880", 1, 0, "01")
+    assert res['rt_cd'] == '0'
+    body = co.call_args.kwargs
+    assert body['order_type'] == 'LIMIT' and body['price'] == 3455
+    # 정규장에서는 종전대로 MARKET
+    with patch.object(api.config.session, 'is_toss', True), \
+         patch.object(api, 'krx_after_window', return_value=False), \
+         patch('api.toss.toss_api.create_order', return_value={'orderId': 'T2'}) as co:
+        api._toss_place_order("domestic", "sell", "018880", 1, 0, "01")
+    assert co.call_args.kwargs['order_type'] == 'MARKET'
