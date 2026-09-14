@@ -40,6 +40,54 @@ def round_trip_cost(buy_price, sell_price, qty, is_overseas=False):
             + sell_fee(float(sell_price) * qty, is_overseas))
 
 
+def gross_realized_profit(buy_price, sell_price, qty):
+    """총차익 = (매도가 − 매입가) × 수량. 비용을 빼지 않는다. (profit_amt, profit_rate%) 반환."""
+    buy_price = float(buy_price or 0)
+    sell_price = float(sell_price or 0)
+    qty = int(qty or 0)
+    basis = buy_price * qty
+    if qty <= 0 or basis <= 0 or sell_price <= 0:
+        return 0.0, 0.0
+    gross = (sell_price - buy_price) * qty
+    return gross, (gross / basis) * 100
+
+
+def costs_in_realized():
+    """실현손익(trades.profit_amt)에 거래비용을 포함하는가 — **가상투자(관찰 모드)만 True**.
+
+    [운용자 결정 2026-09-14] 실제 매매(한투·토스)의 손익은 수동·자동 모두 "실제 매매에서 발생한
+     차익"(총차익)으로 적고 보인다 — 3,460 매수 → 3,455 매도면 −5원이지 −12원이 아니다.
+     가상투자는 체결·비용을 시스템이 흉내 내므로 백테스트와 같은 순손익을 유지한다.
+    """
+    try:
+        return bool(getattr(config.session, 'is_paper', False))
+    except Exception:      # noqa: BLE001 - 세션이 없으면(도구·테스트) 실거래 규약
+        return False
+
+
+def realized_profit(buy_price, sell_price, qty, is_overseas=False):
+    """기록·알림·통계에 쓰는 실현손익 — (profit_amt, profit_rate%, cost_amt) 반환.
+
+    정책은 costs_in_realized() 하나가 정한다:
+      · 실거래(기본): profit = 총차익, cost_amt = 왕복 비용(따로 저장)
+      · 가상투자     : profit = 순손익(비용 차감), cost_amt = 0 (이미 빠져 있다)
+
+    [왜 비용을 따로 남기나] 원금 불변량(꺼져 있던 사이의 입출금 감지, trader._reconcile_offline_transfer)
+     은 원금 = 현금 + 매입원가 − 실현손익 이라는 식이다. 현금에서는 비용이 이미 빠져 있으므로
+     실현손익이 총차익이면 왕복마다 비용만큼 원금이 줄어 보이고, 그 누적이 문턱을 넘는 순간
+     '출금'으로 오인된다([[daily-asset-baseline-transfers]] 사고와 같은 경로). 그래서 그 식만
+     profit_amt − cost_amt 를 쓴다(db.get_realized_profit_between). 두 모드 모두 그 차가 순손익이다.
+    """
+    gross, grate = gross_realized_profit(buy_price, sell_price, qty)
+    if gross == 0 and grate == 0:
+        return 0.0, 0.0, 0.0            # 입력 불량 — '모름'
+    cost = round_trip_cost(buy_price, sell_price, qty, is_overseas)
+    if costs_in_realized():
+        net = gross - cost
+        return net, (net / (float(buy_price) * int(qty))) * 100, 0.0
+    return gross, grate, float(cost)
+
+
 def net_realized_profit(buy_price, sell_price, qty, is_overseas=False):
     """실현손익 = 총손익 − 왕복 비용. (profit_amt, profit_rate%) 반환.
 

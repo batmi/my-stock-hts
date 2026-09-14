@@ -607,6 +607,9 @@ class DBManager:
                     # [비용] 매도 시점의 매입평균가. 체결 확인 단계에서 '실제 체결가' 기준으로
                     #  실현손익을 다시 계산하려면 매입가가 있어야 한다(주문 시점 추정치가 아니라).
                     "buy_price": "REAL DEFAULT 0.0",
+                    # [2026-09-14] 실거래 profit_amt 는 총차익(비용 제외)이다. 원금 불변량만 이 비용을
+                    #  빼서 순손익으로 본다(core.trading_cost.realized_profit 주석). 가상투자 행은 0.
+                    "cost_amt": "REAL DEFAULT 0.0",
                 }
                 
                 for col, dtype in new_columns.items():
@@ -819,7 +822,7 @@ class DBManager:
         except Exception as e:
             logger.warning(f"[Journal] 정정분 재적재 실패 (거래 기록은 정상 갱신됨): {e}")
 
-    def insert_trade(self, type_str, code, name, qty, price, odno, org_odno=None, snapshot=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, order_status="접수", custom_time=None, stop_loss_rate=0.0, buy_price=0.0):
+    def insert_trade(self, type_str, code, name, qty, price, odno, org_odno=None, snapshot=None, profit_amt=0, profit_rate=0.0, reason=None, score=0, order_status="접수", custom_time=None, stop_loss_rate=0.0, buy_price=0.0, cost_amt=0.0):
         """거래 내역 및 스냅샷 저장"""
         # 쓰기 작업은 락으로 보호하여 순차 처리 (SQLite 특성상 안전)
         with self.lock:
@@ -841,9 +844,9 @@ class DBManager:
                     snapshot_json = json.dumps(snapshot, ensure_ascii=False) if snapshot else "{}"
                     
                     cursor.execute('''
-                        INSERT INTO trades (time, type, code, name, qty, price, odno, org_odno, account, is_sim, snapshot, profit_amt, profit_rate, reason, strategy_score, order_status, stop_loss_rate, buy_price)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (now_str, type_str, code, name, str(qty), str(price), odno, org_odno, acc_no, is_sim, snapshot_json, profit_amt, profit_rate, reason, score, order_status, stop_loss_rate, buy_price))
+                        INSERT INTO trades (time, type, code, name, qty, price, odno, org_odno, account, is_sim, snapshot, profit_amt, profit_rate, reason, strategy_score, order_status, stop_loss_rate, buy_price, cost_amt)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (now_str, type_str, code, name, str(qty), str(price), odno, org_odno, acc_no, is_sim, snapshot_json, profit_amt, profit_rate, reason, score, order_status, stop_loss_rate, buy_price, float(cost_amt or 0.0)))
 
                     # [추가] 매매일지 웹서버 전송 대기열 적재.
                     #  거래 기록과 같은 트랜잭션에서 처리해야 '기록은 남았는데 전송 큐엔 없는'
@@ -964,7 +967,7 @@ class DBManager:
                     return False
     
     def update_trade(self, odno, price=None, qty=None, profit_amt=None, profit_rate=None,
-                     order_status=None, where_status=None, on_date=None):
+                     order_status=None, where_status=None, on_date=None, cost_amt=None):
         """주문번호(odno)를 기준으로 거래 내역 업데이트
 
         where_status: 지정하면 그 상태의 행만 갱신한다. 같은 odno로 '접수'와 '체결' 행이
@@ -999,6 +1002,7 @@ class DBManager:
                     if price is not None: updates.append("price = ?"); params.append(str(price))
                     if qty is not None: updates.append("qty = ?"); params.append(str(qty))
                     if profit_amt is not None: updates.append("profit_amt = ?"); params.append(profit_amt)
+                    if cost_amt is not None: updates.append("cost_amt = ?"); params.append(float(cost_amt))
                     if profit_rate is not None: updates.append("profit_rate = ?"); params.append(profit_rate)
                     if order_status is not None: updates.append("order_status = ?"); params.append(order_status)
                     
@@ -2319,7 +2323,10 @@ class DBManager:
         try:
             cursor = self._get_conn().cursor()
             cursor.execute(
-                "SELECT id, substr(time, 1, 10), odno, type, profit_amt FROM trades "
+                #  [2026-09-14] 실거래 profit_amt 는 총차익이라 cost_amt 를 빼야 원금 식과 맞는다
+                #   (가상투자 행은 profit 이 이미 순손익이고 cost_amt=0 이라 같은 식이 그대로 맞는다).
+                "SELECT id, substr(time, 1, 10), odno, type, "
+                "profit_amt - COALESCE(cost_amt, 0) FROM trades "
                 "WHERE account = ? AND is_sim = ? AND time >= ? AND time <= ? "
                 "ORDER BY id ASC",
                 (account, 1 if is_sim else 0, f"{start_date} 00:00:00", f"{end_date} 23:59:59"))

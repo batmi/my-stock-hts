@@ -15,6 +15,7 @@
 증권사·세법이 정하는 사실이라 config 하나에서 바뀌어야 한다.
 """
 import pytest
+from unittest.mock import patch
 
 import config
 from core import trading_cost
@@ -158,34 +159,42 @@ def _origin(**over):
 
 
 def test_realized_profit_is_recomputed_from_the_actual_fill():
-    """발주 시점 추정치가 아니라 실제 체결가로 다시 계산해야 한다."""
+    """발주 시점 추정치가 아니라 실제 체결가로 다시 계산해야 한다.
+
+    [2026-09-14] 실거래 손익은 총차익이고 비용은 세 번째 값(cost_amt)으로 따로 나온다.
+    가상투자만 순손익(비용 0). 두 모드 모두 profit − cost 가 순손익과 같아야 한다.
+    """
     from modules.auto_trade.conclusion import _recalc_realized
-    amt, rate = _recalc_realized(_origin(), fill_price=110_000, fill_qty=10,
-                                 is_overseas=False, fallback_amt=999_999, fallback_rate=99.9)
-    expected, exp_rate = trading_cost.net_realized_profit(100_000, 110_000, 10)
-    assert amt == int(expected)
-    assert rate == pytest.approx(exp_rate)
+    net, net_rate = trading_cost.net_realized_profit(100_000, 110_000, 10)
+    with patch.object(config.session, 'is_paper', False, create=True):
+        amt, rate, cost = _recalc_realized(_origin(), fill_price=110_000, fill_qty=10,
+                                           is_overseas=False, fallback_amt=999_999, fallback_rate=99.9)
+    assert amt == 100_000 and rate == pytest.approx(10.0)
+    assert amt - cost == pytest.approx(net, abs=1)
     assert amt != 999_999, "주문 시점 추정치가 그대로 남았다"
+    with patch.object(config.session, 'is_paper', True, create=True):
+        amt, rate, cost = _recalc_realized(_origin(), 110_000, 10, False, 999_999, 99.9)
+    assert amt == int(net) and rate == pytest.approx(net_rate) and cost == 0.0
 
 
 def test_buy_fills_are_left_alone():
     """매수 체결에는 실현손익이 없다 — 건드리면 안 된다."""
     from modules.auto_trade.conclusion import _recalc_realized
-    assert _recalc_realized(_origin(type='buy(AUTO)'), 110_000, 10, False, 0, 0.0) == (0, 0.0)
+    assert _recalc_realized(_origin(type='buy(AUTO)'), 110_000, 10, False, 0, 0.0) == (0, 0.0, None)
 
 
 @pytest.mark.parametrize("origin", [None, {}, _origin(buy_price=0)])
 def test_missing_buy_price_keeps_the_previous_value(origin):
-    """매입가를 모르면 기존 값을 둔다 — 없는 정보를 추측해 덮어쓰지 않는다."""
+    """매입가를 모르면 기존 값을 둔다 — 없는 정보를 추측해 덮어쓰지 않는다(비용도 None=유지)."""
     from modules.auto_trade.conclusion import _recalc_realized
-    assert _recalc_realized(origin, 110_000, 10, False, 12_345, 1.23) == (12_345, 1.23)
+    assert _recalc_realized(origin, 110_000, 10, False, 12_345, 1.23) == (12_345, 1.23, None)
 
 
 def test_partial_fill_uses_the_filled_quantity():
     """부분 체결이면 체결된 수량만큼만 실현된다."""
     from modules.auto_trade.conclusion import _recalc_realized
-    full, _ = _recalc_realized(_origin(), 110_000, 10, False, 0, 0.0)
-    half, _ = _recalc_realized(_origin(), 110_000, 5, False, 0, 0.0)
+    full, _, _ = _recalc_realized(_origin(), 110_000, 10, False, 0, 0.0)
+    half, _, _ = _recalc_realized(_origin(), 110_000, 5, False, 0, 0.0)
     assert half == pytest.approx(full / 2, rel=0.01)
 
 
@@ -193,7 +202,7 @@ def test_recalc_never_raises_on_bad_input():
     """손익 재계산이 터져서 체결 기록 자체를 잃으면 안 된다."""
     from modules.auto_trade.conclusion import _recalc_realized
     assert _recalc_realized(_origin(buy_price="말도안됨"), "?", None,
-                            False, 7, 0.7) == (7, 0.7)
+                            False, 7, 0.7) == (7, 0.7, None)
 
 
 # ─────────────────────────────────────────────

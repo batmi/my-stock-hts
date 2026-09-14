@@ -17,6 +17,7 @@ from core import jsonio
 from core import trade_tags
 from modules import db_manager
 import json
+from core import trading_cost
 import pandas as pd
 from openpyxl.utils import get_column_letter
 
@@ -2307,6 +2308,18 @@ def view_trade_history():
             if base_type == "매도" or "매도" in raw_type:
                 amt = t.get('profit_amt', 0)
                 rate = t.get('profit_rate', 0.0)
+                # [2026-09-14 운용자 결정] 실거래 손익은 **총차익**(비용 제외)이다 — 수동·자동 공통.
+                #  새 행은 저장값이 이미 총차익이지만, 2026-09-13~14 사이의 행은 순손익으로 저장돼 있어
+                #  매입가·체결가·수량이 있으면 여기서 다시 센다. 매입가가 없는 행(옛 기록·외부 매도)은
+                #  저장값. 가상투자는 순손익 정책이라 손대지 않는다.
+                try:
+                    if not trading_cost.costs_in_realized():
+                        _g_amt, _g_rate = trading_cost.gross_realized_profit(
+                            t.get('buy_price'), t.get('price'), t.get('qty'))
+                        if _g_amt != 0 or _g_rate != 0:
+                            amt, rate = _g_amt, _g_rate
+                except Exception:
+                    pass
                 if amt is not None and rate is not None:
                     try:
                         if int(amt) != 0 or float(rate) != 0.0:

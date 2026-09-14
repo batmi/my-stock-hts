@@ -108,13 +108,18 @@ def test_average_price_is_replayed_forward():
         sell['profit_amt'] / (15_000 * 5) * 100, rel=1e-6)
 
 
-def test_realized_profit_is_net_of_costs():
-    """실현손익은 왕복 비용을 뺀 값이어야 한다(DB의 다른 기록과 같은 자를 쓴다)."""
+def test_realized_profit_follows_the_cost_policy():
+    """[2026-09-14] 실거래 실현손익은 총차익이고 왕복 비용은 cost_amt 로 따로 남는다
+    (DB의 다른 기록과 같은 자를 쓴다 — trading_cost.realized_profit 하나)."""
+    from unittest.mock import patch
+    import config
     from core import trading_cost
-    recs = hb.build_records([_tx("20260701", True, 10, price=10_000),
-                             _tx("20260720", False, 10, price=11_000)])
-    expected, _ = trading_cost.net_realized_profit(10_000, 11_000, 10)
-    assert recs[-1]['profit_amt'] == int(expected)
+    txs = [_tx("20260701", True, 10, price=10_000), _tx("20260720", False, 10, price=11_000)]
+    with patch.object(config.session, 'is_paper', False, create=True):
+        rec = hb.build_records(txs)[-1]
+    net, _ = trading_cost.net_realized_profit(10_000, 11_000, 10)
+    assert rec['profit_amt'] == 10_000 and rec['cost_amt'] > 0
+    assert rec['profit_amt'] - rec['cost_amt'] == pytest.approx(net, abs=1)
 
 
 def test_buy_records_have_no_realized_profit():
@@ -131,12 +136,15 @@ def test_selling_more_than_held_does_not_go_negative():
 
 
 def test_overseas_uses_overseas_cost_rates():
+    from unittest.mock import patch
+    import config
     from core import trading_cost
     txs = [_tx("20260701", True, 10, price=100), _tx("20260720", False, 10, price=110)]
-    dom = hb.build_records(txs)[-1]['profit_amt']
-    ovs = hb.build_records(txs, is_overseas=True)[-1]['profit_amt']
-    assert ovs < dom, "해외가 국내보다 비용이 커야 한다"
-    assert ovs == int(trading_cost.net_realized_profit(100, 110, 10, is_overseas=True)[0])
+    with patch.object(config.session, 'is_paper', False, create=True):
+        dom = hb.build_records(txs)[-1]['cost_amt']
+        ovs = hb.build_records(txs, is_overseas=True)[-1]['cost_amt']
+    assert ovs > dom, "해외가 국내보다 비용이 커야 한다"
+    assert ovs == trading_cost.round_trip_cost(100, 110, 10, is_overseas=True)
 
 
 # ─────────────────────────────────────────────

@@ -324,7 +324,9 @@ def _create_fill_history(db_order, reason_msg):
                 score=db_order.get('strategy_score', 0),
                 profit_amt=profit_amt,
                 profit_rate=profit_rate,
-                stop_loss_rate=api.safe_float(db_order.get('stop_loss_rate'), default=0.0)
+                stop_loss_rate=api.safe_float(db_order.get('stop_loss_rate'), default=0.0),
+                buy_price=api.safe_float(db_order.get('buy_price'), default=0.0),
+                cost_amt=api.safe_float(db_order.get('cost_amt'), default=0.0),
             )
             if config.FILE_DEBUG_LEVEL == "DEBUG":
                 logger.debug(f"[ORDER_DEBUG] 체결 히스토리 생성 완료: {odno} (체결(추정))")
@@ -1018,9 +1020,12 @@ def send_order(order_type):
                 # [수정] Race Condition 방지를 위해 DB 저장부터 최우선으로 실행
                 profit_amt = 0
                 profit_rate = 0.0
+                cost_amt = 0.0
+                buy_price_to_save = 0.0
                 if order_type == 'sell' and stock_info:
                     try:
                         buy_price = float(stock_info.get('buy_price', 0))
+                        buy_price_to_save = buy_price
                         if buy_price > 0:
                             # [Fix 2026-09-13] 종전에는 qty×(매도가−매입가) 총액이었다. 자동 매도
                             #  (trader)는 core.trading_cost.net_realized_profit 로 왕복 비용을 뺀
@@ -1028,8 +1033,10 @@ def send_order(order_type):
                             #  원금 불변량(입출금 감지)이 두 기준을 섞었다 — 실측 2026-09-04 파이
                             #  가상계좌: trades −12,500 vs 원장 −23,978, 차이 11,444원이 '출금'으로
                             #  기록됐다. 자동 매도와 같은 SSOT 를 쓴다.
+                            #  [2026-09-14] 실거래는 총차익(비용은 cost_amt 로 따로), 가상투자는 순손익 —
+                            #   정책은 trading_cost.realized_profit 하나가 정한다.
                             from core import trading_cost
-                            _p, _r = trading_cost.net_realized_profit(
+                            _p, _r, cost_amt = trading_cost.realized_profit(
                                 buy_price, calc_price, qty, is_overseas=is_overseas)
                             profit_amt = int(_p)
                             profit_rate = _r
@@ -1044,7 +1051,11 @@ def send_order(order_type):
                 t_type = "매수" if order_type == 'buy' else "매도"
                 snapshot = analysis.get_snapshot(stock_code, is_overseas=is_overseas)
                 
-                db_manager.db.insert_trade(f"{t_type}(수동)", stock_code, stock_name, qty, price, odno, snapshot=snapshot, reason="사용자 수동 주문", profit_amt=profit_amt, profit_rate=profit_rate, stop_loss_rate=stop_loss_rate_to_save, score=calculated_score)
+                # [Fix 2026-09-14] buy_price 를 함께 적는다. 체결 확인(conclusion._recalc_realized)은 기록의
+                #  매입가로 '실제 체결가 + 왕복 비용' 손익을 다시 계산하는데, 수동 매도만 이 값을 안 넘겨
+                #  주문 시점 추정치가 그대로 굳었다(실측: 3,460 매수 → 최유리 매도 3,455 체결인데 -7원 유지.
+                #  올바른 값은 차익 -5원 + 비용 ≈ -12원). 자동 매도(trader)와 같은 계약이다.
+                db_manager.db.insert_trade(f"{t_type}(수동)", stock_code, stock_name, qty, price, odno, snapshot=snapshot, reason="사용자 수동 주문", profit_amt=profit_amt, profit_rate=profit_rate, stop_loss_rate=stop_loss_rate_to_save, score=calculated_score, buy_price=buy_price_to_save, cost_amt=cost_amt)
                 
                 config.console.print(f"[bold green]주문 성공[/bold green] (주문번호: {odno})")
                 # [추가] AutoTrader에 주문 상태 등록 (중복 매매 방지)

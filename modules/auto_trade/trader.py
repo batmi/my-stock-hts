@@ -328,6 +328,7 @@ class AutoTrader:
                     
                 if r.get('profit_amt'):
                     existing['profit_amt'] = r['profit_amt']
+                    existing['cost_amt'] = r.get('cost_amt') or 0.0   # 손익과 같은 행의 비용을 함께 따라가야 순손익이 맞다
                 if r.get('profit_rate'):
                     existing['profit_rate'] = r['profit_rate']
                     
@@ -4614,7 +4615,12 @@ class AutoTrader:
                             
                             today_trades_refined = self._refine_trade_records(today_trades_parsed)
                             sell_trades = [x for x in today_trades_refined if x['type'] == 'sell']
-                            realized_profit = sum(int(t.get('profit_amt') or 0) for t in sell_trades)
+                            #  [2026-09-14] 원금 식(현금+매입원가−실현손익)에 넣는 실현손익은 **순손익**이어야
+                            #   한다 — 현금에서는 비용이 이미 빠져 있다. 실거래 profit_amt 는 총차익이므로
+                            #   cost_amt 를 뺀다(가상투자 행은 profit 이 순손익·cost_amt 0 이라 같은 식이 맞다).
+                            #   빼지 않으면 왕복마다 비용만큼 원금이 줄어 보여 문턱을 넘는 날 '출금'으로 오인된다.
+                            realized_profit = int(sum(int(t.get('profit_amt') or 0) - float(t.get('cost_amt') or 0)
+                                                     for t in sell_trades))
 
                             # [외부 매도] 운용자가 HTS/MTS로 자동매매 계좌에서 직접 팔면 우리
                             #  주문 기록이 없어 실현손익이 0으로 남는다(conclusion 은 origin_trade
@@ -5899,7 +5905,8 @@ class AutoTrader:
                     ref_price = float(order_price) or float(item.get('prpr') or 0)
                 except (TypeError, ValueError):
                     ref_price = 0.0
-                est_profit, est_rate = trading_cost.net_realized_profit(
+                #  [2026-09-14] 실거래는 총차익·가상투자는 순손익 — 정책은 trading_cost.realized_profit 하나.
+                est_profit, est_rate, est_cost = trading_cost.realized_profit(
                     sell_buy_price, ref_price, target_sell_qty)
                 if sell_buy_price <= 0:      # 매입가를 못 구하면 종전 값으로 폴백
                     #  [Fix 2026-09-06] 종전에는 api.safe_int(item.get('evlu_pfls_amt')) 였다. KIS 는 값이
@@ -5908,9 +5915,9 @@ class AutoTrader:
                     #   전량매도 시 예약 일괄취소·거래기록)를 통째로 건너뛰고, 워커의 포괄
                     #   except 가 "이번 주기에 손절·트레일링 판정을 받지 못했습니다"라는
                     #   **사실과 다른** 경보까지 띄운다(방금 판 종목이다).
-                    est_profit, est_rate = api.safe_int(item.get('evlu_pfls_amt')), profit_rate
+                    est_profit, est_rate, est_cost = api.safe_int(item.get('evlu_pfls_amt')), profit_rate, 0.0
                 try:
-                    odno = self.order_manager.send_order(code, target_sell_qty, "sell", name=name, profit_amt=int(est_profit), profit_rate=est_rate, reason=reason, score=score, price=order_price, rule=rule, buy_price=sell_buy_price)
+                    odno = self.order_manager.send_order(code, target_sell_qty, "sell", name=name, profit_amt=int(est_profit), profit_rate=est_rate, reason=reason, score=score, price=order_price, rule=rule, buy_price=sell_buy_price, cost_amt=est_cost)
                 except _pkg().OrderOutcomeUnclear as e:
                     #  [Fix 2026-09-08] 매도는 방향이 반대다 — 접수됐는데 '안 됐다'로 두면
                     #   다음 주기가 같은 수량을 다시 판다. 부분 체결이었다면 보유보다 많이

@@ -87,7 +87,7 @@ def build_records(executions, is_overseas=False):
             'type': f"{label}(외부)", 'code': tx['code'], 'name': tx['name'],
             'qty': tx['qty'], 'price': price, 'odno': tx['odno'],
             'time': _fmt_time(tx['date'], tx['time']),
-            'buy_price': 0.0, 'profit_amt': 0, 'profit_rate': 0.0,
+            'buy_price': 0.0, 'profit_amt': 0, 'profit_rate': 0.0, 'cost_amt': 0.0,
         }
 
         if tx['is_buy']:
@@ -97,10 +97,11 @@ def build_records(executions, is_overseas=False):
         else:
             sell_qty = min(tx['qty'], qty) if qty else 0
             if avg > 0 and sell_qty > 0:
-                amt, rate = trading_cost.net_realized_profit(avg, price, sell_qty, is_overseas)
+                amt, rate, cost = trading_cost.realized_profit(avg, price, sell_qty, is_overseas)
                 rec['buy_price'] = avg
                 rec['profit_amt'] = int(amt)
                 rec['profit_rate'] = rate
+                rec['cost_amt'] = cost
             qty = max(0, qty - tx['qty'])
             if qty == 0:
                 avg = 0.0
@@ -234,7 +235,7 @@ def apply(plans, cano=None, acnt_prdt_cd=None):
                     reason=OWN_FILL_REASON if own else BACKFILL_REASON,
                     custom_time=r['time'],
                     profit_amt=r['profit_amt'], profit_rate=r['profit_rate'],
-                    buy_price=r['buy_price'], stop_loss_rate=own_sl,
+                    buy_price=r['buy_price'], stop_loss_rate=own_sl, cost_amt=r.get('cost_amt', 0.0),
                     score=(own or {}).get('strategy_score') or 0)
                 if ok:
                     written += 1

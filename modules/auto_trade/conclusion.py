@@ -69,7 +69,10 @@ def current_aux_epoch():
 
 
 def _recalc_realized(origin_trade, fill_price, fill_qty, is_overseas, fallback_amt, fallback_rate):
-    """주문 시점 추정 손익을 '실제 체결가 + 왕복 비용' 기준으로 다시 계산한다.
+    """주문 시점 추정 손익을 '실제 체결가' 기준으로 다시 계산한다. (profit_amt, profit_rate, cost_amt)
+
+    [2026-09-14] 비용 포함 여부는 trading_cost.realized_profit 의 정책을 따른다 — 실거래는 총차익에
+     비용을 따로(cost_amt), 가상투자는 순손익. 재계산 못 하면 cost_amt 는 None(기존 값 유지).
 
     [왜] 종전에는 매도 발주 시점의 평가손익(KIS evlu_pfls_amt)이 그대로 실현손익으로
       굳었다. 체결 확인 단계에서 실제 체결가를 이미 알고 있으면서도 손익만 추정치로
@@ -81,22 +84,22 @@ def _recalc_realized(origin_trade, fill_price, fill_qty, is_overseas, fallback_a
     """
     try:
         if not origin_trade:
-            return fallback_amt, fallback_rate
+            return fallback_amt, fallback_rate, None
         type_str = str(origin_trade.get('type') or '')
         if 'sell' not in type_str.lower() and '매도' not in type_str:
-            return fallback_amt, fallback_rate
+            return fallback_amt, fallback_rate, None
 
         buy_price = float(origin_trade.get('buy_price') or 0)
         fill_price = float(fill_price or 0)
         fill_qty = int(fill_qty or 0)
         if buy_price <= 0 or fill_price <= 0 or fill_qty <= 0:
-            return fallback_amt, fallback_rate
+            return fallback_amt, fallback_rate, None
 
-        amt, rate = trading_cost.net_realized_profit(buy_price, fill_price, fill_qty, is_overseas)
-        return int(amt), rate
+        amt, rate, cost = trading_cost.realized_profit(buy_price, fill_price, fill_qty, is_overseas)
+        return int(amt), rate, cost
     except Exception as e:
         logger.debug(f"[비용] 실현손익 재계산 실패 — 주문 시점 값 유지: {e}")
-        return fallback_amt, fallback_rate
+        return fallback_amt, fallback_rate, None
 
 
 def _odno_scope_date(item, trade_time_str=None):
@@ -721,6 +724,7 @@ class ConclusionMonitor:
                                         db_type_name = type_name
                                         profit_amt = 0
                                         profit_rate = 0.0
+                                        _cost_amt = 0.0
                                         score = 0
                                         stop_loss_rate = 0.0
                                         reason_to_save = "체결 확인"
@@ -758,9 +762,11 @@ class ConclusionMonitor:
                                             profit_amt = origin_trade.get('profit_amt', 0)
                                             profit_rate = origin_trade.get('profit_rate', 0.0)
                                             # [비용] 주문 시점 추정 손익을 '실제 체결가' 기준으로 다시 계산한다.
-                                            profit_amt, profit_rate = _recalc_realized(
+                                            profit_amt, profit_rate, _cost_amt = _recalc_realized(
                                                 origin_trade, fill_price, tot_ccld_qty,
                                                 is_overseas_trade, profit_amt, profit_rate)
+                                            if _cost_amt is None:
+                                                _cost_amt = api.safe_float(origin_trade.get('cost_amt'), default=0.0)
                                             score = origin_trade.get('strategy_score', 0)
                                             stop_loss_rate = api.safe_float(origin_trade.get('stop_loss_rate'), default=0.0)
                                             orig_reason = origin_trade.get('reason', '')
@@ -1027,7 +1033,10 @@ class ConclusionMonitor:
                                                 f"[체결] {code} {odno} {tot_ccld_qty}주를 **단가 0원**으로 "
                                                 f"기록합니다 — 응답에 체결 단가가 없고 원 주문 기록도 "
                                                 f"없습니다. 평단·실현손익·손절선이 이 행을 근거로 삼습니다.")
-                                        db_manager.db.insert_trade(db_type_name, code, name, tot_ccld_qty, fill_price, odno, order_status="체결", reason=reason_to_save, custom_time=trade_time_str, profit_amt=profit_amt, profit_rate=profit_rate, score=score, stop_loss_rate=stop_loss_rate)
+                                        #  [2026-09-14] 체결 행에도 매입가를 남긴다 — 거래 히스토리가 총차익
+                                        #   (매입가·체결가·수량)을 그 자리에서 계산해 보이기 때문이다.
+                                        _bp = api.safe_float((origin_trade or {}).get('buy_price'), default=0.0)
+                                        db_manager.db.insert_trade(db_type_name, code, name, tot_ccld_qty, fill_price, odno, order_status="체결", reason=reason_to_save, custom_time=trade_time_str, profit_amt=profit_amt, profit_rate=profit_rate, score=score, stop_loss_rate=stop_loss_rate, buy_price=_bp, cost_amt=_cost_amt)
 
                                         # [추가] 매매일지 웹서버로 즉시 전송을 깨운다.
                                         #  적재 자체는 insert_trade 가 같은 트랜잭션에서 끝냈으므로
@@ -1065,11 +1074,12 @@ class ConclusionMonitor:
                                         #   자산 기준선이 밀린다([[daily-asset-baseline-transfers]]).
                                         #   profit_rate 는 수량과 무관해 값이 같지만, 산식이 바뀌어도
                                         #   따라오도록 함께 넘긴다.
-                                        _p_amt, _p_rate = _recalc_realized(
+                                        _p_amt, _p_rate, _p_cost = _recalc_realized(
                                             origin_trade, fill_price, tot_ccld_qty,
                                             is_overseas_trade, None, None)
                                         db_manager.db.update_trade(odno, qty=tot_ccld_qty, price=fill_price,
                                                                    profit_amt=_p_amt, profit_rate=_p_rate,
+                                                                   cost_amt=_p_cost,
                                                                    where_status="체결",
                                                                    on_date=_odno_scope_date(item, trade_time_str))
                                         logger.debug(
@@ -1201,8 +1211,10 @@ class ConclusionMonitor:
             except Exception: profit_rate = 0.0
             # [비용] price 는 위에서 실제 체결가(WS 체결통보)로 갱신됐다. 손익만 주문 시점
             #  추정치로 남겨두면 체결가와 어긋난 값이 실현손익으로 굳는다.
-            profit_amt, profit_rate = _recalc_realized(
+            profit_amt, profit_rate, cost_amt = _recalc_realized(
                 trade, price, qty, is_overseas, profit_amt, profit_rate)
+            if cost_amt is None:
+                cost_amt = api.safe_float(trade.get('cost_amt'), default=0.0)
             
             # [추가] snapshot 데이터 타입 안전 처리
             snapshot_data = trade.get('snapshot')
@@ -1248,6 +1260,8 @@ class ConclusionMonitor:
                     score=trade.get('strategy_score', 0),
                     profit_amt=profit_amt,
                     profit_rate=profit_rate,
+                    cost_amt=cost_amt,
+                    buy_price=api.safe_float(trade.get('buy_price'), default=0.0),
                     stop_loss_rate=api.safe_float(trade.get('stop_loss_rate'), default=0.0)
                 )
                 success_db = True
