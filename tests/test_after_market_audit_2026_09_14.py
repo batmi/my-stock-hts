@@ -7,6 +7,8 @@
 4. 세션 전환 알림·예약 '당일' 경고 문구가 애프터마켓을 안다.
 """
 import inspect
+
+import pytest
 from unittest.mock import patch
 
 import api
@@ -67,3 +69,29 @@ def test_reserved_today_warning_boundary_is_2000():
     src = inspect.getsource(trading)
     assert '_hm_now > "2000"' in src
     assert '"1530" <= _hm_now < "1600"' in src
+
+
+# ==========================================================
+# 5. 잔고 AFHR_FLPR_YN — 확장 세션에선 Y(통합 최종가), 아니면 N(정규장 종가)
+#    실측 2026-09-14: N/X → 16,140(정규장 종가), Y → 16,160(애프터 최종가)
+# ==========================================================
+
+@pytest.mark.parametrize("phase, fixed_on, expect", [
+    ("active", True, "Y"),      # NXT 프리 — N 이면 전일 종가로 손절 판정
+    ("krx_after", True, "Y"),   # KRX 애프터 — N 이면 15:30 가격으로 손절 판정
+    ("skip", True, "N"),        # 정규장 — 같은 값, 종전 유지
+    ("break", True, "N"),       # 휴게 — 시장 없음
+    ("offhours", True, "N"),    # 야간·정규장 종가 고정
+    ("offhours", False, "Y"),   # 야간·마지막 실거래가 표시 — 라벨 'KRX 애프터 최종가'와 일치
+])
+def test_balance_afhr_flag_follows_session(phase, fixed_on, expect):
+    with patch.object(api, "_nxt_quote_phase", lambda: phase), \
+            patch.object(config, "USE_KRX_CLOSE_AFTER_HOURS", fixed_on, create=True):
+        assert api.balance_afhr_flpr_yn() == expect
+
+
+def test_domestic_balance_sends_session_flag():
+    from api import account as acct
+    src = inspect.getsource(acct.get_domestic_balance)
+    assert '"AFHR_FLPR_YN": _api().balance_afhr_flpr_yn()' in src
+    assert '"AFHR_FLPR_YN": "N"' not in src

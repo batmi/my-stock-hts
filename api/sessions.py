@@ -340,8 +340,12 @@ def market_session_label(is_overseas=False, is_domestic_etf=False):
     except Exception:      # noqa: BLE001
         basis = "최종가"
     head = "장 마감" if phase == 'closed' else "휴장(주말·공휴일)"
-    note = "" if is_domestic_etf else _toss_after_bar_note()
-    return (f"{head} · {basis}{note}", "dim")
+    if not is_domestic_etf and _toss_after_bar_note():
+        #  토스 모드는 설정과 무관하게 야간 표시가가 애프터 최종가다 — 설정 ON 이면 차트 마지막 봉
+        #  (pykrx, 애프터 포함)의 종가를, OFF 면 토스 lastPrice 를 쓰는데 둘 다 애프터 최종가다.
+        #  "KRX 정규장 종가"라고 적으면 거짓이 된다(실측 2026-09-14 삼성전자 248,500 = 애프터 최종가).
+        return (f"{head} · KRX 종가·일봉 애프터 포함", "dim")
+    return (f"{head} · {basis}", "dim")
 
 
 def _toss_after_bar_note():
@@ -450,6 +454,29 @@ def chart_overlay_enabled(is_overseas=False):
         return _api()._nxt_quote_phase() == 'skip'
     except Exception:      # noqa: BLE001 - 판정 실패는 '정규장'으로 보고 종전 동작 유지
         return True
+
+
+def balance_afhr_flpr_yn():
+    """KIS 국내 잔고 조회의 AFHR_FLPR_YN — 잔고 `prpr`·평가손익이 어느 가격을 기준으로 오는가.
+
+    [실측 2026-09-14 20:3x, 코오롱티슈진 정규장 종가 16,140 / 애프터 최종가 16,160]
+      N → 16,140 (KRX 정규장 종가)   X → 16,140 (NXT, 닫혀 있어 정규장 종가)   **Y → 16,160 (통합 최종가)**
+    자동매매의 손절·트레일링 판정은 잔고 `prpr` 을 현재가로 쓴다(trader 매도 분석). 종전엔 N 고정이라
+    거래 종료 시간을 2000 으로 넓혀도 애프터에서 15:30 가격을 보며 판정했고, NXT 프리마켓에서는
+    전일 종가를 봤다 — '트리거는 항상 실시간가'라는 전제가 잔고 경로에선 거짓이었다.
+    살아있는 확장 세션(NXT 프리 · KRX 애프터)에는 Y, 휴게·정규장·야간(정규장 종가 고정 설정)에는 N.
+    야간에 설정을 끈 경우(마지막 실거래가 표시)는 Y — 화면 라벨 'KRX 애프터 최종가'와 맞춘다.
+    정규장에서는 Y 와 N 이 같지만 종전 값(N)을 유지한다.
+    """
+    try:
+        phase = _api()._nxt_quote_phase()
+    except Exception:      # noqa: BLE001 - 판정 실패는 종전 동작(N)
+        return "N"
+    if phase in ('active', 'krx_after'):
+        return "Y"
+    if phase == 'offhours' and not getattr(config, 'USE_KRX_CLOSE_AFTER_HOURS', True):
+        return "Y"
+    return "N"
 
 
 def display_price_krx_fixed(is_overseas=False):

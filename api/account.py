@@ -46,7 +46,9 @@ def get_domestic_balance(cano=None, acnt_prdt_cd=None, retries=None):
     # [수정] 조회 구분: 모의투자는 '02'(종목별), 실전투자는 '01'(대출일별 - API 제한 대응)
     inqr_dvsn = "01"
     
-    params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": inqr_dvsn, "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
+    #  AFHR_FLPR_YN 은 세션이 정한다 — 확장 세션(NXT 프리·KRX 애프터)에서 N 이면 prpr 이 정규장
+    #  종가에 얼어 손절·트레일링이 그 가격으로 판정된다(api.balance_afhr_flpr_yn 실측 참조).
+    params = {"CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd, "AFHR_FLPR_YN": _api().balance_afhr_flpr_yn(), "OFL_YN": "N", "INQR_DVSN": inqr_dvsn, "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00", "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
     data = _api().call_api(constants.API_URLS["DOMESTIC"]["INQUIRY"]["BALANCE"], "domestic", "inquiry", "balance", params=params, retries=retries)
 
     if data.get('rt_cd') == '0':
