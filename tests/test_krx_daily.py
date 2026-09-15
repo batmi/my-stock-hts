@@ -541,9 +541,21 @@ def test_base_price_source_survives_library_failure():
 
 
 def test_krx_source_is_trusted_for_stored_close():
+    """[2026-09-15] 'krx'(KRX 포털)는 애프터마켓 도입(9/14) 전 날짜만 정규장 종가다 — 그 뒤는 애프터 최종가."""
     import api
-    assert api._toss_krx_close_trusted('005930', 'krx') is True
-    assert api._toss_krx_close_trusted('005930', 'yf') is True
+    assert api._toss_krx_close_trusted('005930', 'krx', '20260911') is True
+    assert api._toss_krx_close_trusted('005930', 'krx', '20260914') is False
+    assert api._toss_krx_close_trusted('005930', 'krx') is False, "날짜를 모르면 믿지 않는다"
+    assert api._toss_krx_close_trusted('005930', 'yf', '20260914') is True
+    assert api._toss_krx_close_trusted('005930', 'brk', '20260914') is True
+
+
+def test_after_market_store_rank_demotes_portal_close():
+    """9/14 이후 저장 우선순위: brk > yf > krx(포털) > cap — 포털 종가가 yfinance 값을 덮지 못한다."""
+    import api
+    r = lambda src, d: api._toss_close_source_rank(src, d)
+    assert r('brk', '20260914') > r('yf', '20260914') > r('krx', '20260914') > r('cap', '20260914')
+    assert r('krx', '20260911') > r('yf', '20260911'), "이전 날짜는 종전 순서"
 
 
 def test_stored_close_never_regresses_to_less_accurate_source():

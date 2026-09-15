@@ -255,13 +255,36 @@ def _toss_krx_close_unpack(v):
     return (c if c > 0 else None), "cap"
 
 
-# KRX 정규장 종가로 검증된 출처. 'krx'(pykrx/FDR = KRX 공식)가 'yf'보다 정확하다 —
-# yfinance는 특정일에 공식 종가와 다른 값을 준다(실측 237거래일 중 2~4일, 최대 1.59%).
-_TOSS_CLOSE_VERIFIED_SOURCES = ("krx", "yf")
-_TOSS_CLOSE_SOURCE_RANK = {"krx": 2, "yf": 1, "cap": 0}
+# KRX 정규장 종가로 검증된 출처.
+#  [2026-09-15 정정] 'krx'(pykrx/FDR = KRX 데이터포털)는 KRX 애프터마켓 도입(2026-09-14) 뒤로 **정규장
+#   종가가 아니다** — 포털 일봉 종가는 애프터 최종가로 확정된다(실측 삼성전자 9/14: 포털 248,500 /
+#   거래소 기준가·KIS 일봉·토스 basePrice 249,000 / yfinance 249,000). 등락률 기준가는 거래소 기준가
+#   (=정규장 종가)여야 하므로 9/14 이후 날짜의 'krx' 값은 검증값으로 치지 않는다(_toss_krx_close_trusted).
+#  'brk' = 휴게(15:30~16:00) 캡처 — 그 30분엔 어느 시장도 체결이 없어 토스 lastPrice 가 곧 KRX 종가
+#   단일가다(옛 분봉 캡처 'cap' 은 NXT 혼입으로 주식엔 부정확했던 것과 다르다).
+#  'yf' 는 특정일에 공식 종가와 다른 값을 준 적이 있으나(237거래일 중 2~4일, 최대 1.59%) 9/14 이후로는
+#   매일 애프터 변동폭만큼 어긋나는 'krx' 보다 낫다.
+_TOSS_CLOSE_VERIFIED_SOURCES = ("krx", "yf", "brk")
+_TOSS_CLOSE_SOURCE_RANK = {"brk": 3, "krx": 2, "yf": 1, "cap": 0}
+_KRX_AFTER_MARKET_START = "20260914"     # 이날부터 포털 일봉 종가 = 애프터 최종가
+_TOSS_CLOSE_KEEP_DAYS = 300               # 종목당 저장 일수(일봉 250봉 + 여유)
 
 
-def _toss_krx_close_trusted(code, source):
+def _toss_close_source_rank(source, date_str):
+    """저장 우선순위. 애프터마켓 이후 날짜의 'krx'(포털 종가)는 검증 출처 아래로 내린다."""
+    if source == "krx" and date_str and str(date_str) >= _KRX_AFTER_MARKET_START:
+        return 0.5           # 'cap'(0) 보다는 낫고 'yf'(1)·'brk'(3) 에는 진다
+    return _TOSS_CLOSE_SOURCE_RANK.get(source, 0)
+
+
+def _toss_krx_source_trusted_for(source, date_str):
+    """출처 태그만으로 판정되는 신뢰 여부(종목 무관). 'krx' 는 애프터마켓 이전 날짜만."""
+    if source == "krx":
+        return bool(date_str) and str(date_str) < _KRX_AFTER_MARKET_START
+    return source in _TOSS_CLOSE_VERIFIED_SOURCES
+
+
+def _toss_krx_close_trusted(code, source, date_str=None):
     """이 출처의 저장값을 KRX 정규장 종가로 믿어도 되는가.
 
     'krx'(pykrx/FDR)·'yf'는 일봉(KRX 기준) 조회로 얻은 값이라 신뢰한다. 'cap'(분봉 캡처)은 **NXT에서
@@ -272,8 +295,10 @@ def _toss_krx_close_trusted(code, source):
     조회 불가(비토스·API 실패) 시에만 종전의 ETF/ETN 휴리스틱으로 폴백한다 — 휴리스틱은
     관심목록 등록·종목명 브랜드에 의존해 NXT 미지원 '주식'을 놓치고 오탐 여지도 있다.
     """
-    if source in _TOSS_CLOSE_VERIFIED_SOURCES:
+    if _toss_krx_source_trusted_for(source, date_str):
         return True
+    if source == "krx":
+        return False          # 애프터마켓 이후의 포털 종가 — 종목 종류와 무관하게 정규장 종가가 아니다
     return _toss_krx_only(code)
 
 
@@ -292,7 +317,7 @@ def _toss_krx_close_get(code, date_str, trusted_only=False):
             return None
     if close is None:
         return None
-    if trusted_only and not _toss_krx_close_trusted(code, source):
+    if trusted_only and not _toss_krx_close_trusted(code, source, date_str):
         return None
     return close
 
@@ -314,14 +339,16 @@ def _toss_krx_close_put(code, date_str, close, source="cap"):
             store[code] = per
         cur_close, cur_source = _toss_krx_close_unpack(per.get(date_str))
         if cur_close is not None:
-            cur_rank = _TOSS_CLOSE_SOURCE_RANK.get(cur_source, 0)
-            new_rank = _TOSS_CLOSE_SOURCE_RANK.get(source, 0)
+            cur_rank = _toss_close_source_rank(cur_source, date_str)
+            new_rank = _toss_close_source_rank(source, date_str)
             if new_rank < cur_rank:
                 return                       # 더 부정확한 출처로 퇴행하지 않는다
             if cur_close == close and cur_source == source:
                 return
         per[date_str] = {"c": float(close), "s": source}
-        for k in sorted(per.keys())[:-10]:
+        #  [2026-09-15] 10일만 남기면 열흘 전 봉부터 포털 종가(애프터)로 되돌아가 지표가 다시 갈린다 —
+        #   일봉 250봉을 덮을 만큼 남긴다(종목당 수십 KB, 파이에서도 무시할 크기).
+        for k in sorted(per.keys())[:-_TOSS_CLOSE_KEEP_DAYS]:
             del per[k]
         try:
             tmp = _toss_krx_close_path() + ".tmp"
@@ -401,6 +428,33 @@ def _toss_capture_krx_close(code):
         logger.debug(f"[Toss] KRX 마감가 캡처 실패({code}): {e}")
 
 
+def _toss_capture_break_close(code, last_price):
+    """휴게(15:30~16:00)에 본 토스 lastPrice 를 오늘의 KRX 정규장 종가('brk')로 저장한다.
+
+    [2026-09-15] KRX 애프터마켓 도입 뒤 15:30~16:00 은 어느 시장도 체결이 없다(NXT 는 프리마켓만).
+     그래서 이 30분의 lastPrice 는 15:30 종가 단일가 그대로다 — 다음날 등락률 기준가(거래소 기준가)와
+     같은 값이다. 옛 분봉 캡처('cap')가 NXT 혼입으로 주식에 부정확했던 문제가 여기엔 없다.
+     하루 1회, 이미 'brk' 가 있으면 다시 쓰지 않는다. 판정 실패·값 0 은 조용히 넘긴다.
+    """
+    try:
+        if not config.session.is_toss or not last_price or last_price <= 0:
+            return
+        if not _api().domestic_break_window():
+            return
+        today = datetime.now().strftime('%Y%m%d')
+        with _toss_krx_close_lock:
+            store = _toss_krx_close_load_locked()
+            try:
+                _c, src = _toss_krx_close_unpack((store.get(code) or {}).get(today))
+            except Exception:
+                _c, src = None, None
+        if src == "brk":
+            return
+        _toss_krx_close_put(code, today, float(last_price), source="brk")
+    except Exception as e:      # noqa: BLE001 - 캡처 실패는 기준가 하위 순위로 넘어간다
+        logger.debug(f"[Toss] 휴게 종가 캡처 실패({code}): {e}")
+
+
 # --- 랭킹 basePrice = 전일 KRX 정규장 종가(기준가) 라이브 조회 (1순위 소스) ---
 #  /api/v1/rankings 의 price.basePrice(MARKET_* 타입)는 '전일 기준가'(=HTS 등락률 기준가)다.
 #  거래대금+거래량 상위 각 100종목을 하루 1회 받아 {symbol: basePrice} 맵을 만든다(대형주 커버).
@@ -415,9 +469,14 @@ def _toss_ranking_base(code):
     global _toss_rank_base_map, _toss_rank_base_day
     if not config.session.is_toss:
         return None
-    today = datetime.now().strftime('%Y%m%d')
+    now = datetime.now()
+    today = now.strftime('%Y%m%d')
+    #  [2026-09-15 실측] 08:00 전에 받은 basePrice 는 아직 전날 기준가다(08:29 조회 249,000 =
+    #   전일 정규장 종가, 그 전에 기동한 화면은 259,500 = 전전일 종가로 등락 -11,500 표시).
+    #   '하루 1회' 키를 (날짜, 08:00 전/후)로 나눠 NXT 프리마켓 개장 뒤 한 번 더 받는다.
+    cache_key = f"{today}-{'pre' if now.strftime('%H%M') < '0800' else 'post'}"
     with _toss_rank_lock:
-        if _toss_rank_base_map is not None and _toss_rank_base_day == today:
+        if _toss_rank_base_map is not None and _toss_rank_base_day == cache_key:
             return _toss_rank_base_map.get(code)
         # 하루 1회 적재 (거래대금·거래량 상위 각 100)
         mp = {}
@@ -435,7 +494,7 @@ def _toss_ranking_base(code):
                     mp.setdefault(sym, bp)
         # 조회 자체가 전부 실패하면(빈 맵) 캐시를 세팅하지 않아 다음 호출에서 재시도한다.
         if mp:
-            _toss_rank_base_map, _toss_rank_base_day = mp, today
+            _toss_rank_base_map, _toss_rank_base_day = mp, cache_key
         return mp.get(code)
 
 
@@ -571,16 +630,23 @@ def _toss_base_price(code, chart_df=None):
         if trusted:
             return trusted
 
-        # 3) KRX 공식 일봉 종가 (pykrx/FDR). 성공 시 검증값으로 적재되어 2)에서 종료된다.
-        #    6시간 캐시를 재사용하므로 추가 네트워크 호출이 없다.
-        krx_close = _toss_krx_lib_close(code, ref_date)
-        if krx_close:
-            return krx_close
-
-        # 3-1) 위가 모두 실패했을 때만 yfinance (특정일 공식 종가와 어긋나는 사례가 있어 후순위)
-        yf_close = _toss_yf_krx_close(code, ref_date)
-        if yf_close:
-            return yf_close
+        # 3) [2026-09-15] 애프터마켓 이후 날짜는 yfinance 를 pykrx 보다 앞세운다 — 포털(pykrx) 종가는
+        #    애프터 최종가라 매일 어긋나고, yfinance 는 정규장 종가를 줬다(9/14 실측 249,000).
+        #    그 이전 날짜는 종전 순서(pykrx → yfinance)를 유지한다.
+        if ref_date >= _KRX_AFTER_MARKET_START:
+            yf_close = _toss_yf_krx_close(code, ref_date)
+            if yf_close:
+                return yf_close
+            krx_close = _toss_krx_lib_close(code, ref_date)       # 근사 폴백(애프터 포함, 검증값 아님)
+            if krx_close:
+                return krx_close
+        else:
+            krx_close = _toss_krx_lib_close(code, ref_date)
+            if krx_close:
+                return krx_close
+            yf_close = _toss_yf_krx_close(code, ref_date)
+            if yf_close:
+                return yf_close
 
         # 4) 저장된 분봉 캡처값 (주식: NXT 혼입으로 부정확) — 위 소스 실패 시 근사 폴백
         stored = _toss_krx_close_get(code, ref_date)
@@ -885,8 +951,109 @@ def _krx_daily_chart(code):
     source = df.attrs.get('source', '?')
     df = df.tail(250).reset_index(drop=True)
     df = _append_today_bar_from_price(df, code)
+    df = _toss_apply_regular_closes(code, df)
     df.attrs['source'] = f"KRX/{source}"
     return df
+
+
+def _toss_apply_regular_closes(code, df):
+    """포털 일봉(pykrx/FDR)의 종가를 기억해 둔 KRX 정규장 종가로 바꿔 KIS 일봉과 같게 만든다.
+
+    [운용자 결정 2026-09-15] 토스 모드도 한투 모드처럼 정규장 종가 봉으로 지표를 계산한다.
+     KRX 데이터포털 일봉 종가는 2026-09-14 부터 애프터 최종가로 확정되는데(삼성전자 9/14 포털
+     248,500 vs 거래소 기준가·KIS 일봉 249,000), 지표·기준가는 정규장 종가여야 두 모드가 같다.
+    출처(신뢰 순): 'brk' 휴게 15:30~16:00 캡처(그 30분엔 어느 시장도 체결이 없어 lastPrice = 종가
+     단일가) → 'yf' yfinance 일봉(정규장 종가, 9/14 실측 249,000). 프로그램이 그날 휴게에 떠 있지
+     않았던 날은 yfinance 로 한 번에 메운다(빠진 날짜 구간 1회 조회·저장). 둘 다 없으면 포털 값을
+     그대로 두고 debug 로 남긴다 — 추측해서 덮지 않는다.
+    시가·고가·저가·거래량은 손대지 않는다(KIS 일봉도 정정 뒤 애프터 포함 그대로다).
+    9/14 이전 봉은 포털 종가 = 정규장 종가라 대상이 아니다.
+    """
+    try:
+        if df is None or df.empty or 'date' not in df.columns:
+            return df
+        dates = [str(d) for d in df['date']]
+        targets = [d for d in dates if d >= _KRX_AFTER_MARKET_START]
+        if not targets:
+            return df
+        closes = {}
+        missing = []
+        for d in targets:
+            v = _toss_krx_close_get(code, d, trusted_only=True)
+            if v:
+                closes[d] = float(v)
+            else:
+                missing.append(d)
+        # 오늘 봉은 휴게 캡처 전(정규장 중·휴게 전)이라면 아직 정규장 종가가 없는 게 정상 — yfinance 로 묻지 않는다.
+        today = datetime.now().strftime('%Y%m%d')
+        missing_hist = [d for d in missing if d < today or _api()._nxt_quote_phase() in ('krx_after', 'offhours')]
+        if missing_hist:
+            fetched = _toss_yf_regular_closes(code, missing_hist[0], missing_hist[-1])
+            for d in missing_hist:
+                if d in fetched:
+                    closes[d] = fetched[d]
+            still = [d for d in missing_hist if d not in closes]
+            if still:
+                logger.debug(f"[Toss] {code} 정규장 종가 미확보 {len(still)}일({still[0]}~{still[-1]}) — 포털 종가(애프터 최종가) 유지")
+        if not closes:
+            return df
+        out = df.copy()
+        mask = out['date'].astype(str).map(lambda d: d in closes)
+        out.loc[mask, 'close'] = out.loc[mask, 'date'].astype(str).map(closes).astype(float)
+        out.attrs.update(df.attrs)
+        out.attrs['regular_close_dates'] = len(closes)
+        return out
+    except Exception as e:      # noqa: BLE001 - 보정 실패는 포털 봉 그대로
+        logger.debug(f"[Toss] {code} 정규장 종가 보정 실패: {e}")
+        return df
+
+
+def _toss_yf_regular_closes(code, start_date, end_date):
+    """yfinance 국내 일봉에서 [start_date, end_date] 의 종가(정규장)를 {YYYYMMDD: close} 로 받아 'yf' 로 저장한다.
+
+    _toss_yf_krx_close 의 구간 버전 — 빠진 날이 여럿이면 날짜마다 두드리지 않고 한 번에 받는다.
+    실패는 (code, start~end) 키로 쿨다운해 주기적 갱신마다 재시도하지 않는다.
+    """
+    out = {}
+    if not code or not start_date or not end_date:
+        return out
+    key = (code, f"{start_date}-{end_date}")
+    with _toss_yf_base_lock:
+        last = _toss_yf_base_miss.get(key)
+        if last and (time.time() - last) < _TOSS_YF_BASE_RETRY_SEC:
+            return out
+    try:
+        start = (datetime.strptime(start_date, "%Y%m%d") - timedelta(days=3)).strftime("%Y-%m-%d")
+        end = (datetime.strptime(end_date, "%Y%m%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+        for suffix in (".KS", ".KQ"):
+            ticker = f"{code}{suffix}"
+            df = _api().fetch_yfinance_data(ticker, start=start, end=end)
+            if df is None or getattr(df, 'empty', True):
+                continue
+            if isinstance(df.columns, pd.MultiIndex):
+                try:
+                    df = df.xs(ticker, axis=1, level=1)
+                except Exception:
+                    pass
+            df.columns = [str(c).lower() for c in df.columns]
+            if 'close' not in df.columns:
+                continue
+            for idx, val in df['close'].items():
+                d = idx.strftime('%Y%m%d') if hasattr(idx, 'strftime') else str(idx).replace('-', '')[:8]
+                try:
+                    close = float(val)
+                except (TypeError, ValueError):
+                    continue
+                if start_date <= d <= end_date and close > 0:
+                    out[d] = close
+                    _toss_krx_close_put(code, d, close, source="yf")
+            if out:
+                return out
+    except Exception as e:
+        logger.debug(f"[Toss] yfinance 정규장 종가 구간 조회 실패({code} {start_date}~{end_date}): {e}")
+    with _toss_yf_base_lock:
+        _toss_yf_base_miss[key] = time.time()
+    return out
 
 
 def _append_today_bar_from_price(df, code):
@@ -1180,8 +1347,9 @@ def _toss_current_price_data(code, is_overseas):
     # [추가] 국내: 기준가 대비 전일대비/등락률 필드를 채운다. 기준가=저장된 KRX 정규장 마감가
     # (있으면 HTS 일치), 없으면 전일 NXT 종가로 폴백. 마감 후엔 오늘 KRX 마감가를 1회 캡처해 저장.
     if not is_overseas:
-        _toss_capture_krx_close(code)  # 마감(15:35+) 후 오늘 KRX 마감가 1회 저장(이미 있으면 즉시 반환)
         p = _toss_float(price)
+        _toss_capture_break_close(code, p)   # 휴게(15:30~16:00) lastPrice = KRX 종가 단일가 → 'brk' 저장
+        _toss_capture_krx_close(code)  # 마감(15:35+) 후 오늘 KRX 마감가 1회 저장(이미 있으면 즉시 반환)
 
         # [모드 정합성] ETF/ETN은 마감 후 현재가를 'KRX 정규장 종가'로 고정한다.
         #  ETF는 NXT 연장거래 대상이 아니라 15:30 이후 체결은 전부 KRX 시간외단일가(16:00~18:00)다.

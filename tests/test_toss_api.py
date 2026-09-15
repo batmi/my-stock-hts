@@ -373,7 +373,7 @@ def _reset_krx_store(entries=None):
     from datetime import datetime as _dt
     api._toss_krx_close_store = entries if entries is not None else {}
     api._toss_rank_base_map = {}
-    api._toss_rank_base_day = _dt.now().strftime('%Y%m%d')
+    api._toss_rank_base_day = _rank_cache_key()
 
 
 def _set_rank_base(mp):
@@ -381,7 +381,14 @@ def _set_rank_base(mp):
     import api
     from datetime import datetime as _dt
     api._toss_rank_base_map = dict(mp)
-    api._toss_rank_base_day = _dt.now().strftime('%Y%m%d')
+    api._toss_rank_base_day = _rank_cache_key()
+
+
+def _rank_cache_key():
+    # api._toss_ranking_base 의 캐시 키와 같은 규칙: (날짜, 08:00 전/후)
+    from datetime import datetime as _dt
+    now = _dt.now()
+    return f"{now.strftime('%Y%m%d')}-{'pre' if now.strftime('%H%M') < '0800' else 'post'}"
 
 
 def test_toss_base_price_uses_ranking_base_first():
@@ -2448,3 +2455,100 @@ def test_domestic_code_helper_is_the_single_source():
     assert not krx_daily.is_domestic_code("AAPL"), "해외 티커는 국내가 아니다"
     assert not krx_daily.is_domestic_code("12345"), "6자리가 아니다"
     assert not krx_daily.is_domestic_code("A05930"), "숫자로 시작해야 한다"
+
+
+def test_toss_ranking_base_reloads_after_0800(monkeypatch):
+    """[2026-09-15] 08:00 전에 받은 basePrice 는 전날 기준가라 NXT 프리 개장 뒤 한 번 더 받는다."""
+    import api
+    from api import toss as _t
+    import datetime as _d
+    calls = []
+    def fake_rankings(**kw):
+        calls.append(1)
+        return {"rankings": [{"symbol": "005930", "price": {"basePrice": "259500" if len(calls) <= 2 else "249000"}}]}
+    monkeypatch.setattr(_t.toss_api, "get_rankings", fake_rankings)
+    api._toss_rank_base_map = None; api._toss_rank_base_day = None
+    config.session.is_toss = True
+    try:
+        class _Pre(_d.datetime):
+            @classmethod
+            def now(cls, tz=None): return _d.datetime(2026, 9, 15, 7, 50)
+        class _Post(_d.datetime):
+            @classmethod
+            def now(cls, tz=None): return _d.datetime(2026, 9, 15, 8, 5)
+        monkeypatch.setattr(_t, "datetime", _Pre)
+        assert api._toss_ranking_base("005930") == 259500.0
+        assert api._toss_ranking_base("005930") == 259500.0 and len(calls) == 2, "같은 구간은 캐시"
+        monkeypatch.setattr(_t, "datetime", _Post)
+        assert api._toss_ranking_base("005930") == 249000.0, "08:00 이후 다시 받아 오늘 기준가"
+        assert len(calls) == 4
+    finally:
+        config.session.is_toss = False
+        api._toss_rank_base_map = None; api._toss_rank_base_day = None
+
+
+# ==========================================================
+# [2026-09-15] 토스 모드 일봉 종가 = 기억해 둔 KRX 정규장 종가 (KIS 일봉과 같게)
+# ==========================================================
+
+def _bars(dates_closes):
+    import pandas as pd
+    return pd.DataFrame([{'date': d, 'open': c, 'high': c, 'low': c, 'close': c, 'volume': 1} for d, c in dates_closes])
+
+
+def test_regular_closes_override_portal_close_after_0914(monkeypatch):
+    import api
+    from api import toss as _t
+    _reset_krx_store({"005930": {"20260914": {"c": 249000.0, "s": "brk"}}})
+    monkeypatch.setattr(_t, "_toss_yf_regular_closes", lambda code, a, b: {"20260915": 251000.0})
+    monkeypatch.setattr(api, "_nxt_quote_phase", lambda: "offhours")
+    df = _bars([("20260911", 259500.0), ("20260914", 248500.0), ("20260915", 250500.0)])
+    out = api._toss_apply_regular_closes("005930", df)
+    assert list(out['close']) == [259500.0, 249000.0, 251000.0], "9/14 이전은 그대로, 이후는 brk/yf 로"
+    assert out.attrs.get('regular_close_dates') == 2
+    assert list(out['high']) == [259500.0, 248500.0, 250500.0], "고가·저가·거래량은 손대지 않는다"
+
+
+def test_regular_closes_keep_portal_value_when_unknown(monkeypatch):
+    import api
+    from api import toss as _t
+    _reset_krx_store({})
+    monkeypatch.setattr(_t, "_toss_yf_regular_closes", lambda code, a, b: {})
+    monkeypatch.setattr(api, "_nxt_quote_phase", lambda: "offhours")
+    df = _bars([("20260914", 248500.0)])
+    out = api._toss_apply_regular_closes("005930", df)
+    assert list(out['close']) == [248500.0], "모르면 추측해 덮지 않는다"
+
+
+def test_regular_closes_do_not_ask_yf_for_today_during_session(monkeypatch):
+    """정규장 중·휴게 전의 오늘 봉은 아직 정규장 종가가 없는 게 정상 — yfinance 를 두드리지 않는다."""
+    import api
+    from api import toss as _t
+    import datetime as _d
+    _reset_krx_store({})
+    calls = []
+    monkeypatch.setattr(_t, "_toss_yf_regular_closes", lambda code, a, b: calls.append((a, b)) or {})
+    monkeypatch.setattr(api, "_nxt_quote_phase", lambda: "skip")
+    today = _d.datetime.now().strftime('%Y%m%d')
+    api._toss_apply_regular_closes("005930", _bars([(today, 250000.0)]))
+    assert calls == []
+
+
+def test_break_capture_stores_brk_once(monkeypatch):
+    import api
+    from api import toss as _t
+    _reset_krx_store({})
+    config.session.is_toss = True
+    try:
+        monkeypatch.setattr(api, "domestic_break_window", lambda: True)
+        api._toss_capture_break_close("005930", 249000.0)
+        today = _t.datetime.now().strftime('%Y%m%d')
+        assert api._toss_krx_close_get("005930", today, trusted_only=True) == 249000.0
+        api._toss_capture_break_close("005930", 248000.0)      # 같은 날 두 번째는 무시
+        assert api._toss_krx_close_get("005930", today) == 249000.0
+        monkeypatch.setattr(api, "domestic_break_window", lambda: False)
+        _reset_krx_store({})
+        api._toss_capture_break_close("005930", 249000.0)
+        assert api._toss_krx_close_get("005930", today) is None, "휴게 밖에서는 캡처하지 않는다"
+    finally:
+        config.session.is_toss = False

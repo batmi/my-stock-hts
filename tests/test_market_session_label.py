@@ -303,31 +303,15 @@ def test_print_table_passes_etf_flag_to_session_tag(title, is_overseas, is_etf, 
 
 
 # ==========================================================
-# 토스 모드 — 일봉이 KRX 공식(애프터 포함)이라는 안내 꼬리
+# 토스 모드 — 라벨은 한투 모드와 같다(포털 일봉 종가를 정규장 종가로 바꿔 쓰므로, 2026-09-15)
 # ==========================================================
 
-def _toss(flag):
+def test_toss_label_matches_kis_mode():
     import config
-    return patch.object(config.session, 'is_toss', flag, create=True)
-
-
-@pytest.mark.parametrize("hh, mm, fixed, expect", [
-    (16, 30, True, "KRX 애프터마켓 · 일봉 애프터 포함"),
-    # 야간: 설정 ON 이어도 토스의 고정값은 pykrx 마지막 봉(애프터 포함)이라 '정규장 종가'가 아니다
-    (22, 0, True, "장 마감 · KRX 종가·일봉 애프터 포함"),
-    (22, 0, False, "장 마감 · KRX 종가·일봉 애프터 포함"),
-])
-def test_toss_label_flags_after_market_bars(hh, mm, fixed, expect):
-    """[실측 2026-09-14] pykrx 일봉은 애프터 체결을 포함(248,500) — KIS(249,500)와 다르다."""
-    a, b = _freeze_kr(datetime(2026, 9, 14, hh, mm))
-    with a, b, _toss(True), patch.object(api, 'display_price_krx_fixed', lambda _=False: fixed):
-        text, _ = api.market_session_label(False)
-    assert text == expect
-
-
-def test_toss_label_note_skips_etf_and_kis_mode():
     a, b = _freeze_kr(datetime(2026, 9, 14, 22, 0))
-    with a, b, _toss(True), patch.object(api, 'display_price_krx_fixed', lambda _=False: True):
-        assert "애프터 포함" not in api.market_session_label(False, is_domestic_etf=True)[0], "ETF 는 애프터 체결이 없어 봉이 같다"
-    with a, b, _toss(False), patch.object(api, 'display_price_krx_fixed', lambda _=False: True):
+    with a, b, patch.object(config.session, 'is_toss', True, create=True), \
+            patch.object(api, 'display_price_krx_fixed', lambda _=False: True):
         assert api.market_session_label(False)[0] == "장 마감 · KRX 정규장 종가"
+    a, b = _freeze_kr(datetime(2026, 9, 14, 16, 30))
+    with a, b, patch.object(config.session, 'is_toss', True, create=True):
+        assert api.market_session_label(False)[0] == "KRX 애프터마켓"

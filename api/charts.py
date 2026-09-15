@@ -441,6 +441,61 @@ def _get_weekly_chart_data(code, is_overseas):
         return _fetch_kis_weekly_domestic(code)
     return _fetch_kis_weekly_overseas(code)
 
+_KIS_REGULAR_CLOSE_CACHE = {}       # {(code, YYYYMMDD): close} — 하루 한 번이면 충분한 값
+
+
+def kis_regular_close(code, date_str):
+    """KIS 일별분봉(FHKST03010230)의 15:30 봉 종가 = 그날 KRX 정규장 종가(종가 단일가). 모르면 0.0.
+
+    [실측 2026-09-14~15 삼성전자] 정규장 종가 단일가는 249,000(15:30 분봉 시=고=저=종, 1,199,772주).
+     그런데 KIS 일봉·일별시세·현재가의 종가는 16:00 부터 새벽 배치 전까지 **애프터마켓 최종가**
+     (248,500)를 보였고, 다음날 07:13 에는 249,000 으로 정정돼 있었다(기준가 stck_sdpr 도 249,000).
+     즉 KRX 공식 종가는 정규장 종가가 맞고, 저녁의 KIS 일봉은 임시값이다. 그 시간대에 받은 봉을
+     캐시에 굳히면 지표·화면이 밤새 틀린다(어제 화면의 249,500 은 16:1x 애프터 체결가였다).
+     정규장 종가를 일봉 필드로 주는 KIS API 는 없고, 15:30 분봉이 유일한 출처다(종목·일자당 1콜).
+    """
+    key = (code, date_str)
+    if key in _KIS_REGULAR_CLOSE_CACHE:
+        return _KIS_REGULAR_CLOSE_CACHE[key]
+    try:
+        params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code, "FID_ETC_CLS_CODE": "",
+                  "FID_INPUT_DATE_1": date_str, "FID_INPUT_HOUR_1": "153100",
+                  "FID_PW_DATA_INCU_YN": "N", "FID_FAKE_TICK_INCU_YN": "N"}
+        data = _api().call_api("/uapi/domestic-stock/v1/quotations/inquire-time-dailychartprice",
+                               "domestic", "quotations", "time_dailychart", params=params,
+                               tr_id="FHKST03010230", timeout=3, retries=0)
+        rows = data.get('output2') or [] if data.get('rt_cd') == '0' else []
+        close = 0.0
+        for r in rows:
+            if str(r.get('stck_bsop_date')) != date_str:
+                continue
+            hh = str(r.get('stck_cntg_hour') or '')
+            if hh > "153000":
+                continue                      # 애프터·휴게 봉이 섞여 와도 정규장 밖은 버린다
+            close = _api().safe_float(r.get('stck_prpr'), default=0.0)
+            if hh != "153000":
+                logger.debug(f"[Chart] {code} {date_str} 15:30 봉이 없어 마지막 정규장 봉({hh})으로 대신합니다")
+            break
+        if close > 0:
+            _KIS_REGULAR_CLOSE_CACHE[key] = close
+        return close
+    except Exception as e:      # noqa: BLE001 - 보정 실패는 종전 값(임시 종가) 유지
+        logger.debug(f"[Chart] {code} {date_str} 정규장 종가 조회 실패: {e}")
+        return 0.0
+
+
+def _kis_daily_close_is_provisional():
+    """지금 받은 KIS 일봉의 '오늘' 봉 종가가 임시값(애프터 최종가)인 시간대인가.
+
+    16:00~새벽 배치 전(같은 달력일의 krx_after·offhours). 배치가 끝난 다음날 새벽에는 봉 날짜가
+    어제라 여기 걸리지 않는다. 15:30~16:00 휴게는 애프터 체결이 없어 그대로 정규장 종가다.
+    """
+    try:
+        return _api()._nxt_quote_phase() in ('krx_after', 'offhours') and datetime.now().strftime("%H%M") >= "1600"
+    except Exception:      # noqa: BLE001
+        return False
+
+
 def get_chart_data(code, is_overseas=False, period_type='daily', realtime=True):
     """
     기술적 분석을 위한 차트 데이터를 조회합니다.
@@ -586,6 +641,17 @@ def get_chart_data(code, is_overseas=False, period_type='daily', realtime=True):
             out = df.sort_values('date', ascending=True).reset_index(drop=True).tail(250)
             if fetch_failed:
                 out.attrs['partial'] = True     # 캐시에 굳히지 않는다(_get_cached_chart)
+            #  [2026-09-15] 16:00~새벽 배치 사이의 KIS '오늘' 봉 종가는 애프터 최종가(임시값)다.
+            #   KRX 공식 종가(정규장 15:30 단일가)로 되돌린다 — kis_regular_close 독스트링 실측 참조.
+            #   고가·저가·거래량은 KIS 정정 뒤에도 애프터 포함이라 손대지 않는다(공식 봉이 그렇다).
+            if len(out) and _kis_daily_close_is_provisional():
+                last_date = str(out.iloc[-1]['date'])
+                if last_date == datetime.now().strftime("%Y%m%d"):
+                    reg = kis_regular_close(code, last_date)
+                    if reg > 0 and reg != float(out.iloc[-1]['close']):
+                        logger.debug(f"[Chart] {code} 오늘 봉 종가 {out.iloc[-1]['close']:,.0f}(애프터 임시) → "
+                                     f"정규장 종가 {reg:,.0f}")
+                        out.loc[out.index[-1], 'close'] = reg
             return out
 
         return _api()._get_cached_chart(code, is_overseas=False, is_index=False, fetch_func=_fetch_domestic_daily, realtime_overlay=realtime)

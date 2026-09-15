@@ -323,7 +323,7 @@ def market_session_label(is_overseas=False, is_domestic_etf=False):
         #  ETF/ETN 은 애프터마켓 미지원(일반 주권만) → 이 표의 값은 정규장 종가에서 멈춰 있다.
         if is_domestic_etf:
             return ("KRX 애프터마켓 · ETF 미거래(KRX 종가)", "dim")
-        return ("KRX 애프터마켓" + _toss_after_bar_note(), "yellow")
+        return ("KRX 애프터마켓", "yellow")
     if phase == 'nxt_after':
         # KRX 휴게 15:30~16:00 — 어느 시장도 열려 있지 않다. 값은 정규장 종가에 멈춰 있다.
         return ("KRX 휴게(15:30~16:00) · 정규장 종가", "dim")
@@ -340,28 +340,9 @@ def market_session_label(is_overseas=False, is_domestic_etf=False):
     except Exception:      # noqa: BLE001
         basis = "최종가"
     head = "장 마감" if phase == 'closed' else "휴장(주말·공휴일)"
-    if not is_domestic_etf and _toss_after_bar_note():
-        #  토스 모드는 설정과 무관하게 야간 표시가가 애프터 최종가다 — 설정 ON 이면 차트 마지막 봉
-        #  (pykrx, 애프터 포함)의 종가를, OFF 면 토스 lastPrice 를 쓰는데 둘 다 애프터 최종가다.
-        #  "KRX 정규장 종가"라고 적으면 거짓이 된다(실측 2026-09-14 삼성전자 248,500 = 애프터 최종가).
-        return (f"{head} · KRX 종가·일봉 애프터 포함", "dim")
+    #  [2026-09-15] 토스 모드도 포털 일봉 종가(애프터 최종가)를 기억해 둔 정규장 종가로 바꿔 쓰므로
+    #   (api.toss._toss_apply_regular_closes) 라벨은 한투 모드와 같다.
     return (f"{head} · {basis}", "dim")
-
-
-def _toss_after_bar_note():
-    """토스 모드 라벨 꼬리 ' · 일봉 애프터 포함'. 한투 모드·판정 실패는 빈 문자열.
-
-    [실측 2026-09-14 20:10] KRX 공식 일봉(pykrx/FDR·네이버)은 애프터마켓 체결을 종가·거래량에
-     넣는다(삼성전자 248,500/17.76M) — KIS 일봉은 정규장만(249,500/16.60M). 토스 모드 국내
-     일봉은 pykrx 라서 지표(EMA·RSI·CCI·52W%·수급)가 한투 모드와 갈리고, 16~20시엔 오늘 봉이
-     계속 움직인다. 운용자 결정: 토스 모드에 KIS API 를 쓰지 않고 **안내로 해결**한다.
-     USE_KRX_CLOSE_AFTER_HOURS 는 표시가만 정하므로 이 꼬리는 설정과 무관하게 붙는다.
-     ETF/ETN 은 애프터 체결이 없어 봉이 같으므로 붙이지 않는다.
-    """
-    try:
-        return " · 일봉 애프터 포함" if getattr(config.session, 'is_toss', False) else ""
-    except Exception:      # noqa: BLE001
-        return ""
 
 
 def market_session_tag(is_overseas=False, is_domestic_etf=False):
