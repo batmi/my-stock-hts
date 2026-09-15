@@ -25,7 +25,7 @@ VIVID_256 = {
     2: 71,    # #5faf5f  green      (40 → 71 → 108 → 71)
     3: 179,   # #d7af5f  yellow     (220 → 179 → 180 → 179)
     4: 68,    # #5f87d7  blue       (was 69  #5f87ff)
-    5: 170,   # #d75fd7  magenta    (was 171 #d75fff)
+    5: 133,   # #af5faf  magenta    (171 → 170 → 133, 아주 약간만)
     6: 74,    # #5fafd7  cyan       (was 45  #00d7ff)
     7: 250,   # #bcbcbc  white      ≈ CONSOLE_TEXT_COLOR(#c0c0c0)
     8: 244,   # #808080  grey
@@ -33,7 +33,7 @@ VIVID_256 = {
     10: 114,  # #87d787  bright green   (83 → 114 → 151 → 114)
     11: 186,  # #d7d787  bright yellow  (227 → 186 → 187 → 186)
     12: 111,  # #87afff  bright blue    (was 75  #5fafff)
-    13: 177,  # #d787ff  bright magenta (was 207 #ff5fff)
+    13: 176,  # #d787d7  bright magenta (207 → 177 → 176)
     14: 116,  # #87d7d7  bright cyan    (was 87  #5fffff)
     15: 231,  # #ffffff  bright white
 }
