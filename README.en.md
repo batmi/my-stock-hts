@@ -265,6 +265,7 @@ chmod +x run.sh                    # first time only
   - To serve charts on their own, run `python tools/web_server.py`.
   - The server **stays up while charts are being rendered** (it is a thread in the same process). It used to be stopped and restarted around rendering, which only made sense while it was a separate process being reclaimed for memory.
 - **Raspberry Pi memory (`CHART_DPI`)** — the memory spike during rendering grows with the square of the DPI. Measured (16x9 inches, RSS delta): `100`->+9MB, `150`->+13MB, `200`->+22MB, `300`->+53MB. matplotlib itself already holds ~145MB, so on a 1GB Pi a 300 DPI spike invites the Linux OOM killer (on 2026-08-26 it did kill the web server process for exactly this reason). On a Pi, prefer `CHART_DPI=150` — a quarter of the spike, and 2400x1350 is plenty readable. The default is unchanged at `300`.
+- **Theme-independent colors** — the 16 named colors (red, blue, …) are emitted as fixed 256-color codes (`core/vivid_colors.py`), so a pastel terminal theme in cmux/iTerm2 etc. no longer washes them out. Set `HTS_VIVID_COLORS=0` to use the terminal theme's colors instead (automatically off on 16-color-only terminals).
 - Use `run.bat` on Windows; for always-on Linux hosts see `tools/stock-hts` (tmux session setup).
 
 ---

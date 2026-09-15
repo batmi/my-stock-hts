@@ -73,6 +73,11 @@ CONSOLE_THEME = Theme({
 
 console = Console(theme=CONSOLE_THEME, style=CONSOLE_TEXT_COLOR)
 
+# [터미널 호환 2] 이름색(red·blue…) 16종을 256색으로 고정해 터미널 테마가 색을 바꾸지 못하게 한다.
+#  cmux 파스텔 테마에서 빨강·파랑이 흐려지던 것. 끄려면 HTS_VIVID_COLORS=0. (core/vivid_colors.py)
+from core import vivid_colors as _vivid   # noqa: E402
+_vivid.install()
+
 class GlobalSettings(BaseModel):
     """동적으로 변경 가능한 전역 설정값들을 관리하는 Pydantic 모델"""
 
