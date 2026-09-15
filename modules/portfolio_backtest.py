@@ -100,7 +100,10 @@ PRICE_EXIT_REASONS = ("손절", "ATR손절", "본전청산", "이익보호", "�
 #   되살아난다. 상장폐지 종목을 섞어 재는 감사(tools/audit_universe.py 축 B)에서는 이것이
 #   **실제 손실**이므로 승률·PF 분모에 들어가야 한다.
 EXIT_REASONS = ("ATR손절", "손절", "본전청산", "이익보호", "시간청산",
-                "트레일링스탑", "점수하락", "교체", "데이터종료")
+                "트레일링스탑", "점수하락", "교체", "데이터종료",
+                # [실험 경로 · bear_swing] 약세장 스윙 프로필 전용 사유. 실매매 analyze_sell 의
+                #  익절/반익절/수익보존 체인을 그대로 옮긴 것이다(기본 OFF, 켠 실행에서만 나온다).
+                "익절", "반익절", "수익보존")
 
 
 def decide_sell(*, price, high, avg, sl_rate, atr_applied, is_bep, holding_days,
@@ -165,6 +168,9 @@ def decide_sell(*, price, high, avg, sl_rate, atr_applied, is_bep, holding_days,
             # 시간청산 유예: 매수 계열 상태 유지 + 상방 모멘텀(최근 5일 고점 ≥ 10일 고점)
             grace = state in ("매수", "강매수", "역매수", "상승", "대기") and \
                 roll_high_5 >= roll_high_10
+            # [실험 · bear_swing] 스윙 프로필의 시간청산은 '정산'이라 유예가 없다.
+            if c.get("time_stop_strict", False):
+                grace = False
             if not grace:
                 sell, reason = True, "시간청산"
 
@@ -221,6 +227,9 @@ def build_sell_cfg(sell_cfg=None):
         "use_time_stop": s.get("TIME_STOP_USE", True) and time_stop_days > 0,
         "time_stop_days": time_stop_days,
         "time_stop_min": s.get("TIME_STOP_MIN_PROFIT_RATE", 0.0),
+        # [실험 · bear_swing] 정산형 시간청산(유예 없음). 실매매에는 이 스위치가 없으므로
+        #  항상 False — run_portfolio 가 스윙 프로필일 때만 True 로 덮는다.
+        "time_stop_strict": False,
         "ts_act": s.get("TRAILING_STOP_ACTIVATION_RATE", 10.0),
         "ts_callback": s.get("TRAILING_STOP_CALLBACK_RATE", 5.0),
         "ts_atr_mult": s.get("TRAILING_ATR_MULTIPLIER", 3.5),
@@ -484,7 +493,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                   pyr_next_open=False, sell_structure_ma=None,
                   intraday_status=None, intraday_entry=False, entry_bar_times=None,
                   buy_score_fn=None, daily_loss_limit=None, invest_ratio_fn=None,
-                  reentry_block=False, heat_basis="cost"):
+                  reentry_block=False, heat_basis="cost", bear_swing=None):
     """N슬롯 포트폴리오 시뮬레이션.
 
     Args:
@@ -526,6 +535,21 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             보유 점수는 sell_check(매도 상태면 0)를 쓴다 — 매도 판정과 같은 잣대다.
             (tools/audit_slot_rotation.py)
 
+        bear_swing: **실험용 경로**(tools/audit_bear_swing.py). None(기본)이면 종전과 같다.
+            dict 를 주면 시장 필터 **차단일에도 진입을 허용**하고, 그 포지션에 추세추종 대신
+            '짧은 스윙' 청산 프로필(고정 익절·반익절·고정 손절·정산형 시간청산)을 건다.
+              mode: "entry"(진입일 국면으로 태그, 청산까지 유지) | "daily"(그날 국면을 따라
+                    프로필이 매일 바뀐다 — 강세장 진입분도 약세 전환 시 익절 프로필로 넘어간다)
+              tp_rate: 고정 익절(%). 0이면 없음.   half_tp: 반익절(익절률의 절반에서 50%)
+              stop_rate: 고정 손절(%, 음수). None 이면 현행(ATR) 손절 유지
+              time_stop_days: 스윙 시간청산(달력일). 0이면 없음
+              time_stop_any: True 면 손익과 무관하게 기간 만료 시 정산(유예 없음)
+              pyramid: 스윙 포지션 증액 허용 여부(기본 False)
+              slots: 스윙 포지션 동시 보유 상한(None=전체 슬롯 공유)
+              size_mult: 스윙 진입 배분액 배수(기본 1.0)
+              ts_act: TS 발동선을 고정 수익률(%)로(None=현행 breakeven·ATR 연동). 콜백은 현행 그대로
+            익절/반익절/수익보존 체인은 실매매 engine.analyze_sell 과 같은 순서·조건이다.
+            장중 청산 모사·분봉 리플레이·장중 진입 경로에서는 지원하지 않는다(종가 모델 전용).
         reentry_block: 당일 손절/본전청산으로 나간 종목을 **그 손절가 이상**에서 되사지
             않는다(실매매 trader.py의 REENTRY_BLOCK_ABOVE_STOP_PRICE). **실험용 경로**로,
             실매매에만 있고 백테스트에는 없던 게이트를 재현한다(tools/audit_reentry_block.py).
@@ -723,6 +747,38 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     bep_default = sell_cfg.get("BREAK_EVEN_PROFIT_RATE", 5.0)
     use_bep = sell_cfg.get("USE_BREAK_EVEN_STOP", False)
 
+    # [실험 · bear_swing] 약세장 스윙 프로필. 종가 모델 전용이다.
+    swing = None
+    if bear_swing:
+        if exit_intraday or intraday_bars or intraday_entry:
+            raise ValueError("bear_swing 은 종가 모델 전용이다(장중 경로 미지원)")
+        swing = {
+            "mode": str(bear_swing.get("mode", "entry")),
+            "tp_rate": float(bear_swing.get("tp_rate", 0.0) or 0.0),
+            "half_tp": bool(bear_swing.get("half_tp", False)),
+            "stop_rate": bear_swing.get("stop_rate"),
+            "time_stop_days": int(bear_swing.get("time_stop_days", 0) or 0),
+            "time_stop_any": bool(bear_swing.get("time_stop_any", True)),
+            "pyramid": bool(bear_swing.get("pyramid", False)),
+            "slots": bear_swing.get("slots"),
+            "size_mult": float(bear_swing.get("size_mult", 1.0) or 1.0),
+            # TS 발동선: None 이면 현행(breakeven=ATR 연동), 값을 주면 그 고정 수익률(%)에서 무장
+            "ts_act": bear_swing.get("ts_act"),
+        }
+        if swing["mode"] not in ("entry", "daily"):
+            raise ValueError(f"bear_swing.mode 는 entry|daily 여야 한다: {swing['mode']}")
+
+    def _bear_day(code, day):
+        return bool(market_filter_dates and day in market_filter_dates.get(code, ()))
+
+    def _swing_active(pos, code, day):
+        """이 포지션이 오늘 스윙 청산 프로필을 따르는가."""
+        if swing is None:
+            return False
+        if swing["mode"] == "entry":
+            return bool(pos.get("swing"))
+        return _bear_day(code, day)
+
     buy_score = thr["BUY_SCORE"]
     buy_rsi = thr["BUY_RSI_MAX"]
     super_use = thr.get("SUPER_MOMENTUM_USE", True)
@@ -851,21 +907,30 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     stop_px_today = {}          # {code: 그날 마지막 손절 체결가} — reentry_block 전용
     reentry_blocked = 0         # 게이트가 실제로 막은 진입 횟수(빈도부터 센다)
 
-    def _do_sell(code, pos, day, sell_price, reason, holding_days, max_profit, is_bep):
-        """청산 1건 집행. 종가 경로와 장중 경로가 같은 회계를 쓰도록 한 군데로 모은다."""
+    def _do_sell(code, pos, day, sell_price, reason, holding_days, max_profit, is_bep,
+                 ratio=1.0):
+        """청산 1건 집행. 종가 경로와 장중 경로가 같은 회계를 쓰도록 한 군데로 모은다.
+
+        ratio < 1 이면 부분 매도(반익절)다 — 수량·lot 을 비례로 줄이고 포지션은 남긴다.
+        실매매(반익절 sell_ratio=0.5)와 같이 정수 주 단위로 내림하되 최소 1주는 판다.
+        """
         nonlocal cash
         if reentry_block and str(reason).startswith(("손절", "ATR손절", "본전청산")):
             # 같은 날 여러 번이면 마지막 값이 남는다 — 실매매 _collect_stop_exit_prices와 같다.
             stop_px_today[code] = sell_price
-        amount = pos["qty"] * sell_price
+        qty = pos["qty"] if ratio >= 1.0 else max(1, int(pos["qty"] * ratio))
+        partial = qty < pos["qty"]
+        amount = qty * sell_price
         amount -= trading_cost.sell_fee(amount)
         # 보고 손익은 왕복(매수+매도) 비용을 모두 뺀다. 현금(cash)에는 매수 수수료가
         # 진입 시점에 이미 빠져 있으므로 이 값을 잔고에 더하지 않는다.
-        profit, _ = trading_cost.net_realized_profit(pos["avg"], sell_price, pos["qty"])
+        profit, _ = trading_cost.net_realized_profit(pos["avg"], sell_price, qty)
         cash += amount
         trades.append({
             "code": code, "date": day, "reason": reason, "profit_amt": profit,
-            "profit": profit / (pos["qty"] * pos["avg"]) * 100, "days": holding_days,
+            "profit": profit / (qty * pos["avg"]) * 100, "days": holding_days,
+            # [실험 · bear_swing] 진입 당시 국면 태그(스윙 기여분을 따로 집계하기 위함).
+            "swing": bool(pos.get("swing")),
             # [진단] 슬롯 점유·수익 반납을 재려면 실현손익만으로는 부족하다.
             #  mfe = 보유 중 최대 평가수익률, armed = TS 무장 경험, bep = 청산 시
             #  손절선이 본전선까지 올라와 있었는가.
@@ -874,8 +939,16 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             #  그날 봉 안의 실현 가능한 가격인지 사후에 검증할 수 없었다**(장중 모드는
             #  체결가 규약이 경로마다 다르다: 선·시가·봉 종가·익일 시가).
             #  tests/test_intraday_replay.py 가 이 값으로 불변식을 건다.
-            "fill": sell_price, "qty": pos["qty"],
+            "fill": sell_price, "qty": qty,
         })
+        if partial:
+            # lot 을 비례로 줄인다(손절률 가중평균은 그대로 유지된다).
+            keep = pos["qty"] - qty
+            f = keep / pos["qty"]
+            pos["qty"] = keep
+            for lot in pos["lots"]:
+                lot["qty"] = lot["qty"] * f
+            return
         del positions[code]
 
     def _close_on_data_end(code, pos):
@@ -1203,7 +1276,44 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             if max_profit >= ts_act_eff:
                 pos["ts_armed_ever"] = True
 
-            ts_breakeven_eff = ts_breakeven and ts_act_fn is None
+            # ---------- [실험 · bear_swing] 스윙 청산 프로필 ----------
+            #  실매매 analyze_sell 의 체인 순서 그대로: 반익절 → 익절 → 수익보존 → (손절 →
+            #  시간청산 → TS → 점수하락 은 decide_sell 에 프로필 값을 덮어 위임).
+            sw_time_stop = use_time_stop
+            sw_time_days = time_stop_days
+            sw_time_min = time_stop_min
+            sw_strict = False
+            sw_ts_fixed = False
+            if _swing_active(pos, code, day):
+                tp = swing["tp_rate"]
+                half = swing["half_tp"]
+                half_sold = bool(pos.get("half_sold"))
+                sw_reason, sw_ratio = "", 1.0
+                if tp > 0 and half and not half_sold and loss_rate >= tp / 2.0:
+                    sw_reason, sw_ratio = "반익절", 0.5
+                elif tp > 0 and loss_rate >= tp and not (half and half_sold):
+                    sw_reason = "익절"
+                elif (tp > 0 and half and half_sold and max_profit >= tp
+                      and loss_rate <= max(tp - 3.0, 0.5)):
+                    sw_reason = "수익보존"
+                if sw_reason:
+                    sell_price = utils.adjust_to_tick(price * (1 - slippage), False) or price
+                    _do_sell(code, pos, day, sell_price, sw_reason, holding_days,
+                             max_profit, is_bep, ratio=sw_ratio)
+                    if sw_ratio < 1.0:
+                        pos["half_sold"] = True
+                    continue
+                if swing["stop_rate"] is not None:
+                    sl_rate, atr_applied, is_bep = float(swing["stop_rate"]), False, False
+                sw_time_stop = swing["time_stop_days"] > 0
+                sw_time_days = swing["time_stop_days"]
+                sw_strict = swing["time_stop_any"]
+                sw_time_min = float("inf") if swing["time_stop_any"] else time_stop_min
+                if swing["ts_act"] is not None:
+                    ts_act_eff = float(swing["ts_act"])
+                    sw_ts_fixed = True
+
+            ts_breakeven_eff = ts_breakeven and ts_act_fn is None and not sw_ts_fixed
             if config.SELL_STRATEGY.get("TS_ARM_LATCH", False):
                 if pos.get("ts_armed") or max_profit >= ts_act_eff:
                     pos["ts_armed"] = True
@@ -1218,9 +1328,9 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 state=state, state_reason=state_reason, raw_score=raw_score,
                 sell_check=sell_check, ema60=row.get(sell_ma_col), atr=row.get("ATR", 0),
                 roll_high_5=row.get("roll_high_5", 0), roll_high_10=row.get("roll_high_10", 0),
-                cfg={"use_atr": use_atr, "use_time_stop": use_time_stop,
-                     "time_stop_days": time_stop_days, "ts_act": ts_act_eff,
-                     "time_stop_min": time_stop_min,
+                cfg={"use_atr": use_atr, "use_time_stop": sw_time_stop,
+                     "time_stop_days": sw_time_days, "ts_act": ts_act_eff,
+                     "time_stop_min": sw_time_min, "time_stop_strict": sw_strict,
                      "ts_callback": ts_callback, "ts_atr_mult": ts_atr_mult,
                      "ts_breakeven": ts_breakeven_eff,
                      "sell_score_limit": sell_score_limit,
@@ -1315,6 +1425,8 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                     continue  # 청산 예약된 포지션에는 얹지 않는다
                 if pyr_require_healthy and market_filter_dates and day in market_filter_dates.get(code, ()):
                     continue
+                if swing is not None and not swing["pyramid"] and _swing_active(pos, code, day):
+                    continue    # 스윙 프로필은 짧게 먹고 나오는 자리다 — 증액하지 않는다
                 # [분봉 경로] 봉 순서대로 판정한다. 증액하면 평단이 올라 다음 발동선도 함께
                 #  올라가므로, 하루종일 밀려 올라가는 날에는 같은 날 2·3차가 이어질 수 있다
                 #  — 실매매(_try_pyramid_buy)에 하루 제한이 없어 실제로 일어나는 일이다.
@@ -1436,8 +1548,13 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 is_super = super_use and raw_score >= super_score and row.get("w52_pos", 0) >= super_w52
                 if row["RSI"] >= (super_rsi if is_super else buy_rsi):
                     continue
-                if market_filter_dates and day in market_filter_dates.get(code, ()):
-                    continue
+                if _bear_day(code, day):
+                    if swing is None:
+                        continue
+                    # [실험 · bear_swing] 차단일에도 진입한다. 스윙 슬롯 상한이 있으면 그 안에서만.
+                    if swing["slots"] is not None and \
+                            sum(1 for p in positions.values() if p.get("swing")) >= int(swing["slots"]):
+                        continue
                 # [추세품질 상한] 종목 축의 모멘텀 크래시 방어(실매매 tq_cap_skip과 같은 판정).
                 if _tq_cap > 0:
                     _q = _tq.get(code, {}).get(day)
@@ -1557,6 +1674,15 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
                 sl_rate = (sl_rate_fn(row, buy_price, atr_mult) if sl_rate_fn is not None
                            else _atr_stop_rate(row.get("ATR", 0), buy_price, atr_mult, day))
             _ratio = invest_ratio if invest_ratio_fn is None else invest_ratio_fn(day, code)
+            is_swing_entry = swing is not None and _bear_day(code, day)
+            if is_swing_entry:
+                # 후보 조립 때도 세지만, 같은 날 여러 후보를 연달아 사므로 집행 직전에 다시 센다.
+                if swing["slots"] is not None and \
+                        sum(1 for p in positions.values() if p.get("swing")) >= int(swing["slots"]):
+                    return False
+                _ratio = _ratio * swing["size_mult"]
+                if swing["stop_rate"] is not None:
+                    sl_rate = float(swing["stop_rate"])    # 사이징도 그 손절폭으로
             amount = allocate_amount(_equity(day), cash, _ratio * day_scale, sl_rate,
                                      row.get("ATR", 0), buy_price)
             if heat_budget is not None and sl_rate:
@@ -1595,7 +1721,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             positions[code] = {"qty": qty, "avg": buy_price,
                                "lots": [{"qty": qty, "sl": sl_rate}],
                                "high": row.get("high", buy_price), "buy_dt": parsed[day],
-                               "pyr": 0}
+                               "pyr": 0, "swing": is_swing_entry}
             # 진입 당일에도 마크를 세워 둔다 — 그 봉이 그 종목의 마지막 봉이면
             #  다음 날 마크 갱신 루프가 돌 기회가 없다.
             mark_px[code] = _mark(row.get("close")) or buy_price
