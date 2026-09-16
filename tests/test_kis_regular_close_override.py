@@ -40,6 +40,36 @@ def test_regular_close_skips_after_market_rows_and_unknown_is_zero():
         assert charts.kis_regular_close('005930', '20260914') == 0.0
 
 
+def test_missing_1530_bar_is_not_replaced_by_last_regular_bar():
+    """[실측 2026-09-16 15:38] 15:30 봉은 늦게 실린다 — 15:19 봉(253,250)을 종가로 쓰면 틀린다(단일가 253,500).
+    과거 날짜는 0(모름), 오늘이면 시간대별체결의 15:30:xx 체결로 메운다."""
+    from datetime import datetime as _dt
+    charts._KIS_REGULAR_CLOSE_CACHE.clear()
+    minute_rows = {'rt_cd': '0', 'output2': [
+        {'stck_bsop_date': '20260916', 'stck_cntg_hour': '151900', 'stck_prpr': '253250'},
+    ]}
+    with patch.object(api, 'call_api', return_value=minute_rows):
+        assert charts.kis_regular_close('005930', '20260912') == 0.0, "과거 날짜에 15:30 봉이 없으면 모른다"
+    charts._KIS_REGULAR_CLOSE_CACHE.clear()
+    today = _dt.now().strftime('%Y%m%d')
+    def fake_call(url, *a, **k):
+        if 'itemconclusion' in url:
+            return {'rt_cd': '0', 'output2': [
+                {'stck_cntg_hour': '153028', 'stck_prpr': '253500'},
+                {'stck_cntg_hour': '151959', 'stck_prpr': '253250'},
+            ]}
+        return {'rt_cd': '0', 'output2': [{'stck_bsop_date': today, 'stck_cntg_hour': '151900', 'stck_prpr': '253250'}]}
+    with patch.object(api, 'call_api', side_effect=fake_call):
+        assert charts.kis_regular_close('005930', today) == 253500.0
+    charts._KIS_REGULAR_CLOSE_CACHE.clear()
+    def no_auction(url, *a, **k):
+        if 'itemconclusion' in url:
+            return {'rt_cd': '0', 'output2': [{'stck_cntg_hour': '151959', 'stck_prpr': '253250'}]}
+        return {'rt_cd': '0', 'output2': [{'stck_bsop_date': today, 'stck_cntg_hour': '151900', 'stck_prpr': '253250'}]}
+    with patch.object(api, 'call_api', side_effect=no_auction):
+        assert charts.kis_regular_close('005930', today) == 0.0, "종가 단일가 체결이 아직 없으면 모른다"
+
+
 def test_provisional_window_is_after_1600_same_day():
     with patch.object(api, '_nxt_quote_phase', lambda: 'krx_after'), \
             patch.object(charts, 'datetime') as dt:

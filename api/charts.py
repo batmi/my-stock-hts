@@ -482,15 +482,45 @@ def kis_regular_close(code, date_str):
             hh = str(r.get('stck_cntg_hour') or '')
             if hh > "153000":
                 continue                      # 애프터·휴게 봉이 섞여 와도 정규장 밖은 버린다
-            close = _api().safe_float(r.get('stck_prpr'), default=0.0)
-            if hh != "153000":
-                logger.debug(f"[Chart] {code} {date_str} 15:30 봉이 없어 마지막 정규장 봉({hh})으로 대신합니다")
+            if hh == "153000":
+                close = _api().safe_float(r.get('stck_prpr'), default=0.0)
+            #  [2026-09-16 실측] 15:30 봉은 늦게 실린다(15:38 조회에 15:19 봉이 마지막, 20시엔 있음).
+            #   없다고 15:19 봉(253,250)을 종가로 쓰면 틀린다 — 종가 단일가는 253,500 이었다.
             break
+        if close <= 0 and date_str == datetime.now().strftime("%Y%m%d"):
+            close = _kis_closing_auction_print(code)
         if close > 0:
             _KIS_REGULAR_CLOSE_CACHE[key] = close
+        else:
+            logger.debug(f"[Chart] {code} {date_str} 정규장 종가(15:30 봉)를 아직 얻지 못했습니다")
         return close
     except Exception as e:      # noqa: BLE001 - 보정 실패는 종전 값(임시 종가) 유지
         logger.debug(f"[Chart] {code} {date_str} 정규장 종가 조회 실패: {e}")
+        return 0.0
+
+
+def _kis_closing_auction_print(code):
+    """오늘의 종가 단일가 체결(15:30:xx)을 시간대별체결(FHPST01060000)에서 읽는다. 없으면 0.0.
+
+    분봉 API 의 15:30 봉이 실리기 전(휴게~저녁 초)에도 이 TR 은 15:30:28 체결을 바로 준다
+    (실측 2026-09-16 15:38: 253,500 = 휴게 현재가 = 토스 휴게 캡처). 오늘 것만 조회된다.
+    """
+    try:
+        params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code, "FID_INPUT_HOUR_1": "153100"}
+        data = _api().call_api("/uapi/domestic-stock/v1/quotations/inquire-time-itemconclusion",
+                               "domestic", "quotations", "time_conclusion", params=params,
+                               tr_id="FHPST01060000", timeout=3, retries=0)
+        if data.get('rt_cd') != '0':
+            return 0.0
+        for r in data.get('output2') or []:
+            hh = str(r.get('stck_cntg_hour') or '')
+            if "153000" <= hh <= "153059":
+                return _api().safe_float(r.get('stck_prpr'), default=0.0)
+            if hh < "153000":
+                break                          # 내림차순 — 15:30 체결이 아직 없다
+        return 0.0
+    except Exception as e:      # noqa: BLE001
+        logger.debug(f"[Chart] {code} 종가 단일가 체결 조회 실패: {e}")
         return 0.0
 
 
