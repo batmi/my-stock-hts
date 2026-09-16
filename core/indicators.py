@@ -990,7 +990,11 @@ def get_trend_lines(df, order=None, period=None):
         if (n - anchor) < 2:
             continue
         slope, up_b, lo_b, spread, move = _trend_fit(hi, lo, cl, anchor, n)
-        if spread > 0 and move / spread >= TREND_MIN_MOVE_RATIO:
+        #  [2026-09-16] 산포폭이 부동소수 잡음(1e-12) 수준이면 '폭 없음'이다. 가격이 사실상
+        #   한 값에 붙어 있는 구간(저유동·가격 고정)은 spread 도 move 도 잡음이라 그 비율이
+        #   우연히 1을 넘어 **완전한 횡보가 채널로 라벨**됐다(실측: 평평한 60봉에 기울기
+        #   4e-14 · 폭 1.8e-12 → '추세'). 잡음은 가격 규모에 비례하므로 상대 기준으로 자른다.
+        if spread > abs(float(np.mean(cl[anchor:]))) * 1e-9 and move / spread >= TREND_MIN_MOVE_RATIO:
             return {'resistance': (slope, up_b, int(anchor)),
                     'support': (slope, lo_b, int(anchor))}
 

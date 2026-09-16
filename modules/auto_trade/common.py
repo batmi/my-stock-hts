@@ -775,14 +775,17 @@ def is_system_market_open():
     """
     if api.is_holiday_today(): return False # 주말 및 공휴일(휴장일) 처리
 
-    current_time = datetime.now().strftime("%H%M")
+    _now = datetime.now()
+    current_time = _now.strftime("%H%M")
     start_time = getattr(config, 'SYSTEM_TRADING_START_TIME', "0900")
     end_time = getattr(config, 'SYSTEM_TRADING_END_TIME', "1530")
 
     if start_time <= current_time <= end_time:
         # KRX 휴게(15:30~16:00, 거래 시장 없음) — 종료 시간을 애프터까지 늘렸을 때만 닿는 구간.
         #  아래 종가 단일가 배제(15:20~15:30)와 이어져 실효 구간은 09:00~15:20 · 16:00~20:00 이다.
-        if "1530" < current_time < "1600": return False
+        #  [2026-09-16] 경계는 api.sessions.KRX_BREAK_WINDOW 하나가 정한다 — 여기 리터럴로 다시
+        #   적으면 정본을 고쳐도 이 자리만 옛 경계로 남는다([[krx-after-market-policy]]).
+        if api.domestic_break_window(_now): return False   # 같은 시각으로 판정한다(경계 1분 어긋남 방지)
         # 단일가(동시호가) 구간 회피. 08:50~09:00은 NXT 프리마켓이 KRX 시가 단일가에 맞춰 쉬는
         # 시간이고(설정을 0800으로 넓힌 경우에만 해당), 15:20~15:30은 KRX 종가 단일가 구간이라
         # 체결가를 예측할 수 없어 진입/청산 판단을 보류한다.

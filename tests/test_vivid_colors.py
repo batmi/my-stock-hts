@@ -29,16 +29,22 @@ def test_background_and_hex_untouched():
     assert "\x1b[38;5;196m" in out          # hex 는 rich 가 256 으로 내리고 우리는 손대지 않는다
 
 
+#  [왜 스타일 문자열이 매번 다른가 · 2026-09-16] rich 는 Style 객체마다 SGR 문자열을 한 번 만들어
+#   붙잡아 둔다(Style._ansi) 그리고 Style.parse 는 같은 문자열에 같은 객체를 돌려준다(lru_cache).
+#   그래서 "[red]" 를 한 번 그리면 그 뒤로는 우리 훅이 **다시 불리지 않는다** — 위 테스트가
+#   먼저 돌면 아래 둘이 옛 결과를 읽어 늘 실패했다(2026-09-15 도입 이후 파일 단위로 항상 빨강).
+#   스위치가 첫 렌더 전에만 유효한 것은 운용에서는 문제가 아니지만(환경변수는 기동 전에 정한다),
+#   가드는 캐시를 안 탄 스타일로 물어야 한다.
 def test_env_switch_restores_palette_codes(monkeypatch):
     monkeypatch.setenv("HTS_VIVID_COLORS", "0")
-    out = _render("[red]r[/]")
-    assert "\x1b[31m" in out
+    out = _render("[red italic]r[/]")
+    assert "\x1b[31m" in out or "\x1b[3;31m" in out, out
 
 
 def test_skips_when_terminal_is_16_color_only():
     with patch.object(vivid_colors, "_terminal_supports_256", lambda: False):
-        out = _render("[red]r[/]")
-    assert "\x1b[31m" in out
+        out = _render("[red underline]r[/]")
+    assert "\x1b[31m" in out or "\x1b[4;31m" in out, out
 
 
 def test_all_16_slots_mapped():

@@ -99,8 +99,9 @@ def main():
     ap.add_argument("--seeds", default="20260915,7,101")
     ap.add_argument("--arms", default=",".join(ARMS))
     args = ap.parse_args()
+    #  경고는 데이터 준비(수 분) 전에 나와야 한다 — parse_args 바로 다음(가드 테스트가 자리를 본다).
+    seed_notice(len(args.seeds.split(",")), example="--seeds 20260915,7,101")
     seeds = [int(x) for x in args.seeds.split(",")]
-    seed_notice(len(seeds), example="--seeds 20260915,7,101")
     arms = [a for a in args.arms.split(",") if a in ARMS]
     slots = args.slots or getattr(config, "SYSTEM_MAX_HOLDINGS", 4)
 

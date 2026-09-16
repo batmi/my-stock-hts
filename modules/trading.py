@@ -1393,6 +1393,9 @@ def modify_order():
                 inherited_sl_rate = 0.0
                 inherited_snapshot = None
                 
+                inherited_buy_price = 0.0
+                inherited_cost = 0.0
+
                 if org_trade:
                     inherited_score = org_trade.get('strategy_score', 0)
                     inherited_sl_rate = org_trade.get('stop_loss_rate', 0.0)
@@ -1400,12 +1403,20 @@ def modify_order():
                     # 기본적으로 기존 수익 정보 상속
                     profit_amt = org_trade.get('profit_amt') or 0
                     profit_rate = org_trade.get('profit_rate') or 0.0
+                    #  [Fix 2026-09-16] 매입가·비용도 상속한다. 정정하면 거래소가 **새 주문번호**를
+                    #   주고, 체결 확인(conclusion)은 그 번호의 접수 행을 원 주문으로 읽는다.
+                    #   그 행에 buy_price 가 없으면 _recalc_realized 가 '매입가 모름'으로 물러나
+                    #   아래 정정가 추정치가 실제 체결가 대신 굳는다 — 2026-09-14에 수동 매도에서
+                    #   막은 것과 같은 구멍이 정정 경로에 그대로 남아 있었다.
+                    inherited_buy_price = api.safe_float(org_trade.get('buy_price'), default=0.0)
+                    inherited_cost = api.safe_float(org_trade.get('cost_amt'), default=0.0)
 
                 db_manager.db.insert_trade(
                     f"{full_action_name}(수동)", pdno, prdt_name, final_qty, price, odno, 
                     org_odno=org_odno, reason=f"사용자 {action_name}", order_status=action_name,
                     profit_amt=profit_amt, profit_rate=profit_rate, score=inherited_score, 
-                    stop_loss_rate=inherited_sl_rate, snapshot=inherited_snapshot
+                    stop_loss_rate=inherited_sl_rate, snapshot=inherited_snapshot,
+                    buy_price=inherited_buy_price, cost_amt=inherited_cost
                 )
 
                 config.console.print(f"[bold green]접수 완료 (번호: {odno})[/]")
@@ -1424,25 +1435,33 @@ def modify_order():
                 # 매도 정정일 경우 새로운 가격으로 예상 손익 재계산 시도
                 if "매도" in full_action_name and action == "1":
                     try:
-                        buy_price = 0
-                        h_list, _ = api.get_domestic_balance(target_cano, target_acnt)
-                        if h_list:
-                            for h in h_list:
-                                if h['pdno'] == pdno:
-                                    buy_price = api.safe_float(h.get('pchs_avg_pric'), default=0.0)
-                                    break
+                        #  원 주문 행의 매입가를 먼저 쓴다 — 잔고 평단은 같은 종목을 정정 사이에
+                        #   추가 매수했으면 이미 다른 값이다. 없을 때만 잔고를 본다.
+                        buy_price = inherited_buy_price
+                        if buy_price <= 0:
+                            h_list, _ = api.get_domestic_balance(target_cano, target_acnt)
+                            if h_list:
+                                for h in h_list:
+                                    if h['pdno'] == pdno:
+                                        buy_price = api.safe_float(h.get('pchs_avg_pric'), default=0.0)
+                                        break
                         if buy_price > 0:
                             c_price = float(price) if price != "0" else float(api.get_current_price(pdno, is_overseas) or 0)
                             if c_price > 0:
-                                est_sell_amt = float(final_qty) * c_price
-                                est_buy_amt = float(final_qty) * buy_price
-                                profit_amt = int(est_sell_amt - est_buy_amt)
-                                profit_rate = ((c_price - buy_price) / buy_price) * 100
+                                #  [Fix 2026-09-16] 종전에는 qty×(정정가−매입가)를 직접 셌다. 손익
+                                #   정책(실거래 총차익+비용 별도 / 가상투자 순손익)은
+                                #   trading_cost.realized_profit 하나가 정한다 — 여기만 다르게 세면
+                                #   가상투자에서 이 행만 순손익이 아니고(실측 -50 vs -131),
+                                #   cost_amt 가 비어 원금 불변량(profit−cost)이 그 비용만큼 어긋난다.
+                                from core import trading_cost
+                                _p, _r, _c = trading_cost.realized_profit(
+                                    buy_price, c_price, int(final_qty), is_overseas=is_overseas)
+                                profit_amt, profit_rate = int(_p), _r
                                 # [추가] 재계산된 손익을 DB에 업데이트
                                 #  방금 INSERT 한 오늘 행만 고친다 — 날짜를 주지 않으면
                                 #  같은 번호의 과거 행이 함께 덮인다(되돌릴 수 없다).
                                 db_manager.db.update_trade(odno, profit_amt=profit_amt,
-                                                           profit_rate=profit_rate,
+                                                           profit_rate=profit_rate, cost_amt=_c,
                                                            on_date=utils.odno_scope_date())
                                 msg += f"\n예상손익: {int(profit_amt):+,}원 ({profit_rate:+.2f}%)"
                     except Exception: pass
@@ -2523,12 +2542,13 @@ def register_reserved_order():
             # [추가] 장 마감 후에 '당일'을 고르면 사실상 감시 시간이 남지 않는다.
             #  [2026-09-14] 예약 감시는 KRX 애프터마켓(16:00~20:00)에도 발동한다 — 경계는 20:00 이고,
             #   15:30~16:00 휴게에는 "16시부터 발동 가능"으로 안내한다(ETF/ETN 은 애프터 미거래).
-            _hm_now = datetime.now().strftime("%H%M")
+            _now = datetime.now()
+            _hm_now = _now.strftime("%H%M")
             if v == "1" and not state['is_overseas']:
                 if _hm_now > "2000":
                     config.console.print("[yellow]⚠️ 오늘 장(KRX 애프터마켓 20:00)이 모두 끝난 시각입니다. '당일'은 "
                                          "오늘 안에 발동하지 않으면 내일 만료 처리됩니다.[/yellow]")
-                elif "1530" <= _hm_now < "1600":
+                elif api.domestic_break_window(_now):
                     config.console.print("[yellow]ℹ️ 정규장은 끝났고 16:00 KRX 애프터마켓(~20:00)에서 발동할 수 있습니다. "
                                          "ETF/ETN 은 애프터 미거래라 오늘은 발동하지 않습니다.[/yellow]")
             state['expire_dt'] = expire_dt

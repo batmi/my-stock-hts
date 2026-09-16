@@ -68,7 +68,8 @@ def test_session_change_message_knows_after_market():
 def test_reserved_today_warning_boundary_is_2000():
     src = inspect.getsource(trading)
     assert '_hm_now > "2000"' in src
-    assert '"1530" <= _hm_now < "1600"' in src
+    #  [2026-09-16] 휴게 경계는 리터럴이 아니라 api.domestic_break_window 정본을 지난다.
+    assert "api.domestic_break_window(_now)" in src
 
 
 # ==========================================================

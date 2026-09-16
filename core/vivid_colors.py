@@ -9,6 +9,8 @@
  macOS Terminal.app 등은 트루컬러를 못 그리지만 256색은 사실상 모든 터미널·tmux·ssh 가 같게 그린다.
 [끄기] 환경변수 HTS_VIVID_COLORS=0 (터미널 테마 색을 그대로 쓰고 싶을 때). 터미널이 16색만 지원하면
  (rich 판정 color_system == 'standard') 자동으로 건너뛴다.
+[유효 시점] 스위치는 **기동 전**에 정해야 한다. rich 는 Style 마다 SGR 문자열을 한 번 만들어 붙잡아
+ 두므로(Style._ansi · Style.parse lru_cache) 이미 그린 색은 실행 중에 환경변수를 바꿔도 되돌아가지 않는다.
 """
 import os
 

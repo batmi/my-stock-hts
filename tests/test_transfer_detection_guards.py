@@ -181,10 +181,13 @@ def test_fee_sized_residuals_are_filtered_but_small_account_withdrawals_are_not(
 # ==========================================================
 
 def test_manual_sell_records_net_profit_like_auto_sell():
-    """수동 매도 손익도 자동 매도와 같은 SSOT(왕복 비용 차감)로 적는다.
+    """수동 매도 손익도 자동 매도와 같은 SSOT 로 적는다.
 
     종전엔 qty×(매도가−매입가) 총액이라 같은 날 '오늘 실현 손익'과 원금 불변량이
     두 기준을 섞었다(2026-09-04 파이: trades −12,500 vs 원장 −23,978).
+    [2026-09-14] 정책이 바뀌었다 — 실거래는 총차익+비용 별도, 가상투자는 순손익. 그 분기는
+     trading_cost.realized_profit 하나가 정하므로 이 가드는 '그 함수를 지나는가'만 본다
+     (net_realized_profit 을 직접 부르면 실거래 행이 정책과 어긋난다).
     """
     import inspect
     from modules import trading
@@ -192,8 +195,9 @@ def test_manual_sell_records_net_profit_like_auto_sell():
     src = inspect.getsource(trading.send_order)
     i = src.index("if order_type == 'sell' and stock_info:")
     window = src[i:i + 1500]
-    assert "trading_cost.net_realized_profit(" in window, \
+    assert "trading_cost.realized_profit(" in window, \
         "수동 매도 손익이 거래비용 SSOT 를 거치지 않는다"
+    assert "net_realized_profit(" not in window, "모드별 정책을 우회해 순손익을 직접 적는다"
     assert "est_sell_amt - est_buy_amt" not in window, "총액 산식이 남아 있다"
 
 
