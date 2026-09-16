@@ -201,7 +201,17 @@ def _fetch_kis_weekly_domestic(code, lookback_days=1100):
     df = df[['stck_bsop_date', 'stck_clpr', 'stck_oprc', 'stck_hgpr', 'stck_lwpr', 'acml_vol']].copy()
     df.columns = ['date', 'close', 'open', 'high', 'low', 'volume']
     df = df.astype({'close': float, 'open': float, 'high': float, 'low': float, 'volume': float})
-    return df.sort_values('date', ascending=True).reset_index(drop=True).tail(160)
+    out = df.sort_values('date', ascending=True).reset_index(drop=True).tail(160)
+    #  [2026-09-16] 이번 주 봉의 종가는 오늘 종가라, 일봉과 같은 저녁 임시값(애프터 최종가) 문제가 있다.
+    #   주봉 date 는 주 시작일이므로 '오늘이 그 주에 속하면' 15:30 분봉 종가로 되돌린다.
+    if len(out) and _kis_daily_close_is_provisional():
+        today_s = now.strftime("%Y%m%d")
+        week_start = (now - timedelta(days=now.weekday())).strftime("%Y%m%d")
+        if str(out.iloc[-1]['date']) >= week_start:
+            reg = kis_regular_close(code, today_s)
+            if reg > 0 and reg != float(out.iloc[-1]['close']):
+                out.loc[out.index[-1], 'close'] = reg
+    return out
 
 def _fetch_kis_weekly_overseas(code, lookback_days=1100):
     """KIS 해외 주봉(GUBN='1'). 거래소 후보를 순회하며 날짜 구간을 뒤로 페이징한다."""

@@ -265,6 +265,20 @@ def _mock_index_chart_df(periods=60):
 
 
 @pytest.fixture(autouse=True)
+def paper_broker_market_open(request, monkeypatch):
+    """[벽시계 격리 · 2026-09-16] 가상투자 체결(paper_broker.place_order)은 열린 시장이 없으면
+    거절한다(휴게·야간·휴장). 테스트가 밤에 돌면 주문 경로 전부가 그 게이트에 걸리므로
+    기본은 '시장 열림·ETF 창 아님'으로 고정한다. 게이트 자체를 검증하는 테스트는
+    @pytest.mark.paper_session_gate 로 이 고정을 끈다.
+    """
+    if request.node.get_closest_marker("paper_session_gate"):
+        return
+    from modules import paper_broker as _pb
+    monkeypatch.setattr(_pb, "_market_open", lambda: True)
+    monkeypatch.setattr(_pb, "_etf_untraded", lambda code, name: False)
+
+
+@pytest.fixture(autouse=True)
 def block_external_market_api(request, monkeypatch):
     """[격리] 분석 워커(ThreadPoolExecutor) 등에서 지수 조회가 mock 없이 실행되면
     실제 한투 서버로 네트워크 요청이 나간다. 하위 진입점인 get_domestic_index_chart를

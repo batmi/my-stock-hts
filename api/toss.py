@@ -879,6 +879,7 @@ def _toss_long_daily(code, is_overseas, lookback_days=1100):
                 if df is not None and not df.empty and len(df) >= 120:
                     src = df.attrs.get('source', '?')
                     df = df.reset_index(drop=True)
+                    df = _toss_apply_regular_closes(code, df)     # 주봉 종가도 정규장 종가로(일봉과 같은 규칙)
                     df.attrs['source'] = f"KRX/{src}"
                     return df
         except Exception as e:      # noqa: BLE001 - 외부 소스 장애가 차트를 막지 않게 한다

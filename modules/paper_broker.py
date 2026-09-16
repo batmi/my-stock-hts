@@ -383,6 +383,18 @@ def fill_price(price, action, market=False, is_etf=False):
     return float(utils.adjust_to_tick(adj, is_overseas=False, is_etf=is_etf) or adj)
 
 
+def _market_open():
+    """국내에 열린 시장이 있는가(api.domestic_trading_session_open). 테스트는 이 이름을 고정한다."""
+    import api as _api_mod
+    return bool(_api_mod.domestic_trading_session_open())
+
+
+def _etf_untraded(code, name):
+    """ETF/ETN 이 거래되지 않는 창(NXT 프리·휴게·KRX 애프터)에 ETF/ETN 을 주문했는가."""
+    import api as _api_mod
+    return bool(_api_mod.domestic_etf_untraded_window() and _api_mod.is_domestic_etf_etn(code, name))
+
+
 def place_order(action, code, qty, price, name=None):
     """api.place_order 대체. 즉시 전량 체결로 처리하고 KIS 형식 응답을 만든다."""
     with _lock:
@@ -394,14 +406,26 @@ def place_order(action, code, qty, price, name=None):
         if qty <= 0:
             return _fail("주문 수량이 0입니다")
 
+        if name is None:
+            name = _lookup_name(code)
+
+        #  [2026-09-16 · 애프터마켓 정합] 실계좌라면 거부될 주문을 가상계좌가 체결하면 관찰 결과가
+        #   실전과 갈린다. 시장이 없는 시간(15:30~16:00 휴게·야간·휴장)과 KRX 애프터마켓의 ETF/ETN
+        #   (애프터 미거래·값이 정규장 종가에 멈춰 있어 '그 값에 체결'은 가짜다)은 거절한다.
+        #   판정 실패는 종전대로 체결한다(관찰 모드가 시계 오류로 멈추면 그것대로 사고다).
+        try:
+            if not _market_open():
+                return _fail("지금은 열린 시장이 없어 체결하지 않습니다(휴게·야간·휴장)")
+            if _etf_untraded(code, name):
+                return _fail("ETF/ETN 은 NXT·KRX 애프터마켓에서 거래되지 않습니다")
+        except Exception as e:      # noqa: BLE001
+            logger.debug(f"[PAPER] 세션 판정 실패({code}) — 종전대로 체결: {e}")
+
         is_market = price <= 0
         if is_market:  # 시장가 주문 → 현재가로 체결
             price = _current_price(code)
             if price <= 0:
                 return _fail("현재가를 확인할 수 없어 체결 불가")
-
-        if name is None:
-            name = _lookup_name(code)
 
         pos = _db().execute_query(
             "SELECT name, qty, avg_price, first_buy_at FROM paper_positions WHERE code=?",
