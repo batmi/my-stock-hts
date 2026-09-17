@@ -46,6 +46,57 @@ def _us_futures_closed_now():
     except Exception:
         return False
 
+# yfinance 일봉 '종가'를 전일 기준으로 쓰지 않는 선물·원자재. 워커의 is_futures 와 다운로드
+#  그룹의 분봉 추가 수신이 같은 목록을 봐야 한다(한쪽만 넓히면 새 종목이 옛 경로로 빠진다).
+FUTURES_NAMES = ("나스닥 선물", "S&P500 선물", "다우존스 선물", "러셀2000 선물",
+                 "금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "디젤 ULSD", "천연가스", "밀")
+FUTURES_INTRADAY_KW = dict(period="3d", interval="15m")   # 전 세션 마지막 봉을 담을 만큼만
+
+
+def _futures_session_prev_close(df_intraday, now_et=None):
+    """선물의 '전일 종가' = **직전 세션 마지막 분봉 종가**. 못 정하면 None.
+
+    [왜 일봉을 안 쓰나 · 2026-09-17] yfinance 의 선물 일봉 종가(와 fast_info 의 prev_close)는
+     롤오버 주에 다른 월물을 가리킨다. 실측(NQ=F, 9월물 만기 전날): 일봉 16일 종가 28,963.5 인데
+     그 세션 15분봉은 29,129~29,524 사이를 한 번도 벗어나지 않았고 세션 마지막 봉은 29,263.75 다.
+     그 값으로 등락률을 내면 +2.09% — 실제(토스·HTS 공통 +1.06%)의 두 배다. 같은 표에서 15일도
+     28,955 vs 29,277 로 어긋났다. 분봉은 현재가(fast_info last)와 같은 시리즈라 이 문제가 없다.
+
+    세션은 CME 글로벡스 기준 18:00 ET 에 열리고 17:00 ET 에 닫힌다. '지금 세션의 시작' 이전
+     마지막 봉이 전일 종가다. 휴장(주말·휴일)으로 지금 세션에 봉이 하나도 없으면 하루씩 물러나
+     마지막으로 거래가 있던 세션의 시작을 찾는다 — 그래야 주말에 0% 로 굳지 않는다.
+    """
+    if df_intraday is None or df_intraday.empty or 'close' not in df_intraday.columns:
+        return None
+    try:
+        closes = df_intraday['close'].dropna()
+        if closes.empty:
+            return None
+        idx = closes.index
+        if getattr(idx, 'tz', None) is None:
+            idx = idx.tz_localize('UTC')
+        et_idx = idx.tz_convert('America/New_York')
+        now_et = now_et or pd.Timestamp(api.now_us_eastern())
+        if now_et.tzinfo is None:
+            now_et = now_et.tz_localize('America/New_York')
+        session_start = now_et.normalize() + pd.Timedelta(hours=18)
+        if now_et < session_start:
+            session_start -= pd.Timedelta(days=1)
+        vals = closes.values
+        for _ in range(4):                       # 최대 사흘 물러난다(주말·연휴)
+            before = et_idx < session_start
+            in_session = (~before) & (et_idx <= now_et)
+            if in_session.any() and before.any():
+                return float(vals[before][-1])
+            if not before.any():
+                return None
+            session_start -= pd.Timedelta(days=1)
+        return None
+    except Exception as e:      # noqa: BLE001 - 못 정하면 호출부가 일봉 경로로 간다
+        logger.debug(f"[선물 전일종가] 분봉 판정 실패: {e}")
+        return None
+
+
 def _daily_prev_close_idx(df_daily, last_price, is_futures):
     """선물/암호화폐의 '전일 종가'로 쓸 일봉 인덱스(-1 또는 -2)를 고른다.
 
@@ -618,7 +669,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         high_52 = high_52_daily
         
         is_crypto = name in ["비트코인", "이더리움", "솔라나", "리플"]
-        is_futures = name in ["나스닥 선물", "S&P500 선물", "다우존스 선물", "러셀2000 선물", "금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "디젤 ULSD", "천연가스", "밀"]
+        is_futures = name in FUTURES_NAMES
         is_proxy_yield = False # [추가] 금리 추정 여부 플래그
         chart_calc_price = None # [추가] 지표 계산용 원본 가격 보존
         
@@ -707,7 +758,27 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                     prev_close = fi.get('regular_market_previous_close')
                     
                     # [수정] 선물/암호화폐는 yfinance의 전일 종가 대신 일봉 데이터의 종가를 사용 (정확도 향상)
-                    if (is_crypto or is_futures) and not df_daily.empty and len(df_daily) >= 2:
+                    #  [Fix 2026-09-17] 선물은 그 일봉마저 롤오버 주에 다른 월물을 가리킨다 — 직전 세션
+                    #   마지막 분봉이 정본이다(_futures_session_prev_close 주석의 실측). 분봉이 지금
+                    #   세션을 덮지 못하면(캐시가 세션 넘김 전 것) 한 번 새로 받고, 그래도 못 정하면
+                    #   종전 일봉 경로로 간다.
+                    sess_prev = None
+                    if is_futures:
+                        sess_prev = _futures_session_prev_close(df_intraday)
+                        if sess_prev is None:
+                            try:
+                                i_raw = api.fetch_yfinance_data(ticker, group_by='ticker', **FUTURES_INTRADAY_KW)
+                                if i_raw is not None and not i_raw.empty:
+                                    if isinstance(i_raw.columns, pd.MultiIndex):
+                                        i_raw = i_raw[ticker].copy() if ticker in i_raw.columns.get_level_values(0) else pd.DataFrame()
+                                    if not i_raw.empty:
+                                        i_raw.columns = [str(c).lower() for c in i_raw.columns]
+                                        sess_prev = _futures_session_prev_close(i_raw)
+                            except Exception as _ie:
+                                logger.debug(f"{name} 선물 분봉 재수신 실패: {_ie}")
+                    if sess_prev is not None and sess_prev > 0:
+                        prev_close = sess_prev
+                    elif (is_crypto or is_futures) and not df_daily.empty and len(df_daily) >= 2:
                         try:
                             target_idx = _daily_prev_close_idx(df_daily, last_price, is_futures)
                             check_prev = float(df_daily['close'].iloc[target_idx])
@@ -1308,6 +1379,7 @@ def _show_market_indices_core(target_indices=None):
                     groups_to_fetch.append(("기타", other_tickers))
 
             task_dl = progress.add_task("[cyan]지수 데이터 수신 준비 중...[/cyan]", total=None)
+            futures_tickers = {t for n, t in indices_map.items() if n in FUTURES_NAMES}
 
             # 그룹별 순차 요청
             for group_name, t_list in groups_to_fetch:
@@ -1358,7 +1430,19 @@ def _show_market_indices_core(target_indices=None):
                                 # threads=True: 그룹 내 티커들을 yfinance 내부에서 병렬 수신(순차 N왕복 → 동시, 데이터 동일)
                                 d = api.fetch_yfinance_data(tickers_str, period="1y", interval="1d", group_by='ticker', threads=True)
                                 result_container['daily'] = d
-                                result_container['intra'] = pd.DataFrame()
+                                #  [2026-09-17] 선물은 전일 종가를 직전 세션 마지막 분봉에서 얻는다
+                                #   (_futures_session_prev_close). 그룹에 선물이 있으면 분봉을 한 번에 받아
+                                #   워커의 단건 재수신을 줄인다(그룹당 호출 1회 추가).
+                                fut_in_group = [t for t in tickers_to_fetch if t in futures_tickers]
+                                if fut_in_group:
+                                    try:
+                                        result_container['intra'] = api.fetch_yfinance_data(
+                                            " ".join(fut_in_group), group_by='ticker', threads=True, **FUTURES_INTRADAY_KW)
+                                    except Exception as _ie:
+                                        logger.debug(f"[지수] 선물 분봉 일괄 수신 실패(워커가 단건으로 받는다): {_ie}")
+                                        result_container['intra'] = pd.DataFrame()
+                                else:
+                                    result_container['intra'] = pd.DataFrame()
                             except Exception as e:
                                 result_container['error'] = e
 
