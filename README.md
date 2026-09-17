@@ -381,7 +381,7 @@ export DART_API_KEY="40자리_인증키"
 
 ### 6.6 FRED (미국 경제지표 일정)
 
-`[6] → 5. 투자 캘린더` 상단의 **미국 지표 발표일**(CPI·고용보고서·PCE·PPI·GDP·소매판매·JOLTS)에만 필요합니다. FOMC 일정은 연준 공식 캘린더에서, 국내·미국 선물옵션 동시만기는 자체 계산으로 받아 **키 없이도 동작**합니다.
+`[6] → 5. 투자 캘린더` 상단의 **미국 지표 발표일**(CPI·고용보고서·PCE·PPI·GDP·소매판매·JOLTS)에만 필요합니다. FOMC 일정은 연준 공식 캘린더에서, **일본은행(BOJ) 금융정책결정회의**는 boj.or.jp 영문 일정표에서(회의 둘째 날=결정일, 전망보고서 회의 표시), 국내·미국 선물옵션 동시만기는 자체 계산으로 받아 **키 없이도 동작**합니다.
 
 **발급 절차**
 1. [FRED API Keys](https://fredaccount.stlouisfed.org/apikeys) 접속 → 계정이 없으면 **Create New Account**로 무료 가입(이메일 인증)
@@ -518,7 +518,7 @@ my-stock-hts/
 │   │   ├── watchlist.py    #     관심종목 등록·삭제·조회
 │   │   ├── discover.py     #     [7-4] 관심종목 탐색
 │   │   ├── events.py       #     [6-5] 배당·실적 캘린더
-│   │   ├── econ_events.py  #     주요 경제 이벤트 (FRED·연준)
+│   │   ├── econ_events.py  #     주요 경제 이벤트 (FRED·연준·일본은행)
 │   │   ├── disclosure.py   #     [6-6] 공시 모니터링
 │   │   ├── insider.py      #     [6-7] 수급·물량 신호
 │   │   └── financials.py   #     [6-8] 재무 스냅샷

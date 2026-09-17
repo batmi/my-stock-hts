@@ -5,6 +5,8 @@
   - FRED API   : 미국 지표 발표일(CPI/고용보고서/PPI/PCE/GDP/소매판매/JOLTS).
                  발표 '예정일'을 미래분까지 제공하므로 추정이 아니라 확정값이다.
   - Fed 캘린더 : FOMC 금리결정·의사록·베이지북 (federalreserve.gov 공식 JSON, 키 불필요).
+  - BOJ 캘린더 : 일본은행 금융정책결정회의(MPM) 일정 (boj.or.jp 영문 페이지의 연도별 표, 키 불필요).
+                 회의는 이틀이고 결정·발표는 둘째 날이다 — 그 날을 적는다. 전망보고서 회의는 표시.
   - 계산/시드  : 국내·미국 선물옵션 동시만기는 규칙으로 계산하고,
                  기계 판독이 불가능한 일정(한은 금통위)만 시드 파일에서 읽는다.
 
@@ -33,6 +35,7 @@ SEED_FILE = os.path.join(config.JSON_DIR, "econ_calendar_seed.json")
 
 FRED_BASE_URL = "https://api.stlouisfed.org/fred"
 FED_CALENDAR_URL = "https://www.federalreserve.gov/json/calendar.json"
+BOJ_CALENDAR_URL = "https://www.boj.or.jp/en/mopo/mpmsche_minu/index.htm"
 
 # FRED release_id → (표시명, 중요도). 중요도 1=최상위(장 전체를 흔드는 지표)
 FRED_RELEASES = {
@@ -163,6 +166,71 @@ def _fetch_fed(start, end):
     return out, True
 
 
+_BOJ_MONTHS = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6, "june": 6, "jul": 7,
+               "july": 7, "aug": 8, "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12}
+_BOJ_TOKEN_RE = re.compile(r"(?:([A-Za-z]{3,5})\.?\s+)?(\d{1,2})\s*\((?:Mon|Tues?|Wed|Thurs?|Fri|Sat|Sun)\.?\)")
+
+
+def _boj_meeting_days(year, text):
+    """'Jan. 22 (Thurs.), 23 (Fri.)' → [date(2026,1,22), date(2026,1,23)]. 달 없는 날은 앞의 달을 잇는다.
+
+    두 번째 날이 달을 넘기면('Oct. 31 (Thurs.), Nov. 1 (Fri.)') 새 달이 명시되므로 그대로 읽힌다.
+    """
+    out, month = [], None
+    for mon, day in _BOJ_TOKEN_RE.findall(text):
+        if mon:
+            month = _BOJ_MONTHS.get(mon.lower().rstrip("."))
+        if not month:
+            continue
+        try:
+            out.append(date(year, month, int(day)))
+        except ValueError:
+            continue
+    return out
+
+
+def _parse_boj_html(page):
+    """BOJ 영문 MPM 페이지 → [(결정일, 전망보고서 여부)]. 연도별 표(caption 'Table : 2026')를 읽는다."""
+    found = []
+    for tbl in re.findall(r"<table.*?</table>", page, re.S | re.I):
+        cap = re.search(r"<caption[^>]*>(.*?)</caption>", tbl, re.S | re.I)
+        m = re.search(r"(20\d{2})", re.sub(r"<[^>]+>", "", cap.group(1))) if cap else None
+        if not m:
+            continue
+        year = int(m.group(1))
+        for row in re.findall(r"<tr[^>]*>(.*?)</tr>", tbl, re.S | re.I):
+            cells = [re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", c)).strip()
+                     for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, re.S | re.I)]
+            if not cells:
+                continue
+            days = _boj_meeting_days(year, cells[0])
+            if not days:
+                continue                       # 머리행('Date of MPM' 등)
+            outlook = len(cells) > 1 and bool(_BOJ_TOKEN_RE.search(cells[1]))
+            found.append((max(days), outlook))  # 결정·발표는 회의 마지막 날
+    return found
+
+
+def _fetch_boj(start, end):
+    """일본은행 금융정책결정회의 일정 → (이벤트, 성공 여부).
+
+    표가 하나도 안 읽히면 실패로 본다(페이지 개편) — 빈 목록을 성공으로 돌리면 BOJ 가 조용히 사라진다.
+    """
+    res = requests.get(BOJ_CALENDAR_URL, timeout=HTTP_TIMEOUT,
+                       headers={"User-Agent": "Mozilla/5.0"})
+    res.raise_for_status()
+    meetings = _parse_boj_html(res.text)
+    if not meetings:
+        raise ValueError("BOJ 일정 표를 찾지 못했습니다(페이지 형식 변경?)")
+    out = []
+    for d, outlook in meetings:
+        if start <= d <= end:
+            out.append({"date": d.strftime("%Y-%m-%d"),
+                        "name": "BOJ 금리결정" + (" (전망보고서)" if outlook else ""),
+                        "country": "JP", "weight": 1, "source": "BOJ"})
+    return out, True
+
+
 def _nth_weekday(year, month, weekday, nth):
     """해당 월의 n번째 요일(weekday: 월=0 … 일=6)."""
     d = date(year, month, 1)
@@ -237,13 +305,16 @@ def _load_seed(start, end):
     return out
 
 
+_SOURCE_COUNT = 5    # _collect 가 on_progress 를 부르는 횟수(네트워크 3 + 로컬 2)
+
+
 def _collect(start, end, on_progress=None):
     """모든 소스를 합쳐 날짜순 정렬 → (이벤트, 전 소스 성공 여부).
 
     같은 날 같은 이름은 중복 제거한다.
     """
     events, complete = [], True
-    for fn in (_fetch_fred, _fetch_fed):           # 네트워크 소스 (성공 여부를 함께 돌려준다)
+    for fn in (_fetch_fred, _fetch_fed, _fetch_boj):   # 네트워크 소스 (성공 여부를 함께 돌려준다)
         try:
             got, ok = fn(start, end)
             events.extend(got)
@@ -343,7 +414,7 @@ def build_lines(days=45):
         lines.append(f"• {d.strftime('%m-%d')}({_WEEKDAY_KR[d.weekday()]}) {dday} "
                      f"{ev['name']} [{ev.get('source', '')}]")
 
-    lines.append("  ※ 미국 지표는 현지시각 기준 발표일입니다 (한국시각 대체로 익일 새벽).")
+    lines.append("  ※ 미국 지표는 현지시각 기준 발표일입니다 (한국시각 대체로 익일 새벽). BOJ 는 회의 둘째 날 정오 무렵 발표.")
     return lines
 
 
@@ -359,9 +430,9 @@ def render(days=45):
         SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
         BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%"), console=config.console, transient=True
     ) as progress:
-        task = progress.add_task("[cyan]경제 이벤트 일정 조회 중...[/cyan]", total=4)
+        task = progress.add_task("[cyan]경제 이벤트 일정 조회 중...[/cyan]", total=_SOURCE_COUNT)
         events, status = get_events(days=days, on_progress=lambda: progress.advance(task))
-        progress.update(task, completed=4)
+        progress.update(task, completed=_SOURCE_COUNT)
 
     # 수집이 실패했는데 조용히 옛 일정을 보여주면 그게 언제 기준인지 알 길이 없다 —
     #  FOMC가 이미 지나갔는지 여부까지 걸린 문제라 반드시 밝힌다.
@@ -399,5 +470,6 @@ def render(days=45):
         )
 
     config.console.print(table)
-    config.console.print("  [dim]※ 미국 지표는 현지시각 기준 발표일입니다 (한국시각으로는 대체로 익일 새벽).[/dim]")
+    config.console.print("  [dim]※ 미국 지표는 현지시각 기준 발표일입니다 (한국시각으로는 대체로 익일 새벽). "
+                         "BOJ 는 회의 둘째 날 정오 무렵(한국시각) 발표.[/dim]")
     config.console.print()

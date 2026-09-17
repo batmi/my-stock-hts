@@ -382,7 +382,7 @@ export DART_API_KEY="40_character_key"
 
 ### 6.6 FRED (US economic calendar)
 
-Needed only for **US indicator release dates** (CPI, employment, PCE, PPI, GDP, retail sales, JOLTS) at the top of `[6] → 5. Investment Calendar`. FOMC dates come from the Federal Reserve's own calendar, and KR/US quadruple-witching dates are computed locally, so both **work without a key**.
+Needed only for **US indicator release dates** (CPI, employment, PCE, PPI, GDP, retail sales, JOLTS) at the top of `[6] → 5. Investment Calendar`. FOMC dates come from the Federal Reserve's own calendar, **Bank of Japan (BOJ) Monetary Policy Meetings** from the boj.or.jp English schedule table (day two of the meeting = decision day; Outlook Report meetings are flagged), and KR/US quadruple-witching dates are computed locally, so all of these **work without a key**.
 
 **How to obtain**
 1. Go to [FRED API Keys](https://fredaccount.stlouisfed.org/apikeys) → **Create New Account** if needed (free, email verification)
@@ -519,7 +519,7 @@ my-stock-hts/
 │   │   ├── watchlist.py    #     Add/remove/view watchlist
 │   │   ├── discover.py     #     [7-4] Candidate discovery
 │   │   ├── events.py       #     [6-5] Dividend/earnings calendar
-│   │   ├── econ_events.py  #     Key economic events (FRED, Fed)
+│   │   ├── econ_events.py  #     Key economic events (FRED, Fed, BOJ)
 │   │   ├── disclosure.py   #     [6-6] Disclosure monitoring
 │   │   ├── insider.py      #     [6-7] Supply and overhang signals
 │   │   └── financials.py   #     [6-8] Financial snapshot
