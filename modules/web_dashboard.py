@@ -56,6 +56,66 @@ class ChartRequestHandler(SimpleHTTPRequestHandler):
         # 기본 구현은 stderr 로 직접 찍어 rich 화면을 깨뜨린다. 로거로 돌린다.
         logger.debug("[webchart] " + (fmt % args))
 
+    def do_DELETE(self):
+        """갤러리 카드의 ✕ — chart/ 바로 아래 *.png 하나를 지운다(썸네일 포함) 뒤 인덱스를 다시 만든다.
+
+        경로는 **파일명 하나**만 받는다(디렉터리 구분자·상위 참조·다른 확장자는 404). 실제로 지우기
+        전에 realpath 가 chart/ 안인지 다시 확인한다 — 파일명 검사와 경로 검사 둘 다 통과해야 한다.
+        """
+        if not getattr(config, 'WEBCHART_ALLOW_DELETE', True):
+            self.send_error(403, "delete disabled")
+            return
+        name = _delete_target_name(self.path)
+        if name is None:
+            self.send_error(404)
+            return
+        ok, msg = delete_chart_file(self.directory, name)
+        if not ok:
+            self.send_error(404 if msg == "not found" else 500, msg)
+            return
+        self.send_response(204)
+        self.end_headers()
+
+
+def _delete_target_name(raw_path):
+    """'/<name>.png' → 'name.png'. 규약 밖이면 None. URL 인코딩을 풀고 파일명 하나만 남긴다."""
+    from urllib.parse import unquote, urlsplit
+    name = unquote(urlsplit(raw_path).path.lstrip("/"))
+    if not name or name != os.path.basename(name) or "/" in name or "\\" in name:
+        return None
+    if name in (".", "..") or not name.lower().endswith(".png"):
+        return None
+    return name
+
+
+def delete_chart_file(chart_dir, name):
+    """chart_dir 바로 아래의 name(.png) 과 그 썸네일을 지우고 index.html 을 다시 만든다.
+
+    (성공, 메시지). 원본이 없으면 (False, 'not found'). 썸네일 삭제 실패는 성공을 막지 않는다
+    (다음 인덱스 생성이 고아 썸네일을 걷어낸다).
+    """
+    root = os.path.realpath(chart_dir)
+    target = os.path.realpath(os.path.join(root, name))
+    if os.path.dirname(target) != root:
+        return False, "not found"
+    try:
+        os.remove(target)
+    except FileNotFoundError:
+        return False, "not found"
+    except OSError as e:
+        logger.warning(f"[webchart] 차트 삭제 실패({name}): {e}")
+        return False, "remove failed"
+    try:
+        os.remove(thumbnail_path(target))
+    except OSError:
+        pass
+    logger.info(f"[webchart] 갤러리에서 차트 삭제: {name}")
+    try:
+        update_chart_index(root)
+    except Exception as e:      # noqa: BLE001 - 지우기는 끝났다. 인덱스는 다음 렌더가 다시 만든다.
+        logger.warning(f"[webchart] 삭제 뒤 인덱스 재생성 실패: {e}")
+    return True, "ok"
+
 
 def _serve_forever(httpd, started):
     """서버 루프. 예외를 삼켜 처리되지 않은 스레드 예외를 만들지 않는다.
@@ -542,6 +602,51 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .close-btn:hover { color: var(--accent); }
 
+        /* [드래그 정렬 · 2026-09-17] 기본은 최신순. 운용자가 카드를 끌어 놓으면 그 자리를
+           이 브라우저(localStorage)가 기억한다 — 서버는 관여하지 않는다(정적 갤러리 그대로). */
+        .card[draggable] { cursor: grab; }
+        .card.dragging { opacity: 0.4; transform: scale(0.97); }
+        .card.drop-before { box-shadow: -4px 0 0 0 var(--accent); }
+        .card.drop-after  { box-shadow:  4px 0 0 0 var(--accent); }
+        .toolbar {
+            max-width: 1400px; margin: -2rem auto 1rem; display: flex; justify-content: flex-end;
+            gap: 0.5rem; font-size: 0.8rem; color: var(--text-muted);
+        }
+        .toolbar button {
+            background: transparent; color: var(--text-muted); border: 1px solid var(--border);
+            border-radius: 8px; padding: 0.3rem 0.7rem; cursor: pointer; font: inherit;
+        }
+        .toolbar button:hover { color: var(--text-main); border-color: var(--accent); }
+        .toolbar button[hidden] { display: none; }
+        .card { position: relative; }
+        .card .del {
+            position: absolute; top: 6px; right: 6px; width: 26px; height: 26px; line-height: 24px;
+            border-radius: 50%; border: 1px solid var(--border); background: rgba(15, 23, 42, 0.75);
+            color: var(--text-main); text-align: center; font-size: 1.05rem; cursor: pointer;
+            z-index: 2; transition: color 0.2s, border-color 0.2s, background 0.2s;
+        }
+        .card .del:hover { color: #fff; background: #ef4444; border-color: #ef4444; }
+        body.no-delete .card .del { display: none; }
+        /* 확인 창 — 브라우저 confirm() 은 'http://…/ 페이지의 메시지:' 머리말을 강제로 붙인다. 페이지 안의 창으로 대체. */
+        #confirm {
+            display: none; position: fixed; inset: 0; z-index: 1100; align-items: center; justify-content: center;
+            background: rgba(15, 23, 42, 0.7); backdrop-filter: blur(6px);
+        }
+        #confirm.active { display: flex; }
+        #confirm .box {
+            background: #1e293b; border: 1px solid var(--border); border-radius: 14px; padding: 1.4rem 1.6rem;
+            max-width: 380px; width: calc(100% - 3rem); box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+        }
+        #confirm .msg { margin: 0 0 1.2rem; line-height: 1.5; white-space: pre-line; }
+        #confirm .msg b { color: var(--text-main); }
+        #confirm .btns { display: flex; justify-content: flex-end; gap: 0.6rem; }
+        #confirm button {
+            font: inherit; border-radius: 10px; padding: 0.5rem 1.1rem; cursor: pointer; border: 1px solid var(--border);
+            background: transparent; color: var(--text-main);
+        }
+        #confirm button.danger { background: #ef4444; border-color: #ef4444; color: #fff; }
+        #confirm button:hover { filter: brightness(1.15); }
+
         @keyframes fadeInDown {
             from { opacity: 0; transform: translateY(-20px); }
             to { opacity: 1; transform: translateY(0); }
@@ -556,8 +661,21 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <header>
         <h1>Chart Dashboard</h1>
     </header>
-    <div class="gallery">
+    <div class="toolbar">
+        <button id="order-reset" hidden onclick="resetOrder()">최신순으로 되돌리기</button>
+    </div>
+    <div class="gallery" id="gallery">
         <!-- INJECT_CARDS -->
+    </div>
+
+    <div id="confirm" onclick="if (event.target === this) confirmClose(false)">
+        <div class="box" role="dialog" aria-modal="true">
+            <p class="msg" id="confirm-msg"></p>
+            <div class="btns">
+                <button type="button" id="confirm-no" onclick="confirmClose(false)">취소</button>
+                <button type="button" id="confirm-yes" class="danger" onclick="confirmClose(true)">삭제</button>
+            </div>
+        </div>
     </div>
 
     <div id="lightbox" onclick="closeLightbox()">
@@ -586,8 +704,136 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             document.body.style.overflow = 'auto';
         }
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') closeLightbox();
+            if (e.key === 'Escape') {
+                if (document.getElementById('confirm').classList.contains('active')) { confirmClose(false); return; }
+                closeLightbox();
+            }
         });
+
+        /* ---------------- 드래그 정렬 ----------------
+           서버는 카드를 최신순으로 내보낸다(기본). 운용자가 끌어 놓은 순서는 파일명 배열로
+           localStorage 에 남고, 페이지가 다시 만들어져도 그 순서로 다시 세운다.
+           저장된 목록에 없는 카드(새로 그린 차트)는 맨 앞에 최신순으로 둔다 — '기본은 시간순'.
+           저장된 목록에만 있고 지금은 없는 파일은 무시한다(지워진 차트). */
+        const ORDER_KEY = 'chartOrder.v1';
+        let suppressClick = false;
+
+        function loadOrder() {
+            try { const v = JSON.parse(localStorage.getItem(ORDER_KEY) || '[]'); return Array.isArray(v) ? v : []; }
+            catch (e) { return []; }
+        }
+        function saveOrder(keys) {
+            try { localStorage.setItem(ORDER_KEY, JSON.stringify(keys)); } catch (e) {}
+        }
+        function currentKeys() {
+            return [...document.querySelectorAll('#gallery .card[data-key]')].map(c => c.dataset.key);
+        }
+        function applySavedOrder() {
+            const saved = loadOrder();
+            const gallery = document.getElementById('gallery');
+            const cards = [...gallery.querySelectorAll('.card[data-key]')];
+            if (!saved.length || !cards.length) { updateToolbar(false); return; }
+            const byKey = new Map(cards.map(c => [c.dataset.key, c]));
+            const fresh = cards.filter(c => !saved.includes(c.dataset.key));   // 새 차트: 최신순 그대로, 맨 앞
+            const kept = saved.map(k => byKey.get(k)).filter(Boolean);
+            [...fresh, ...kept].forEach(c => gallery.appendChild(c));
+            updateToolbar(true);
+        }
+        function updateToolbar(active) {
+            document.getElementById('order-reset').hidden = !active;
+        }
+        function resetOrder() {
+            try { localStorage.removeItem(ORDER_KEY); } catch (e) {}
+            location.reload();
+        }
+        let _confirmResolve = null;
+        function askConfirm(html, yesLabel) {
+            return new Promise((resolve) => {
+                _confirmResolve = resolve;
+                document.getElementById('confirm-msg').innerHTML = html;
+                const yes = document.getElementById('confirm-yes');
+                const no = document.getElementById('confirm-no');
+                yes.textContent = yesLabel || '삭제';
+                if (yesLabel === '확인') { no.hidden = true; yes.classList.remove('danger'); }   // 알림용(단추 하나)
+                else { no.hidden = false; yes.classList.add('danger'); }
+                document.getElementById('confirm').classList.add('active');
+                yes.focus();
+            });
+        }
+        function confirmClose(answer) {
+            document.getElementById('confirm').classList.remove('active');
+            const r = _confirmResolve; _confirmResolve = null;
+            if (r) r(answer);
+        }
+        function escapeHtml(t) {
+            return String(t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        }
+        async function deleteCard(event, btn) {
+            event.stopPropagation();
+            const card = btn.closest('.card[data-key]');
+            if (!card) return;
+            const key = card.dataset.key;
+            const title = (card.querySelector('.card-title')?.innerText || key).replace(/\\s+/g, ' ').trim();
+            const ok = await askConfirm(`<b>${escapeHtml(title)}</b> 차트를 서버에서 삭제합니다.\n다시 그리면 다시 생깁니다.`, '삭제');
+            if (!ok) return;
+            try {
+                const res = await fetch('/' + encodeURIComponent(key), { method: 'DELETE' });
+                if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
+            } catch (e) {
+                await askConfirm('삭제하지 못했습니다: ' + escapeHtml(e.message), '확인');
+                return;
+            }
+            card.remove();
+            const saved = loadOrder();
+            if (saved.length) saveOrder(saved.filter(k => k !== key));
+            if (!document.querySelector('#gallery .card[data-key]')) location.reload();
+        }
+        function cardClick(src) {
+            if (suppressClick) { suppressClick = false; return; }
+            openLightbox(src);
+        }
+        (function installDnD() {
+            const gallery = document.getElementById('gallery');
+            let dragged = null;
+            gallery.addEventListener('dragstart', (e) => {
+                const card = e.target.closest('.card[data-key]');
+                if (!card) return;
+                dragged = card;
+                card.classList.add('dragging');
+                e.dataTransfer.effectAllowed = 'move';
+                try { e.dataTransfer.setData('text/plain', card.dataset.key); } catch (_) {}
+            });
+            gallery.addEventListener('dragover', (e) => {
+                if (!dragged) return;
+                e.preventDefault();
+                const over = e.target.closest('.card[data-key]');
+                gallery.querySelectorAll('.drop-before,.drop-after').forEach(c => c.classList.remove('drop-before', 'drop-after'));
+                if (!over || over === dragged) return;
+                const r = over.getBoundingClientRect();
+                const before = (e.clientX - r.left) < r.width / 2;
+                over.classList.add(before ? 'drop-before' : 'drop-after');
+            });
+            gallery.addEventListener('drop', (e) => {
+                if (!dragged) return;
+                e.preventDefault();
+                const over = e.target.closest('.card[data-key]');
+                if (over && over !== dragged) {
+                    const r = over.getBoundingClientRect();
+                    const before = (e.clientX - r.left) < r.width / 2;
+                    gallery.insertBefore(dragged, before ? over : over.nextSibling);
+                    saveOrder(currentKeys());
+                    updateToolbar(true);
+                }
+            });
+            gallery.addEventListener('dragend', () => {
+                if (dragged) dragged.classList.remove('dragging');
+                gallery.querySelectorAll('.drop-before,.drop-after').forEach(c => c.classList.remove('drop-before', 'drop-after'));
+                dragged = null;
+                suppressClick = true;              // 드롭 직후의 click 이 라이트박스를 열지 않게
+                setTimeout(() => { suppressClick = false; }, 0);
+            });
+        })();
+        applySavedOrder();
     </script>
 </body>
 </html>
@@ -638,7 +884,9 @@ def update_chart_index(chart_dir):
                      f"?v={int(mtime)}")
 
         cards_html += f'''
-        <div class="card" style="animation-delay: {anim_delay}s" onclick="openLightbox(&quot;{src}&quot;)">
+        <div class="card" data-key="{html.escape(filename, quote=True)}" draggable="true"
+             style="animation-delay: {anim_delay}s" onclick="cardClick(&quot;{src}&quot;)">
+            <span class="del" title="이 차트 삭제" onclick="deleteCard(event, this)">&times;</span>
             <img src="{thumb_src}" alt="{html.escape(alt_text, quote=True)}"
                  loading="lazy" decoding="async">
             <div class="card-info">
@@ -657,6 +905,8 @@ def update_chart_index(chart_dir):
     _purge_orphan_thumbs(chart_dir, {os.path.basename(f) for f in png_files})
 
     html_content = HTML_TEMPLATE.replace('<!-- INJECT_CARDS -->', cards_html)
+    if not getattr(config, 'WEBCHART_ALLOW_DELETE', True):
+        html_content = html_content.replace('<body>', '<body class="no-delete">', 1)
 
     _write_index_atomic(os.path.join(chart_dir, 'index.html'), html_content)
 

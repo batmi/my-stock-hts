@@ -3374,6 +3374,11 @@ WEBCHART_PORT = int(os.getenv("WEBCHART_PORT", "9095"))
 #  인증이 없으므로 신뢰할 수 없는 망에 물린 서버라면 "127.0.0.1" 로 좁히고 SSH 터널을 쓴다.
 WEBCHART_HOST = os.getenv("WEBCHART_HOST", "0.0.0.0")
 
+# [삭제 허용 · 2026-09-17] 갤러리의 ✕ 버튼이 서버의 차트 PNG 를 지운다(썸네일 포함).
+#  인증이 없는 서버라 같은 망의 누구든 지울 수 있다 — 지워지는 것은 다시 그릴 수 있는 이미지뿐이고
+#  chart/ 안의 *.png 로 한정한다. 그래도 신뢰할 수 없는 망이면 "0" 으로 끈다(버튼도 사라진다).
+WEBCHART_ALLOW_DELETE = os.getenv("WEBCHART_ALLOW_DELETE", "1").strip().lower() not in ("0", "false", "no", "off")
+
 # [차트 해상도] 메뉴에서 그리는 분석 차트의 DPI.
 #  [왜 손잡이가 필요한가 · 2026-08-29] 렌더링 순간의 메모리 봉우리가 DPI 의 제곱으로 큰다.
 #   실측(16x9 인치 기준, RSS 증가분):

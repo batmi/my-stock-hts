@@ -33,6 +33,10 @@ def monitor(monkeypatch):
     cm.active_interval = 1
     monkeypatch.setattr(C.config, 'CONCLUSION_CHECK_INTERVAL', 0, raising=False)
     monkeypatch.setattr(cm, '_check_conclusions', lambda initial=False: (False, False))
+    #  [2026-09-17] _is_market_open 은 먼저 api.domestic_trading_session_open() 을 본다 — 국내 세션이
+    #   살아 있는 시각(정규장·KRX 애프터 16~20시)에 돌리면 아래 테스트가 갈아 끼운
+    #   is_system_market_open 에 닿기 전에 True 로 돌아가, 벽시계에 따라 실패했다. 세션을 닫아 둔다.
+    monkeypatch.setattr(C.api, 'domestic_trading_session_open', lambda: False)
     yield cm
     cm.is_running = False
     try:

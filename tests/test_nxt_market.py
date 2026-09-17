@@ -115,6 +115,9 @@ def test_sor_order_routing_real(monkeypatch):
         return {'rt_cd': '0', 'output': {'ODNO': '12345'}}
         
     monkeypatch.setattr(api, 'call_api', mock_call_api)
+    #  [2026-09-17] KRX 애프터(16~20시)에는 주문이 KRX 직행이 정책이다([[krx-after-market-policy]]).
+    #   이 테스트는 정규장 SOR 라우팅을 보는 것이므로 애프터 창을 닫아 벽시계 의존을 없앤다.
+    monkeypatch.setattr(api, 'krx_after_window', lambda *a, **k: False)
 
     api.place_order("domestic", "buy", "005930", 1, 50000, "00")
 
