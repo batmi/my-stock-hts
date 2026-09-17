@@ -65,6 +65,28 @@ _boot_log() {
 
 # 패키지 이름 → import 이름. 스캔과 설치 후 재확인이 같은 표를 써야 한다
 #  (두 벌로 두면 한쪽만 고쳐져 '설치했는데 여전히 없다'를 놓친다).
+# 설치 여부는 **import 를 실행하지 않고** 판정한다(importlib.util.find_spec).
+#  [왜 · 2026-09-17] pykrx 는 패키지 import 시점에 KRX 에 로그인하는데(KRX_ID/KRX_PW 가
+#   있으면 자동), KRX 가 에러 페이지(HTML)를 돌려주면 그 JSON 파싱 예외가 import 자체를
+#   깨뜨린다. 종전 `python -c "import pykrx"` 판정은 이것을 "설치되어 있지 않다"로 읽어
+#   pip 를 다시 돌리고(이미 만족), 그래도 import 가 안 되니 **기동을 중단**했다 — 앱 쪽
+#   krx_daily/krx_data 는 pykrx 없이도 FDR 로 폴백해 잘 도는데, 런처가 먼저 포기한 것이다.
+#   '설치 안 됨'과 '설치됐지만 import 가 죽음'은 다른 문제다([[unknown-vs-empty]]와 같은 결).
+#  find_spec 은 최상위 패키지를 실행하지 않는다. 점(.)이 든 이름은 부모까지만 import 한다.
+_is_installed() {
+    $PYTHON_PATH - "$1" <<'PYEOF' > /dev/null 2>&1
+import importlib.util, sys
+name = sys.argv[1]
+try:
+    spec = importlib.util.find_spec(name)
+except ModuleNotFoundError:
+    spec = None
+except Exception:
+    spec = True          # 부모 패키지 import 가 예외를 냈다 — 설치는 돼 있다
+sys.exit(0 if spec else 1)
+PYEOF
+}
+
 _import_name() {
     case "$1" in
         "beautifulsoup4")        echo "bs4" ;;
@@ -152,10 +174,7 @@ if [ -z "$REQUIRED_LIBS" ]; then
 fi
 for lib in $REQUIRED_LIBS; do
     IMPORT_NAME=$(_import_name "$lib")
-    $PYTHON_PATH -c "import $IMPORT_NAME" > /dev/null 2>&1
-    if [ $? -ne 0 ]; then
-        MISSING_LIBS="$MISSING_LIBS $lib"
-    fi
+    _is_installed "$IMPORT_NAME" || MISSING_LIBS="$MISSING_LIBS $lib"
 done
 
 # 7. 사용자 확인 및 설치 진행
@@ -190,10 +209,10 @@ if [ -n "$MISSING_LIBS" ]; then
         STILL_MISSING=""
         for lib in $MISSING_LIBS; do
             IMPORT_NAME=$(_import_name "$lib")
-            $PYTHON_PATH -c "import $IMPORT_NAME" > /dev/null 2>&1 || STILL_MISSING="$STILL_MISSING $lib"
+            _is_installed "$IMPORT_NAME" || STILL_MISSING="$STILL_MISSING $lib"
         done
         if [ -n "$STILL_MISSING" ]; then
-            _boot_log "설치 후에도 import 실패:$STILL_MISSING — 기동을 중단합니다(네트워크 미준비 가능성)."
+            _boot_log "설치 후에도 패키지를 찾지 못함:$STILL_MISSING — 기동을 중단합니다(네트워크 미준비 가능성)."
             exit 1
         fi
     else
