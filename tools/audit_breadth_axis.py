@@ -35,8 +35,9 @@ from tools.audit_market_axes import (  # noqa: E402
 def build_breadth(n_stocks, ma, start):
     """상위 시총 n개 종목의 '200일선 위 비율'(%) 일별 시계열."""
     import FinanceDataReader as fdr
+    from tools.audit_common import listing
 
-    lst = fdr.StockListing('KOSPI')
+    lst = listing('KOSPI')
     lst = lst[~lst['Name'].str.contains('우$|우B$|스팩', regex=True, na=False)]
     codes = lst.nlargest(n_stocks, 'Marcap')['Code'].tolist()
 

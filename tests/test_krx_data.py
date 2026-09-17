@@ -433,6 +433,22 @@ def test_배너_억제는_모듈_print만_바꾼다():
     assert auth.print("  로그인 ID: someone") is None
 
 
+def test_조회_실패_문구도_화면이_아니라_로거로_간다(capsys):
+    """pykrx 의 dataframe_empty_handler 는 KRX 가 JSON 아닌 응답을 주면 예외를 삼키고
+    'Error occurred in …' 를 print 한다(2026-09-17 메뉴 1-9 실측). 그 print 도 로거로."""
+    util = pytest.importorskip("pykrx.website.comm.util")
+    krx_data.silence_pykrx_banner()
+    assert getattr(util, "_hts_silenced", False) is True
+
+    @util.dataframe_empty_handler
+    def _boom():
+        raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+    out = _boom()
+    assert out.empty                       # 라이브러리의 '빈 프레임' 계약은 그대로
+    assert "Error occurred" not in capsys.readouterr().out
+
+
 # ---------------------------------------------------------------------------
 # 시장 수급·공매도 (지수 표 컬럼)
 # ---------------------------------------------------------------------------

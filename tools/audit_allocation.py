@@ -45,8 +45,8 @@ from tools.audit_defensive_sector import (  # noqa: E402
 
 def industry_map(codes):
     """종목 → 업종. 탐색 메뉴와 같은 소스(KRX-DESC)를 쓴다."""
-    import FinanceDataReader as fdr
-    desc = fdr.StockListing("KRX-DESC").set_index("Code")
+    from tools.audit_common import listing
+    desc = listing("KRX-DESC").set_index("Code")
     out = {}
     for c in codes:
         v = desc.loc[c, "Industry"] if c in desc.index else None

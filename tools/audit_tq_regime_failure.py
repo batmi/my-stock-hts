@@ -93,6 +93,10 @@ def main():
             col = rolling_trend_quality(df["close"], lb)
         tq_map[c] = dict(zip((str(d) for d in df["date"]), col))
 
+    #  구간 이름은 audit_windows 가 정한다(k<=1 이면 "전체" 하나). 아래 [1] 표는 이 이름
+    #  목록을 그대로 돈다 — 종전엔 로컬 k 로 "구간{i}" 를 다시 만들어 이름이 두 곳에서
+    #  갈렸고, 정본화(50c51c5) 때 k 만 사라져 NameError 로 죽어 있었다(2026-09-17 스모크).
+    seg_names = [name for name, _wd in audit_windows(dates, args.subperiods)]
     seg_of = {d: name for name, wd in audit_windows(dates, args.subperiods) for d in wd}
 
     cap = (config.ANALYSIS_THRESHOLDS.get("TREND_QUALITY_MAX", 300.0)
@@ -143,7 +147,7 @@ def main():
                         open_day = None
     print(f"[표본] 진입→청산 {len(recs):,}건", flush=True)
 
-    segs = [f"구간{i + 1}" for i in range(k)]
+    segs = seg_names
     print("\n[1] 구간별 · TQ 밴드별 실현 손익 — TQ가 결과를 가르는가")
     for sg in segs:
         sub = [r for r in recs if r[0] == sg]

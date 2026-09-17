@@ -408,9 +408,14 @@ def apply_w52_position(df):
         lo = df['low'].rolling(250, min_periods=1).min()
     else:
         win = f"{_W52_DAYS}D"
-        hi = df['high'].set_axis(dt).rolling(win).max().to_numpy()
-        lo = df['low'].set_axis(dt).rolling(win).min().to_numpy()
-        cnt = df['close'].set_axis(dt).rolling(win).count().to_numpy()
+        #  [Fix 2026-09-17] closed='both' — pandas 의 시간 창 rolling 은 기본이 (t-365D, t] 로
+        #   **정확히 365일 전 봉을 뺀다.** 실매매(indicators.w52_high_low)는 `dates >= cutoff`
+        #   로 그 봉을 **넣는다.** 경계의 하루 차이지만 극값이 그 날에 있으면 밴드가 갈려
+        #   같은 봉에 다른 가격 모멘텀 점수(±0.5)가 매겨진다 — 파리티 감사(6,989건)에서
+        #   3건이 정확히 이 자리였다(SK하이닉스 20240531 고점 210,000 vs 저점 106,700/106,000).
+        hi = df['high'].set_axis(dt).rolling(win, closed='both').max().to_numpy()
+        lo = df['low'].set_axis(dt).rolling(win, closed='both').min().to_numpy()
+        cnt = df['close'].set_axis(dt).rolling(win, closed='both').count().to_numpy()
         short = cnt < _W52_MIN_BARS          # 52주를 못 채운 구간 → 보유 봉 전체
         hi = pd.Series(np.where(short, df['high'].cummax(), hi), index=df.index)
         lo = pd.Series(np.where(short, df['low'].cummin(), lo), index=df.index)

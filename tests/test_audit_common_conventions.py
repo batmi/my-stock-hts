@@ -49,6 +49,11 @@ def _code_lines(src):
 _PRIVATE_EXIT = re.compile(r'reason\s*!=\s*["\']매수["\']')
 # 자기 손으로 구간 경계를 만드는 형태. audit_common.windows 를 써야 한다.
 _PRIVATE_WINDOW = re.compile(r'len\(dates\)\s*//\s*|dates\[\s*i\s*\*\s*(step|size)\s*:')
+# FDR 상장목록 직접 호출. data.krx.co.kr 가 막히면(2026-09-08 404 · 09-17 재발) 도구가 죽는다 —
+# 캐시 저장소로 견디는 audit_common.listing(→ krx_daily.fdr_listing) 을 써야 한다.
+_PRIVATE_LISTING = re.compile(r'\bfdr\.StockListing\(')
+# audit_universe._listing 이 스냅샷을 만드는 유일한 정상 경로 호출부다.
+_LISTING_EXEMPT = {"audit_universe.py"}
 
 
 # 규칙이 **일부러** 다른 도구. 새 사본이 여기 슬쩍 들어오지 않도록 사유를 적어 둔다.
@@ -65,6 +70,7 @@ _WINDOW_EXEMPT = {
 @pytest.mark.parametrize("pattern, helper, exempt", [
     (_PRIVATE_EXIT, "audit_common.is_exit / exits", frozenset()),
     (_PRIVATE_WINDOW, "audit_common.windows", frozenset(_WINDOW_EXEMPT)),
+    (_PRIVATE_LISTING, "audit_common.listing", frozenset(_LISTING_EXEMPT)),
 ])
 def test_no_tool_keeps_a_private_copy(pattern, helper, exempt):
     hits = [(fn, n, line.strip())
@@ -75,7 +81,7 @@ def test_no_tool_keeps_a_private_copy(pattern, helper, exempt):
 
 def test_the_exemption_list_does_not_outlive_its_files():
     """면제 목록이 사라진 파일을 가리키면, 다음 사람이 그 이름으로 새 사본을 만들 수 있다."""
-    missing = [fn for fn in _WINDOW_EXEMPT
+    missing = [fn for fn in _WINDOW_EXEMPT | _LISTING_EXEMPT
                if not os.path.exists(os.path.join(TOOLS, fn))]
     assert not missing, missing
 

@@ -58,14 +58,14 @@ def pick_groups(n, pool, exclude):
      '지주회사라서 진 것'과 '그 크기 구간이라서 진 것'이 섞인다. 순위 이웃을 짝지으면
      크기가 통제되고 라벨만 남는다.
     """
-    import FinanceDataReader as fdr
-    df = fdr.StockListing("KRX")
+    from tools.audit_common import listing
+    df = listing("KRX")
     df = df[df["Market"].isin(["KOSPI", "KOSDAQ"])].dropna(subset=["Marcap"])
     bad = (df["Name"].str.contains("스팩|리츠", na=False)
            | df["Code"].str.endswith(("5", "7", "9")))
     df = df[~bad].sort_values("Marcap", ascending=False).head(pool).reset_index(drop=True)
     # 업종은 KRX 목록에 없다 — 탐색 메뉴와 같은 소스(KRX-DESC)에서 가져온다.
-    desc = fdr.StockListing("KRX-DESC").set_index("Code")
+    desc = listing("KRX-DESC").set_index("Code")
 
     def _ind(code):
         if code not in desc.index:

@@ -138,8 +138,8 @@ def main():
     ap.add_argument('--interval', default='30m')
     args = ap.parse_args()
 
-    import FinanceDataReader as fdr
-    lst = fdr.StockListing('KOSPI')
+    from tools.audit_common import listing
+    lst = listing('KOSPI')
     lst = lst[~lst['Name'].str.contains('우$|우B$|스팩', regex=True, na=False)]
     targets = lst.nlargest(args.stocks, 'Marcap')[['Code', 'Name']].values.tolist()
 

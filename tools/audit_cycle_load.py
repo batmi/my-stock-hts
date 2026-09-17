@@ -98,8 +98,8 @@ def main():
     codes = [c for c, _n in live]
     if len(codes) < need:
         # 관심종목이 모자라면 시총 상위에서 채운다 — 종목 수만 늘리면 되는 축이다.
-        import FinanceDataReader as fdr
-        krx = fdr.StockListing("KRX")
+        from tools.audit_common import listing
+        krx = listing("KRX")
         krx = krx[krx["Market"].isin(["KOSPI", "KOSDAQ"])].dropna(subset=["Marcap"])
         krx = krx.sort_values("Marcap", ascending=False)
         have = set(codes)

@@ -69,8 +69,8 @@ def regime_by_date(dates, days):
 
 
 def market_map(codes):
-    import FinanceDataReader as fdr
-    df = fdr.StockListing("KRX")
+    from tools.audit_common import listing
+    df = listing("KRX")
     m = dict(zip(df["Code"], df["Market"]))
     return {c: ("KOSDAQ" if str(m.get(c, "KOSPI")).upper().startswith("KOSDAQ") else "KOSPI")
             for c in codes}

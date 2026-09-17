@@ -116,6 +116,26 @@ def windows(dates, k, whole=False):
     return chunks if k > 1 else [("전체", list(dates))]
 
 
+def listing(kind):
+    """FDR 상장목록 — **`modules.krx_daily.fdr_listing` 하나로만** 받는다.
+
+    [왜] `fdr.StockListing(...)` 직접 호출은 data.krx.co.kr 가 막히면(2026-09-08 404,
+    2026-09-17 스모크에서 재발) 도구가 통째로 죽는다. 저장소에는 이미 캐시 저장소의
+    '가장 최근 날짜'로 견디는 래퍼가 있는데 감사 도구 6곳이 그 옆을 지나 직접 부르고
+    있었다. 'KOSPI'/'KOSDAQ' 은 FDR 이 KRX 목록에서 Market 으로 거르는 것과 같으므로
+    여기서도 같은 방식으로 거른다. 못 받으면 조용히 빈 표본을 만들지 않고 예외를 낸다.
+    """
+    from modules import krx_daily
+    kind = str(kind).upper()
+    base = "KRX" if kind in ("KOSPI", "KOSDAQ") else kind
+    df = krx_daily.fdr_listing(base)
+    if df is None or df.empty:
+        raise RuntimeError(f"상장목록({kind})을 받지 못했다 — FDR 정상 경로·캐시 저장소 모두 실패")
+    if kind in ("KOSPI", "KOSDAQ"):
+        df = df[df["Market"].astype(str).str.upper() == kind].reset_index(drop=True)
+    return df
+
+
 def seed_notice(n_seeds, flag="--seed", example=None, emit=print):
     """표본 씨드 수가 규약에 못 미치면 경고 한 줄. 판정을 막지는 않는다.
 

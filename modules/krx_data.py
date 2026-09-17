@@ -104,21 +104,28 @@ def silence_pykrx_banner():
     ※ 첫 import 때 도는 로그인 배너 한 번은 이 함수보다 먼저 실행된다(pykrx 패키지
       __init__ 이 webio 를 끌어와 즉시 로그인한다). 그 한 줄만 _lazy_import 가 처리한다.
     """
-    try:
-        from pykrx.website.comm import auth as _auth
-    except Exception:       # noqa: BLE001
-        return
-    if getattr(_auth, "_hts_silenced", False):
-        return
-
     def _to_log(*args, **_kwargs):
         msg = " ".join(str(a) for a in args).strip()
         if not msg or "로그인 ID" in msg:      # 계정 ID 는 로그에도 남기지 않는다
             return
         logger.debug(f"[pykrx] {msg}")
 
-    _auth.print = _to_log
-    _auth._hts_silenced = True
+    #  [2026-09-17] 배너(auth)만이 아니다. `pykrx.website.comm.util.dataframe_empty_handler`
+    #   는 조회 함수가 KRX 에서 JSON 아닌 응답(빈 본문·HTML)을 받으면 그 예외를 **삼키고**
+    #   `print("Error occurred in get_index_ohlcv_by_date: Expecting value ...")` 를 stdout
+    #   에 찍은 뒤 빈 프레임을 돌려준다. 예외가 라이브러리 안에서 끝나므로 이쪽 try/except
+    #   에는 오지 않고, 화면(메뉴 1-9)에 그 줄만 남는다 — 실측 2026-09-17 17:09, 감사 배치가
+    #   같은 서버를 두드리던 중. 같은 방식(모듈의 print 이름 교체)으로 로거로 돌린다.
+    for mod_name in ("pykrx.website.comm.auth", "pykrx.website.comm.util"):
+        try:
+            import importlib
+            mod = importlib.import_module(mod_name)
+        except Exception:       # noqa: BLE001 - 없으면 조용히 건너뛴다(구조 변경·미설치)
+            continue
+        if getattr(mod, "_hts_silenced", False):
+            continue
+        mod.print = _to_log
+        mod._hts_silenced = True
 
 
 def _lazy_import():

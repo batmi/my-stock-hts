@@ -71,6 +71,29 @@ def test_the_window_matches_the_live_definition():
     assert float(df["roll_low_52w"].iloc[-1]) == pytest.approx(l, rel=1e-12)
 
 
+def test_a_bar_exactly_52_weeks_ago_is_inside_the_window():
+    """실매매는 `dates >= 오늘-365일` 로 그 날을 **넣는다**. pandas 시간 창 rolling 의 기본
+    (좌측 열림)은 그 날을 빼므로 closed='both' 가 없으면 경계의 극값에서 밴드가 갈린다
+    (2026-09-17 파리티 감사에서 3건 실측)."""
+    import datetime as dt
+
+    from core import indicators
+
+    last = dt.datetime(2024, 1, 2)                 # 화요일
+    edge = last - dt.timedelta(days=365)           # 2023-01-02 월요일 — 둘 다 영업일
+    idx = pd.bdate_range(edge, last)
+    n = len(idx)
+    c = np.full(n, 100.0)
+    c[0] = 1000.0                                  # 정확히 365일 전 봉의 고점
+    df = pd.DataFrame({"date": idx.strftime("%Y%m%d"), "high": c * 1.01,
+                       "low": c * 0.99, "close": c})
+    bt.apply_w52_position(df)
+    h_live, _ = indicators.w52_band(df, now=last)
+    assert h_live == pytest.approx(1010.0)
+    assert float(df["roll_high_52w"].iloc[-1]) == pytest.approx(h_live), \
+        "365일 전 봉이 백테스트 창에서 빠졌다 — 실매매와 경계가 다르다"
+
+
 def test_a_short_history_falls_back_to_everything_held():
     """신규상장·워밍업 앞머리 — 좁아진 밴드를 쓰면 52주 위치가 부풀려진다."""
     df = _frame(60)

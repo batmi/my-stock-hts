@@ -85,11 +85,15 @@ def judge_live(df, t, window=None):
     ind = indicators.calculate_indicators(sub)
     prev_rsi = ind.get('prev_rsi') if len(sub) >= 16 else None
 
-    # engine.analyze_buy 와 동일한 52주 위치 산식
-    recent = sub.tail(250)
-    h52, l52 = recent['high'].max(), recent['low'].min()
+    # engine.analyze_buy 와 동일한 52주 위치 산식 — indicators.w52_position(365 달력일 창).
+    #  [Fix 2026-09-17] 종전엔 tail(250) 사본이었다. 실매매는 2026-07-24, 백테스트는
+    #  2026-09-04(4b571c1)에 365일 창으로 옮겼는데 이 계측기만 옛 정의로 남아 '조립 방식
+    #  차이 0.19%'(전부 가격 모멘텀 항목 ±0.5)를 **엔진 결함처럼** 보고했다. 실매매는
+    #  now=datetime.now() 로 부르므로 여기서는 그 봉의 날짜를 '오늘'로 준다.
+    from datetime import datetime as _dt
     price = float(sub.iloc[-1]['close'])
-    w52_pos = (price - l52) / (h52 - l52) * 100 if h52 > l52 else 0.0
+    bar_day = _dt.strptime(str(sub.iloc[-1]['date'])[:8], '%Y%m%d')
+    w52_pos = indicators.w52_position(sub, price, now=bar_day)
 
     state, _, _ = analysis.classify_stock_state(
         df=sub, ind=ind, prev_rsi=prev_rsi, thresholds=None,
@@ -139,8 +143,8 @@ def main():
     ap.add_argument('--step', type=int, default=5, help='몇 거래일마다 대조할지')
     args = ap.parse_args()
 
-    import FinanceDataReader as fdr
-    lst = fdr.StockListing('KOSPI')
+    from tools.audit_common import listing
+    lst = listing('KOSPI')
     lst = lst[~lst['Name'].str.contains('우$|우B$|스팩', regex=True, na=False)]
     targets = lst.nlargest(args.stocks, 'Marcap')[['Code', 'Name']].values.tolist()
 
