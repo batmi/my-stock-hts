@@ -39,8 +39,17 @@ def _fdr_frame(n=200, start='2025-01-02'):
 
 
 @pytest.fixture(autouse=True)
-def clean_cache():
-    """실제 import·네트워크를 타지 않도록 라이브러리 슬롯만 채우고 fetch는 목으로 대체한다."""
+def clean_cache(monkeypatch):
+    """실제 import·네트워크를 타지 않도록 라이브러리 슬롯만 채우고 fetch는 목으로 대체한다.
+
+    [2026-09-17] 조회 순서가 Open API → FDR → pykrx(스크래핑 허용 시에만)로 바뀌었다. 이 파일의
+    캐시·쿨다운 테스트는 소스 자체가 아니라 get_daily 의 **기계장치**를 재므로, 종전 목
+    (`_fetch_pykrx`)을 그대로 쓰기 위해 스크래핑 게이트를 열고 Open API 는 끈다.
+    (`_fdr` 슬롯이 object() 라 _fetch_fdr 는 AttributeError → 다음 소스로 넘어간다.)
+    """
+    import config
+    monkeypatch.setattr(config, "KRX_WEB_SCRAPING_ALLOWED", True, raising=False)
+    monkeypatch.delenv("KRX_OPENAPI_KEY", raising=False)
     saved = (krx_daily._import_done, krx_daily._pykrx, krx_daily._fdr)
     krx_daily._import_done = True
     krx_daily._pykrx = object()     # is_available() True 유지 (_fetch_* 는 테스트가 patch)
@@ -86,13 +95,22 @@ def test_normalize_missing_columns_returns_none():
 # ---------------------------------------------------------
 # 소스 선택 / 폴백
 # ---------------------------------------------------------
-def test_pykrx_is_preferred():
-    with patch.object(krx_daily, '_fetch_pykrx', return_value=krx_daily._normalize(_pykrx_frame(), 'pykrx')), \
-         patch.object(krx_daily, '_fetch_fdr') as fdr_mock:
+def test_fdr_is_preferred_over_pykrx_scraping():
+    """[2026-09-17] pykrx(data.krx.co.kr 스크래핑)는 약관 위반으로 차단됐다 — 허용해도 맨 뒤다."""
+    with patch.object(krx_daily, '_fetch_pykrx', return_value=krx_daily._normalize(_pykrx_frame(), 'pykrx')) as pk, \
+         patch.object(krx_daily, '_fetch_fdr', return_value=krx_daily._normalize(_fdr_frame(), 'FDR')):
         df = krx_daily.get_daily('005930')
-    assert df.attrs['source'] == 'pykrx'
-    assert df['close'].iloc[0] == 10050
-    fdr_mock.assert_not_called()        # 1순위가 성공하면 폴백은 호출되지 않는다
+    assert df.attrs['source'] == 'FDR'
+    pk.assert_not_called()              # 앞 소스가 성공하면 스크래핑은 호출되지 않는다
+
+
+def test_pykrx_is_used_only_when_scraping_is_allowed(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "KRX_WEB_SCRAPING_ALLOWED", False, raising=False)
+    with patch.object(krx_daily, '_fetch_pykrx', return_value=krx_daily._normalize(_pykrx_frame(), 'pykrx')) as pk, \
+         patch.object(krx_daily, '_fetch_fdr', side_effect=RuntimeError('naver down')):
+        assert krx_daily.get_daily('005930') is None
+    pk.assert_not_called()
 
 
 def test_falls_back_to_fdr_when_pykrx_raises():
@@ -846,9 +864,7 @@ def test_FDR_상장목록은_Code컬럼이_없으면_None():
 
 
 def test_FDR_상장목록은_예외를_None으로_삼킨다():
-    krx_daily._lazy_import()
-    with patch.object(krx_daily, '_fdr') as fdr:
-        fdr.StockListing.side_effect = RuntimeError("network")
+    with patch.object(krx_daily, 'fdr_listing', side_effect=RuntimeError("network")):
         assert krx_daily._listing_map_from_fdr() is None
 
 

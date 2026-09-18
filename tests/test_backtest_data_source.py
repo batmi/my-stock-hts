@@ -128,7 +128,9 @@ def test_short_cached_lookback_is_not_reused_for_longer_request():
         norm = krx_daily._normalize(
             pd.DataFrame({'시가': [1], '고가': [2], '저가': [1], '종가': [2], '거래량': [1]},
                          index=pd.to_datetime(['2026-07-24'])), 'pykrx')
-        with patch.object(krx_daily, '_fetch_pykrx', return_value=norm) as m:
+        # [2026-09-17] 순서가 Open API → FDR → pykrx(게이트)라 목은 FDR 자리에 둔다
+        with patch.object(krx_daily, '_fetch_openapi', return_value=None), \
+             patch.object(krx_daily, '_fetch_fdr', return_value=norm) as m:
             krx_daily.get_daily('005930', lookback_days=730)     # 차트 경로
             krx_daily.get_daily('005930', lookback_days=3650)    # 백테스트 — 재조회돼야 한다
             assert m.call_count == 2

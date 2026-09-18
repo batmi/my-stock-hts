@@ -292,7 +292,7 @@ Secrets live in **environment variables**. Put them in a shell profile such as `
 | OpenDART | `DART_API_KEY` | optional | Domestic disclosure/dividend/financial features disabled |
 | FRED | `FRED_API_KEY` | optional | Only US indicator dates are missing |
 | TradingView | `TV_USERNAME` `TV_PASSWORD` | optional | Anonymous mode (lower quota and stability) |
-| KRX Data System | `KRX_ID` `KRX_PW` | optional | Gold, indices, and historical flows fall back to alternate sources |
+| KRX Open API | `KRX_OPENAPI_KEY` | optional | Stock dailies, indices, VKOSPI200, futures and spot gold fall back to alternate sources |
 | Trading journal sync | `JOURNAL_API_URL` `JOURNAL_API_KEY` and others | optional | Journal sync disabled |
 
 ---
@@ -407,25 +407,37 @@ export TV_PASSWORD="tv_password"
 - Without them it runs anonymously and logs a WARNING (INFO on successful login).
 - The token is cached for **7 days** in `data/tv_token.json` so restarts do not re-login — frequent logins trigger TradingView **CAPTCHA**. If a CAPTCHA appears, retry later or sign in once in a browser and restart.
 
-### 6.8 KRX Data System (`KRX_ID` / `KRX_PW`)
+### 6.8 KRX Open API (`KRX_OPENAPI_KEY`)
 
-Not an API key — these are the **web login ID and password for a [data.krx.co.kr](https://data.krx.co.kr) member account**. Sign up for free on the site and use those credentials.
+Sign up for free at [openapi.krx.co.kr](https://openapi.krx.co.kr) → apply for the **services** in the table below → request an **API key** on My Page (usually approved within a day). One key covers everything below; 10,000 calls per key per day.
 
 ```sh
-export KRX_ID="krx_id"
-export KRX_PW="krx_password"
+export KRX_OPENAPI_KEY="your_key"
 ```
 
-> ⚠️ **This is a password — use a dedicated account you do not reuse elsewhere.** A restart is required; a process already running will not receive these values.
+> The former `KRX_ID`/`KRX_PW` (data.krx.co.kr web login) are **no longer needed.** That path (pykrx scraping) violates KRX terms §10-2 (no automated collection) and got the IP blocked (2026-09-17); it is off by default (`config.KRX_WEB_SCRAPING_ALLOWED`). You can remove both variables from `.htsrc`.
 
-What these credentials switch on — without them everything **falls back silently**, so behavior is the same but data quality differs.
+Services to apply for (each is approved separately — an unapproved service answers 401 and falls back):
 
-| Item | With KRX | Difference vs fallback |
+| Service (category) | Used for | Without it |
 |---|---|---|
-| Historical investor flows | Range queries | The KIS flow API returns **only the last 30 trading days**, so multi-year backtests run with "smart money" switched off outside that window |
-| KRX spot gold | Real OHLC + volume | Naver provides **close only** → bars must be flattened (distorting ATR/ADX) and OBV is impossible without volume |
-| KOSPI200 / KOSDAQ150 daily | Settled bars + volume | tvDatafeed returns intermittent empty responses and zero index volume. **KOSDAQ150 has no ticker on Yahoo or FDR**, making tvDatafeed a single point of failure |
-| Listed-symbol master | Names and market caps | Used to validate ticker codes in AI output (KONEX is filled in from FDR) |
+| KOSPI / KOSDAQ / KONEX **daily trading info** (stocks) | Domestic stock dailies (indicators, backtests, audits) | FDR (Naver) fallback |
+| ETF / ETN **daily trading info** (ETP) | ETF/ETN dailies (charts, validation) | FDR (Naver) fallback |
+| KOSPI / KOSDAQ / KONEX **issue base info** (stocks) | Listed-symbol master (market type, AI output validation) | FDR cached listing |
+| KOSPI / KOSDAQ series **daily index prices** (indices) | Settled bars for KOSPI, KOSDAQ, KOSPI200, KOSDAQ150 | Real-time sources only |
+| **Derivative index prices** (indices) | VKOSPI200 with OHLC | None (mode 2 KIS only) |
+| **Futures daily trading info** (derivatives) | KOSPI200 futures front month (day and night) | None (mode 2 KIS only) |
+| **Gold market daily trading info** (general) | KRX spot gold OHLC + volume | Naver (close only → flattened bars) |
+
+The Open API is keyed by **one base date × all instruments**, so daily snapshots accumulate in `data/krx_openapi.db` and symbols are sliced from there. The app fetches at most 60 calls per request (the few missing days); the initial load is done once with a tool:
+
+```sh
+python3 tools/krx_openapi_backfill.py --days 1200            # operations (includes indicator warm-up)
+python3 tools/krx_openapi_backfill.py --days 4050 --only stocks   # 10 years of stocks for audits
+python3 tools/krx_openapi_backfill.py --status               # coverage
+```
+
+A Raspberry Pi can simply copy `data/krx_openapi.db` from the Mac (pure settled data, identical across machines). The previous day's data is published at 08:00 on the next business day, so **today's bar is topped up from FDR** and intraday prices still come from the real-time sources. Daily trading info arrives as raw prices; bars are adjusted only on days where a listed-share change and a price gap match the same ratio (splits/reverse splits).
 
 > KRX only publishes **settled bars after the close**, so intraday prices still come from the existing real-time sources.
 > **VKOSPI200 and KOSPI200 futures are mode-2 (KIS live) only.** Neither has an alternative real-time source, and filling the gap with settled bars leaves a stale number for the whole session — futures sessions cover nearly the whole day (day 09:00–15:45, night 18:00–06:00), drifting up to a full day (measured 40-point divergence during a night session), and a volatility index goes quiet precisely when volatility spikes. Rather than display an inaccurate number, both are omitted from the index list in Toss mode.

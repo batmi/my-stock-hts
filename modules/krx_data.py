@@ -169,6 +169,11 @@ def is_available():
     자격증명 없이 열리는 것은 개별 종목 일봉뿐이다 — 지수·금·파생은 전부 로그인 게이트라
     미리 걸러야 헛호출과 오해할 만한 실패 로그가 안 생긴다.
     """
+    #  [2026-09-17] 이 모듈의 웹 경로(data.krx.co.kr 로그인 스크래핑)는 약관 위반으로 IP 가
+    #   차단됐다. 기본 꺼져 있다(config.KRX_WEB_SCRAPING_ALLOWED). 공식 데이터는 Open API
+    #   (modules/krx_openapi)가 맡고, 아래 get_* 함수들이 그쪽을 먼저 본다.
+    if not getattr(config, "KRX_WEB_SCRAPING_ALLOWED", False):
+        return False
     if not has_credentials():
         return False
     _lazy_import()
@@ -190,6 +195,17 @@ def status_text():
     """
     if is_available():
         return True, f"KRX 공식 데이터 사용 ({KRX_COVERAGE})"
+    #  Open API 가 켜져 있으면 그쪽이 정본이다 — 웹 경로 상태는 아무 의미가 없다.
+    try:
+        from modules import krx_openapi
+        ok, msg = krx_openapi.status_text()
+        if ok or krx_openapi.api_key():
+            return ok, msg
+    except Exception:       # noqa: BLE001 - 상태 문구가 기동을 막으면 안 된다
+        pass
+    if not getattr(config, "KRX_WEB_SCRAPING_ALLOWED", False):
+        return False, ("KRX 공식 데이터 미사용 — KRX_OPENAPI_KEY 미설정(웹 스크래핑 경로는 약관 위반으로 "
+                       f"꺼져 있음) → 종전 소스로 폴백 ({KRX_COVERAGE})")
     import os
     missing = [n for n in ("KRX_ID", "KRX_PW") if not os.environ.get(n)]
     if missing:
@@ -366,6 +382,18 @@ def _finish(rows, source):
 # ---------------------------------------------------------------------------
 # KRX 금현물
 # ---------------------------------------------------------------------------
+def _openapi_first(fn_name, *args, **kwargs):
+    """Open API 가 켜져 있으면 그쪽 결과를 돌려준다(None 이면 호출부가 종전 경로로)."""
+    try:
+        from modules import krx_openapi
+        if not krx_openapi.is_available():
+            return None
+        return getattr(krx_openapi, fn_name)(*args, **kwargs)
+    except Exception as e:      # noqa: BLE001 - 어떤 실패든 종전 경로로 넘긴다
+        logger.debug(f"[KRXDATA] Open API {fn_name} 실패: {e}")
+        return None
+
+
 def get_gold_daily(days=400, use_cache=True):
     """KRX 금현물(원/g) 일봉 — ['date','open','high','low','close','volume'], attrs['source']='KRX'.
 
@@ -384,6 +412,13 @@ def get_gold_daily(days=400, use_cache=True):
             return None
         if hit is not None:
             return hit
+
+    df = _openapi_first("gold_daily", days)
+    if df is not None and not df.empty:
+        _cache_put(key, df)
+        return df
+    if not is_available():
+        return None
 
     rows = []
     #  [Fix 2026-09-07] 구간 조회 **실패**와 '그 구간에 데이터가 없다'를 갈라야 한다.
@@ -440,7 +475,7 @@ def get_index_daily(market_type, days=400, use_cache=True):
     지원하지 않는 지수(V코스피200·선물)는 None — 그건 전용 함수가 따로 있다.
     """
     ticker = INDEX_TICKERS.get(market_type)
-    if not ticker or not is_available():
+    if not ticker:
         return None
 
     key = ("index", market_type, int(days))
@@ -450,6 +485,13 @@ def get_index_daily(market_type, days=400, use_cache=True):
             return None
         if hit is not None:
             return hit
+
+    df = _openapi_first("index_daily", market_type, days)
+    if df is not None and not df.empty:
+        _cache_put(key, df)
+        return df
+    if not is_available():
+        return None
 
     df = None
     try:
@@ -546,6 +588,13 @@ def get_k200_futures_daily(session="F", days=400, use_cache=True):
         if hit is not None:
             return hit
 
+    df = _openapi_first("k200_futures_daily", session, days)
+    if df is not None and not df.empty:
+        _cache_put(key, df)
+        return df
+    if not is_available():
+        return None
+
     isu, _day = _front_contract(PROD_K200_FUTURES)
     rows = []
     if isu:
@@ -601,6 +650,15 @@ def get_vkospi_daily(days=400, use_cache=True):
             return None
         if hit is not None:
             return hit
+
+    # Open API 파생상품지수에는 '코스피 200 변동성지수'가 **시·고·저까지** 있다 — 선물 SPOT_PRC 로
+    #  종가만 모으던 종전 경로보다 낫다.
+    df = _openapi_first("index_daily", "VKOSPI", days)
+    if df is not None and not df.empty:
+        _cache_put(key, df)
+        return df
+    if not is_available():
+        return None
 
     want_from, _ = _clamp_range(days)       # 이 날짜까지 덮으면 더 받을 이유가 없다
     spot = {}

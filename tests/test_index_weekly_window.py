@@ -67,6 +67,10 @@ def test_gold_pages_until_a_window_comes_back_empty(monkeypatch):
         return [{"TRD_DD": f"2026/0{len(calls)}/01", "TDD_OPNPRC": "1", "TDD_HGPRC": "2",
                  "TDD_LWPRC": "1", "TDD_CLSPRC": "1.5", "ACC_TRDVOL": "10"}]
 
+    import config
+    monkeypatch.setattr(config, "KRX_WEB_SCRAPING_ALLOWED", True, raising=False)   # 웹 경로의 페이징을 잰다
+    monkeypatch.delenv("KRX_OPENAPI_KEY", raising=False)
+    monkeypatch.setattr(krx_data, "is_available", lambda: True)
     monkeypatch.setattr(krx_data, "_post", _post)
     krx_data.get_gold_daily(2000, use_cache=False)
     assert len(calls) == 3, "빈 구간을 만나고도 계속 요청했다"

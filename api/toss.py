@@ -974,7 +974,10 @@ def _toss_apply_regular_closes(code, df):
         if df is None or df.empty or 'date' not in df.columns:
             return df
         dates = [str(d) for d in df['date']]
-        targets = [d for d in dates if d >= _KRX_AFTER_MARKET_START]
+        #  [2026-09-18] Open API 일봉(krx_daily._fetch_openapi)은 그 날짜까지 이미 정규장 종가다 —
+        #   FDR 로 덧댄 꼬리(오늘·미게시일)만 보정 대상이다. 없는 날을 yfinance 에 묻지 않게 된다.
+        upto = str(df.attrs.get('official_close_upto') or '')
+        targets = [d for d in dates if d >= _KRX_AFTER_MARKET_START and d > upto]
         if not targets:
             return df
         closes = {}

@@ -3450,6 +3450,24 @@ PRESETS_FILE = os.path.join(JSON_DIR, "presets.json")
 # [추가] 거래 내역 및 스냅샷을 저장할 SQLite DB 파일 경로
 DB_FILE_PATH = os.path.join(DB_DIR, "trade_history.db")
 
+# ==========================================================
+# KRX Open API(openapi.krx.co.kr) — 공식 일별 확정 데이터 (modules/krx_openapi.py)
+# ==========================================================
+#  [2026-09-17] data.krx.co.kr 화면을 pykrx 로 긁던 경로는 약관 위반(자동화 수집)으로 IP 가
+#   1일 차단됐다. 종목 일봉·지수·V코스피200·코스피200선물·금현물·종목기본정보는 이제
+#   인증키(환경변수 KRX_OPENAPI_KEY) 하나로 Open API 에서 받는다 — **KRX_ID/KRX_PW 불필요.**
+#   조회 단위가 '기준일 하루 × 전 종목'이라 날짜별 스냅샷을 아래 SQLite 에 누적한다.
+KRX_OPENAPI_DB_PATH = os.path.join(DATA_DIR, "krx_openapi.db")
+#  앱 안에서 한 요청이 할 수 있는 호출 수. 매일 빠진 며칠(시장 2 × 며칠)만 받으면 되므로
+#   넉넉하다. 첫 적재(수년치)는 tools/krx_openapi_backfill.py 로 한 번 한다 — 캡을 넘게
+#   비어 있으면 부분 이력 대신 None 을 돌려주고 종전 소스로 폴백한다(구멍 난 시계열 금지).
+KRX_OPENAPI_MAX_INLINE_CALLS = 60
+KRX_OPENAPI_CALL_INTERVAL_SEC = 0.2        # 호출 간격(초). 일 한도 10,000회와 별개로 서버 예의
+#  data.krx.co.kr 웹 화면 스크래핑(pykrx 지수/수급/업종·krx_data 로그인 경로)을 허용할지.
+#   기본 False — 약관 제10조 제2호 위반이며 재탐지 시 다시 차단된다. True 로 켜도 KRX_ID/KRX_PW 가
+#   있어야만 동작한다. 켜야 할 이유가 생기면 그 이유를 여기 적을 것.
+KRX_WEB_SCRAPING_ALLOWED = False
+
 # [관찰 모드] 페이퍼 트레이딩 전용 DB. 실계좌 DB와 **파일을 분리**한다 —
 #  trailing_stops·half_tp_status가 code를 PK로 쓰기 때문에 파일을 공유하면
 #  실계좌 포지션의 트레일링 최고가가 가상 포지션에 오염된다.

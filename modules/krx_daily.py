@@ -169,6 +169,43 @@ def _fetch_fdr(code, start, end):
     return _normalize(_fdr.DataReader(code, start, end), 'FDR')
 
 
+def _fetch_openapi(code, lookback_days):
+    """KRX Open API 확정 일봉 + 오늘(및 아직 안 실린 직전 영업일) 봉은 FDR 로 덧댄다.
+
+    Open API 는 전일까지의 확정분만 있다(다음 영업일 08:00 갱신). 화면·판정 경로는 오늘 봉을
+    기대하므로(장중엔 진행 중인 봉, 마감 후엔 확정 봉) 마지막 확정일 이후만 FDR 에서 받아
+    이어 붙인다. FDR 이 죽으면 확정분만 돌려준다 — 실시간가 오버레이(apply_realtime_price)가
+    오늘 봉을 만들어 주므로 판정은 이어진다. 구간이 완전하지 않으면(첫 적재 전) None.
+    """
+    from modules import krx_openapi
+    if not krx_openapi.is_available():
+        return None
+    base = krx_openapi.stock_daily(code, lookback_days)
+    if base is None or base.empty:
+        return None
+    last = str(base['date'].iloc[-1])
+    # Open API 의 종가는 정규장 15:30 단일가다(실측 2026-09-14 삼성전자 249,000 = KIS 일봉·거래소 기준가,
+    #  포털/FDR 248,500 은 애프터 최종가). 이 날짜까지는 정규장 종가 보정(api.toss._toss_apply_regular_closes)
+    #  이 손댈 필요가 없다 — 덧댄 FDR 봉만 대상이다.
+    base.attrs['official_close_upto'] = last
+    today = datetime.now().strftime('%Y%m%d')
+    if last < today:
+        try:
+            tail = _fetch_fdr(code, last, today)
+        except Exception as ex:     # noqa: BLE001 - 덧대기 실패는 확정분으로 충분하다
+            logger.debug(f"[KRX] Open API 뒤 FDR 덧대기 실패({code}): {ex}")
+            tail = None
+        if tail is not None and not tail.empty:
+            tail = tail[tail['date'] > last]
+            if not tail.empty:
+                merged = pd.concat([base, tail[_COLUMNS]], ignore_index=True)
+                merged.attrs.update(base.attrs)
+                merged.attrs['source'] = 'OPENAPI+FDR'
+                return merged
+    base.attrs['source'] = 'OPENAPI'
+    return base
+
+
 def is_domestic_code(code):
     """국내 6자리 종목코드인가.
 
@@ -232,14 +269,20 @@ def get_daily(code, lookback_days=None, use_cache=True):
     s, e = start.strftime('%Y%m%d'), end.strftime('%Y%m%d')
 
     df = None
-    for name, fetch in (('pykrx', _fetch_pykrx), ('FDR', _fetch_fdr)):
+    # [2026-09-17] 순서: Open API(공식·확정분, 오늘 봉은 FDR 로 덧댐) → FDR(네이버) → pykrx.
+    #  pykrx 는 data.krx.co.kr 화면 스크래핑이라 약관 위반으로 IP 가 차단됐다(config
+    #  KRX_WEB_SCRAPING_ALLOWED 주석). 기본 꺼져 있고, 켜도 맨 뒤다.
+    sources = [('OPENAPI', lambda c, s_, e_: _fetch_openapi(c, lookback_days)), ('FDR', _fetch_fdr)]
+    if getattr(config, 'KRX_WEB_SCRAPING_ALLOWED', False):
+        sources.append(('pykrx', _fetch_pykrx))
+    for name, fetch in sources:
         try:
             df = fetch(code, s, e)
         except Exception as ex:     # noqa: BLE001 - 어느 소스가 죽어도 다음 소스로 넘어간다
             logger.debug(f"[KRX] {name} 조회 실패({code}): {ex}")
             df = None
         if df is not None and not df.empty:
-            df.attrs['source'] = name
+            df.attrs.setdefault('source', name)
             break
 
     if df is None or df.empty:
@@ -359,13 +402,32 @@ def _listing_map_from_krx():
     return result or None
 
 
-def _listing_map_from_fdr():
-    """FinanceDataReader 상장 목록 {코드: {'name','marcap'}}. 실패 시 None."""
-    _lazy_import()
-    if _fdr is None:
-        return None
+def _listing_map_from_openapi():
+    """KRX Open API 종목기본정보 + 최신 일별매매 시총 {코드: {'name','marcap','market'}}. 실패 시 None."""
     try:
-        df = _fdr.StockListing('KRX')
+        from modules import krx_openapi
+        if not krx_openapi.is_available():
+            return None
+        raw = krx_openapi.listing_map()
+    except Exception as e:      # noqa: BLE001
+        logger.debug(f"[KRX] Open API 상장목록 실패: {e}")
+        return None
+    if not raw:
+        return None
+    return {code: {'name': v.get('name', ''), 'marcap': float(v.get('marcap') or 0.0),
+                   'market': str(v.get('market') or '').upper()}
+            for code, v in raw.items() if is_domestic_code(code)} or None
+
+
+def _listing_map_from_fdr():
+    """FinanceDataReader 상장 목록 {코드: {'name','marcap'}}. 실패 시 None.
+
+    [2026-09-17] fdr.StockListing 직접 호출 대신 fdr_listing(캐시 저장소의 최근 날짜로 견딤)을 쓴다 —
+     data.krx.co.kr 목록 엔드포인트가 죽어 있는 동안(09-08 404 · 09-17 차단) 여기서 None 이 나면
+     시장 판정(get_market)이 통째로 '모름'이 된다.
+    """
+    try:
+        df = fdr_listing('KRX')
     except Exception as e:      # noqa: BLE001 - 네트워크/파싱 실패 모두 '검증 불가'
         logger.debug(f"[KRX] 상장목록 조회 실패: {e}")
         return None
@@ -413,7 +475,7 @@ def get_listing_map(use_cache=True):
             if now - _LISTING_FAIL_TS[0] < _FAIL_COOLDOWN_SEC:
                 return None
 
-    result = _listing_map_from_krx()
+    result = _listing_map_from_openapi() or _listing_map_from_krx()
     if result:
         # KONEX 보충 — 실패해도 무해하다(공식 목록만으로도 KOSPI·KOSDAQ 전종목을 덮는다).
         fallback = _listing_map_from_fdr()

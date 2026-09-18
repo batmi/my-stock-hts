@@ -13,8 +13,16 @@ from modules import krx_data
 
 
 @pytest.fixture(autouse=True)
-def _isolated():
-    """자격증명·라이브러리 슬롯을 채워 두고(실제 로그인 없음) 캐시를 비운다."""
+def _isolated(monkeypatch):
+    """자격증명·라이브러리 슬롯을 채워 두고(실제 로그인 없음) 캐시를 비운다.
+
+    [2026-09-17] 이 모듈의 웹(로그인) 경로는 약관 위반으로 기본 꺼졌다(config.KRX_WEB_SCRAPING_ALLOWED)
+    — 공식 데이터는 modules/krx_openapi 가 맡는다. 여기 테스트는 웹 경로의 파싱·캐시 **기계장치**를
+    재므로 게이트를 열고 Open API 는 끈다. 게이트 자체는 test_krx_openapi 가 잰다.
+    """
+    import config
+    monkeypatch.setattr(config, "KRX_WEB_SCRAPING_ALLOWED", True, raising=False)
+    monkeypatch.delenv("KRX_OPENAPI_KEY", raising=False)
     saved = (krx_data._import_done, krx_data._pykrx_webio)
     krx_data._import_done = True
     krx_data._pykrx_webio = object()        # is_available() 통과용 — _post 는 테스트가 patch
@@ -23,6 +31,19 @@ def _isolated():
         yield
     krx_data.clear_cache()
     krx_data._import_done, krx_data._pykrx_webio = saved
+
+
+def test_status_text_points_to_openapi_when_scraping_is_off(monkeypatch):
+    """기본 상태(스크래핑 OFF·키 없음)에서는 KRX_ID/KRX_PW 가 아니라 **Open API 키**를 안내한다."""
+    import config
+    monkeypatch.setattr(config, "KRX_WEB_SCRAPING_ALLOWED", False, raising=False)
+    ok, msg = krx_data.status_text()
+    assert ok is False and "KRX_OPENAPI_KEY" in msg and "KRX_ID" not in msg
+    monkeypatch.setenv("KRX_OPENAPI_KEY", "K")
+    from modules import krx_openapi
+    krx_openapi._DISABLED_UNTIL[0] = 0.0
+    ok, msg = krx_data.status_text()
+    assert ok is True and "Open API" in msg
 
 
 # ---------------------------------------------------------------------------

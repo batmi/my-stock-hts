@@ -2520,6 +2520,22 @@ def test_regular_closes_keep_portal_value_when_unknown(monkeypatch):
     assert list(out['close']) == [248500.0], "모르면 추측해 덮지 않는다"
 
 
+def test_regular_closes_skip_dates_already_official_from_openapi(monkeypatch):
+    """[2026-09-18] Open API 일봉은 정규장 종가라 그 날짜까지는 손대지도, yfinance 에 묻지도 않는다."""
+    import api
+    from api import toss as _t
+    _reset_krx_store({})
+    calls = []
+    monkeypatch.setattr(_t, "_toss_yf_regular_closes",
+                        lambda code, a, b: calls.append((a, b)) or {"20260916": 999.0})
+    monkeypatch.setattr(api, "_nxt_quote_phase", lambda: "offhours")
+    df = _bars([("20260914", 249000.0), ("20260915", 248500.0), ("20260916", 248000.0)])
+    df.attrs['official_close_upto'] = "20260915"
+    out = api._toss_apply_regular_closes("005930", df)
+    assert list(out['close']) == [249000.0, 248500.0, 999.0]
+    assert calls == [("20260916", "20260916")], "Open API 구간(~09-15)은 조회 대상이 아니다"
+
+
 def test_regular_closes_do_not_ask_yf_for_today_during_session(monkeypatch):
     """정규장 중·휴게 전의 오늘 봉은 아직 정규장 종가가 없는 게 정상 — yfinance 를 두드리지 않는다."""
     import api

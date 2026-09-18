@@ -216,8 +216,8 @@ def test_krx_daily_cache_expires_at_close(monkeypatch):
 
     fresh = pd.DataFrame({'date': [TRADING_DAY], 'open': [1.0], 'high': [1.0],
                           'low': [1.0], 'close': [2.0], 'volume': [1.0]})
-    monkeypatch.setattr(krx_daily, '_fetch_pykrx', lambda c, s, e: fresh)
-    monkeypatch.setattr(krx_daily, '_fetch_fdr', lambda c, s, e: None)
+    monkeypatch.setattr(krx_daily, '_fetch_openapi', lambda c, d: None)
+    monkeypatch.setattr(krx_daily, '_fetch_fdr', lambda c, s, e: fresh)
 
     try:
         out = krx_daily.get_daily('005930')
