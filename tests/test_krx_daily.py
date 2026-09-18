@@ -5,7 +5,7 @@
 모든 테스트는 네트워크를 타지 않도록 소스 함수를 목으로 대체한다.
 """
 import time
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
@@ -111,6 +111,17 @@ def test_pykrx_is_used_only_when_scraping_is_allowed(monkeypatch):
          patch.object(krx_daily, '_fetch_fdr', side_effect=RuntimeError('naver down')):
         assert krx_daily.get_daily('005930') is None
     pk.assert_not_called()
+
+
+def test_investor_netbuy_is_gated_by_scraping_flag(monkeypatch):
+    """수급(투자자별 순매수)은 pykrx 스크래핑뿐이라 게이트가 꺼지면 KRX 를 두드리지 않고 None."""
+    import config
+    monkeypatch.setattr(config, "KRX_WEB_SCRAPING_ALLOWED", False, raising=False)
+    krx_daily._INVESTOR_CACHE.clear()
+    fake = MagicMock()
+    with patch.object(krx_daily, '_pykrx', fake), patch.object(krx_daily, '_import_done', True):
+        assert krx_daily.get_investor_netbuy('005930', '20260101', '20260131') is None
+    fake.get_market_trading_volume_by_date.assert_not_called()
 
 
 def test_falls_back_to_fdr_when_pykrx_raises():

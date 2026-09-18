@@ -410,7 +410,7 @@ def announce_smart_money_source(where="백테스트"):
         _note_provenance(msg)
     else:
         # KRX가 하나도 없다 = 이 축이 사실상 빠진 채로 도는 중이다. 눈에 띄어야 한다.
-        msg += " — KRX_ID/KRX_PW 가 없으면 이 축은 최근 구간 밖에서 꺼진 것으로 계산된다."
+        msg += " — KRX 웹 스크래핑이 꺼져 있으면(기본) 이 축은 최근 구간 밖에서 꺼진 것으로 계산된다."
         logger.warning(msg)
         try:
             config.console.print(f"[dim yellow]※ {msg}[/dim yellow]")

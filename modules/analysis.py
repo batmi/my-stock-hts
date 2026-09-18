@@ -860,7 +860,7 @@ def get_krx_gold_data(symbol=None):
      모든 봉을 종가로 평탄화해야 했다 — True Range 가 종가 차분이 되어 ATR·ADX 가 왜곡되고,
      거래량 이력이 없어 OBV 는 '-' 로 남았다. data.krx.co.kr 로그인이 생기면서 실제 OHLC 와
      거래량을 받게 됐다(네이버 종가와 겹치는 60일 불일치 0으로 드롭인 확인).
-     KRX_ID/KRX_PW 가 없으면 종전 네이버 경로로 그대로 폴백하므로 동작은 종전과 같다.
+     2026-09-18부터는 KRX Open API(krx_data.get_gold_daily)가 정본이고, 없으면 네이버로 폴백한다.
 
     KRX는 마감 후 확정 봉만 주므로 **장중 현재가는 네이버 현재가로 덮는다**(60초 캐시).
     attrs['source'] 는 'KRX' 또는 'NAVER'. 실패 시 None(성공 캐시가 있으면 그것을 돌려준다).

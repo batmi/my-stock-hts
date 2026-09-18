@@ -551,6 +551,9 @@ def get_ticker_name(code):
 # [자격증명] data.krx.co.kr 회원 계정이 필요하다(KRX_ID / KRX_PW 환경변수). API 키가 아니라
 #  웹 로그인이며, 없으면 pykrx가 조용히 빈 DataFrame을 준다 → 여기서 None을 돌려주고
 #  호출부는 기존 KIS 30일 경로로 폴백한다. 즉 자격증명이 없어도 동작은 종전과 같다.
+# [게이트 · 2026-09-18] 이 호출은 화면용 엔드포인트 스크래핑이라 KRX_WEB_SCRAPING_ALLOWED
+#  가 꺼져 있으면(기본) 아예 부르지 않는다 — 감사 배치가 이 계열을 두드린 것이 IP 차단의
+#  원인이었다. Open API 에는 투자자별 순매수 서비스가 없어 대체 소스도 없다 → None(KIS 30일).
 _INVESTOR_CACHE = {}              # {(code, start, end): df | None}
 _INVESTOR_CACHE_LOCK = threading.RLock()
 _INVESTOR_CACHE_MAX = 200
@@ -577,6 +580,8 @@ def get_investor_netbuy(code, start, end):
         if key in _INVESTOR_CACHE:
             return _INVESTOR_CACHE[key]
 
+    if not getattr(config, 'KRX_WEB_SCRAPING_ALLOWED', False):
+        return None
     _lazy_import()
     if _pykrx is None:
         return None
@@ -597,7 +602,7 @@ def get_investor_netbuy(code, start, end):
         else:
             # 자격증명이 없으면 pykrx가 로그인 실패를 찍고 빈 프레임을 준다.
             logger.debug(f"[KRX] 수급 조회 결과 없음({code} {start}~{end}) "
-                         f"— KRX_ID/KRX_PW 미설정이면 정상이다")
+                         f"— 스크래핑 OFF·KRX_ID/KRX_PW 미설정이면 정상이다")
     except Exception as e:      # noqa: BLE001
         logger.debug(f"[KRX] 수급 조회 실패({code} {start}~{end}): {e}")
         df = None

@@ -209,7 +209,7 @@ def test_kis_fallback_warns_when_coverage_is_partial(capsys):
         backtest._append_smart_money_signal(_bars(dates), "005930", is_overseas=False)
 
     printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list if c.args)
-    assert "KRX_ID" in printed and "수급 데이터가 최근 구간" in printed
+    assert "스크래핑" in printed and "수급 데이터가 최근 구간" in printed
 
 
 # ==========================================================
@@ -297,7 +297,7 @@ def test_a_run_without_krx_says_so_loudly():
 
     assert dist == {"KIS": 1, "없음": 1}
     printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list if c.args)
-    assert "KRX_ID" in printed
+    assert "스크래핑" in printed
 
 
 def test_a_run_with_krx_records_itself_without_nagging():

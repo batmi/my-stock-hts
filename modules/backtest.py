@@ -338,7 +338,7 @@ def _append_smart_money_signal(df, code, is_overseas, lag=None):
             if covered < 95.0:
                 config.console.print(
                     f"[dim yellow]※ 안내: 수급 데이터가 최근 구간({covered:.0f}%)만 있습니다 — "
-                    f"KRX_ID/KRX_PW를 설정하면 전 구간을 조회합니다. "
+                    f"KRX Open API 에는 투자자별 순매수가 없고 웹 스크래핑은 차단돼 기본 OFF 입니다. "
                     f"그 전까지 '스마트머니'는 나머지 구간에서 꺼진 것으로 계산됩니다.[/dim yellow]")
         
         merged = pd.merge(df, inv_df, on='date', how='left')
