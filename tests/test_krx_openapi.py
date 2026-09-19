@@ -267,3 +267,44 @@ def test_pykrx_scraping_is_off_by_default(monkeypatch):
     krx_daily.clear_cache()
     krx_daily.get_daily("005930", lookback_days=4, use_cache=False)
     assert calls == [], "스크래핑이 꺼져 있는데 pykrx 를 불렀다"
+
+
+def test_a_blank_body_is_retried_but_a_401_is_not(tmp_path, monkeypatch):
+    """백필 5,350콜째의 빈 본문('') 한 번이 배치를 멈추면 안 된다 — 일시 오류만 짧게 재시도."""
+    import requests
+    monkeypatch.setattr(config, "KRX_OPENAPI_DB_PATH", str(tmp_path / "oa.db"), raising=False)
+    monkeypatch.setenv(oa.ENV_KEY, "TESTKEY")
+    monkeypatch.setattr(oa, "_throttle", lambda: None)
+    monkeypatch.setattr(oa, "TRANSIENT_RETRY_WAIT_SEC", 0.0)
+    oa._DISABLED_UNTIL[0] = 0.0
+    bodies = ["", "", '{"OutBlock_1": [{"BAS_DD": "20190426", "IDX_NM": "코스피", "CLSPRC_IDX": "1"}]}']
+
+    class _Resp:
+        status_code = 200
+
+        def __init__(self, text):
+            self.text = text
+
+        def json(self):
+            import json
+            return json.loads(self.text)
+
+    calls = []
+    monkeypatch.setattr(requests, "get", lambda *a, **k: calls.append(1) or _Resp(bodies[len(calls) - 1]))
+    assert oa._call("kospi_dd_trd", "20190426")[0]["IDX_NM"] == "코스피"
+    assert len(calls) == 3                                   # 빈 본문 2회 뒤 성공
+
+    calls.clear()
+    monkeypatch.setattr(requests, "get", lambda *a, **k: calls.append(1) or _Resp(""))
+    with pytest.raises(oa.OpenAPIError) as ei:
+        oa._call("kospi_dd_trd", "20190426")
+    assert ei.value.transient and len(calls) == oa.TRANSIENT_RETRIES + 1
+
+    class _Denied(_Resp):
+        status_code = 401
+    calls.clear()
+    monkeypatch.setattr(requests, "get", lambda *a, **k: calls.append(1) or _Denied(""))
+    with pytest.raises(oa.OpenAPIError) as ei:
+        oa._call("kospi_dd_trd", "20190426")
+    assert ei.value.status == 401 and len(calls) == 1        # 인증 거부는 재시도하지 않는다
+    oa._DISABLED_UNTIL[0] = 0.0

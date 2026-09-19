@@ -93,9 +93,10 @@ _DISABLED_REASON = [""]
 
 
 class OpenAPIError(RuntimeError):
-    def __init__(self, message, status=None):
+    def __init__(self, message, status=None, transient=False):
         super().__init__(message)
         self.status = status
+        self.transient = transient      # 빈 본문·네트워크·5xx — 잠깐 뒤 다시 물어볼 만한 것
 
 
 # ---------------------------------------------------------------------------
@@ -234,8 +235,31 @@ def _seconds_until_midnight():
     return max(60.0, (nxt - now).total_seconds())
 
 
+TRANSIENT_RETRIES = 2          # 빈 본문·네트워크 오류·5xx 는 잠깐의 것이라 몇 번 더 묻는다
+TRANSIENT_RETRY_WAIT_SEC = 1.5
+
+
 def _call(api_id, bas_dd):
-    """한 (서비스, 기준일)을 받는다 → 행 리스트. 실패는 OpenAPIError."""
+    """한 (서비스, 기준일)을 받는다 → 행 리스트. 실패는 OpenAPIError.
+
+    [왜 재시도 · 2026-09-19] 백필 5,350콜째에 knx_bydd_trd 20190426 이 본문 '' 로 왔다(바로
+    다시 부르니 200·47KB). 한 번의 빈 응답이 수천 콜 배치를 멈추게 하면 안 된다 — 일시적인
+    것(빈 본문·네트워크·5xx)만 짧게 재시도하고, 401/403/429·구조 이상은 그대로 올린다.
+    """
+    last = None
+    for attempt in range(TRANSIENT_RETRIES + 1):
+        try:
+            return _call_once(api_id, bas_dd)
+        except OpenAPIError as e:
+            if not e.transient or attempt == TRANSIENT_RETRIES:
+                raise
+            last = e
+            logger.debug(f"[KRX-OPENAPI] 일시 실패 재시도 {attempt + 1}/{TRANSIENT_RETRIES}: {e}")
+            time.sleep(TRANSIENT_RETRY_WAIT_SEC)
+    raise last      # pragma: no cover - 루프가 반드시 return/raise 한다
+
+
+def _call_once(api_id, bas_dd):
     if api_id not in API:
         raise OpenAPIError(f"모르는 서비스: {api_id}")
     key = api_key()
@@ -251,7 +275,7 @@ def _call(api_id, bas_dd):
         resp = requests.get(url, params={"basDd": str(bas_dd)},
                             headers={"AUTH_KEY": key, "User-Agent": "my-stock-hts"}, timeout=30)
     except Exception as e:      # noqa: BLE001 - 네트워크 실패는 한 종류로 올린다
-        raise OpenAPIError(f"요청 실패 {api_id} {bas_dd}: {e}") from e
+        raise OpenAPIError(f"요청 실패 {api_id} {bas_dd}: {e}", transient=True) from e
     if resp.status_code == 429:
         _disable(_seconds_until_midnight(), "일 호출 한도(10,000회) 초과")
         raise OpenAPIError("일 호출 한도 초과", status=429)
@@ -261,11 +285,11 @@ def _call(api_id, bas_dd):
         raise OpenAPIError(f"인증 거부 HTTP {resp.status_code} {api_id}", status=resp.status_code)
     if resp.status_code != 200:
         raise OpenAPIError(f"HTTP {resp.status_code} {api_id} {bas_dd}: {resp.text[:120]}",
-                           status=resp.status_code)
+                           status=resp.status_code, transient=resp.status_code >= 500)
     try:
         data = resp.json()
     except ValueError as e:
-        raise OpenAPIError(f"JSON 아님 {api_id} {bas_dd}: {resp.text[:120]!r}") from e
+        raise OpenAPIError(f"JSON 아님 {api_id} {bas_dd}: {resp.text[:120]!r}", transient=True) from e
     if isinstance(data, dict) and "OutBlock_1" in data:
         rows = data.get("OutBlock_1") or []
     elif isinstance(data, dict) and str(data.get("respCode", "")).startswith("4"):
