@@ -386,7 +386,7 @@ def _openapi_first(fn_name, *args, **kwargs):
     """Open API 가 켜져 있으면 그쪽 결과를 돌려준다(None 이면 호출부가 종전 경로로)."""
     try:
         from modules import krx_openapi
-        if not krx_openapi.is_available():
+        if not krx_openapi.is_configured():     # 쿨다운 중에도 받아 둔 확정분은 읽는다
             return None
         return getattr(krx_openapi, fn_name)(*args, **kwargs)
     except Exception as e:      # noqa: BLE001 - 어떤 실패든 종전 경로로 넘긴다

@@ -105,9 +105,19 @@ def api_key():
     return (os.environ.get(ENV_KEY) or "").strip()
 
 
+def is_configured():
+    """인증키가 있는가 — 저장소(로컬 DB)를 읽어도 되는 조건. 쿨다운과 무관하다."""
+    return bool(api_key())
+
+
 def is_available():
-    """인증키가 있고 쿨다운(401/429)에 걸려 있지 않은가."""
-    return bool(api_key()) and time.time() >= _DISABLED_UNTIL[0]
+    """인증키가 있고 쿨다운(401/429)에 걸려 있지 않은가 — **네트워크 호출**이 가능한 조건.
+
+    조회 함수(stock_daily 등)는 이걸로 막지 않는다. 429 로 자정까지 쿨다운이 걸린 날에도
+    이미 받아 둔 확정분은 그대로 읽어야 한다(_ensure_or_none 이 꼬리만 잘라 준다) —
+    안 그러면 한도 한 번에 지수·선물·금이 하루 종일 사라진다(스크래핑 폴백은 기본 OFF).
+    """
+    return is_configured() and time.time() >= _DISABLED_UNTIL[0]
 
 
 def status_text():
@@ -437,15 +447,41 @@ def _start_dd(lookback_days, end_dd):
     return (e - timedelta(days=int(lookback_days))).strftime("%Y%m%d")
 
 
+STORED_TAIL_MAX_DAYS = 3      # 쿨다운 중 잘라 낼 수 있는 꼬리(평일) 최대 — 연휴 뒤 첫날 정도
+
+
+def _stored_span(api_ids, start_dd, end_dd, now=None):
+    """네트워크 없이 저장소만으로 완전한 구간 (start, end') — 결손이 꼬리(최신 쪽)에만 있으면
+    그 앞까지로 끝을 당긴다. 결손이 중간에 있거나 남는 날이 없으면 None."""
+    todo = missing_days(api_ids, start_dd, end_dd, now=now)
+    if not todo:
+        return start_dd, end_dd
+    first_missing = min(dd for _, dd in todo)
+    days = _weekdays(start_dd, end_dd)
+    kept = [d for d in days if d < first_missing]
+    # 잘라도 되는 건 '아직 못 받은 최근 며칠'뿐이다 — 그보다 깊은 결손은 창 자체가 짧아져
+    #  지표(EMA·52주)가 틀어지므로 부분 이력 대신 None.
+    if not kept or len(days) - len(kept) > STORED_TAIL_MAX_DAYS:
+        return None
+    return start_dd, kept[-1]
+
+
 def _ensure_or_none(api_ids, lookback_days, max_calls, now=None):
-    """구간을 채우고 완전하면 (start, end), 아니면 None."""
+    """구간을 채우고 완전하면 (start, end), 아니면 None.
+
+    네트워크를 못 쓰는 동안(쿨다운·호출 실패)은 저장소만으로 완전한 구간을 돌려준다 — 최신
+    하루가 비어 있을 뿐이면 그 전날까지. 호출부(krx_daily._fetch_openapi)가 그 뒤는 FDR 로
+    덧대므로 오늘 봉이 빠지지 않는다. 중간에 구멍이 있으면 부분 이력 대신 None(모듈 규약).
+    """
     end_dd = latest_available_dd(now)
     start_dd = _start_dd(lookback_days, end_dd)
+    if time.time() < _DISABLED_UNTIL[0]:
+        return _stored_span(api_ids, start_dd, end_dd, now=now)
     try:
         remaining, _ = ensure(api_ids, start_dd, end_dd, max_calls=max_calls, now=now)
     except OpenAPIError as e:
-        logger.warning(f"[KRX-OPENAPI] 적재 실패({','.join(api_ids)}): {e}")
-        return None
+        logger.warning(f"[KRX-OPENAPI] 적재 실패({','.join(api_ids)}): {e} — 받아 둔 확정분만 쓴다")
+        return _stored_span(api_ids, start_dd, end_dd, now=now)
     if remaining > 0:
         return None
     return start_dd, end_dd
@@ -483,7 +519,7 @@ def stock_daily(code, lookback_days, max_calls=None, now=None):
     상장 전·폐지 후 날짜는 그냥 없다(폐지 종목도 마지막 봉까지 그대로 나온다 —
     [[backtest-data-end-exit]] 가 다루는 바로 그 표본이다).
     """
-    if not is_available():
+    if not is_configured():
         return None
     code = str(code or "").strip()
     span = _ensure_or_none(STOCK_APIS, lookback_days, max_calls, now)
@@ -545,7 +581,7 @@ def adjust_splits(rows):
 
 def index_daily(market_type, lookback_days, max_calls=None, now=None):
     """지수 일봉 — analysis 표기('KOSPI'/'KOSDAQ'/'KOSPI200'/'KOSDAQ150'/'VKOSPI')."""
-    if not is_available():
+    if not is_configured():
         return None
     spec = INDEX_KEYS.get(str(market_type or "").upper())
     if not spec:
@@ -576,7 +612,7 @@ def k200_futures_daily(session="F", lookback_days=400, max_calls=None, now=None)
     근월물은 **그 날 정규장 미결제약정이 가장 큰 계약**이다(만기 연속 시계열의 관행).
     야간 세션은 같은 계약의 야간 봉을 쓴다.
     """
-    if not is_available():
+    if not is_configured():
         return None
     want = "야간" if str(session).upper() in ("CM", "야간", "NIGHT") else "정규"
     span = _ensure_or_none(["fut_bydd_trd"], lookback_days, max_calls, now)
@@ -603,7 +639,7 @@ def k200_futures_daily(session="F", lookback_days=400, max_calls=None, now=None)
 
 def gold_daily(lookback_days=400, max_calls=None, now=None):
     """KRX 금현물(금 99.99K, 원/g) 일봉 — 시·고·저·거래량이 실제 값이다."""
-    if not is_available():
+    if not is_configured():
         return None
     span = _ensure_or_none(["gold_bydd_trd"], lookback_days, max_calls, now)
     if span is None:
@@ -622,17 +658,24 @@ def listing_map(max_calls=None, now=None):
 
     기본정보는 스냅샷이라 최신 기준일 하루만 받는다(2콜). 시총은 그 날의 일별매매에서 온다.
     """
-    if not is_available():
+    if not is_configured():
         return None
     end_dd = latest_available_dd(now)
-    try:
-        remaining, _ = ensure(list(BASE_INFO_APIS) + list(STOCK_APIS), end_dd, end_dd,
-                              max_calls=max_calls, now=now)
-    except OpenAPIError as e:
-        logger.warning(f"[KRX-OPENAPI] 상장목록 적재 실패: {e}")
-        return None
-    if remaining > 0:
-        return None
+    fresh = False
+    if time.time() >= _DISABLED_UNTIL[0]:
+        try:
+            remaining, _ = ensure(list(BASE_INFO_APIS) + list(STOCK_APIS), end_dd, end_dd,
+                                  max_calls=max_calls, now=now)
+            fresh = remaining == 0
+        except OpenAPIError as e:
+            logger.warning(f"[KRX-OPENAPI] 상장목록 적재 실패: {e} — 받아 둔 최신 스냅샷을 쓴다")
+    if not fresh:
+        # 쿨다운·실패 — 목록은 하루 묵어도 무해하다(시장 판정·종목명). 마지막으로 받은 날로 대신한다.
+        with _DB_LOCK, _connect() as conn:
+            row = conn.execute("SELECT MAX(bas_dd) FROM fetched WHERE api_id='stk_bydd_trd' AND n>0").fetchone()
+        if not row or not row[0]:
+            return None
+        end_dd = row[0]
     with _DB_LOCK, _connect() as conn:
         base = conn.execute("SELECT code, abbrv, name, market, list_dd, secugrp, kind FROM isu_base").fetchall()
         daily = conn.execute("SELECT code, name, market, marcap FROM stock_daily WHERE bas_dd=?",

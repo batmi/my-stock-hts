@@ -178,7 +178,7 @@ def _fetch_openapi(code, lookback_days):
     오늘 봉을 만들어 주므로 판정은 이어진다. 구간이 완전하지 않으면(첫 적재 전) None.
     """
     from modules import krx_openapi
-    if not krx_openapi.is_available():
+    if not krx_openapi.is_configured():     # 쿨다운은 저장소 읽기를 막지 않는다
         return None
     base = krx_openapi.stock_daily(code, lookback_days)
     if base is None or base.empty:
@@ -406,7 +406,7 @@ def _listing_map_from_openapi():
     """KRX Open API 종목기본정보 + 최신 일별매매 시총 {코드: {'name','marcap','market'}}. 실패 시 None."""
     try:
         from modules import krx_openapi
-        if not krx_openapi.is_available():
+        if not krx_openapi.is_configured():
             return None
         raw = krx_openapi.listing_map()
     except Exception as e:      # noqa: BLE001

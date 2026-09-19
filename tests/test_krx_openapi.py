@@ -6,6 +6,8 @@
 from datetime import datetime
 from unittest.mock import patch
 
+import time
+
 import pandas as pd
 import pytest
 
@@ -136,8 +138,59 @@ def test_unauthorized_disables_the_client_for_a_while(tmp_path, monkeypatch):
         oa._call("kospi_dd_trd", "20260917")
     assert ei.value.status == 401
     assert not oa.is_available()
-    assert oa.index_daily("KOSPI", 4, now=NOW) is None     # 쿨다운 중엔 묻지도 않는다
+    assert oa.index_daily("KOSPI", 4, now=NOW) is None     # 쿨다운 중이고 저장소도 비었다 → None
     oa._DISABLED_UNTIL[0] = 0.0
+
+
+def test_cooldown_still_serves_the_stored_history_and_trims_only_the_tail(store):
+    """429/401 쿨다운은 네트워크만 막는다 — 받아 둔 확정분은 그대로 읽고, 비어 있는 최신 날만 잘라 낸다."""
+    oa.ensure(oa.STOCK_APIS + ("kospi_dd_trd", "gold_bydd_trd"), "20260910", "20260916", now=NOW)
+    n = len(store)
+    oa._DISABLED_UNTIL[0] = time.time() + 600
+    try:
+        assert not oa.is_available() and oa.is_configured()
+        df = oa.stock_daily("005930", 7, now=NOW)         # 09-17 이 비었지만 그 앞은 완전하다
+        assert list(df["date"])[-1] == "20260916"
+        assert oa.index_daily("KOSPI", 7, now=NOW)["date"].iloc[-1] == "20260916"
+        assert oa.gold_daily(7, now=NOW)["date"].iloc[-1] == "20260916"
+        assert len(store) == n                               # 쿨다운 중엔 한 번도 부르지 않았다
+        # 중간에 구멍이 있으면 부분 이력 대신 None
+        with oa._DB_LOCK, oa._connect() as conn:
+            conn.execute("DELETE FROM fetched WHERE bas_dd='20260914'")
+        assert oa.stock_daily("005930", 7, now=NOW) is None
+    finally:
+        oa._DISABLED_UNTIL[0] = 0.0
+
+
+def test_cooldown_listing_uses_the_last_stored_snapshot(store):
+    oa.ensure(list(oa.BASE_INFO_APIS) + list(oa.STOCK_APIS), "20260916", "20260916", now=NOW)
+    n = len(store)
+    oa._DISABLED_UNTIL[0] = time.time() + 600
+    try:
+        lm = oa.listing_map(now=NOW)
+        assert lm["005930"]["name"] == "삼성전자" and lm["0080G0"]["market"] == "ETF"
+        assert len(store) == n
+    finally:
+        oa._DISABLED_UNTIL[0] = 0.0
+
+
+def test_krx_daily_reads_the_store_during_cooldown_and_tops_up_from_fdr(store, monkeypatch):
+    from modules import krx_daily
+    oa.ensure(oa.STOCK_APIS, "20260910", "20260916", now=NOW)
+    monkeypatch.setattr(oa, "latest_available_dd", lambda now=None: "20260917")
+    today = datetime.now().strftime("%Y%m%d")
+    tail = pd.DataFrame({"date": ["20260916", "20260917", today], "open": [1, 1, 1], "high": [1, 1, 1],
+                         "low": [1, 1, 1], "close": [116, 117, 118], "volume": [1, 1, 1]})
+    monkeypatch.setattr(krx_daily, "_fetch_fdr", lambda code, s, e: tail.copy())
+    krx_daily.clear_cache()
+    oa._DISABLED_UNTIL[0] = time.time() + 600
+    try:
+        df = krx_daily.get_daily("005930", lookback_days=7, use_cache=False)
+    finally:
+        oa._DISABLED_UNTIL[0] = 0.0
+    assert df.attrs["source"] == "OPENAPI+FDR"
+    assert df.attrs["official_close_upto"] == "20260916"
+    assert list(df["date"])[-3:] == ["20260916", "20260917", today]
 
 
 # ── 지수·선물·금·목록 ──────────────────────────────────────
