@@ -143,6 +143,8 @@ def test_같은_주문은_첫_인지만_남는다(tmp_db):
 
 def test_조회_실패는_빈_목록이_아니라_None이다(monkeypatch):
     from modules import db_manager
-    db = db_manager.db
-    monkeypatch.setattr(db, "_get_conn", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    db = getattr(db_manager.db, "_real_db", db_manager.db)
+    # 클래스에 패치한다 — 인스턴스에 패치하면 monkeypatch 가 되돌릴 때 바운드 메서드를 인스턴스
+    #  속성으로 남겨, 뒤 테스트의 type(db)._get_conn 패치가 가려진다(test_half_tp_unknown 오염).
+    monkeypatch.setattr(type(db), "_get_conn", lambda self: (_ for _ in ()).throw(RuntimeError("boom")))
     assert db.get_fill_latency() is None

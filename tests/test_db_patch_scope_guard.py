@@ -44,6 +44,21 @@ def _is_shared_db(node):
     return src in ("_db()", "_real_db()")             # 이 스위트의 관용 헬퍼
 
 
+def _shared_aliases(func):
+    """함수 안에서 공유 DB 를 가리키게 된 지역 이름들 — `db = db_manager.db` 류.
+
+    [왜 · 2026-09-19] test_fill_latency 가 `db = db_manager.db` 로 받아 인스턴스에 패치했고,
+    가드는 표현이 `db` 라 놓쳤다. 그 잔재가 test_half_tp_unknown 의 장애 시험을 전체
+    실행에서만 조용히 무력화했다(파일 단독은 통과). 별칭 한 단계는 따라간다.
+    """
+    names = set()
+    for node in ast.walk(func):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            if _is_shared_db(node.value):
+                names.add(node.targets[0].id)
+    return names
+
+
 def _offenders():
     """monkeypatch.setattr 로 **공유 DB 인스턴스**의 연결을 갈아끼우는 자리.
 
@@ -54,18 +69,23 @@ def _offenders():
     out = []
     for path in sorted(TESTS_DIR.glob("test_*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), str(path))
-        for node in ast.walk(tree):
-            if not (isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "setattr"
-                    and len(node.args) >= 2):
-                continue
-            target, attr = node.args[0], node.args[1]
-            if not (isinstance(attr, ast.Constant) and attr.value in TARGETS):
-                continue
-            if _is_type_call(target) or not _is_shared_db(target):
-                continue
-            out.append(f"{path.name}:{node.lineno}  {ast.unparse(node)[:90]}")
+        for func in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+            aliases = _shared_aliases(func)
+            for node in ast.walk(func):
+                if not (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "setattr"
+                        and len(node.args) >= 2):
+                    continue
+                target, attr = node.args[0], node.args[1]
+                if not (isinstance(attr, ast.Constant) and attr.value in TARGETS):
+                    continue
+                if _is_type_call(target):
+                    continue
+                aliased = isinstance(target, ast.Name) and target.id in aliases
+                if not (aliased or _is_shared_db(target)):
+                    continue
+                out.append(f"{path.name}:{node.lineno}  {ast.unparse(node)[:90]}")
     return out
 
 
@@ -130,3 +150,18 @@ def test_monkeypatch_really_leaves_the_attribute(monkeypatch):
     monkeypatch.setattr(o, "m", lambda: "fake")
     monkeypatch.undo()
     assert "m" in o.__dict__, "monkeypatch 가 더 이상 잔재를 남기지 않는다 — 가드를 재검토하라"
+
+
+def test_the_detector_follows_a_local_alias(tmp_path, monkeypatch):
+    """`db = db_manager.db` 로 받아 인스턴스에 패치해도 잡아야 한다(2026-09-19 실제 누락 사례)."""
+    bad = tmp_path / "test_alias.py"
+    bad.write_text("def t(monkeypatch):\n"
+                   "    db = db_manager.db\n"
+                   "    monkeypatch.setattr(db, '_get_conn', lambda: None)\n"
+                   "def ok(monkeypatch):\n"
+                   "    db = DBManager()\n"
+                   "    monkeypatch.setattr(db, '_get_conn', lambda: None)\n",
+                   encoding="utf-8")
+    monkeypatch.setattr(pathlib.Path, "glob", lambda self, pat: [bad])
+    hits = _offenders()
+    assert len(hits) == 1 and ":3 " in hits[0], hits
