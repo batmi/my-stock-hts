@@ -554,7 +554,10 @@ def stock_daily(code, lookback_days, max_calls=None, now=None):
             "SELECT bas_dd, open, high, low, close, volume, shares FROM stock_daily "
             "WHERE code=? AND bas_dd BETWEEN ? AND ? ORDER BY bas_dd", (code, span[0], span[1])).fetchall()
     df = _finish([r[:6] for r in adjust_splits(rows)], "OPENAPI")
-    return df if df is not None else pd.DataFrame(columns=_COLUMNS)
+    if df is None:
+        df = pd.DataFrame(columns=_COLUMNS)
+    df.attrs["span_end"] = span[1]      # 저장소가 완전한 마지막 날 — 이보다 앞에서 봉이 끝나면 폐지·정지
+    return df
 
 
 SPLIT_MIN_RATIO = 1.5     # 상장주식수가 이 배수 이상 변하고

@@ -189,7 +189,11 @@ def _fetch_openapi(code, lookback_days):
     #  이 손댈 필요가 없다 — 덧댄 FDR 봉만 대상이다.
     base.attrs['official_close_upto'] = last
     today = datetime.now().strftime('%Y%m%d')
-    if last < today:
+    # 저장소가 완전한 마지막 날(span_end)에 이 종목의 봉이 없으면 그날 거래가 없었다(상장폐지·
+    #  거래정지). 그런 종목에 FDR 을 덧대면 네이버가 폐지 다음 날에 만드는 거래량 0 유령 봉이
+    #  붙는다(실측 2026-09-20 000075: 07-31 폐지 뒤 08-01 봉) → 덧대지 않는다. 쿨다운으로
+    #  span_end 자체가 앞당겨진 경우는 종목이 살아 있으니 종전대로 덧댄다.
+    if last < today and last >= str(base.attrs.get('span_end') or ''):
         try:
             tail = _fetch_fdr(code, last, today)
         except Exception as ex:     # noqa: BLE001 - 덧대기 실패는 확정분으로 충분하다

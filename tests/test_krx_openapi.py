@@ -308,3 +308,18 @@ def test_a_blank_body_is_retried_but_a_401_is_not(tmp_path, monkeypatch):
         oa._call("kospi_dd_trd", "20190426")
     assert ei.value.status == 401 and len(calls) == 1        # 인증 거부는 재시도하지 않는다
     oa._DISABLED_UNTIL[0] = 0.0
+
+
+def test_a_delisted_stock_gets_no_fdr_tail(store, monkeypatch):
+    """마지막 확정 봉이 최신 게시일보다 앞이면(폐지·정지) FDR 유령 봉을 덧대지 않는다."""
+    from modules import krx_daily
+    oa.ensure(oa.STOCK_APIS, "20260910", "20260917", now=NOW)
+    with oa._DB_LOCK, oa._connect() as conn:                 # 005930 이 09-16 부터 사라졌다고 치자
+        conn.execute("DELETE FROM stock_daily WHERE code='005930' AND bas_dd >= '20260916'")
+    monkeypatch.setattr(oa, "latest_available_dd", lambda now=None: "20260917")
+    called = []
+    monkeypatch.setattr(krx_daily, "_fetch_fdr", lambda code, s, e: called.append(code))
+    krx_daily.clear_cache()
+    df = krx_daily.get_daily("005930", lookback_days=7, use_cache=False)
+    assert df.attrs["source"] == "OPENAPI" and not called
+    assert str(df["date"].iloc[-1]) == "20260914"
