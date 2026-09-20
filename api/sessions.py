@@ -5,6 +5,8 @@
 표시 규칙(장 마감 후 어떤 가격을 보여줄 것인가)이 여기 모인다.
 """
 import logging
+import re
+import os
 from datetime import datetime, timedelta, timezone
 import config
 
@@ -191,9 +193,85 @@ KRX_BREAK_WINDOW = ("1530", "1559")
 # [특수 세션일] 정규장 시각이 옮겨지는 날 — 세션 경계의 단일 소스
 #  KRX 는 수능일에 전 세션을 1시간 늦추고(10:00~16:30), 그 해 첫 거래일에는 10:00 에 연다(마감 그대로).
 #  아래 phase·게이트 함수들은 리터럴("0900"·"1530"…)을 그대로 두되 krx_hm() 으로 그 날의 값으로
-#  옮겨 읽는다. 표(config.KRX_SESSION_SHIFT_DAYS)는 연 1회 손으로 채운다.
+#  옮겨 읽는다. 수능일은 한국교육과정평가원(KICE) 메인의 '주요 일정'에서 기동 때 자동으로 받아
+#  json/krx_session_shift_auto.json 에 저장하고(refresh_session_shift_table), 세션 판정은 그 저장분과
+#  수기 표(config.KRX_SESSION_SHIFT_DAYS — 자동 소스가 없는 날·덮어쓰기용)를 합쳐 본다. 판정 경로에는
+#  네트워크가 없다. [2026-09-20] 종전에는 표를 연 1회 손으로 채우라고 했다 — 일정은 자동 수집이 규약이다.
 # ==========================================================
 _SHIFT_CACHE = {}
+KICE_SCHEDULE_URL = "https://www.suneung.re.kr/main.do?s=suneung"
+CSAT_SHIFT = (60, 60)          # 수능일: 전 세션 1시간 지연(정규장 10:00~16:30)
+_KICE_TIMEOUT = 15
+
+
+def _shift_auto_file():
+    return os.path.join(config.JSON_DIR, "krx_session_shift_auto.json")
+
+
+def _parse_kice_csat_date(html):
+    """KICE 메인 '수능 및 모의평가 주요 일정' → 수능 시행일 'YYYYMMDD'. 못 찾으면 None.
+
+    구조(실측 2026-09-20): <dl class="sche01"><dt>대학수학능력시험</dt><dd>…<li><p>2026.11.19.
+    <span>시험 실시</span></p></li>…</dd></dl>. 모의평가(6월·9월) 블록에도 '시험 실시'가 있으므로
+    반드시 '대학수학능력시험' dt 가 붙은 dl 안에서만 읽는다.
+    """
+    for block in re.findall(r"<dl[^>]*>(.*?)</dl>", html, re.S | re.I):
+        dt = re.search(r"<dt[^>]*>(.*?)</dt>", block, re.S | re.I)
+        if not dt or "대학수학능력시험" not in re.sub(r"<[^>]+>", "", dt.group(1)):
+            continue
+        for li in re.findall(r"<li[^>]*>(.*?)</li>", block, re.S | re.I):
+            text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", li)).strip()
+            m = re.match(r"(20\d{2})\.\s*(\d{1,2})\.\s*(\d{1,2})\.?\s+시험 실시$", text)
+            if m:
+                return f"{int(m.group(1)):04d}{int(m.group(2)):02d}{int(m.group(3)):02d}"
+    return None
+
+
+def fetch_csat_date():
+    """KICE 에서 올해(또는 다음 학년도) 수능 시행일을 받는다. 실패는 예외."""
+    import requests
+    res = requests.get(KICE_SCHEDULE_URL, timeout=_KICE_TIMEOUT, headers={"User-Agent": "Mozilla/5.0"})
+    res.raise_for_status()
+    day = _parse_kice_csat_date(res.text)
+    if not day:
+        raise ValueError("KICE 주요 일정에서 '시험 실시' 날짜를 찾지 못했습니다(페이지 형식 변경?)")
+    return day
+
+
+def _load_auto_shift_days():
+    """저장된 자동 수집분 {YYYYMMDD: (open, close)}. 파일이 없거나 깨졌으면 빈 dict."""
+    try:
+        from core import jsonio
+        data = jsonio.load_json(_shift_auto_file(), default={}) or {}
+        out = {}
+        for day in (data.get("csat") or {}).values():
+            if re.fullmatch(r"\d{8}", str(day)):
+                out[str(day)] = CSAT_SHIFT
+        return out
+    except Exception:      # noqa: BLE001 - 저장분이 깨져도 판정은 수기 표로 계속된다
+        return {}
+
+
+def refresh_session_shift_table():
+    """수능일을 KICE 에서 받아 저장한다(기동 점검이 부른다). (성공 여부, 한 줄 메시지).
+
+    실패해도 예외를 올리지 않는다 — 저장분·수기 표로 계속 간다. 성공하면 세션 캐시를 비운다.
+    """
+    from core import jsonio
+    path = _shift_auto_file()
+    prior = jsonio.load_json(path, default={}) or {}
+    try:
+        day = fetch_csat_date()
+    except Exception as e:      # noqa: BLE001
+        kept = ", ".join(sorted((prior.get("csat") or {}).values()))
+        return False, (f"KICE 수능일 조회 실패({e}) — 저장분 {kept or '없음'}"
+                       f"{'(' + str(prior.get('fetched')) + ' 수집)' if kept else ''}으로 계속합니다")
+    csat = dict(prior.get("csat") or {})
+    csat[day[:4]] = day
+    jsonio.save_json(path, {"fetched": datetime.now().strftime("%Y-%m-%d"),
+                            "source": KICE_SCHEDULE_URL, "csat": csat})
+    _SHIFT_CACHE.clear()
+    return True, f"수능일 {day} (KICE 자동 수집)"
 
 
 def krx_session_shift(day=None):
@@ -202,7 +280,7 @@ def krx_session_shift(day=None):
     hit = _SHIFT_CACHE.get(day)
     if hit is not None:
         return hit
-    table = getattr(config, "KRX_SESSION_SHIFT_DAYS", {}) or {}
+    table = {**_load_auto_shift_days(), **(getattr(config, "KRX_SESSION_SHIFT_DAYS", {}) or {})}
     ent = table.get(day)
     if ent:
         out = (int(ent[0]), int(ent[1]))
@@ -261,14 +339,15 @@ def local_tz_is_kst(now=None):
 
 
 def krx_session_status_text():
-    """기동 점검용 한 줄 — 특수 세션일 표에 올해 수능일이 있는가(11월에 없으면 경고)."""
+    """기동 점검용 한 줄 — 수능일을 KICE 에서 갱신하고, 올해 수능일을 아는지 말한다(10월 이후 모르면 경고)."""
     now = datetime.now()
-    table = getattr(config, "KRX_SESSION_SHIFT_DAYS", {}) or {}
-    this_year = [d for d in table if d.startswith(str(now.year))]
+    ok, msg = refresh_session_shift_table()
+    table = {**_load_auto_shift_days(), **(getattr(config, "KRX_SESSION_SHIFT_DAYS", {}) or {})}
+    this_year = sorted(d for d in table if d.startswith(str(now.year)))
     if now.month >= 10 and not this_year:
-        return False, (f"{now.year}년 수능일이 config.KRX_SESSION_SHIFT_DAYS 에 없습니다 — 그 날 정규장이 "
-                       f"1시간 밀리는데 시스템은 15:30 에 감시를 멈춥니다. 날짜를 확인해 추가하세요.")
-    return True, f"특수 세션일 표 {len(table)}건 (올해 {', '.join(this_year) or '없음'})"
+        return False, (f"{msg}. {now.year}년 수능일을 알 수 없습니다 — 그 날 정규장이 1시간 밀리는데 시스템은 "
+                       f"15:30 에 감시를 멈춥니다. 확인해 config.KRX_SESSION_SHIFT_DAYS 에 넣으세요.")
+    return ok, f"{msg}; 특수 세션일 {len(table)}건 (올해 {', '.join(this_year) or '없음'})"
 
 
 def nxt_order_window(now=None):

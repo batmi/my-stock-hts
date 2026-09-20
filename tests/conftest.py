@@ -143,7 +143,7 @@ def block_side_effects_for_whole_session():
     _ETC_HOSTS = ("finance.naver.com", "stock.naver.com", "news.google.com", "krx.co.kr",
                   #  [차단 2026-09-17] 경제 캘린더 소스. 읽기 전용이지만 테스트가 실 서버에 닿으면
                   #   그날 실제 일정이 결과에 섞여 단정이 흔들린다(BOJ 추가 때 dedupe 테스트가 실제로 깨졌다).
-                  "boj.or.jp", "bok.or.kr", "federalreserve.gov", "stlouisfed.org")
+                  "boj.or.jp", "bok.or.kr", "suneung.re.kr", "federalreserve.gov", "stlouisfed.org")
     # [차단 2026-09-03] 매매일지 웹서버. 여기로 나간 요청은 되돌릴 수 없다 — 테스트가 만든
     #  가짜 체결이 사람이 보는 매매일지에 실거래로 남는다(실제 사고). 호스트는 환경변수에서
     #  뽑아 설치마다 달라도 따라가고, 미설정이면 막을 대상 자체가 없다.

@@ -104,6 +104,8 @@ def test_수능일_확정_종가_기준선은_16시40분이다(monkeypatch):
 
 
 def test_기동_점검은_올해_수능일이_없으면_경고한다(monkeypatch):
+    """KICE 조회가 막힌 상태(테스트 격리)에서는 저장분·수기 표만으로 판단한다."""
+    monkeypatch.setattr(api.sessions, "refresh_session_shift_table", lambda: (False, "KICE 조회 실패(테스트)"))
     with patch("api.sessions.datetime") as dt:
         dt.now.return_value = datetime(2027, 11, 1)
         ok, msg = api.krx_session_status_text()
@@ -111,7 +113,7 @@ def test_기동_점검은_올해_수능일이_없으면_경고한다(monkeypatch
     with patch("api.sessions.datetime") as dt:
         dt.now.return_value = datetime(2026, 11, 1)
         ok, msg = api.krx_session_status_text()
-    assert ok is True and SUNEUNG in msg
+    assert SUNEUNG in msg and "없음" not in msg.split("올해")[-1]
 
 
 def test_시간대가_KST_가_아니면_자동매매_시간_게이트가_닫힌다(monkeypatch):
