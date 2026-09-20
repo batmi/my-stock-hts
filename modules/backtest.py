@@ -518,8 +518,8 @@ def register_market_types(mapping):
 
     덮어쓰지 않고 **모를 때만** 쓰인다 — 아래 우선순위의 세 번째다.
     """
-    for code, market in (mapping or {}).items():
-        m = str(market or "").strip().upper()
+    for code, mkt in (mapping or {}).items():      # `market` 은 모듈 이름 — 가리지 않는다
+        m = str(mkt or "").strip().upper()
         if m in ("KOSPI", "KOSDAQ"):
             _MARKET_TYPE_OVERRIDES[str(code)] = m
 

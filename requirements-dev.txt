@@ -10,3 +10,5 @@
 pytest>=8.0
 pytest-xdist>=3.5      # 병렬 실행(-n). 일부 시간 의존 테스트는 플래키할 수 있다.
 pytest-cov>=5.0        # 커버리지 측정(선택)
+# pyflakes: tests/test_pyflakes_baseline.py 가 미정의 이름·모듈 가림을 전수 검사한다(없으면 그 테스트는 skip).
+pyflakes>=3.0
