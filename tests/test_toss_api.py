@@ -176,6 +176,27 @@ def test_resolve_account_seq_fallback_first():
     assert seq == 1
 
 
+def test_resolve_account_seq_refuses_when_the_named_account_is_missing_or_ambiguous():
+    """TOSS_ACC_NUM 을 지정했는데 맞는 계좌가 없거나 둘 이상이면 첫 계좌로 넘어가지 않고 None."""
+    accounts = [
+        {"accountNo": "99999999999", "accountSeq": 7, "accountType": "BROKERAGE"},
+        {"accountNo": "99999999998", "accountSeq": 8, "accountType": "BROKERAGE"},
+    ]
+    for acc_num in ("12345678901", "9999999999"):      # 없음 / 접두가 둘에 걸림
+        config.session.toss_account_seq = None
+        config.session.toss_acc_num = acc_num
+        config.session.cano = ""
+        with patch("brokers.toss_api.get_accounts", return_value=accounts):
+            assert toss_api.resolve_account_seq(force=True) is None, acc_num
+        assert config.session.toss_account_seq is None and config.session.cano == ""
+    # 접두 표기 차이라도 하나로 좁혀지면 그 계좌
+    config.session.toss_acc_num = "999999999999"        # 계좌번호 뒤에 상품코드가 붙은 표기
+    with patch("brokers.toss_api.get_accounts", return_value=accounts[:1]):
+        assert toss_api.resolve_account_seq(force=True) == 7
+    config.session.toss_account_seq = None
+    config.session.toss_acc_num = ""
+
+
 def test_get_price_returns_first_row():
     rows = [{"symbol": "005930", "lastPrice": "72000", "currency": "KRW"}]
     with patch("brokers.toss_api._request", return_value=rows) as mp:

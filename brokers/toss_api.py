@@ -367,6 +367,12 @@ def resolve_account_seq(force=False):
 
     - TOSS_ACC_NUM 미설정 시 첫 번째 계좌를 사용한다.
     - 성공 시 accountSeq(int) 반환, 실패 시 None.
+
+    [fail-closed · 2026-09-20] 종전에는 TOSS_ACC_NUM 을 지정했는데 일치하는 계좌가 없으면
+    경고 한 줄 뒤 **첫 계좌로 조용히 폴백**했다 — 운용자가 고른 계좌가 아닌 곳으로 주문이
+    나가는 경로다(계좌를 두 개 가진 사용자가 번호를 한 자리 틀리면 그대로 실전이 된다).
+    지정했으면 **정확히 하나**가 맞아야 한다. 0개·2개 이상이면 None 이고 기동 점검(main)이
+    실패로 멈춘다. 모르는 것을 '괜찮다'로 접지 않는다([[unknown-vs-empty]] 계열).
     """
     if not force and config.session.toss_account_seq is not None:
         return config.session.toss_account_seq
@@ -382,16 +388,21 @@ def resolve_account_seq(force=False):
         return None
 
     target = (config.session.toss_acc_num or "").replace("-", "").strip()
-    chosen = None
     if target:
-        for acc in accounts:
-            acc_no = str(acc.get("accountNo", "")).replace("-", "")
-            if acc_no == target or acc_no.startswith(target) or target.startswith(acc_no):
-                chosen = acc
-                break
-        if chosen is None:
-            logger.warning(f"[Toss] TOSS_ACC_NUM({config.session.toss_acc_num})과 일치하는 계좌가 없어 첫 계좌를 사용합니다.")
-    if chosen is None:
+        exact = [a for a in accounts if str(a.get("accountNo", "")).replace("-", "") == target]
+        loose = [a for a in accounts
+                 if (lambda n: n.startswith(target) or target.startswith(n))(str(a.get("accountNo", "")).replace("-", ""))]
+        matched = exact or loose        # 표기 차이(접두·접미)는 허용하되, 그래도 하나여야 한다
+        if len(matched) != 1:
+            def _mask(n):
+                n = str(n or "").replace("-", "")
+                return f"{n[:3]}***{n[-3:]}" if len(n) > 6 else "***"
+            logger.error(f"[Toss] TOSS_ACC_NUM({_mask(target)})과 일치하는 계좌가 {len(matched)}개 — "
+                         f"보유 계좌 {[_mask(a.get('accountNo')) for a in accounts]}. "
+                         f"지정한 계좌가 아닌 곳으로 주문이 나갈 수 있어 계좌를 고르지 않는다.")
+            return None
+        chosen = matched[0]
+    else:
         chosen = accounts[0]
 
     seq = chosen.get("accountSeq")

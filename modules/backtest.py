@@ -1219,17 +1219,33 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
         "missed_trades": missed_trades
     }
 
+MONTE_CARLO_RUNS = 1000
+MONTE_CARLO_SEED = 20260920     # 고정 — 설정을 바꾼 두 실행을 같은 노이즈 위에서 비교하기 위해
+
+
 def run_monte_carlo_simulation(full_df, start_idx, initial_capital, buy_score, buy_rsi, is_overseas,
                                stop_loss, take_profit, take_profit_rsi, sell_score, ts_activation, ts_callback, time_stop_days,
                                use_atr_stop, atr_mult, half_tp_use,
-                               weights=None, name="Unknown", code="Unknown", days=0, pyramiding_max=None):
-    """Monte Carlo 시뮬레이션 실행 (1,000회 반복)
+                               weights=None, name="Unknown", code="Unknown", days=0, pyramiding_max=None,
+                               runs=MONTE_CARLO_RUNS, seed=MONTE_CARLO_SEED):
+    """Monte Carlo 시뮬레이션 실행 (기본 1,000회 반복)
 
     각 시행마다 (워밍업 포함) 전체 가격 시계열에 노이즈를 주입한 뒤 보조지표를 재계산하므로,
     체결 노이즈뿐 아니라 매매 시그널(점수/상태) 자체의 견고성까지 검증한다.
+
+    [감사 · 2026-09-20] 노이즈 모형의 알려진 편향 — 봉마다 **독립**인 ±1% 수준(level) 노이즈라
+    일수익률에 ε_t−ε_{t−1} 이 더해진다. 실측(2025-06~, 100회 평균): 일수익률 σ가 KT&G +25% ·
+    신한지주 +17% · 삼성전자 +5%, ATR14 가 +19% · +9% · +4% 부풀고 lag-1 자기상관이 −0.18→−0.30
+    으로 깊어진다(평균회귀 주입). ATR 이 부풀면 손절폭이 넓어지고 포지션이 줄며, 평균회귀는
+    추세추종에 체계적으로 불리하다 — 이 화면의 수치는 '원본보다 노이즈가 많고 되돌림이 잦은
+    종목'에서의 성과다. 모형 교체(수익률 노이즈·거래 부트스트랩)는 운용자 결정으로 남긴다.
+    seed 를 고정해 두 실행이 비교 가능하게 한다(종전엔 매 실행이 달랐다).
     """
-    config.console.print("\n[bold magenta]━━━ Monte Carlo Simulation (1,000 runs) ━━━[/]")
-    config.console.print("[dim]가격 데이터 노이즈(±1%) 주입 후 지표를 재계산하고, 체결 노이즈(슬리피지 변동, 체결 누락)를 적용하여 전략 시그널의 견고성을 검증합니다.[/dim]\n")
+    rng = np.random.default_rng(seed)
+    config.console.print(f"\n[bold magenta]━━━ Monte Carlo Simulation ({runs:,} runs · seed {seed}) ━━━[/]")
+    config.console.print("[dim]가격 데이터 노이즈(±1%) 주입 후 지표를 재계산하고, 체결 노이즈(슬리피지 변동, 체결 누락)를 적용하여 전략 시그널의 견고성을 검증합니다.[/dim]")
+    config.console.print("[dim yellow]※ 봉마다 독립인 수준 노이즈라 일변동성이 5~25%·ATR 이 4~19% 부풀고 평균회귀가 섞입니다 — "
+                         "추세추종에는 보수적(불리) 방향의 편향이며, 원본 백테스트 수치와 직접 비교하지 마세요.[/dim yellow]\n")
 
     # 날짜/표시는 노이즈와 무관하므로 깨끗한 원본 슬라이스를 참조용으로 보관
     sim_df = full_df.iloc[start_idx:]
@@ -1267,13 +1283,13 @@ def run_monte_carlo_simulation(full_df, start_idx, initial_capital, buy_score, b
         console=config.console,
         transient=True
     ) as progress:
-        task = progress.add_task("[cyan]시뮬레이션 진행 중...[/cyan]", total=1000)
+        task = progress.add_task("[cyan]시뮬레이션 진행 중...[/cyan]", total=runs)
         
-        for _ in range(1000):
+        for _ in range(int(runs)):
             # 1. (워밍업 포함) 전체 시계열에 노이즈 주입 후 지표 재계산
             noisy_full = full_df.copy()
             # 정규분포 노이즈 (평균 0, 표준편차 1%) — 동일 봉의 OHLC는 같은 비율로 이동시켜 봉 구조 보존
-            noise = np.random.normal(0, 0.01, len(noisy_full))
+            noise = rng.normal(0, 0.01, len(noisy_full))
             for col in ['close', 'open', 'high', 'low']:
                 if col in noisy_full.columns:
                     noisy_full[col] = noisy_full[col] * (1 + noise)
@@ -1326,7 +1342,9 @@ def run_monte_carlo_simulation(full_df, start_idx, initial_capital, buy_score, b
             wr = (res['win_trades'] / sell_trades * 100) if sell_trades > 0 else 0.0
             win_rates.append(wr)
             
-            pf = (res['gross_profit'] / res['gross_loss']) if res['gross_loss'] > 0 else (99.9 if res['gross_profit'] > 0 else 0.0)
+            #  손실이 없는 시행은 PF 가 정의되지 않는다 — 종전 센티널 99.9 를 평균에 넣으면 그런
+            #   시행이 5% 만 있어도 평균 PF 가 +5 로 뛰었다. NaN 으로 두고 아래에서 중앙값을 쓴다.
+            pf = (res['gross_profit'] / res['gross_loss']) if res['gross_loss'] > 0 else (np.nan if res['gross_profit'] > 0 else 0.0)
             profit_factors.append(pf)
             
             # Sharpe Ratio 계산
@@ -1345,7 +1363,9 @@ def run_monte_carlo_simulation(full_df, start_idx, initial_capital, buy_score, b
     avg_mdd = np.nanmean(mdds) if mdds else 0.0
     avg_asset = np.nanmean(final_assets) if final_assets else 0.0
     avg_wr = np.nanmean(win_rates) if win_rates else 0.0
-    avg_pf = np.nanmean(profit_factors) if profit_factors else 0.0
+    _pf_defined = [x for x in profit_factors if not (isinstance(x, float) and math.isnan(x))]
+    avg_pf = float(np.nanmedian(_pf_defined)) if _pf_defined else 0.0      # 중앙값(무손실 시행 제외)
+    no_loss_runs = len(profit_factors) - len(_pf_defined)
     avg_sr = np.nanmean(sharpe_ratios) if sharpe_ratios else 0.0
     avg_trades = np.nanmean(trade_counts) if trade_counts else 0.0
     
@@ -1396,7 +1416,7 @@ def run_monte_carlo_simulation(full_df, start_idx, initial_capital, buy_score, b
     summary_table.add_section()
     
     # [수정] 매매 횟수 상세 표시
-    summary_table.add_row("총 매매 횟수 (평균)", f"{avg_trades:.1f}건 (익절 {avg_win_count:.1f} / 손절 {avg_loss_count:.1f})")
+    summary_table.add_row("총 매매 횟수 (평균)", f"{avg_trades:.1f}건 (수익 {avg_win_count:.1f} / 손실 {avg_loss_count:.1f})")
     
     # [추가] 매수 보류 표시
     if avg_missed_caution > 0 or avg_missed_danger > 0:
@@ -1435,7 +1455,9 @@ def run_monte_carlo_simulation(full_df, start_idx, initial_capital, buy_score, b
     else: pf_color = "blue"; pf_desc = " (손실)"
     pf_str = f"[{pf_color}]{avg_pf:.2f}[/]"
     
-    summary_table.add_row("손익비 (Profit Factor)", f"{pf_str}{pf_desc} (총 이익 [red]+{fmt_money(avg_gross_profit)}[/] / 총 손실 [blue]-{fmt_money(avg_gross_loss)}[/])")
+    summary_table.add_row("손익비 (Profit Factor, 중앙값)",
+                          f"{pf_str}{pf_desc} (총 이익 [red]+{fmt_money(avg_gross_profit)}[/] / 총 손실 [blue]-{fmt_money(avg_gross_loss)}[/]"
+                          + (f", 무손실 시행 {no_loss_runs}회 제외" if no_loss_runs else "") + ")")
     
     # 샤프 지수 상세 표시
     sharpe_desc = ""

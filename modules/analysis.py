@@ -953,6 +953,8 @@ _TVDATAFEED_NEG_TTL_SEC = 1800        # 30분
 #  메타데이터라 재사용해도 신선도에 영향이 없다(일봉은 매번 새로 받는다). KIS 경로의
 #  exchange_cache와 같은 성격으로, 재조회 때 search_symbol과 헛거래소 순회를 없앤다.
 _TVDATAFEED_EXCHANGE = {}             # code -> exchange 이름
+# TradingView 거래소 표기 중 미국 달러로 거래되는 것 — 해외 일봉 폴백은 이 밖의 상장을 쓰지 않는다
+_TVDATAFEED_US_EXCHANGES = ('NASDAQ', 'NYSE', 'AMEX', 'CBOE', 'OTC')
 # 종목당 tvDatafeed 폴백 총 소요 상한(초). 전역 락을 쥐고 도는 경로라 상한이 없으면
 #  한 종목의 연결 타임아웃이 나머지 종목의 대기로 그대로 번진다.
 TVDATAFEED_FETCH_BUDGET_SEC = 12.0
@@ -985,15 +987,19 @@ def fetch_overseas_daily_via_tvdatafeed(code, n_bars=260):
     #  헛거래소 순회를 건너뛰고, (2) 검색이 성공하면 추측 거래소는 붙이지 않는다.
     #  ※ 기억하는 것은 '거래소 이름'(메타데이터)이지 시세가 아니다 — 일봉은 매번 새로 받는다.
     known = _TVDATAFEED_EXCHANGE.get(code)
-    exchanges = [known] if known else []
-    if not known:
+    exchanges = [known] if known in _TVDATAFEED_US_EXCHANGES else []
+    if not exchanges:
         try:
             with _TVDATAFEED_LOCK:
                 matches = tv.search_symbol(code) or []
             for m in matches:
                 sym = str(m.get('symbol', '')).upper()
-                exch = m.get('exchange') or ''
-                if sym == code.upper() and exch and exch not in exchanges:
+                exch = str(m.get('exchange') or '').upper()
+                #  [2026-09-20] 같은 티커가 다른 나라 거래소에도 있다(캐나다 NEO 의 CDR, 멕시코 BMV
+                #   등 — TSLA 가 NEO 에서는 CAD 30 남짓). 1순위가 익명 웹소켓 실패로 비면 다음
+                #   거래소로 넘어가는데, 그게 외국 상장이면 통화가 다른 가격이 지표에 실린다.
+                #   이 시스템의 해외는 미국뿐이므로 미국 거래소만 후보로 둔다.
+                if sym == code.upper() and exch in _TVDATAFEED_US_EXCHANGES and exch not in exchanges:
                     exchanges.append(exch)
         except Exception as e:
             logger.debug(f"[TVDATAFEED] {code} 심볼 검색 실패: {e}")

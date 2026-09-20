@@ -111,3 +111,14 @@ def test_stop_message_warns_about_pending_orders(monkeypatch):
     finally:
         with om._lock:
             om.pending_orders = saved
+
+
+def test_addrestrict_flags_a_code_whose_name_could_not_be_verified(bot, monkeypatch):
+    """이름을 못 찾은 코드(오타일 수 있다)는 등록하되, 의도한 종목이 제한되지 않았을 수 있음을 밝힌다."""
+    monkeypatch.setattr(bot, '_resolve_stock', lambda kw: ("005935", "005935", False), raising=False)
+    reply = bot._cmd_addrestrict(["005935"])
+    assert "005935" in auto_trade.load_restricted_stocks()
+    assert "종목명을 확인하지 못한" in reply
+    # 정상 이름은 경고가 없다
+    monkeypatch.setattr(bot, '_resolve_stock', lambda kw: (CODE, NAME, False), raising=False)
+    assert "종목명을 확인하지 못한" not in bot._cmd_addrestrict([CODE])
