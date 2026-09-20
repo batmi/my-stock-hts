@@ -114,6 +114,7 @@ def test_collect_dedupes_same_day_same_name():
     with patch.object(econ_events, "_fetch_fred", return_value=(list(dup), True)), \
          patch.object(econ_events, "_fetch_fed", return_value=(list(dup), True)), \
          patch.object(econ_events, "_fetch_boj", return_value=(list(dup), True)), \
+         patch.object(econ_events, "_fetch_bok", return_value=(list(dup), True)), \
          patch.object(econ_events, "_option_expiry", return_value=[]), \
          patch.object(econ_events, "_load_seed", return_value=[]):
         out, complete, _failed = econ_events._collect(date(2026, 7, 29), date(2026, 9, 12))

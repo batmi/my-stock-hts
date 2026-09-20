@@ -80,6 +80,7 @@ def test_collect_이_BOJ_를_네트워크_소스로_센다():
          patch.object(E, "_fetch_fed", return_value=([], True)), \
          patch.object(E, "_fetch_boj", return_value=([{"date": "2026-09-18", "name": "BOJ 금리결정",
                                                        "country": "JP", "weight": 1, "source": "BOJ"}], True)), \
+         patch.object(E, "_fetch_bok", return_value=([], True)), \
          patch.object(E, "_option_expiry", return_value=[]), \
          patch.object(E, "_load_seed", return_value=[]):
         out, complete, _failed = E._collect(date(2026, 9, 17), date(2026, 10, 31), on_progress=lambda: calls.append(1))

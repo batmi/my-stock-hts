@@ -36,6 +36,8 @@ SEED_FILE = os.path.join(config.JSON_DIR, "econ_calendar_seed.json")
 FRED_BASE_URL = "https://api.stlouisfed.org/fred"
 FED_CALENDAR_URL = "https://www.federalreserve.gov/json/calendar.json"
 BOJ_CALENDAR_URL = "https://www.boj.or.jp/en/mopo/mpmsche_minu/index.htm"
+# 한국은행 통화정책방향 결정회의(금통위) 연간 일정. pYear 로 연도를 고르며, 다음 해는 연말 공표 전까지 빈 표다.
+BOK_CALENDAR_URL = "https://www.bok.or.kr/portal/singl/crncyPolicyDrcMtg/listYear.do?mtgSe=A&menuNo=200755"
 
 # FRED release_id → (표시명, 중요도). 중요도 1=최상위(장 전체를 흔드는 지표)
 FRED_RELEASES = {
@@ -231,6 +233,54 @@ def _fetch_boj(start, end):
     return out, True
 
 
+_BOK_DAY_RE = re.compile(r"(\d{1,2})\s*월\s*(\d{1,2})\s*일")
+
+
+def _parse_bok_html(page, year):
+    """한은 '통화정책방향 회의' 표(회의일자 열 '01월 15일(목)') → [date]. 표가 없으면 None(페이지 개편)."""
+    tables = [t for t in re.findall(r"<table.*?</table>", page, re.S | re.I) if "회의일자" in t]
+    if not tables:
+        return None
+    out = []
+    for row in re.findall(r"<tr[^>]*>(.*?)</tr>", tables[0], re.S | re.I):
+        cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, re.S | re.I)
+        if not cells:
+            continue
+        first = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", cells[0])).strip()
+        m = _BOK_DAY_RE.search(first)
+        if not m:
+            continue                           # 머리행
+        try:
+            out.append(date(year, int(m.group(1)), int(m.group(2))))
+        except ValueError:
+            continue
+    return out
+
+
+def _fetch_bok(start, end):
+    """한국은행 금통위(통화정책방향 결정회의) 일정 → (이벤트, 성공 여부).
+
+    [2026-09-20] 종전에는 '한은이 향후 일정을 구조화해 내주지 않는다'며 시드 파일 수기 입력에
+    맡겼는데, 실제로는 연간 일정 페이지의 표에 그 해 남은 회의일까지 전부 실려 있다(실측: 09-20 조회에
+    10월 22일·11월 26일 포함). 창이 걸치는 연도마다 한 번씩 받는다. 그 해 표가 비어 있으면 —
+    다음 해는 연말 공표 전이라 정상이고, 올해가 비면 페이지 개편이므로 실패로 본다.
+    """
+    today = datetime.now().date()
+    out = []
+    for year in sorted({start.year, end.year}):
+        res = requests.get(BOK_CALENDAR_URL, params={"pYear": year}, timeout=HTTP_TIMEOUT,
+                           headers={"User-Agent": "Mozilla/5.0"})
+        res.raise_for_status()
+        days = _parse_bok_html(res.text, year)
+        if days is None or (not days and year <= today.year):
+            raise ValueError(f"한은 금통위 {year}년 일정 표를 찾지 못했습니다(페이지 형식 변경?)")
+        for d in days:
+            if start <= d <= end:
+                out.append({"date": d.strftime("%Y-%m-%d"), "name": "한은 금통위",
+                            "country": "KR", "weight": 1, "source": "BOK"})
+    return out, True
+
+
 def _nth_weekday(year, month, weekday, nth):
     """해당 월의 n번째 요일(weekday: 월=0 … 일=6)."""
     d = date(year, month, 1)
@@ -292,7 +342,10 @@ def _option_expiry(start, end):
 
 
 def _load_seed(start, end):
-    """시드 파일의 수기 일정(한은 금통위 등). 파일이 없거나 비어 있어도 정상 동작한다."""
+    """시드 파일의 수기 일정(선택 — 기계 수집이 없는 임시 일정용). 파일이 없거나 비어 있어도 정상 동작한다.
+
+    한은 금통위는 2026-09-20부터 _fetch_bok 이 자동 수집하므로 여기 넣을 필요가 없다.
+    """
     data = jsonio.load_json(SEED_FILE, default={}) or {}
     out = []
     for ev in data.get("events", []):
@@ -305,7 +358,7 @@ def _load_seed(start, end):
     return out
 
 
-_SOURCE_COUNT = 5    # _collect 가 on_progress 를 부르는 횟수(네트워크 3 + 로컬 2)
+_SOURCE_COUNT = 6    # _collect 가 on_progress 를 부르는 횟수(네트워크 4 + 로컬 2)
 
 
 def _dedupe(events):
@@ -325,7 +378,7 @@ def _collect(start, end, on_progress=None):
     """
     events, failed = [], []      # failed = 이벤트의 source 표기(실패한 소스의 저장분을 골라 메울 때 쓴다)
     # 네트워크 소스 (성공 여부를 함께 돌려준다)
-    for fn, label in ((_fetch_fred, "FRED"), (_fetch_fed, "Fed"), (_fetch_boj, "BOJ")):
+    for fn, label in ((_fetch_fred, "FRED"), (_fetch_fed, "Fed"), (_fetch_boj, "BOJ"), (_fetch_bok, "BOK")):
         try:
             got, ok = fn(start, end)
             events.extend(got)

@@ -384,7 +384,7 @@ export DART_API_KEY="40_character_key"
 
 ### 6.6 FRED (US economic calendar)
 
-Needed only for **US indicator release dates** (CPI, employment, PCE, PPI, GDP, retail sales, JOLTS) at the top of `[6] → 5. Investment Calendar`. FOMC dates come from the Federal Reserve's own calendar, **Bank of Japan (BOJ) Monetary Policy Meetings** from the boj.or.jp English schedule table (day two of the meeting = decision day; Outlook Report meetings are flagged), and KR/US quadruple-witching dates are computed locally, so all of these **work without a key**.
+Needed only for **US indicator release dates** (CPI, employment, PCE, PPI, GDP, retail sales, JOLTS) at the top of `[6] → 5. Investment Calendar`. FOMC dates come from the Federal Reserve's own calendar, **Bank of Korea MPC meetings** from the bok.or.kr annual schedule table (it lists the rest of the current year's meetings; next year appears automatically once published in December), **Bank of Japan (BOJ) Monetary Policy Meetings** from the boj.or.jp English schedule table (day two of the meeting = decision day; Outlook Report meetings are flagged), and KR/US quadruple-witching dates are computed locally, so all of these **work without a key**. Every schedule is **fetched fresh on each query**; the cache is only a fallback when a fetch fails.
 
 **How to obtain**
 1. Go to [FRED API Keys](https://fredaccount.stlouisfed.org/apikeys) → **Create New Account** if needed (free, email verification)
@@ -395,7 +395,7 @@ Needed only for **US indicator release dates** (CPI, employment, PCE, PPI, GDP, 
 export FRED_API_KEY="32_character_key"
 ```
 
-> FRED publishes scheduled future release dates, so the dates shown are **official, not estimated** (US local time). Results are cached daily in `json/econ_calendar_cache.json`. Events that are not machine-readable (e.g. Bank of Korea rate decisions) can be entered by hand in `json/econ_calendar_seed.json`.
+> FRED publishes scheduled future release dates, so the dates shown are **official, not estimated** (US local time). Results are saved to `json/econ_calendar_cache.json` and used only as a fallback when a fetch fails. One-off events with no machine-readable source (summits etc.) can optionally be entered in `json/econ_calendar_seed.json` — BOK, FOMC, BOJ and US releases are fetched automatically, so do not add them there.
 
 ### 6.7 TradingView (index & Treasury stability)
 
@@ -534,7 +534,7 @@ my-stock-hts/
 │   │   ├── watchlist.py    #     Add/remove/view watchlist
 │   │   ├── discover.py     #     [7-4] Candidate discovery
 │   │   ├── events.py       #     [6-5] Dividend/earnings calendar
-│   │   ├── econ_events.py  #     Key economic events (FRED, Fed, BOJ)
+│   │   ├── econ_events.py  #     Key economic events (FRED, Fed, BOK, BOJ)
 │   │   ├── scan.py         #     Shared parallel fetch collector (failure counts shown on screen)
 │   │   ├── disclosure.py   #     [6-6] Disclosure monitoring
 │   │   ├── insider.py      #     [6-7] Supply and overhang signals
