@@ -26,6 +26,19 @@ W52_MIN_BARS = 200   # 창이 52주를 못 채우면(신규상장·차트 절단
 ATR_MIN_BARS = 15    # calculate_indicators 의 ATR 가드와 같은 값 — 두 곳이 갈리면 안 된다
 
 
+def _positive_bars(df):
+    """시·고·저가 0 인 봉(거래정지일)을 뺀다 — 0 은 극값이 아니다.
+
+    [왜 · 2026-09-20] FDR 은 거래정지일을 O/H/L=0·종가만으로 준다(삼성전자 2018-04-30~05-03).
+    종전엔 `h > l > 0` 검사로 창 전체를 버리고 보유 봉 전체(그 역시 0 포함)로 폴백해 밴드가
+    엉뚱해졌다. 백테스트(backtest.apply_w52_position)와 같은 규칙으로 양수 봉만 본다.
+    """
+    try:
+        return df[(df['high'] > 0) & (df['low'] > 0)]
+    except Exception:
+        return df
+
+
 def w52_high_low(df, now=None):
     """'최근 365일'(=52주) 구간의 (고가, 저가). 창을 못 채우면 (None, None).
 
@@ -39,7 +52,7 @@ def w52_high_low(df, now=None):
         base = now or datetime.now()
         cutoff = (base - timedelta(days=W52_DAYS)).strftime('%Y%m%d')
         dates = df['date'].astype(str).str.replace('-', '', regex=False).str[:8]
-        win = df[dates >= cutoff]
+        win = _positive_bars(df[dates >= cutoff])
         if len(win) < W52_MIN_BARS:
             return None, None
         h, l = float(win['high'].max()), float(win['low'].min())
@@ -58,7 +71,8 @@ def w52_band(df, now=None):
     h, l = w52_high_low(df, now=now)
     if h is None:
         try:
-            h, l = float(df['high'].max()), float(df['low'].min())
+            ok = _positive_bars(df)
+            h, l = float(ok['high'].max()), float(ok['low'].min())
         except Exception:
             return 0.0, 0.0
     return h, l

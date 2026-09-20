@@ -135,3 +135,30 @@ def test_only_one_place_defines_the_window():
     src = inspect.getsource(bt)
     assert "rolling(250, min_periods=1).max()" not in src.replace(
         inspect.getsource(bt.apply_w52_position), "")
+
+
+def test_zero_priced_halt_bars_are_not_extremes_on_either_side():
+    """거래정지일(O/H/L=0·종가만)이 52주 저가를 0 으로 끌어내리면 안 되고, 실매매와 같아야 한다.
+
+    [2026-09-20] FDR 이 삼성전자 2018-04-30~05-03 을 그렇게 준다. 엔진은 저가 0 → 위치 85%,
+    실매매는 창을 버리고 전체 폴백(그것도 0 포함) → 파리티 감사에서 3.0 vs 2.5 로 갈렸다.
+    """
+    import datetime as dt
+
+    from core import indicators as ci
+
+    n = 400
+    c = np.linspace(100, 200, n)
+    df = _frame(n, c)
+    for i in (150, 151, 152):                       # 창 안의 정지일 — 종가만 남고 나머지 0
+        df.loc[i, ["high", "low"]] = 0.0
+    bt.apply_w52_position(df)
+    lo_engine = float(df["roll_low_52w"].iloc[-1])
+    hi_engine = float(df["roll_high_52w"].iloc[-1])
+    assert lo_engine > 0, "0원 봉이 52주 저가가 됐다"
+
+    now = dt.datetime.strptime(df["date"].iloc[-1], "%Y%m%d")
+    h, l = ci.w52_high_low(df, now=now)
+    assert h is not None, "실매매가 0원 봉 때문에 창을 통째로 버렸다"
+    assert (hi_engine, lo_engine) == pytest.approx((h, l), rel=1e-12)
+    assert ci.w52_band(df.iloc[:100], now=now)[1] > 0     # 짧은 이력 폴백도 0 을 극값으로 안 본다

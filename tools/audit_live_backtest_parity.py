@@ -45,20 +45,20 @@ LIVE_WINDOW = 260   # 실매매가 지표 계산에 들고 있는 일봉 수
 WARMUP = 260        # 대조 시작 인덱스(EMA120·52주 위치가 자리잡는 구간 이후만 비교)
 
 
-def load_daily(code, start='2014-01-01'):
-    """FDR 일봉 → 백테스트/실매매가 쓰는 스키마의 DataFrame."""
-    import FinanceDataReader as fdr
-    raw = fdr.DataReader(code, start)
-    if raw is None or raw.empty:
+def load_daily(code, lookback_days=4000):
+    """일봉 — 앱·백테스트와 같은 정본 경로(krx_daily.get_daily: Open API → FDR).
+
+    [왜 · 2026-09-20] 종전엔 FDR 을 직접 읽어 앱이 버리는 0원 거래정지 봉이 그대로 들어왔고,
+    그 봉이 조립 차이처럼 보였다(20190430 삼성전자). 정본 경로를 타면 데이터 정제까지 같다.
+    """
+    from modules import krx_daily
+    df = krx_daily.get_daily(code, lookback_days=lookback_days)
+    if df is None or df.empty:
         return None
-    df = pd.DataFrame({
-        'date': raw.index.strftime('%Y%m%d'),
-        'open': pd.to_numeric(raw['Open'], errors='coerce'),
-        'high': pd.to_numeric(raw['High'], errors='coerce'),
-        'low': pd.to_numeric(raw['Low'], errors='coerce'),
-        'close': pd.to_numeric(raw['Close'], errors='coerce'),
-        'volume': pd.to_numeric(raw['Volume'], errors='coerce'),
-    }).dropna().reset_index(drop=True)
+    df = df[['date', 'open', 'high', 'low', 'close', 'volume']].copy()
+    for c in ('open', 'high', 'low', 'close', 'volume'):
+        df[c] = pd.to_numeric(df[c], errors='coerce')
+    df = df.dropna().reset_index(drop=True)
     return df if len(df) > WARMUP + 50 else None
 
 

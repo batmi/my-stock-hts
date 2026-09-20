@@ -399,13 +399,19 @@ def apply_w52_position(df):
     n = len(df)
     if n == 0:
         return df
+    # [Fix 2026-09-20] 0원 시·고·저 봉(거래정지일 — FDR 은 삼성전자 2018-04-30~05-03 을
+    #  O/H/L=0·종가만으로 준다)은 극값이 아니다. 그대로 두면 52주 저가가 0 이 되어 위치가
+    #  85% 로 뜨고, 실매매(core.indicators.w52_high_low)는 같은 봉을 버리므로 조립 파리티가
+    #  갈린다(2026-09-20 파리티 감사 20190430 삼성전자 3.0 vs 2.5). 양쪽 다 '양수 봉만' 본다.
+    hi_src = df['high'].where(df['high'] > 0)
+    lo_src = df['low'].where(df['low'] > 0)
     dt = pd.to_datetime(df['date'].astype(str).str.replace('-', '', regex=False).str[:8],
                         format='%Y%m%d', errors='coerce') if 'date' in df.columns else None
     if dt is None or dt.isna().any() or not dt.is_monotonic_increasing:
         # 날짜를 못 읽으면 창을 날짜로 자를 수 없다. 종전 동작으로 물러서되 조용히 하지 않는다.
         logger.warning("[Backtest] 52주 창을 날짜로 자르지 못해 250봉 창으로 폴백합니다")
-        hi = df['high'].rolling(250, min_periods=1).max()
-        lo = df['low'].rolling(250, min_periods=1).min()
+        hi = hi_src.rolling(250, min_periods=1).max()
+        lo = lo_src.rolling(250, min_periods=1).min()
     else:
         win = f"{_W52_DAYS}D"
         #  [Fix 2026-09-17] closed='both' — pandas 의 시간 창 rolling 은 기본이 (t-365D, t] 로
@@ -413,12 +419,12 @@ def apply_w52_position(df):
         #   로 그 봉을 **넣는다.** 경계의 하루 차이지만 극값이 그 날에 있으면 밴드가 갈려
         #   같은 봉에 다른 가격 모멘텀 점수(±0.5)가 매겨진다 — 파리티 감사(6,989건)에서
         #   3건이 정확히 이 자리였다(SK하이닉스 20240531 고점 210,000 vs 저점 106,700/106,000).
-        hi = df['high'].set_axis(dt).rolling(win, closed='both').max().to_numpy()
-        lo = df['low'].set_axis(dt).rolling(win, closed='both').min().to_numpy()
-        cnt = df['close'].set_axis(dt).rolling(win, closed='both').count().to_numpy()
+        hi = hi_src.set_axis(dt).rolling(win, closed='both').max().to_numpy()
+        lo = lo_src.set_axis(dt).rolling(win, closed='both').min().to_numpy()
+        cnt = lo_src.set_axis(dt).rolling(win, closed='both').count().to_numpy()   # 양수 봉만 센다
         short = cnt < _W52_MIN_BARS          # 52주를 못 채운 구간 → 보유 봉 전체
-        hi = pd.Series(np.where(short, df['high'].cummax(), hi), index=df.index)
-        lo = pd.Series(np.where(short, df['low'].cummin(), lo), index=df.index)
+        hi = pd.Series(np.where(short, hi_src.cummax(), hi), index=df.index)
+        lo = pd.Series(np.where(short, lo_src.cummin(), lo), index=df.index)
 
     df['roll_high_52w'] = hi
     df['roll_low_52w'] = lo
