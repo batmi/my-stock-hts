@@ -631,8 +631,8 @@ my-stock-hts/
 | 분류 | 명령어 |
 |---|---|
 | 시스템 제어 | `/start` `/stop` `/restart` `/status` `/health` `/config` |
-| 계좌·자산 | `/balance` `/holdings` `/pending` `/reserves` `/profit [기간]` `/history [기간]` `/report [기간]` `/stats [종목]` |
-| 시장·종목 분석 | `/market [그룹]` `/signal <종목>` `/analyze <종목>` `/chart [기간] <종목>` `/briefing` `/closing` `/curate` `/scan [시장]` `/news <종목>` `/calendar [일수]` `/ask <질문>` |
+| 계좌·자산 | `/balance` `/holdings` `/pending` `/reserves` `/profit [기간]` `/history [기간]` `/report [기간]` `/stats [종목]` `/position` |
+| 시장·종목 분석 | `/market [그룹]` `/signal <종목>` `/analyze <종목>` `/chart [기간] <종목>` `/briefing` `/closing` `/curate` `/scan [시장]` `/news <종목>` `/calendar [일수]` `/disclosure` `/ask <질문>` |
 | 관리 | `/stocks` `/rules [종목]` `/restrict` `/addrestrict <종목> [사유]` `/delrestrict <종목>` `/memo [a/d/종목]` `/log` `/help` |
 
 > 명령어는 계속 추가·변경됩니다. **최신 전체 목록은 봇에서 `/help`** 로 확인하세요.

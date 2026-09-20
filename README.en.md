@@ -632,8 +632,8 @@ my-stock-hts/
 | Category | Commands |
 |---|---|
 | System control | `/start` `/stop` `/restart` `/status` `/health` `/config` |
-| Account & assets | `/balance` `/holdings` `/pending` `/reserves` `/profit [period]` `/history [period]` `/report [period]` `/stats [symbol]` |
-| Market & analysis | `/market [group]` `/signal <symbol>` `/analyze <symbol>` `/chart [period] <symbol>` `/briefing` `/closing` `/curate` `/scan [market]` `/news <symbol>` `/calendar [days]` `/ask <question>` |
+| Account & assets | `/balance` `/holdings` `/pending` `/reserves` `/profit [period]` `/history [period]` `/report [period]` `/stats [symbol]` `/position` |
+| Market & analysis | `/market [group]` `/signal <symbol>` `/analyze <symbol>` `/chart [period] <symbol>` `/briefing` `/closing` `/curate` `/scan [market]` `/news <symbol>` `/calendar [days]` `/disclosure` `/ask <question>` |
 | Management | `/stocks` `/rules [symbol]` `/restrict` `/addrestrict <symbol> [reason]` `/delrestrict <symbol>` `/memo [a/d/symbol]` `/log` `/help` |
 
 > Commands keep evolving. **Send `/help` to the bot for the current list.**

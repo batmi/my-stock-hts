@@ -70,3 +70,22 @@ def test_the_parser_actually_reads_the_tree():
     entries = _tree_entries("README.md")
     assert "modules/krx_openapi.py" in entries
     assert "core/vivid_colors.py" in entries
+
+
+# ---------------------------------------------------------------------------
+# 텔레그램 명령 표 — 봇 디스패치 표에 있는 명령은 README 표(한·영)에도 있어야 한다.
+#  (2026-09-20 감사: /position·/disclosure 가 /help 에는 있고 README 에는 없었다)
+# ---------------------------------------------------------------------------
+def _bot_commands():
+    src = open(os.path.join(ROOT, "modules", "telegram_bot.py"), encoding="utf-8").read()
+    cmds = set(re.findall(r'^\s*"(/[a-z_]+)":\s*self\._cmd_', src, re.M))
+    assert len(cmds) > 20, "디스패치 표를 못 읽었다 — 형식이 바뀌었으면 정규식을 고쳐라"
+    return cmds
+
+
+@pytest.mark.parametrize("readme", READMES)
+def test_every_bot_command_is_in_the_readme_table(readme):
+    text = open(os.path.join(ROOT, readme), encoding="utf-8").read()
+    documented = set(re.findall(r"`(/[a-z_]+)", text))
+    missing = sorted(_bot_commands() - documented)
+    assert not missing, f"{readme} 텔레그램 명령 표에 빠진 명령(한·영 둘 다 넣어라): {missing}"
