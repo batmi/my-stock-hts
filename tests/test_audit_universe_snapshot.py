@@ -181,7 +181,7 @@ def test_pit_은_그_시점_시총으로_고른다(monkeypatch):
     monkeypatch.setattr(AU, "_listing", lambda kind, refresh=None: today)
     # 그 시점(2016)에는 LG엔솔이 없고 한국전력이 2위였다
     monkeypatch.setattr(AU, "_pit_marcap", lambda date: {"005930": 8e14, "015760": 3e14})
-    monkeypatch.setattr(AU, "_name_map", lambda: {"005930": "삼성전자", "015760": "한국전력"})
+    monkeypatch.setattr(AU, "_name_map", lambda pit_date=None: {"005930": "삼성전자", "015760": "한국전력"})
 
     now = {c for c, _ in AU.extend_targets(set(), 3, mode="marcap")}
     pit = {c for c, _ in AU.extend_targets(set(), 3, mode="pit", pit_date="20160826")}
@@ -196,7 +196,7 @@ def test_pit_도_우선주_스팩을_배제한다(monkeypatch):
     """배제 규칙은 현재 목록과 PIT 목록이 **같아야** 한다 (같은 헬퍼를 쓴다)."""
     monkeypatch.setattr(AU, "_pit_marcap", lambda date: {
         "005930": 9e14, "005935": 8e14, "00680K": 7e14, "123456": 6e14, "654321": 5e14})
-    monkeypatch.setattr(AU, "_name_map", lambda: {
+    monkeypatch.setattr(AU, "_name_map", lambda pit_date=None: {
         "005930": "삼성전자", "005935": "삼성전자우", "00680K": "미래에셋증권2우B",
         "123456": "케이비제20호스팩", "654321": "OO리츠"})
 
@@ -216,7 +216,7 @@ def test_pit_은_뽑기_방식이_random_과_같다(monkeypatch):
                        "Market": ["KOSPI"] * 600, "Marcap": [caps[c] for c in codes]})
     monkeypatch.setattr(AU, "_listing", lambda kind, refresh=None: df)
     monkeypatch.setattr(AU, "_pit_marcap", lambda date: caps)
-    monkeypatch.setattr(AU, "_name_map", lambda: {c: f"종목{c}" for c in codes})
+    monkeypatch.setattr(AU, "_name_map", lambda pit_date=None: {c: f"종목{c}" for c in codes})
 
     a = {c for c, _ in AU.extend_targets(set(), 60, mode="random")}
     b = {c for c, _ in AU.extend_targets(set(), 60, mode="pit", pit_date="20160826")}
@@ -224,14 +224,16 @@ def test_pit_은_뽑기_방식이_random_과_같다(monkeypatch):
 
 
 def test_pit_은_시총을_못_받으면_조용히_비지_않는다(monkeypatch, capsys):
-    """자격증명이 없으면 빈 결과를 주되 **이유를 말해야** 한다.
+    """시총을 못 받으면 빈 결과를 주되 **이유와 복구 경로를 말해야** 한다.
 
     조용히 0종목을 돌려주면 '확장 없이 잰 수치'가 확장한 것처럼 기록된다.
+    (2026-09-18 Open API 이전으로 자격증명(KRX_ID)이 아니라 저장소 결손이 이유다)
     """
     monkeypatch.setattr(AU, "_pit_marcap", lambda date: None)
     out = AU.extend_targets(set(), 10, mode="pit", pit_date="20160826")
     assert out == []
-    assert "KRX_ID" in capsys.readouterr().out
+    msg = capsys.readouterr().out
+    assert "시총을 받지 못했다" in msg and "krx_openapi_backfill" in msg
 
 
 def test_pit_은_기준일이_없으면_거부한다():

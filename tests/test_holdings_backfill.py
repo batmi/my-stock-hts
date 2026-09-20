@@ -496,3 +496,25 @@ def test_지원하지_않는_모드는_실패가_아니다(monkeypatch):
 
     monkeypatch.setattr(acct, "_paper_active", lambda: True)
     assert acct.get_period_executions(["005930"]) == {}
+
+
+def test_an_external_round_trip_does_not_restrict_the_systems_own_position(monkeypatch):
+    """시스템 보유 100주 위에서 운용자가 50주 사고 50주 판 왕복 — 외부 순매수 0 → 제한하지 않는다.
+    (종전엔 외부 매수 하나만 보고 걸어 시스템 포지션의 손절·트레일링을 멈췄다)"""
+    monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: odno == "SYS1")
+    monkeypatch.setattr(hb, 'our_order_row', lambda odno: {'type': '매수'} if odno == "SYS1" else None)
+    records = hb.build_records([_tx("20260720", True, 100, odno="SYS1"),
+                                _tx("20260728", True, 50, odno="EXT-B"),
+                                _tx("20260729", False, 50, odno="EXT-S")])
+    plans = [{'code': '005930', 'name': '삼성전자', 'qty': 100, 'missing': 0, 'already': 1, 'records': records}]
+    calls = _stub_sync(monkeypatch, plans)
+    res = hb.sync_account(holdings=[_holding()], register_restrictions=True)
+    assert res['restricted'] == [] and not calls
+    # 외부 순매수가 남으면(50 사고 20 팔았다) 종전대로 제한한다
+    records = hb.build_records([_tx("20260720", True, 100, odno="SYS1"),
+                                _tx("20260728", True, 50, odno="EXT-B"),
+                                _tx("20260729", False, 20, odno="EXT-S")])
+    plans[0]['records'] = records
+    calls = _stub_sync(monkeypatch, plans)
+    res = hb.sync_account(holdings=[_holding()], register_restrictions=True)
+    assert res['restricted'] == ["005930"]

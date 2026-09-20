@@ -282,10 +282,18 @@ def sync_account(cano=None, acnt_prdt_cd=None, months=12, register_restrictions=
         # [외부 판정] '체결 기록이 없다'가 아니라 '우리가 낸 주문이 아니다'가 기준이다.
         #  our_order_row 주석 참조 — 접수 기록만 남은 자기 주문을 외부로 몰면 그 포지션의
         #  손절이 멈춘다(제한 종목 등록).
-        new_buy_codes = {(p['code'], p['name']) for p in plans
-                         for r in p['records']
-                         if '매수' in r['type'] and not _exists(r['odno'])
-                         and our_order_row(r['odno']) is None}
+        #  [2026-09-20] 외부 **순매수**가 남아 있는 종목만이다. 시스템이 100주를 들고 있는 동안
+        #   운용자가 같은 계좌에서 50주를 사고 50주를 판 왕복은 역산에 잡히지만(매도를 지나
+        #   더 거슬러 올라가므로) 지금 보유분은 전부 시스템 것이다 — 그 종목을 제한하면
+        #   시스템 포지션의 손절·트레일링이 멈춘다. 외부 매수량 − 외부 매도량 > 0 일 때만 건다.
+        external_net = {}
+        for p in plans:
+            for r in p['records']:
+                if _exists(r['odno']) or our_order_row(r['odno']) is not None:
+                    continue
+                key = (p['code'], p['name'])
+                external_net[key] = external_net.get(key, 0) + (r['qty'] if '매수' in r['type'] else -r['qty'])
+        new_buy_codes = {k for k, net in external_net.items() if net > 0}
 
         summary['written'], summary['skipped'] = apply(plans, cano=cano, acnt_prdt_cd=acnt_prdt_cd)
 

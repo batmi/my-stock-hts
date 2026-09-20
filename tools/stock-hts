@@ -12,10 +12,10 @@ ARGS="$@"
 
 # 1. 세션 생성 (System Trading - 첫 번째 윈도우)
 # 참고: ~/.htsrc 는 사용자 홈 디렉토리를 참조하도록 변경 (없어도 에러 메시지 무시)
-tmux new-session -d -s stock-hts -n "System Trading" "/usr/bin/bash -c \"source ~/.htsrc 2>/dev/null; cd '$PROJECT_ROOT' && ./run.sh $ARGS; echo 'Process exited. Press Enter to close...'; read\""
+tmux new-session -d -s stock-hts -n "System Trading" "bash -c \"source ~/.htsrc 2>/dev/null; cd '$PROJECT_ROOT' && ./run.sh $ARGS; echo 'Process exited. Press Enter to close...'; read\""
 
 # 2. Log Monitoring 창 추가 (두 번째 윈도우)
-tmux new-window -t stock-hts -n "Log Monitoring" "/usr/bin/bash -c \"source ~/.htsrc 2>/dev/null; cd '$PROJECT_ROOT' && tail -F logs/mystock.log\""
+tmux new-window -t stock-hts -n "Log Monitoring" "bash -c \"source ~/.htsrc 2>/dev/null; cd '$PROJECT_ROOT' && tail -F logs/mystock.log\""
 
 # 3. System Trading 윈도우로 이동 (첫 번째 선택)
 tmux select-window -t stock-hts:0
