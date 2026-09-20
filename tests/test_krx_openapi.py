@@ -363,3 +363,51 @@ def test_days_without_chg_lists_legacy_rows_and_refetch_fills_them(store):
     remaining, calls = oa.refetch(todo, 10)
     assert remaining == 0 and calls == len(todo) and len(store) == n + calls
     assert oa.days_without_chg() == []
+
+
+# ── 2026-09-20 감사: 빈 꼬리 날·동시 ensure ──────────────────────
+def test_a_holiday_or_unpublished_tail_day_does_not_cut_the_fdr_top_up(store, monkeypatch):
+    """어제가 휴장(또는 아직 게시 전)이면 span_end 가 빈 날이다 — 살아 있는 종목의 오늘 봉 덧대기를
+    끊으면 안 된다. 폐지 판정의 기준은 '남들은 봉이 있는 마지막 날'이다."""
+    from modules import krx_daily
+    oa.ensure(oa.STOCK_APIS, "20260910", "20260915", now=NOW)      # 09-15 는 빈 응답(휴장)
+    monkeypatch.setattr(oa, "latest_available_dd", lambda now=None: "20260915")
+    base = oa.stock_daily("005930", 7, now=NOW)
+    assert base.attrs["span_end"] == "20260914" and str(base["date"].iloc[-1]) == "20260914"
+    today = datetime.now().strftime("%Y%m%d")
+    tail = pd.DataFrame({"date": ["20260914", today], "open": [1, 1], "high": [1, 1], "low": [1, 1],
+                         "close": [114, 200], "volume": [1, 1]})
+    called = []
+    monkeypatch.setattr(krx_daily, "_fetch_fdr", lambda code, s, e: (called.append(code), tail.copy())[1])
+    krx_daily.clear_cache()
+    df = krx_daily.get_daily("005930", lookback_days=7, use_cache=False)
+    assert called and df.attrs["source"] == "OPENAPI+FDR"
+    assert list(df["date"])[-2:] == ["20260914", today]
+    # 같은 상황에서 정말로 폐지된 종목(남들이 봉을 가진 09-14 에 없다)은 여전히 덧대지 않는다
+    with oa._DB_LOCK, oa._connect() as conn:
+        conn.execute("DELETE FROM stock_daily WHERE code='005930' AND bas_dd >= '20260912'")
+    called.clear()
+    krx_daily.clear_cache()
+    df = krx_daily.get_daily("005930", lookback_days=7, use_cache=False)
+    assert not called and df.attrs["source"] == "OPENAPI"
+
+
+def test_concurrent_callers_do_not_fetch_the_same_missing_days_twice(store, monkeypatch):
+    """분석 워커 N 개가 같은 아침에 stock_daily 를 부르면 빠진 날짜를 한 번만 받는다."""
+    import threading
+    real = oa._call
+    monkeypatch.setattr(oa, "_call", lambda a, d: (time.sleep(0.02), real(a, d))[1])
+    errors = []
+
+    def worker(code):
+        try:
+            oa.stock_daily(code, 5, now=NOW)
+        except Exception as e:      # noqa: BLE001
+            errors.append(e)
+    threads = [threading.Thread(target=worker, args=(c,)) for c in ("005930", "000660", "247540", "005930")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors
+    assert len(store) == len(set(store)), "같은 (서비스, 날짜)를 두 번 받았다"

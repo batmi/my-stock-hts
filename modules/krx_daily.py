@@ -189,10 +189,11 @@ def _fetch_openapi(code, lookback_days):
     #  이 손댈 필요가 없다 — 덧댄 FDR 봉만 대상이다.
     base.attrs['official_close_upto'] = last
     today = datetime.now().strftime('%Y%m%d')
-    # 저장소가 완전한 마지막 날(span_end)에 이 종목의 봉이 없으면 그날 거래가 없었다(상장폐지·
-    #  거래정지). 그런 종목에 FDR 을 덧대면 네이버가 폐지 다음 날에 만드는 거래량 0 유령 봉이
-    #  붙는다(실측 2026-09-20 000075: 07-31 폐지 뒤 08-01 봉) → 덧대지 않는다. 쿨다운으로
-    #  span_end 자체가 앞당겨진 경우는 종목이 살아 있으니 종전대로 덧댄다.
+    # 저장소에 봉이 실린 마지막 날(span_end — 휴장·미게시의 빈 날은 제외, krx_openapi.last_data_dd)에
+    #  이 종목의 봉이 없으면 그날 거래가 없었다(상장폐지·거래정지). 그런 종목에 FDR 을 덧대면
+    #  네이버가 폐지 다음 날에 만드는 거래량 0 유령 봉이 붙는다(실측 2026-09-20 000075: 07-31 폐지
+    #  뒤 08-01 봉) → 덧대지 않는다. 쿨다운으로 span_end 자체가 앞당겨진 경우는 종목이 살아 있으니
+    #  종전대로 덧댄다.
     if last < today and last >= str(base.attrs.get('span_end') or ''):
         try:
             tail = _fetch_fdr(code, last, today)
@@ -290,7 +291,9 @@ def get_daily(code, lookback_days=None, use_cache=True):
             break
 
     if df is None or df.empty:
-        logger.warning(f"[KRX] 일봉 조회 실패({code}) — pykrx·FDR 모두 실패, 토스 캔들로 폴백")
+        logger.warning(f"[KRX] 일봉 조회 실패({code}) — Open API·FDR"
+                       f"{'·pykrx' if getattr(config, 'KRX_WEB_SCRAPING_ALLOWED', False) else ''} 모두 실패, "
+                       f"토스 캔들로 폴백")
         with _CACHE_LOCK:
             _FAIL[code] = now
         return None

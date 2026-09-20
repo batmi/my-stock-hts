@@ -110,8 +110,13 @@ def get_domestic_index_chart(code):
         start_date = (now - timedelta(days=730)).strftime("%Y%m%d") # 2년치 조회
 
         def _fetch_pages(api_caller, log_fail=True):
-            """기간 분할 페이지네이션 공통 루프 (api_caller: params → 응답 dict)"""
+            """기간 분할 페이지네이션 공통 루프 (api_caller: params → 응답 dict).
+
+            (items, fetch_failed) 를 돌려준다. fetch_failed 는 **모으다 말았다**는 뜻이다 —
+            첫 페이지는 받았는데 다음 페이지가 거부되면 100봉짜리 반쪽 프레임이 나온다.
+            """
             all_items = []
+            fetch_failed = False
             current_end_date = today
             retry_count = 0
             while len(all_items) < 300 and retry_count < 10:
@@ -140,13 +145,18 @@ def get_domestic_index_chart(code):
                 else:
                     if not all_items and log_fail:
                         logger.warning(f"[API] 지수({code}) 조회 실패: {data.get('msg1')} (Code: {data.get('msg_cd')})")
+                    elif all_items:
+                        #  종전에는 여기서 아무 말 없이 끊겼다 — 모은 만큼만 돌아가면서 로그 한 줄 없었다.
+                        fetch_failed = True
+                        logger.warning(f"[API] 지수({code}) 일봉 페이지 조회 실패 — 여기까지 {len(all_items)}건 "
+                                       f"({data.get('msg_cd')} {data.get('msg1')})")
                     break
-            return all_items
+            return all_items, fetch_failed
 
         # 모의서버 업종 TR은 'MCI전송 오류(OPSQ0008)' 등으로 간헐 실패한다. 모의 모드에서
         # 실전 서버는 사용하지 않으며(운영 방침), 실패 시 상위 폴백 체인(tvDatafeed→yfinance)이
         # 코스피·코스닥·코스피200·코스닥150을 받쳐준다 (VKOSPI는 폴백이 없어 모드 1 목록 제외).
-        all_items = _fetch_pages(
+        all_items, fetch_failed = _fetch_pages(
             lambda p: _api().call_api(url_path, "domestic", "quotations", "index_chart", params=p, tr_id=tr_id, retries=0)
         )
 
@@ -166,6 +176,14 @@ def get_domestic_index_chart(code):
             #  국내 지수는 NXT 연장거래가 없어 개장 전 당일 행은 언제나 가짜다 → 제거한다.
             if len(df) >= 2 and _api()._before_krx_regular_open() and str(df.iloc[-1]['date']) == _api().market_today(False):
                 df = df.iloc[:-1].reset_index(drop=True)
+            #  [Fix 2026-09-20] **반쪽 지수 차트를 캐시에 굳히지 않는다** — 종목 일봉(api/charts.py)은
+            #   같은 표식을 붙이는데 지수만 빠져 있었다. 이 프레임은 시장 필터(EMA80·이탈밴드 1%)와
+            #   국면 판정(EMA9/41)의 입력이다. 100봉짜리 반쪽으로 EMA80 을 내면 300봉 기준과 약 1%
+            #   어긋난다(무작위 경로 실측 +0.8~1.1%) — 이탈밴드와 같은 크기라, 6시간 캐시 동안
+            #   신규 매수가 엉뚱하게 막히거나 열린다. 표식이 있으면 _get_cached_chart 가 굳히지 않고,
+            #   analysis 의 폴백 체인이 다음 소스(KRX 확정 봉·tvDatafeed)로 내려간다.
+            if fetch_failed:
+                df.attrs['partial'] = True
             return df
 
         return pd.DataFrame()
@@ -209,9 +227,13 @@ def get_domestic_index_price(code):
             prev = fi.get('regular_market_previous_close')
             if curr is None:
                 return {'rt_cd': '9999'}
+            #  [Fix 2026-09-20] 전일 종가를 모르면 '0'(모름) — 종전에는 현재가를 대신 넣어
+            #   등락률이 0% 로 만들어졌고(서킷브레이커 알림 문구), 차트 오버레이의 수정주가 검증이
+            #   '전일 종가 ≠ 캐시 마지막 종가' 로 읽어 지수가 1.5% 이상 움직인 날마다 캐시를
+            #   파기·재조회했다. 토스 경로와 같은 규약(0 = 검증 건너뜀)으로 맞춘다.
             return {'rt_cd': '0', 'output': {
                 'bstp_nmix_prpr': str(curr),
-                'bstp_nmix_prdy_clpr': str(prev if prev is not None else curr),
+                'bstp_nmix_prdy_clpr': str(prev) if prev is not None else '0',
             }}
         except Exception as e:
             logger.debug(f"[Toss] 지수 현재가 yfinance 조회 실패({code}): {e}")
@@ -319,6 +341,7 @@ def get_k200_futures_chart(mrkt_div_code, iscd):
     url_path = constants.API_URLS["DOMESTIC"]["QUOTATIONS"]["FUT_CHART"]
     now = datetime.now()
     all_items = []
+    fetch_failed = False
     current_end_date = now.strftime("%Y%m%d")
     retry_count = 0
     while len(all_items) < 300 and retry_count < 10:
@@ -331,9 +354,8 @@ def get_k200_futures_chart(mrkt_div_code, iscd):
         }
         data = _call_k200_futures_api(url_path, "fut_chart", "FHKIF03020100", params)
         if data.get('rt_cd') == '0':
-            items = data.get('output2', [])
-            # 빈 행(과거 미상장 구간) 제거
-            items = [it for it in items if it.get('stck_bsop_date')]
+            # 빈 행(과거 미상장 구간) 제거 — output2 가 None 으로 오는 응답도 있다(지수 TR 과 동일)
+            items = [it for it in (data.get('output2') or []) if it.get('stck_bsop_date')]
             if items:
                 all_items.extend(items)
                 last_date = items[-1]['stck_bsop_date']
@@ -348,6 +370,10 @@ def get_k200_futures_chart(mrkt_div_code, iscd):
         else:
             if not all_items:
                 logger.warning(f"[API] K200선물 차트({mrkt_div_code}/{iscd}) 조회 실패: {data.get('msg1')} (Code: {data.get('msg_cd')})")
+            else:
+                fetch_failed = True
+                logger.warning(f"[API] K200선물 차트({mrkt_div_code}/{iscd}) 페이지 조회 실패 — 여기까지 "
+                               f"{len(all_items)}건 ({data.get('msg_cd')} {data.get('msg1')})")
             break
 
     if not all_items:
@@ -372,4 +398,6 @@ def get_k200_futures_chart(mrkt_div_code, iscd):
     df = df[['date', 'open', 'high', 'low', 'close', 'volume']].dropna(subset=['close'])
     df = df.sort_values('date', ascending=True).reset_index(drop=True)
     df.attrs['source'] = 'KIS'
+    if fetch_failed:
+        df.attrs['partial'] = True      # 지수 차트와 같은 표식(analysis 폴백 체인이 읽는다)
     return df

@@ -224,11 +224,21 @@ def get_dart_acc_month(stock_code):
     return acc
 
 
+_DISCLOSURE_MAX_PAGES = 20     # 100건 × 20 = 2,000건 — 대형사 2년치도 덮는다
+
+
 def get_dart_disclosures(stock_code, days=30, pblntf_ty=None, page_count=100):
     """종목의 최근 공시 목록 조회 (list.json).
 
-    반환: [{rcept_no, report_nm, flr_nm, rcept_dt, rm, corp_name}, ...] (최신순). 실패 시 [].
+    반환: [{rcept_no, report_nm, flr_nm, rcept_dt, rm, corp_name}, ...] (최신순).
+    맵에 없는 종목·데이터 없음(013)은 [] — 조회 **실패**는 DartQueryError(call_dart 참조).
     pblntf_ty: 공시유형 코드(A정기/B주요사항/C발행/D지분 등). None이면 전체.
+
+    [페이지 · 2026-09-20] list.json 은 한 페이지 최대 100건이다. 종전에는 첫 페이지만 받아
+    **창이 조용히 최신 100건으로 잘렸다** — 호출부는 730일(전환청구권행사, insider)·400일
+    (지난해 잠정실적으로 다음 실적일 추정, events)을 달라고 하는데, 대형사는 한 해 공시가
+    150~250건이라 창의 앞부분(가장 오래된 쪽)이 통째로 빠졌다. 실적 예상일은 하필 그
+    오래된 쪽(1년 전 공시)에서 나온다. 한 페이지가 꽉 차면 다음 페이지를 이어 받는다.
     """
     corp = _api().get_dart_corp_map().get(stock_code)
     if not corp:
@@ -244,19 +254,28 @@ def get_dart_disclosures(stock_code, days=30, pblntf_ty=None, page_count=100):
     }
     if pblntf_ty:
         params["pblntf_ty"] = pblntf_ty
-    rows = _api().call_dart("list.json", params)
-    if not rows or not isinstance(rows, list):
-        return []
-    out = []
-    for r in rows:
-        out.append({
-            "rcept_no": r.get("rcept_no", ""),
-            "report_nm": (r.get("report_nm") or "").strip(),
-            "flr_nm": (r.get("flr_nm") or "").strip(),
-            "rcept_dt": (r.get("rcept_dt") or "").strip(),
-            "rm": (r.get("rm") or "").strip(),
-            "corp_name": (r.get("corp_name") or "").strip(),
-        })
+    out, seen = [], set()
+    for page_no in range(1, _DISCLOSURE_MAX_PAGES + 1):
+        rows = _api().call_dart("list.json", dict(params, page_no=str(page_no)))
+        if not rows or not isinstance(rows, list):
+            break
+        added = 0
+        for r in rows:
+            rcept_no = r.get("rcept_no", "")
+            if rcept_no and rcept_no in seen:      # 같은 페이지를 되풀이 받으면 여기서 멈춘다
+                continue
+            seen.add(rcept_no)
+            added += 1
+            out.append({
+                "rcept_no": rcept_no,
+                "report_nm": (r.get("report_nm") or "").strip(),
+                "flr_nm": (r.get("flr_nm") or "").strip(),
+                "rcept_dt": (r.get("rcept_dt") or "").strip(),
+                "rm": (r.get("rm") or "").strip(),
+                "corp_name": (r.get("corp_name") or "").strip(),
+            })
+        if added == 0 or len(rows) < int(page_count):
+            break
     return out
 
 

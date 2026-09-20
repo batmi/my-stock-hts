@@ -308,38 +308,44 @@ def _load_seed(start, end):
 _SOURCE_COUNT = 5    # _collect 가 on_progress 를 부르는 횟수(네트워크 3 + 로컬 2)
 
 
-def _collect(start, end, on_progress=None):
-    """모든 소스를 합쳐 날짜순 정렬 → (이벤트, 전 소스 성공 여부).
-
-    같은 날 같은 이름은 중복 제거한다.
-    """
-    events, complete = [], True
-    for fn in (_fetch_fred, _fetch_fed, _fetch_boj):   # 네트워크 소스 (성공 여부를 함께 돌려준다)
-        try:
-            got, ok = fn(start, end)
-            events.extend(got)
-            complete = complete and ok
-        except Exception as e:
-            logger.warning(f"[econ] {fn.__name__} 실패: {e}")
-            complete = False
-        if on_progress:
-            on_progress()
-    for fn in (_option_expiry, _load_seed):        # 로컬 소스 (계산·파일이라 실패할 일이 없다)
-        try:
-            events.extend(fn(start, end))
-        except Exception as e:
-            logger.warning(f"[econ] {fn.__name__} 실패: {e}")
-            complete = False
-        if on_progress:
-            on_progress()
-
+def _dedupe(events):
     seen, uniq = set(), []
     for ev in sorted(events, key=lambda e: (e["date"], e["weight"], e["name"])):
         key = (ev["date"], ev["name"])
         if key not in seen:
             seen.add(key)
             uniq.append(ev)
-    return uniq, complete
+    return uniq
+
+
+def _collect(start, end, on_progress=None):
+    """모든 소스를 합쳐 날짜순 정렬 → (이벤트, 전 소스 성공 여부, 실패한 소스 표기 목록).
+
+    같은 날 같은 이름은 중복 제거한다.
+    """
+    events, failed = [], []      # failed = 이벤트의 source 표기(실패한 소스의 저장분을 골라 메울 때 쓴다)
+    # 네트워크 소스 (성공 여부를 함께 돌려준다)
+    for fn, label in ((_fetch_fred, "FRED"), (_fetch_fed, "Fed"), (_fetch_boj, "BOJ")):
+        try:
+            got, ok = fn(start, end)
+            events.extend(got)
+            if not ok:
+                failed.append(label)
+        except Exception as e:
+            logger.warning(f"[econ] {label} 수집 실패: {e}")
+            failed.append(label)
+        if on_progress:
+            on_progress()
+    # 로컬 소스 (계산·파일이라 실패할 일이 없다)
+    for fn, label in ((_option_expiry, "계산"), (_load_seed, "시드")):
+        try:
+            events.extend(fn(start, end))
+        except Exception as e:
+            logger.warning(f"[econ] {label} 수집 실패: {e}")
+            failed.append(label)
+        if on_progress:
+            on_progress()
+    return _dedupe(events), not failed, failed
 
 
 def get_events(days=60, on_progress=None):
@@ -354,15 +360,30 @@ def get_events(days=60, on_progress=None):
     대신 묵었다는 사실을 status로 함께 돌려줘 화면에서 밝힌다.
 
     Returns:
-        (events, status) — status = {"stale_since": 'YYYY-MM-DD'|None, "complete": bool}
+        (events, status) — status = {"stale_since": 'YYYY-MM-DD'|None, "complete": bool,
+                                     "backfilled": {소스: 'YYYY-MM-DD'}}
         stale_since가 있으면 그 날짜에 받아둔 저장분을 보여주고 있다는 뜻이다.
+        backfilled 는 **일부** 소스만 실패해 그 소스의 일정을 저장분(받은 날짜)으로 메웠다는 뜻이다.
+
+    [부분 실패 · 2026-09-20] 종전에는 FRED 하나가 타임아웃이면 CPI·고용보고서가 그 호출에서
+    통째로 빠졌고, 그 불완전한 목록이 다시 캐시에 덮어써져 다음 전면 실패 때의 폴백마저
+    비게 했다. 실패한 소스만 마지막 저장분으로 메운다 — 발표 일정은 몇 주 단위로 바뀌는
+    자료라 하루 이틀 묵은 값이 '없음'보다 낫고, 어느 소스를 언제 것으로 메웠는지 밝힌다.
     """
     today = datetime.now().date()
     end = today + timedelta(days=days)
 
-    events, complete = _collect(today, end, on_progress)
+    events, complete, failed = _collect(today, end, on_progress)
     stale_since = None
+    backfilled = {}
     if events:
+        if failed:
+            cache = jsonio.load_json(CACHE_FILE, default={}) or {}
+            prior = [e for e in cache.get("events", []) if e.get("source") in failed]
+            if prior:
+                events = _dedupe(events + prior)
+                backfilled = {src: cache.get("fetched") for src in failed
+                              if any(e.get("source") == src for e in prior)}
         jsonio.save_json(CACHE_FILE, {"fetched": today.strftime("%Y-%m-%d"),
                                       "covers_until": end.strftime("%Y-%m-%d"),
                                       "complete": complete,
@@ -377,7 +398,16 @@ def get_events(days=60, on_progress=None):
     return ([e for e in events
              if (_parse_date(e.get("date")) or today) >= today
              and (_parse_date(e.get("date")) or today) <= end],
-            {"stale_since": stale_since, "complete": complete})
+            {"stale_since": stale_since, "complete": complete, "backfilled": backfilled})
+
+
+def _partial_note(status):
+    """일부 소스 실패 문구(한 줄). 메운 소스가 있으면 어느 것을 언제 저장분으로 썼는지 적는다."""
+    bf = status.get("backfilled") or {}
+    if bf:
+        parts = ", ".join(f"{src}={day or '?'}" for src, day in bf.items())
+        return f"일부 소스 조회에 실패해 저장분으로 대신합니다({parts} 기준)."
+    return "일부 소스 조회에 실패해 일정이 누락됐을 수 있습니다."
 
 
 _WEEKDAY_KR = ["월", "화", "수", "목", "금", "토", "일"]
@@ -398,7 +428,7 @@ def build_lines(days=45):
     if status.get("stale_since"):
         lines.append(f"  ※ 수집 실패로 {status['stale_since']} 기준 저장분을 표시합니다.")
     elif not status.get("complete", True):
-        lines.append("  ※ 일부 소스 조회에 실패해 일정이 누락됐을 수 있습니다.")
+        lines.append(f"  ※ {_partial_note(status)}")
 
     if not events:
         lines.append("  표시할 경제 이벤트가 없습니다.")
@@ -440,7 +470,7 @@ def render(days=45):
         config.console.print(f"  [yellow]※ 일정 수집에 실패해 {status['stale_since']} 기준 저장분을 표시합니다 "
                              f"(그 이후 변경·추가된 일정은 반영되지 않습니다).[/yellow]")
     elif not status.get("complete", True):
-        config.console.print("  [dim yellow]※ 일부 소스 조회에 실패해 일정이 누락됐을 수 있습니다.[/dim yellow]")
+        config.console.print(f"  [dim yellow]※ {_partial_note(status)}[/dim yellow]")
 
     if not events:
         config.console.print("  [dim]표시할 경제 이벤트가 없습니다.[/dim]\n")

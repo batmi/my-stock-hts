@@ -87,6 +87,10 @@ _COLUMNS = ["date", "open", "high", "low", "close", "volume"]
 
 _DB_LOCK = threading.RLock()
 _CALL_LOCK = threading.RLock()
+#  [2026-09-20] ensure 는 한 번에 한 스레드만 — 분석 워커 N 개가 같은 아침에 같은 '빠진 며칠'을
+#   각자 받아 오면 같은 (서비스, 날짜)를 N 번 부른다(한도 10,000회를 헛되이 깎고 0.2s 간격
+#   직렬화로 N 배 느리다). 락 안에서 결손을 다시 세므로 뒤따르는 스레드는 받을 것이 없다.
+_ENSURE_LOCK = threading.RLock()
 _LAST_CALL_TS = [0.0]
 _DISABLED_UNTIL = [0.0]     # 401/429 뒤 헛호출을 막는 쿨다운(epoch)
 _DISABLED_REASON = [""]
@@ -435,6 +439,11 @@ def ensure(api_ids, start_dd, end_dd, max_calls=None, now=None, progress=None, w
     저장은 한 스레드씩 한다. 앱 안(인라인)은 1 이다.
     """
     api_ids = [a for a in api_ids if a in API]
+    with _ENSURE_LOCK:
+        return _ensure_locked(api_ids, start_dd, end_dd, max_calls, now, progress, workers)
+
+
+def _ensure_locked(api_ids, start_dd, end_dd, max_calls, now, progress, workers):
     todo = missing_days(api_ids, start_dd, end_dd, now=now)
     if not todo:
         return 0, 0
@@ -561,8 +570,25 @@ def stock_daily(code, lookback_days, max_calls=None, now=None):
     df = _finish([r[:6] for r in adjust_splits(rows)], "OPENAPI")
     if df is None:
         df = pd.DataFrame(columns=_COLUMNS)
-    df.attrs["span_end"] = span[1]      # 저장소가 완전한 마지막 날 — 이보다 앞에서 봉이 끝나면 폐지·정지
+    df.attrs["span_end"] = last_data_dd(STOCK_APIS, span[0], span[1]) or span[1]
     return df
+
+
+def last_data_dd(api_ids, start_dd, end_dd):
+    """[start, end] 안에서 저장소에 **행이 실제로 실린** 마지막 날. 하나도 없으면 None.
+
+    [왜 · 2026-09-20] 종전에는 '구간의 끝(span_end)'을 그대로 썼다. 그 끝이 휴장일이거나 아직
+    게시 전의 어제(08:00 가정보다 늦게 실리는 날)면 **빈 날**인데, krx_daily 는 '마지막 봉이
+    span_end 보다 앞이면 폐지·정지'로 읽어 살아 있는 전 종목에 오늘 봉 덧대기를 끊었다 —
+    연휴 다음 날 20:00 이후(오버레이가 꺼진 뒤) 차트가 어제로 끝나 보이는 자리다.
+    폐지·정지 판정은 '남들은 봉이 있는 날에 이 종목만 없다'여야 하므로 그 날을 준다.
+    """
+    marks = ",".join("?" * len(api_ids))
+    with _DB_LOCK, _connect() as conn:
+        row = conn.execute(
+            f"SELECT MAX(bas_dd) FROM fetched WHERE n>0 AND api_id IN ({marks}) AND bas_dd BETWEEN ? AND ?",
+            (*api_ids, start_dd, end_dd)).fetchone()
+    return row[0] if row and row[0] else None
 
 
 SPLIT_MIN_RATIO = 1.5     # 상장주식수가 이 배수 이상 변하고
@@ -605,32 +631,6 @@ def adjust_splits(rows):
             continue
         sh_prev, sh = rows[i - 1][6], rows[i][6]
         if not sh_prev or not sh or not o:
-            continue
-        r = sh / sh_prev
-        if r >= SPLIT_MIN_RATIO or r <= 1.0 / SPLIT_MIN_RATIO:
-            gap = c_prev / o           # 분할이면 ≈ r
-            if abs(gap / r - 1.0) <= SPLIT_GAP_TOL:
-                factors.append((i, 1.0 / r))
-    if not factors:
-        return rows
-    mult = 1.0
-    j = len(factors) - 1
-    for i in range(len(rows) - 1, -1, -1):
-        while j >= 0 and factors[j][0] > i:
-            mult *= factors[j][1]
-            j -= 1
-        if mult != 1.0:
-            for k in (1, 2, 3, 4):
-                if rows[i][k] is not None:
-                    rows[i][k] = rows[i][k] * mult
-            if rows[i][5] is not None:
-                rows[i][5] = rows[i][5] / mult
-    return rows
-    factors = []          # (index, price_mult) — 이 index 이전 봉에 곱한다
-    for i in range(1, len(rows)):
-        sh_prev, sh = rows[i - 1][6], rows[i][6]
-        c_prev, o = rows[i - 1][4], rows[i][1]
-        if not sh_prev or not sh or not c_prev or not o:
             continue
         r = sh / sh_prev
         if r >= SPLIT_MIN_RATIO or r <= 1.0 / SPLIT_MIN_RATIO:

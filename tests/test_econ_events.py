@@ -116,7 +116,7 @@ def test_collect_dedupes_same_day_same_name():
          patch.object(econ_events, "_fetch_boj", return_value=(list(dup), True)), \
          patch.object(econ_events, "_option_expiry", return_value=[]), \
          patch.object(econ_events, "_load_seed", return_value=[]):
-        out, complete = econ_events._collect(date(2026, 7, 29), date(2026, 9, 12))
+        out, complete, _failed = econ_events._collect(date(2026, 7, 29), date(2026, 9, 12))
     assert len(out) == 1 and complete
 
 
@@ -136,12 +136,12 @@ def test_get_events_always_refetches(tmp_path):
     with patch.object(econ_events, "CACHE_FILE", str(tmp_path / "c.json")), \
          patch.object(econ_events.jsonio, "load_json", return_value=cache), \
          patch.object(econ_events.jsonio, "save_json") as mock_save, \
-         patch.object(econ_events, "_collect", return_value=(fresh, True)) as mock_collect:
+         patch.object(econ_events, "_collect", return_value=(fresh, True, [])) as mock_collect:
         out, status = econ_events.get_events(days=30)
 
     mock_collect.assert_called_once()
     assert [e["name"] for e in out] == ["미국 CPI"]     # 캐시가 아니라 새로 받은 값
-    assert status == {"stale_since": None, "complete": True}
+    assert status == {"stale_since": None, "complete": True, "backfilled": {}}
     assert mock_save.call_args.args[1]["complete"] is True
 
 
@@ -153,7 +153,7 @@ def test_get_events_flags_partial_collection(tmp_path):
 
     with patch.object(econ_events, "CACHE_FILE", str(tmp_path / "c.json")), \
          patch.object(econ_events.jsonio, "save_json") as mock_save, \
-         patch.object(econ_events, "_collect", return_value=(partial, False)):
+         patch.object(econ_events, "_collect", return_value=(partial, False, ["FRED"])):
         out, status = econ_events.get_events(days=30)
 
     assert [e["name"] for e in out] == ["FOMC 금리결정"]
@@ -172,7 +172,7 @@ def test_get_events_falls_back_to_stale_cache(tmp_path):
     }
     with patch.object(econ_events, "CACHE_FILE", str(tmp_path / "c.json")), \
          patch.object(econ_events.jsonio, "load_json", return_value=stale), \
-         patch.object(econ_events, "_collect", return_value=([], False)):
+         patch.object(econ_events, "_collect", return_value=([], False, ["FRED", "Fed", "BOJ"])):
         out, status = econ_events.get_events(days=30)
 
     assert len(out) == 1 and out[0]["name"] == "FOMC 금리결정"
@@ -183,7 +183,7 @@ def test_get_events_empty_when_collect_fails_without_cache(tmp_path):
     """수집도 실패하고 폴백할 캐시도 없으면 빈 목록 — stale 표시는 붙이지 않는다."""
     with patch.object(econ_events, "CACHE_FILE", str(tmp_path / "c.json")), \
          patch.object(econ_events.jsonio, "load_json", return_value={}), \
-         patch.object(econ_events, "_collect", return_value=([], False)):
+         patch.object(econ_events, "_collect", return_value=([], False, ["FRED", "Fed", "BOJ"])):
         out, status = econ_events.get_events(days=30)
 
     assert out == [] and status["stale_since"] is None
@@ -200,7 +200,7 @@ def test_get_events_drops_past_dates(tmp_path):
     ]
     with patch.object(econ_events, "CACHE_FILE", str(tmp_path / "c.json")), \
          patch.object(econ_events.jsonio, "save_json"), \
-         patch.object(econ_events, "_collect", return_value=(collected, True)):
+         patch.object(econ_events, "_collect", return_value=(collected, True, [])):
         out, _ = econ_events.get_events(days=30)
 
     assert [e["name"] for e in out] == ["오늘 FOMC"]
@@ -283,3 +283,32 @@ def test_build_lines_reports_stale_cache():
                       return_value=([], {"stale_since": "2026-07-20", "complete": False})):
         text = "\n".join(econ_events.build_lines())
     assert "2026-07-20 기준 저장분" in text
+
+
+def test_a_failed_source_is_backfilled_from_the_last_saved_run_and_says_so(tmp_path):
+    """FRED 만 타임아웃이면 CPI·고용보고서를 마지막 저장분으로 메우고, 어느 소스를 언제 것으로
+    메웠는지 status 와 문구에 밝힌다. 성공한 소스(Fed)의 옛 저장분은 섞지 않는다."""
+    today = datetime.now().date()
+    d5 = (today + timedelta(days=5)).strftime("%Y-%m-%d")
+    d9 = (today + timedelta(days=9)).strftime("%Y-%m-%d")
+    cache = {"fetched": "2026-09-19", "complete": True, "events": [
+        {"date": d5, "name": "미국 CPI", "country": "US", "weight": 1, "source": "FRED"},
+        {"date": d9, "name": "취소된 FOMC", "country": "US", "weight": 1, "source": "Fed"},
+    ]}
+    partial = [{"date": d9, "name": "FOMC 금리결정", "country": "US", "weight": 1, "source": "Fed"}]
+    with patch.object(econ_events, "CACHE_FILE", str(tmp_path / "c.json")), \
+         patch.object(econ_events.jsonio, "load_json", return_value=cache), \
+         patch.object(econ_events.jsonio, "save_json") as mock_save, \
+         patch.object(econ_events, "_collect", return_value=(partial, False, ["FRED"])):
+        out, status = econ_events.get_events(days=30)
+    assert [e["name"] for e in out] == ["미국 CPI", "FOMC 금리결정"]
+    assert status["complete"] is False and status["backfilled"] == {"FRED": "2026-09-19"}
+    assert [e["name"] for e in mock_save.call_args.args[1]["events"]] == ["미국 CPI", "FOMC 금리결정"]
+    assert "FRED=2026-09-19" in econ_events._partial_note(status)
+    # 저장분에도 그 소스가 없으면 메울 것이 없다 — 종전 문구
+    with patch.object(econ_events, "CACHE_FILE", str(tmp_path / "c.json")), \
+         patch.object(econ_events.jsonio, "load_json", return_value={"fetched": "2026-09-19", "events": partial}), \
+         patch.object(econ_events.jsonio, "save_json"), \
+         patch.object(econ_events, "_collect", return_value=(partial, False, ["FRED"])):
+        out, status = econ_events.get_events(days=30)
+    assert status["backfilled"] == {} and "누락됐을 수" in econ_events._partial_note(status)

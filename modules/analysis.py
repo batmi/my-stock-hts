@@ -1678,7 +1678,12 @@ def _fetch_domestic_index_data(market_type):
         ma_period = max(ma_period, getattr(config, 'MARKET_FILTER_MA', 80))
 
     def _insufficient(d):
-        return d is None or d.empty or len(d) < ma_period
+        #  [2026-09-20] 반쪽 프레임(attrs['partial'], 페이지네이션 도중 실패)은 봉 수가 기준을
+        #   넘어도 '부족'으로 본다 — 다음 소스가 온전한 이력을 주면 그쪽을 쓰고, 전부 실패하면
+        #   반쪽이 그대로 남는다(있는 것이 없는 것보다 낫다는 원칙은 여기서도 같다).
+        if d is None or d.empty or len(d) < ma_period:
+            return True
+        return bool(getattr(d, 'attrs', {}).get('partial'))
 
     df = None
 

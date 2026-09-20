@@ -82,7 +82,7 @@ def test_collect_이_BOJ_를_네트워크_소스로_센다():
                                                        "country": "JP", "weight": 1, "source": "BOJ"}], True)), \
          patch.object(E, "_option_expiry", return_value=[]), \
          patch.object(E, "_load_seed", return_value=[]):
-        out, complete = E._collect(date(2026, 9, 17), date(2026, 10, 31), on_progress=lambda: calls.append(1))
+        out, complete, _failed = E._collect(date(2026, 9, 17), date(2026, 10, 31), on_progress=lambda: calls.append(1))
     assert complete and [e["source"] for e in out] == ["BOJ"]
     assert len(calls) == E._SOURCE_COUNT
 
@@ -97,5 +97,5 @@ def test_BOJ_실패는_불완전으로_표시된다():
          patch.object(E, "_fetch_boj", _boom), \
          patch.object(E, "_option_expiry", return_value=[]), \
          patch.object(E, "_load_seed", return_value=[]):
-        _out, complete = E._collect(date(2026, 9, 17), date(2026, 10, 31))
+        _out, complete, failed = E._collect(date(2026, 9, 17), date(2026, 10, 31))
     assert complete is False, "BOJ 가 빠졌는데 '완전'이라고 하면 화면이 누락을 말하지 않는다"
