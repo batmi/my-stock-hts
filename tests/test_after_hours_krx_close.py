@@ -19,6 +19,8 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 
+pytestmark = pytest.mark.real_session_window   # 휴게 판정 자체를 검증한다(conftest 자동 고정 제외)
+
 import api
 import config
 from core import indicators

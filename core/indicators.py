@@ -771,6 +771,13 @@ def calculate_indicators(df):
         indicators['macd_hist'] = hist.iloc[-1]
         if len(hist) > 1: indicators['prev_macd_hist'] = hist.iloc[-2]
 
+    # [중간 봉 결측 · 2026-09-20] 위 가드는 마지막 봉만 본다. rolling 창(CCI 20봉) 안의 어느 봉이
+    #  결측이면 마지막 값이 NaN 으로 나온다(실측: 5봉 전 결측 → cci·prev_cci NaN, 나머지는 ewm 이
+    #  결측을 건너뛰어 멀쩡). NaN 은 모든 비교에서 False 라 점수만 조용히 깎이고 화면엔 'nan' 이
+    #  찍힌다 — 위와 같은 규약으로 '모름 = None' 에 맞춘다.
+    for k, v in indicators.items():
+        if isinstance(v, (float, np.floating)) and np.isnan(v):
+            indicators[k] = None
     return indicators
 
 def get_swing_points(df, order=5):

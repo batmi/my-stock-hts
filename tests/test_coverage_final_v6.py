@@ -143,9 +143,13 @@ def test_get_market_regime_kosdaq(mock_yf, mock_kis):
 def test_analyze_stock_worker_custom_rule(mock_vol, mock_chart):
     """개별 룰이 적용된 분석 워커 테스트"""
     # [수정] 지표 계산(EMA120 등)을 위해 충분한 데이터 제공 (30 -> 150)
+    # [2026-09-20] 완전 평탄 프레임은 RSI 가 0/0 이라 '모름(None)' → 워커가 '지표 계산용 데이터
+    #  부족'으로 답한다(core.indicators 가 NaN 을 None 으로 맞춘 뒤의 올바른 동작). 이 테스트의
+    #  관심은 개별 룰·체결강도라 값에 변동을 준다.
+    closes = [10000 + i + (i % 10) * 8 for i in range(150)]   # 완만한 상승·톱니 잔파동(RSI 60대, 매수 후보)
     mock_chart.return_value = pd.DataFrame({
-        'close': [10000]*150, 'high': [10000]*150, 
-        'low': [10000]*150, 'open': [10000]*150, 
+        'close': closes, 'high': [c + 20 for c in closes],
+        'low': [c - 20 for c in closes], 'open': closes,
         'volume': [1000]*150
     })
     mock_vol.return_value = 100.0

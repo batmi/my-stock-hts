@@ -9,6 +9,8 @@ from unittest.mock import patch
 
 import pytest
 
+pytestmark = pytest.mark.real_session_window   # 휴게 판정 자체를 검증한다(conftest 자동 고정 제외)
+
 import api
 import config
 from modules.auto_trade import common

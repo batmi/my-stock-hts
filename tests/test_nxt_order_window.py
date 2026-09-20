@@ -11,6 +11,8 @@ from datetime import datetime
 
 import pytest
 
+pytestmark = pytest.mark.real_session_window   # 휴게 판정 자체를 검증한다(conftest 자동 고정 제외)
+
 import api
 from modules import trading
 

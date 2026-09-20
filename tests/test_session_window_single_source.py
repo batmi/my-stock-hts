@@ -8,6 +8,10 @@
  정본(KRX_BREAK_WINDOW)을 고치는 날 이 두 자리만 옛 경계로 남는다 — 그것이 하드코딩을 걷어낸
  이유 자체다. 가드가 없으면 같은 일이 세 번째로 일어난다.
 """
+import pytest
+
+pytestmark = pytest.mark.real_session_window   # 휴게 판정 자체를 검증한다(conftest 자동 고정 제외)
+
 import inspect
 import re
 

@@ -17,19 +17,20 @@ console = Console()
 
 def clear_all_trades():
     console.print("[bold red]=== 거래 내역(History) 초기화 도구 ===[/bold red]")
-    console.print("[dim]DB에 저장된 매매 내역을 영구적으로 삭제합니다.[/dim]\n")
+    console.print("[dim]DB에 저장된 매매 내역을 영구적으로 삭제합니다.[/dim]")
+    console.print(f"[dim]대상 DB: {config.DB_FILE_PATH} — 가상투자(mode 1)의 {config.PAPER_DB_FILE_PATH} 는 이 도구가 건드리지 않는다(9번 자산 관리 → 가상투자 계좌 관리).[/dim]\n")
 
     # 1. 대상 유형 선택 (폐기된 모의투자 기록 / 실전)
     console.print("[bold]초기화할 대상 유형을 선택하세요:[/bold]")
     console.print("[1] 옛 모의투자 기록 (폐기된 모드 · is_sim=1)")
-    console.print("[2] 한투증권 (Real)")
+    console.print("[2] 실거래 기록 (한투·토스 — 계좌로 고른다 · is_sim=0)")
 
     choice = Prompt.ask("선택 [dim](취소: q)[/dim]", choices=["1", "2", "q"], default="2")
     if choice.lower() == 'q':
         return
 
     is_sim = 1 if choice == "1" else 0
-    mode_label = "옛 모의투자 기록" if is_sim else "한투증권"
+    mode_label = "옛 모의투자 기록" if is_sim else "실거래(한투·토스)"
 
     db_path = config.DB_FILE_PATH
     if not os.path.exists(db_path):
@@ -108,12 +109,12 @@ def clear_all_trades():
         console.print(f"[bold red]DB 작업 중 오류 발생: {e}[/bold red]")
 
 def delete_individual_trade():
-    choice = Prompt.ask("\n조회할 환경을 선택하세요 [1: 옛 모의투자 기록, 2: 한투증권, q: 취소]", choices=["1", "2", "q"], default="2")
+    choice = Prompt.ask("\n조회할 환경을 선택하세요 [1: 옛 모의투자 기록, 2: 실거래(한투·토스), q: 취소]", choices=["1", "2", "q"], default="2")
     if choice == 'q':
         return
         
     is_sim = True if choice == "1" else False
-    env_str = "옛 모의투자 기록" if is_sim else "한투증권"
+    env_str = "옛 모의투자 기록" if is_sim else "실거래(한투·토스)"
 
     # 최근 50건 조회하여 표시
     trades = db_manager.db.get_trades(limit=50, is_sim=is_sim)

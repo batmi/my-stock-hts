@@ -7,6 +7,8 @@ import os
 import tempfile
 import time
 import pytest
+
+pytestmark = pytest.mark.real_session_window   # 휴게 판정 자체를 검증한다(conftest 자동 고정 제외)
 from unittest.mock import patch, MagicMock
 
 import config

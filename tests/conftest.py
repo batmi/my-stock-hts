@@ -268,6 +268,21 @@ def _mock_index_chart_df(periods=60):
 
 
 @pytest.fixture(autouse=True)
+def krx_break_window_closed(request, monkeypatch):
+    """[벽시계 격리 · 2026-09-20] 15:30~16:00 KRX 휴게에는 trading.send_order 가 "그래도 주문을
+    보내시겠습니까?" 프롬프트를 하나 더 띄운다(2026-09-14 애프터마켓 도입). 그 시간에 스위트를
+    돌리면 Prompt.ask 의 side_effect 목록이 하나 모자라 8건이 StopIteration 으로 죽는다
+    (2026-09-17 15:50 실측, 16:01 재실행 전부 통과). 기본은 '휴게 아님'으로 고정한다.
+    휴게 판정·휴게 프롬프트 자체를 검증하는 파일은 @pytest.mark.real_session_window 로 끈다.
+    (api.sessions 안에서 모듈 이름으로 직접 부르는 자리는 이 patch 가 닿지 않는다 — 의도한 범위다.)
+    """
+    if request.node.get_closest_marker("real_session_window"):
+        return
+    import api as _api_pkg
+    monkeypatch.setattr(_api_pkg, "domestic_break_window", lambda *a, **k: False)
+
+
+@pytest.fixture(autouse=True)
 def paper_broker_market_open(request, monkeypatch):
     """[벽시계 격리 · 2026-09-16] 가상투자 체결(paper_broker.place_order)은 열린 시장이 없으면
     거절한다(휴게·야간·휴장). 테스트가 밤에 돌면 주문 경로 전부가 그 게이트에 걸리므로
