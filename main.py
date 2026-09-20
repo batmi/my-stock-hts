@@ -315,6 +315,18 @@ def preflight_check():
     except Exception as e:      # noqa: BLE001
         config.console.print(f"  - [dim]특수 세션일 표 확인 실패: {e}[/dim]")
 
+    #  holidays 패키지 — 운용자 cron 없이 앱이 7일마다 갱신하고, 바뀐 휴장일은 알린다(다음 기동부터 적용).
+    try:
+        from modules import holiday_calendar_update as _hcu
+        _state = _hcu._load_state()
+        if _hcu.is_due(state=_state):
+            config.console.print("  - 휴장일 달력(holidays) 갱신 주기가 됐습니다 — 잠시 뒤 백그라운드에서 갱신·비교합니다.")
+            _hcu.start_background_check()
+        else:
+            config.console.print(f"  - 성공: 휴장일 달력(holidays {_state.get('version', '?')}) 최근 점검 {_state.get('last_check')}.")
+    except Exception as e:      # noqa: BLE001
+        config.console.print(f"  - [dim]휴장일 달력 갱신 점검 실패: {e}[/dim]")
+
     # 4. 종목 데이터 로드 및 누락/오류 exchange 정보 보완
     config.session.load_stock_config()
     

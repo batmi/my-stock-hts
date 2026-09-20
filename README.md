@@ -256,7 +256,7 @@ chmod +x run.sh                    # 최초 1회
 ```
 
 - `run.sh`를 쓰면 가상 환경 활성화와 의존성 설치가 자동입니다. **`requirements.txt`가 의존성의 단일 소스**이며 `run.sh`가 그 파일을 읽습니다.
-- `holidays` 패키지는 기동할 때마다 자동 업그레이드하지 **않습니다** — 휴장일 판정이 사람 모르게 바뀌면 매매 시간 판단이 달라지기 때문입니다. 임시공휴일 반영은 `tools/update_holidays.sh`를 주 1회 cron으로 돌리세요.
+- `holidays` 패키지는 기동할 때 조용히 업그레이드하지 **않습니다** — 휴장일 판정이 사람 모르게 바뀌면 매매 시간 판단이 달라지기 때문입니다. 대신 **앱이 7일마다 백그라운드에서 갱신**하고, 갱신 전후로 향후 400일의 국내·미국·거래소 휴장일을 비교해 **달라진 날짜를 텔레그램·로그로 알립니다**(새 달력은 다음 기동부터 적용). cron 은 필요 없고 `tools/update_holidays.sh` 는 수동 실행용입니다.
 - **세션이 옮겨지는 날은 표로 관리합니다.** 수능일(모든 세션 1시간 지연, 정규장 10:00~16:30)과 연초 첫 거래일(10:00 개장)은 09:00/15:30 리터럴이 전부 틀리는 날이라, 세션 판정·운용 시간·개장 보류·확정 종가 기준선·NXT 단계가 한 소스(`api.krx_session_shift`)를 거칩니다. 연초 개장일은 달력에서 계산하고, **수능일은 기동 점검이 한국교육과정평가원(suneung.re.kr) 주요 일정에서 자동으로 받아** `json/krx_session_shift_auto.json`에 저장합니다(조회 실패 시 저장분으로 계속). `config.KRX_SESSION_SHIFT_DAYS`는 그 위에 덮는 수기·오프라인 폴백이며, 10월 이후 그 해 수능일을 어디서도 모르면 기동 점검이 경고합니다.
 - **시스템 시간대는 KST여야 합니다.** 국내 세션·휴장 판정이 전부 로컬 시각을 KST로 믿습니다. 노트북을 해외에서 켜거나 라즈베리파이 이미지가 UTC면 기동 점검이 실패로 표시하고 **자동매매 시간 게이트가 닫힙니다**(수동 메뉴는 그대로). `timedatectl set-timezone Asia/Seoul`(리눅스) 뒤 재시작하세요.
 - **같은 모드는 한 서버에서 하나만 뜹니다.** 두 번째 실행은 선점 프로세스를 알리고 종료합니다 — 두 인스턴스가 텔레그램 폴링(409)·KIS 유량·DB 파일을 서로 빼앗기 때문입니다. 조회 전용으로 하나 더 띄우려면 `--allow-duplicate`를 붙이세요(실주문은 계좌 잠금이 계속 막습니다).
@@ -543,6 +543,7 @@ my-stock-hts/
 │   ├── paper_broker.py     # 관찰 모드 가상 브로커 (api 층에서 가로채기)
 │   ├── paper_report.py     # [9-6] 가상투자 계좌 리포트
 │   ├── reserved_order_monitor.py # 예약 주문 감시 스레드
+│   ├── holiday_calendar_update.py # holidays 패키지 7일 자동 갱신 + 전후 휴장일 비교·알림
 │   ├── krx_daily.py        # 국내 일봉 (Open API 1순위 → FDR 폴백, 오늘 봉은 FDR 덧대기 — 그 봉의 종가는 api/toss가 정규장 종가로 교체)
 │   ├── krx_openapi.py      # KRX Open API 정본 (날짜별 스냅샷 data/krx_openapi.db·백필·분할 보정)
 │   ├── krx_data.py         # KRX 공식 시세 (금현물·지수·파생·수급)
@@ -564,7 +565,7 @@ my-stock-hts/
 │   ├── web_server.py       #   차트 갤러리를 단독으로 띄우는 얇은 CLI (로직은 web_dashboard)
 │   ├── hts_watchdog.py     #   프로세스 사망 감시 (cron) — 알림만, 재기동 없음
 │   ├── get_telegram_chat_id.py  # 텔레그램 Chat ID 확인
-│   ├── update_holidays.sh  #   휴장일 라이브러리 주기 갱신
+│   ├── update_holidays.sh  #   휴장일 라이브러리 수동 갱신 (자동 갱신은 modules/holiday_calendar_update)
 │   ├── journal_sync_e2e.py #   매매일지 연동 종단 검증
 │   ├── check_*.py          #   시세·체결·잔고·API 진단 도구
 │   ├── audit_common.py     #   감사 공통 규약 (청산 표본·지표 단일 소스)

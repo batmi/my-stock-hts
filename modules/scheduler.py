@@ -58,6 +58,7 @@ class SystemScheduler:
             #   늘어진다. 예약 감시기·매매일지 워커가 이미 같은 이유로 Event 를 쓴다.
             self._wake = threading.Event()
             self.last_holiday_notified_date = None
+            self.last_holidays_pkg_check = 0.0     # holidays 패키지 자동 갱신 점검(하루 1회 판정, 실제 갱신은 7일)
             self.last_briefing_date = None
             self.last_calendar_alert_date = None
             self.last_heartbeat_time = time.time()
@@ -110,6 +111,7 @@ class SystemScheduler:
                         or getattr(config, 'MARKET_HALT_VI_USE', False)):
                     self._check_market_halt()
                 self._check_heartbeat()
+                self._check_holidays_package()
             except Exception as e:
                 logger.error(f"[Scheduler] 스케줄러 루프 에러: {e}", exc_info=True)
 
@@ -326,6 +328,21 @@ class SystemScheduler:
             "running": bool(getattr(self.trader, 'is_running', False)),
             "holdings": getattr(self.trader, 'last_holdings_count', None),
         }
+
+    def _check_holidays_package(self):
+        """holidays 패키지 자동 갱신 — 하루 한 번 주기(7일)를 보고, 됐으면 백그라운드에서 갱신·비교·알림.
+
+        운용자 cron(tools/update_holidays.sh) 을 대신한다. 새 달력은 다음 기동부터 적용되고,
+        달라진 휴장일은 텔레그램으로 날짜 단위로 알린다(modules/holiday_calendar_update 주석).
+        """
+        now = time.time()
+        if now - self.last_holidays_pkg_check < 86400:
+            return
+        self.last_holidays_pkg_check = now
+        from modules import holiday_calendar_update
+        if holiday_calendar_update.is_due():
+            threading.Thread(target=holiday_calendar_update.run_if_due, daemon=True,
+                             name="HolidaysUpdate").start()
 
     def _check_heartbeat(self):
         """1분 주기 하트비트 점검.

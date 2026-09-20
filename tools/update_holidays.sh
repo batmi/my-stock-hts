@@ -10,10 +10,11 @@
 #  달라져도 되는 종류의 것이 아니다.
 #  그렇다고 고정만 하면 임시공휴일이 반영되지 않으므로, '가끔·명시적으로' 갱신한다.
 #
+# [2026-09-20] 자동 갱신은 앱이 한다(modules/holiday_calendar_update — 7일마다 백그라운드 갱신, 전후 휴장일
+#  비교·텔레그램 알림). 이 스크립트는 **수동 실행용**으로만 남긴다. cron 에 걸 필요 없다.
+#
 # [사용법]
 #   수동:   ./tools/update_holidays.sh
-#   주기:   crontab -e 에 아래 한 줄 (매주 일요일 04:10)
-#           10 4 * * 0 /home/pi/my-stock-hts/tools/update_holidays.sh >> /home/pi/my-stock-hts/logs/holidays_update.log 2>&1
 #
 #   갱신 결과(버전 변화 여부)는 표준출력에 남는다. 버전이 바뀌면 그 사실 자체가
 #   '휴장일 판정이 달라졌을 수 있다'는 신호이므로, 로그로 남겨 두는 편이 좋다.

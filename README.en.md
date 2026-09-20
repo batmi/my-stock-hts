@@ -257,7 +257,7 @@ chmod +x run.sh                    # first time only
 ```
 
 - `run.sh` activates the virtual environment and installs dependencies for you. **`requirements.txt` is the single source of truth** for dependencies, and `run.sh` reads that file.
-- The `holidays` package is **not** auto-upgraded at startup — if the holiday calendar changed silently on every launch, trading-hour decisions would change without anyone noticing. Run `tools/update_holidays.sh` from cron weekly instead.
+- The `holidays` package is **not** silently upgraded at startup — if the holiday calendar changed on every launch, trading-hour decisions would change without anyone noticing. Instead **the app upgrades it in the background every 7 days**, diffs the next 400 days of KR/US/exchange holidays before and after, and **reports any changed dates via Telegram and the log** (the new calendar applies from the next start). No cron is needed; `tools/update_holidays.sh` remains for manual runs.
 - **Days with shifted sessions are table-driven.** On the CSAT day (every session delayed by one hour, regular session 10:00–16:30) and the first trading day of the year (10:00 open) every 09:00/15:30 literal would be wrong, so session phase, trading window, open-delay hold, settled-close baseline and NXT phase all go through one source (`api.krx_session_shift`). The first trading day is computed from the calendar, and **the CSAT date is fetched automatically by the startup check from the KICE schedule (suneung.re.kr)** into `json/krx_session_shift_auto.json` (the stored value is kept when the fetch fails). `config.KRX_SESSION_SHIFT_DAYS` is a manual/offline override layered on top; from October on, the startup check warns if no source knows the current year's CSAT date.
 - **The system timezone must be KST.** Every domestic session and holiday decision trusts local time as KST. If a laptop boots abroad or a Raspberry Pi image runs on UTC, the startup check reports a failure and **the auto-trader's time gate stays closed** (manual menus still work). Run `timedatectl set-timezone Asia/Seoul` (Linux) and restart.
 - **One instance per mode, per host.** A second launch names the process already holding the mode and exits — two instances fight over Telegram polling (409), the KIS rate/websocket/token budget, and the same DB file. Add `--allow-duplicate` for a read-only second instance (the account lock still blocks live orders).
@@ -544,6 +544,7 @@ my-stock-hts/
 │   ├── paper_broker.py     # Paper-mode virtual broker (intercepts at the api layer)
 │   ├── paper_report.py     # [9-6] Paper account reporting
 │   ├── reserved_order_monitor.py # Reserved-order watcher thread
+│   ├── holiday_calendar_update.py # 7-day auto refresh of the holidays package with before/after diff alerts
 │   ├── krx_daily.py        # Domestic daily bars (Open API first → FDR fallback; today's bar appended from FDR — its close swapped to the regular-session close by api/toss)
 │   ├── krx_openapi.py      # KRX Open API primary source (per-date snapshots in data/krx_openapi.db, backfill, split adjustment)
 │   ├── krx_data.py         # Official KRX data (gold, indices, derivatives, flows)
@@ -565,7 +566,7 @@ my-stock-hts/
 │   ├── web_server.py       #   Thin CLI to serve the chart gallery standalone (logic lives in web_dashboard)
 │   ├── hts_watchdog.py     #   Process watchdog (cron) — alerts only, no restarts
 │   ├── get_telegram_chat_id.py  # Verify Telegram Chat ID helper
-│   ├── update_holidays.sh  #   Periodic holiday-library refresh
+│   ├── update_holidays.sh  #   Manual holiday-library refresh (automatic refresh lives in modules/holiday_calendar_update)
 │   ├── journal_sync_e2e.py #   End-to-end journal sync verification
 │   ├── check_*.py          #   Quote, fill, balance, and API diagnostics
 │   ├── audit_common.py     #   Shared audit contract (exit sample, metrics)
