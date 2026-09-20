@@ -183,7 +183,92 @@ def domestic_trading_session_open():
 NXT_ORDER_WINDOWS = (("0800", "0849"),)
 
 # KRX 휴게(15:30~16:00, 양끝 포함 '분'). 정규장 마감 뒤 애프터마켓 개장 전 — 거래 시장이 없다.
+#  ※ 특수 세션일(수능일)에는 함께 밀린다 — 읽을 때는 domestic_break_window/krx_hm 을 거친다.
 KRX_BREAK_WINDOW = ("1530", "1559")
+
+
+# ==========================================================
+# [특수 세션일] 정규장 시각이 옮겨지는 날 — 세션 경계의 단일 소스
+#  KRX 는 수능일에 전 세션을 1시간 늦추고(10:00~16:30), 그 해 첫 거래일에는 10:00 에 연다(마감 그대로).
+#  아래 phase·게이트 함수들은 리터럴("0900"·"1530"…)을 그대로 두되 krx_hm() 으로 그 날의 값으로
+#  옮겨 읽는다. 표(config.KRX_SESSION_SHIFT_DAYS)는 연 1회 손으로 채운다.
+# ==========================================================
+_SHIFT_CACHE = {}
+
+
+def krx_session_shift(day=None):
+    """그 날(YYYYMMDD, 기본 오늘)의 (개장 지연 분, 마감 지연 분). 평일 보통날은 (0, 0)."""
+    day = str(day or datetime.now().strftime("%Y%m%d"))
+    hit = _SHIFT_CACHE.get(day)
+    if hit is not None:
+        return hit
+    table = getattr(config, "KRX_SESSION_SHIFT_DAYS", {}) or {}
+    ent = table.get(day)
+    if ent:
+        out = (int(ent[0]), int(ent[1]))
+    elif day[4:6] == "01" and _is_first_trading_day_of_year(day):
+        out = (60, 0)
+    else:
+        out = (0, 0)
+    if len(_SHIFT_CACHE) > 64:
+        _SHIFT_CACHE.clear()
+    _SHIFT_CACHE[day] = out
+    return out
+
+
+def _is_first_trading_day_of_year(day):
+    """그 날이 그 해 첫 거래일인가(1월, 앞선 날이 전부 주말·휴장)."""
+    try:
+        d = datetime.strptime(day, "%Y%m%d")
+        if _api().is_holiday_on(day):
+            return False
+        probe = datetime(d.year, 1, 1)
+        while probe < d:
+            if not _api().is_holiday_on(probe.strftime("%Y%m%d")):
+                return False
+            probe += timedelta(days=1)
+        return True
+    except Exception:      # noqa: BLE001 - 달력 실패는 보통날로 본다
+        return False
+
+
+def krx_hm(base_hhmm, side="open", day=None):
+    """보통날 기준 경계("0900" 등)를 그 날의 값으로 옮긴다. side='open'|'close' 가 어느 지연을 따를지."""
+    o, c = krx_session_shift(day)
+    shift = o if side == "open" else c
+    if not shift:
+        return base_hhmm
+    h, m = int(base_hhmm[:2]), int(base_hhmm[2:4])
+    total = h * 60 + m + shift
+    return f"{min(total // 60, 23):02d}{total % 60:02d}"
+
+
+KST_UTC_OFFSET_SEC = 9 * 3600
+
+
+def local_tz_is_kst(now=None):
+    """프로세스의 로컬 시간대가 KST(+09:00)인가.
+
+    [왜 · 2026-09-20] 국내 세션·휴장·주문 시각 판정은 전부 naive `datetime.now()` = 로컬 시각을
+    KST 로 믿는다. 맥북을 해외에서 켜면 OS 가 시간대를 자동으로 바꾸고, 파이는 이미지에 따라
+    UTC 로 깔린다 — 그러면 09:00 판정이 실제 KST 18:00 에 맞고, 휴장 판정은 날짜가 어긋난다.
+    잘못된 시각으로 주문을 내느니 자동매매 시간 게이트를 닫는다(수동 메뉴는 그대로).
+    """
+    import time as _t
+    off = (now.utcoffset().total_seconds() if now is not None and now.utcoffset() is not None
+           else (_t.localtime().tm_gmtoff if hasattr(_t.localtime(), "tm_gmtoff") else -_t.timezone))
+    return int(off) == KST_UTC_OFFSET_SEC
+
+
+def krx_session_status_text():
+    """기동 점검용 한 줄 — 특수 세션일 표에 올해 수능일이 있는가(11월에 없으면 경고)."""
+    now = datetime.now()
+    table = getattr(config, "KRX_SESSION_SHIFT_DAYS", {}) or {}
+    this_year = [d for d in table if d.startswith(str(now.year))]
+    if now.month >= 10 and not this_year:
+        return False, (f"{now.year}년 수능일이 config.KRX_SESSION_SHIFT_DAYS 에 없습니다 — 그 날 정규장이 "
+                       f"1시간 밀리는데 시스템은 15:30 에 감시를 멈춥니다. 날짜를 확인해 추가하세요.")
+    return True, f"특수 세션일 표 {len(table)}건 (올해 {', '.join(this_year) or '없음'})"
 
 
 def nxt_order_window(now=None):
@@ -225,8 +310,10 @@ def domestic_break_window(now=None):
 
     자동매매·예약은 이 구간을 닫고, 수동 발주는 '거부될 주문을 그래도 보낼지' 확인을 받는다.
     """
-    hm = (now or datetime.now()).strftime("%H%M")
-    lo, hi = KRX_BREAK_WINDOW
+    now = now or datetime.now()
+    hm = now.strftime("%H%M")
+    day = now.strftime("%Y%m%d")
+    lo, hi = (krx_hm(KRX_BREAK_WINDOW[0], "close", day), krx_hm(KRX_BREAK_WINDOW[1], "close", day))
     return lo <= hm <= hi
 
 
@@ -253,13 +340,13 @@ def domestic_session_phase():
     except Exception:      # noqa: BLE001 - 휴장 판정 실패는 거래일로 보고 시간대만 판정
         pass
     hm = datetime.now().strftime('%H%M')
-    if "0800" <= hm < "0900":
+    if krx_hm("0800") <= hm < krx_hm("0900"):
         return 'nxt_pre'
-    if "0900" <= hm < "1530":
+    if krx_hm("0900") <= hm < krx_hm("1530", "close"):
         return 'krx'
-    if "1530" <= hm < "1600":
+    if krx_hm("1530", "close") <= hm < krx_hm("1600", "close"):
         return 'nxt_after'
-    if "1600" <= hm <= "2000":
+    if krx_hm("1600", "close") <= hm <= "2000":
         return 'krx_after'
     return 'closed'
 
@@ -389,8 +476,8 @@ def _krx_close_passed_at():
         now = datetime.now()
         if market_today(False) != now.strftime('%Y%m%d'):
             return None
-        settled = now.replace(hour=_KRX_DAILY_SETTLED_HHMM[0], minute=_KRX_DAILY_SETTLED_HHMM[1],
-                              second=0, microsecond=0)
+        hhmm = krx_hm(f"{_KRX_DAILY_SETTLED_HHMM[0]:02d}{_KRX_DAILY_SETTLED_HHMM[1]:02d}", "close")
+        settled = now.replace(hour=int(hhmm[:2]), minute=int(hhmm[2:]), second=0, microsecond=0)
         return settled if now >= settled else None
     except Exception:      # noqa: BLE001 - 판정 실패 시 종전 동작(캐시 유지)
         return None

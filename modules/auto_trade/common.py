@@ -774,11 +774,20 @@ def is_system_market_open():
     운영). 단일 구간 비교(start<=t<=end)만으로는 그 30분이 함께 열려 버린다.
     """
     if api.is_holiday_today(): return False # 주말 및 공휴일(휴장일) 처리
+    if not api.local_tz_is_kst(): return False   # 시간대가 KST 가 아니면 어느 판정도 믿을 수 없다(기동 점검이 알린다)
 
     _now = datetime.now()
     current_time = _now.strftime("%H%M")
     start_time = getattr(config, 'SYSTEM_TRADING_START_TIME', "0900")
     end_time = getattr(config, 'SYSTEM_TRADING_END_TIME', "1530")
+    #  [특수 세션일 · 2026-09-20] 수능일은 전 세션이 1시간 밀린다(정규장 10:00~16:30). 설정값을
+    #   그대로 비교하면 15:30 에 감시를 멈춰 시장이 열린 마지막 한 시간이 무방비가 된다.
+    #   시작은 개장 지연, 종료는 마감 지연을 따른다(애프터 끝 20:00 은 그대로).
+    _day = _now.strftime("%Y%m%d")
+    start_time = api.krx_hm(start_time, "open", _day)
+    #   종료 시각이 휴게 끝(정본 KRX_BREAK_WINDOW) 이전이면 정규장 마감에 묶인 값이므로 함께 민다.
+    if end_time <= api.sessions.KRX_BREAK_WINDOW[1]:
+        end_time = api.krx_hm(end_time, "close", _day)
 
     if start_time <= current_time <= end_time:
         # KRX 휴게(15:30~16:00, 거래 시장 없음) — 종료 시간을 애프터까지 늘렸을 때만 닿는 구간.
@@ -796,8 +805,8 @@ def is_system_market_open():
         #  15:20~15:30(10분)이라 15:20~15:25에 나간 주문은 접수만 되고 체결되지 않는다.
         #  미체결 자동취소(UNFILLED_ORDER_CANCEL_SECONDS, 기본 120초)에 걸려 2분 뒤 취소되는
         #  헛주문이 되므로, 접속매매가 끝나는 15:20을 경계로 맞춘다.
-        if "0850" <= current_time < "0900": return False
-        if "1520" <= current_time <= "1530": return False
+        if api.krx_hm("0850", "open", _day) <= current_time < api.krx_hm("0900", "open", _day): return False
+        if api.krx_hm("1520", "close", _day) <= current_time <= api.krx_hm("1530", "close", _day): return False
         return True
     return False
 
@@ -827,7 +836,8 @@ def entry_open_delay_remaining(now=None):
 
     now = now or datetime.now()
     start = str(getattr(config, 'SYSTEM_TRADING_START_TIME', "0900") or "0900")
-    base = max(start, KRX_REGULAR_OPEN_TIME)
+    day = now.strftime("%Y%m%d")
+    base = max(api.krx_hm(start, "open", day), api.krx_hm(KRX_REGULAR_OPEN_TIME, "open", day))
     try:
         open_at = now.replace(hour=int(base[:2]), minute=int(base[2:4]),
                               second=0, microsecond=0)

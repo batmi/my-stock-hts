@@ -297,6 +297,23 @@ def preflight_check():
         config.console.print(f"  - {'성공' if krx_ok else '[yellow]주의[/yellow]'}: {krx_msg}")
     except Exception as e:      # noqa: BLE001 - 점검 자체가 기동을 막으면 안 된다
         config.console.print(f"  - [dim]KRX 공식 데이터 상태 확인 실패: {e}[/dim]")
+    #  시간대 — 국내 판정은 전부 로컬 시각을 KST 로 믿는다. 아니면 자동매매 시간 게이트가 닫힌다.
+    try:
+        if api.local_tz_is_kst():
+            config.console.print("  - 성공: 시스템 시간대 KST(+09:00) 확인.")
+        else:
+            import time as _time
+            config.console.print(f"  - [bold red]실패[/]: 시스템 시간대가 KST 가 아닙니다"
+                                 f"(현재 {_time.strftime('%Z %z')}). 세션·휴장·주문 시각 판정이 전부 어긋나므로 "
+                                 f"**자동매매는 열리지 않습니다**. OS 시간대를 Asia/Seoul 로 맞추고 재기동하세요.")
+    except Exception as e:      # noqa: BLE001
+        config.console.print(f"  - [dim]시간대 확인 실패: {e}[/dim]")
+    #  특수 세션일(수능일) 표 — 그 해 항목이 없으면 그 날 정규장 마지막 한 시간을 감시 없이 둔다.
+    try:
+        ss_ok, ss_msg = api.krx_session_status_text()
+        config.console.print(f"  - {'성공' if ss_ok else '[yellow]주의[/yellow]'}: {ss_msg}")
+    except Exception as e:      # noqa: BLE001
+        config.console.print(f"  - [dim]특수 세션일 표 확인 실패: {e}[/dim]")
 
     # 4. 종목 데이터 로드 및 누락/오류 exchange 정보 보완
     config.session.load_stock_config()

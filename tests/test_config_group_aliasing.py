@@ -27,18 +27,20 @@ def test_the_module_name_and_the_settings_field_are_one_object():
     assert config.ANALYSIS_THRESHOLDS is config.settings.ANALYSIS_THRESHOLDS
 
 
-def test_assigning_splits_them_and_that_is_why_it_is_banned(restore):
-    """이 테스트는 금지 사유를 재현한다 — 고쳐야 할 코드가 아니라 근거다."""
+def test_assigning_no_longer_splits_them_but_stays_banned_in_source(restore):
+    """[2026-09-20] config.<그룹> 대입은 이제 settings 로 라우팅되어 **갈라지지 않는다**
+    (config._ConfigModule). 그래도 소스 가드(대입 금지)는 유지한다 — 대입은 '임시 값을 저장
+    대상에 쓰는' 행위라 되돌림 규약(제자리 복구)과 다르기 때문이다. 이 테스트는 옛 결함(대입이
+    settings 와 갈라져 임시 값이 저장되던 것)이 재발하지 않음을 지킨다."""
     saved = config.ANALYSIS_THRESHOLDS.copy()
     config.ANALYSIS_THRESHOLDS["BUY_SCORE"] = 3.0      # 스크리닝이 임시로 낮춘 값
-    config.ANALYSIS_THRESHOLDS = saved                 # '복구'처럼 보이는 대입
+    config.ANALYSIS_THRESHOLDS = saved                 # 대입 — 이제 settings 자체가 saved 를 가리킨다
 
-    assert config.ANALYSIS_THRESHOLDS is not config.settings.ANALYSIS_THRESHOLDS
-    # 임시 값이 저장 대상에 그대로 남는다
-    assert config.settings.ANALYSIS_THRESHOLDS["BUY_SCORE"] == 3.0
-    # 이후 메뉴에서 고친 값은 저장되지 않는다
+    assert config.ANALYSIS_THRESHOLDS is config.settings.ANALYSIS_THRESHOLDS
+    assert config.settings.ANALYSIS_THRESHOLDS["BUY_SCORE"] == saved["BUY_SCORE"] != 3.0
     config.ANALYSIS_THRESHOLDS["BUY_SCORE"] = 8.0
-    assert config.settings.model_dump()["ANALYSIS_THRESHOLDS"]["BUY_SCORE"] == 3.0
+    assert config.settings.model_dump()["ANALYSIS_THRESHOLDS"]["BUY_SCORE"] == 8.0
+    assert "ANALYSIS_THRESHOLDS" not in vars(config)
 
 
 def test_restoring_in_place_keeps_them_together(restore):

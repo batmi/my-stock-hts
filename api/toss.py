@@ -176,16 +176,19 @@ def _toss_krx_regular_bounds(date_str=None):
     캘린더 호출은 하루 1회다. 비토스 모드·조회 실패·미수록 날짜는 기본값(09:00~15:30).
     """
     global _toss_kr_cal_map, _toss_kr_cal_day, _toss_kr_cal_fail
-    if not config.session.is_toss:
-        return _TOSS_KRX_SESSION_DEFAULT
     today = datetime.now().strftime('%Y%m%d')
     key = str(date_str or today)
+    #  기본값도 특수 세션일을 따른다(비토스 모드·캘린더 실패 시 수능일 10:00~16:30).
+    _o, _c = _api().krx_hm("0900", "open", key), _api().krx_hm("1530", "close", key)
+    default = ((int(_o[:2]), int(_o[2:])), (int(_c[:2]), int(_c[2:])))
+    if not config.session.is_toss:
+        return default
     with _toss_kr_cal_lock:
         if _toss_kr_cal_day == today:
-            return _toss_kr_cal_map.get(key, _TOSS_KRX_SESSION_DEFAULT)
+            return _toss_kr_cal_map.get(key, default)
         # 실패 직후 재조회 억제 — 시세 갱신마다 캘린더를 두드리지 않게 한다
         if _toss_kr_cal_fail and (time.time() - _toss_kr_cal_fail) < _TOSS_KR_CAL_RETRY_SEC:
-            return _TOSS_KRX_SESSION_DEFAULT
+            return default
 
     parsed = {}
     try:
@@ -208,7 +211,7 @@ def _toss_krx_regular_bounds(date_str=None):
             _toss_kr_cal_fail = 0.0
         else:                           # 실패: 쿨다운 후 재시도(그 동안은 기본값 사용)
             _toss_kr_cal_fail = time.time()
-    return parsed.get(key, _TOSS_KRX_SESSION_DEFAULT)
+    return parsed.get(key, default)
 
 
 # --- KRX 정규장 마감가(15:30) 캡처·저장 (mode 3 등락률 기준가) ---
@@ -397,7 +400,8 @@ def _before_krx_regular_open():
     이 구간엔 직전 정규장 최종 등락률(전일 vs 전전일)을 대신 표시하기 위한 판정.
     """
     now = datetime.now()
-    return _api().market_today(False) == now.strftime('%Y%m%d') and now.strftime('%H%M') < '0900'
+    return (_api().market_today(False) == now.strftime('%Y%m%d')
+            and now.strftime('%H%M') < _api().krx_hm('0900'))      # 수능일·연초 개장일은 10:00
 
 
 def _toss_capture_krx_close(code):

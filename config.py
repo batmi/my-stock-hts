@@ -3468,6 +3468,19 @@ KRX_OPENAPI_CALL_INTERVAL_SEC = 0.2        # 호출 간격(초). 일 한도 10,0
 #   있어야만 동작한다. 켜야 할 이유가 생기면 그 이유를 여기 적을 것.
 KRX_WEB_SCRAPING_ALLOWED = False
 
+# [특수 세션일 · 2026-09-20] KRX 가 정규장 시각을 옮기는 날. 값은 (개장 지연 분, 마감 지연 분).
+#  · 수능일: 전 세션이 1시간 밀린다(정규장 10:00~16:30, NXT 프리 09:00~10:00, 휴게·애프터도 함께).
+#    매년 날짜가 다르고(2025-11-13 은 둘째 목요일, 2026-11-19 는 셋째 목요일) 규칙이 없어
+#    **연 1회 손으로 적는다** — 11월에 그 해 항목이 없으면 기동 점검이 경고한다.
+#  · 연초 개장일(그 해 첫 거래일): 10:00 개장, 마감은 15:30 그대로 — 달력에서 계산하므로 여기 없다.
+#  이 표를 안 보면 수능일 15:30 에 '정규장 종료'로 읽어 시장이 열린 마지막 한 시간을 감시 없이
+#  두고, 15:40 가격을 확정 종가로 굳히며, 09:30 부터 낸 매수가 10:00 시가 단일가에 들어간다.
+#  단일 소스는 api.sessions.krx_session_shift — 세션 경계 리터럴을 새로 적지 말고 그것을 거칠 것.
+KRX_SESSION_SHIFT_DAYS = {
+    "20251113": (60, 60),      # 2026학년도 수능
+    "20261119": (60, 60),      # 2027학년도 수능
+}
+
 # [관찰 모드] 페이퍼 트레이딩 전용 DB. 실계좌 DB와 **파일을 분리**한다 —
 #  trailing_stops·half_tp_status가 code를 PK로 쓰기 때문에 파일을 공유하면
 #  실계좌 포지션의 트레일링 최고가가 가상 포지션에 오염된다.
@@ -4423,3 +4436,52 @@ def __getattr__(name):
         with _settings_lock:
             return getattr(settings, name)
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+
+
+# ==========================================================
+# [대입 라우팅 · 2026-09-20] `config.X = v` 에서 X 가 GlobalSettings 필드면 settings 객체에 쓴다.
+#  __getattr__ 은 settings 를 비추지만 **대입은 모듈 사전에 그림자를 만들었다**. 한 번 생기면
+#  그 뒤의 읽기는 settings 가 아니라 그림자를 본다 — 메뉴에서 설정을 바꿔도 반영이 안 되고,
+#  프로필 전환·되돌리기(settings 객체 교체)도 그 이름만 옛 값에 묶인다.
+#  실측: modules/backtest.py 가 `config.USE_MARKET_FILTER = ...` 로 잠깐 바꿨다 되돌리며 그림자를
+#  남겼고, 테스트 22파일 30곳의 monkeypatch.setattr(config, "<필드>") 도 복원 때 같은 그림자를
+#  남겨(hasattr 가 True 라 '원래 값'을 setattr 로 되돌린다) 순서 의존 실패를 만들었다.
+#  모듈 클래스를 바꿔 __setattr__ 을 갖는 것은 api 패키지(_ApiPackage)와 같은 기법이다.
+# ==========================================================
+import sys as _sys
+import types as _types
+
+_SETTINGS_FIELDS = frozenset(getattr(GlobalSettings, "model_fields", {}).keys())
+
+
+#  대입 직전 값을 이름별 스택에 쌓는다 — `mock.patch.object(config, "X", v)` 는 X 가 모듈 사전에
+#   없으면 종료 시 **delattr** 로 복원하므로(그림자를 지우면 원본이 드러난다는 가정), 라우팅
+#   뒤에는 delattr 이 '직전 값으로 되돌리기'여야 settings 에 v 가 남지 않는다.
+_ROUTED_PREVIOUS = {}
+_ROUTED_STACK_MAX = 16
+
+
+class _ConfigModule(_types.ModuleType):
+    def __setattr__(self, name, value):
+        if name in _SETTINGS_FIELDS:
+            with self.__dict__["_settings_lock"]:
+                st = self.__dict__["settings"]
+                stack = _ROUTED_PREVIOUS.setdefault(name, [])
+                stack.append(getattr(st, name, None))
+                del stack[:-_ROUTED_STACK_MAX]
+                setattr(st, name, value)
+            self.__dict__.pop(name, None)      # 그림자를 남기지 않는다
+            return
+        self.__dict__[name] = value
+
+    def __delattr__(self, name):
+        if name in _SETTINGS_FIELDS and name not in self.__dict__:
+            with self.__dict__["_settings_lock"]:
+                stack = _ROUTED_PREVIOUS.get(name) or []
+                if stack:
+                    setattr(self.__dict__["settings"], name, stack.pop())
+            return
+        del self.__dict__[name]
+
+
+_sys.modules[__name__].__class__ = _ConfigModule

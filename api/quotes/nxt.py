@@ -167,13 +167,14 @@ def _nxt_quote_phase():
     except Exception:
         holiday = False
     now = datetime.now().strftime("%H%M")
-    if holiday or now >= "2001" or now < "0800":
+    _hm = _api().krx_hm          # 특수 세션일(수능일·연초 개장일)에는 경계가 함께 밀린다
+    if holiday or now >= "2001" or now < _hm("0800"):
         return 'offhours'
-    if now < "0900":
+    if now < _hm("0900"):
         return 'active'
-    if now < "1530":
+    if now < _hm("1530", "close"):
         return 'skip'
-    if now < "1600":
+    if now < _hm("1600", "close"):
         return 'break'
     return 'krx_after'
 
