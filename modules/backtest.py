@@ -151,7 +151,7 @@ def daily_source_summary():
 def get_backtest_data(code, is_overseas, days):
     """백테스트용 장기 일봉.
 
-    [데이터 정합성] 국내는 **모드와 무관하게 KRX 공식(pykrx/FDR)** 을 1순위로 쓴다.
+    [데이터 정합성] 국내는 **모드와 무관하게 KRX 공식 일봉(krx_daily: Open API 1순위 → FDR 폴백)** 을 쓴다.
      ① 실매매·화면 지표의 기준과 같다 — 토스 모드는 이미 KRX 공식이고, KIS 일봉도 KRX 정규장
         기준이라 같은 값을 본다. 검증한 전략과 실행하는 전략이 다른 데이터 위에 서지 않는다.
      ② 모드를 바꿔가며 비교해도 백테스트 결과가 흔들리지 않는다.

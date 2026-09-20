@@ -66,7 +66,7 @@ Chosen at startup or via `--mode`. Each mode keeps a separate config profile, so
 
 **Trading & Quotes**
 - Unified management of domestic/US stocks and ETFs; real-time quotes with buy/sell/modify/cancel orders
-- **KRX after-market (16:00–20:00), NXT pre-market & SOR support** — from 2026-09-14 KRX runs an after-market session 16:00–20:00. Quotes and orders use the KRX after-market (exchange pinned to `KRX`, order types auto-mapped to the after-market codes `41` limit / `44` best-counter / `47` best-own; there is no market order, so market orders go out as best-counter; **ETF/ETN are not traded after hours — common stock only**); 15:30–16:00 is a break with no open venue, so the auto-trader and reserved orders stay closed for those 30 minutes and manual orders require confirmation. NXT runs pre-market only (08:00–08:50) and keeps using NXT quotes and orders there. Trading pauses during the KRX single-price auctions (08:50–09:00 and 15:20–15:30). **The auto-trader's default window is the KRX regular session, 09:00–15:30** (in KIS mode, indicators and daily bars are on a KRX regular-session basis). **The KRX data-portal daily close (pykrx/FDR) has been the after-market final print since 2026-09-14** (the exchange base price, KIS daily bars and Toss basePrice are the regular-session close — measured 9/14 Samsung: portal 248,500 vs base 249,000), so Toss mode **remembers the regular-session close and swaps it into the bar** (Toss last price captured during the 15:30–16:00 break, else the yfinance daily close) — indicators use the same bars as KIS mode, and only days with no captured value keep the portal close. KIS mode restores the provisional evening close (after-market value shown by KIS between 16:00 and the overnight batch) to the 15:30 minute-bar close before caching. To run through the after-market, set the trading end time to `2000` under `[0] → 5-1` (both entries and exits run until then).
+- **KRX after-market (16:00–20:00), NXT pre-market & SOR support** — from 2026-09-14 KRX runs an after-market session 16:00–20:00. Quotes and orders use the KRX after-market (exchange pinned to `KRX`, order types auto-mapped to the after-market codes `41` limit / `44` best-counter / `47` best-own; there is no market order, so market orders go out as best-counter; **ETF/ETN are not traded after hours — common stock only**); 15:30–16:00 is a break with no open venue, so the auto-trader and reserved orders stay closed for those 30 minutes and manual orders require confirmation. NXT runs pre-market only (08:00–08:50) and keeps using NXT quotes and orders there. Trading pauses during the KRX single-price auctions (08:50–09:00 and 15:20–15:30). **The auto-trader's default window is the KRX regular session, 09:00–15:30** (in KIS mode, indicators and daily bars are on a KRX regular-session basis). The primary source for domestic dailies, the **KRX Open API, reports the regular-session 15:30 close** (same as the exchange base price, KIS daily bars and Toss basePrice — measured 9/14 Samsung: 249,000), whereas **the KRX data-portal (FDR) daily close has been the after-market final print since 2026-09-14** (248,500 that day), so only the bars appended from FDR for today and the not-yet-published previous session carry the after-market value. Toss mode **remembers the regular-session close and swaps it into those bars** (Toss last price captured during the 15:30–16:00 break, else the yfinance daily close) — indicators use the same bars as KIS mode, and only days with no captured value keep the portal close. KIS mode restores the provisional evening close (after-market value shown by KIS between 16:00 and the overnight batch) to the 15:30 minute-bar close before caching. To run through the after-market, set the trading end time to `2000` under `[0] → 5-1` (both entries and exits run until then).
 - **US day market** — uses KIS's dedicated exchange codes (`BAQ`/`BAY`/`BAA`) for the overnight ATS session, falling back to regular-session codes when there are no fills.
 - **KRX regular-session close after hours** (`USE_KRX_CLOSE_AFTER_HOURS`, ON by default) — once every session has closed, the current price is pinned to the KRX regular-session close. Turn it off to keep showing that day's last KRX after-market print until the next open. This setting only affects the displayed price — indicators use regular-session-close bars in both modes (Toss mode swaps the remembered regular close into the portal bars), and **order prices always use the live price.**
 - **9 reserved-order types** — stop, breakout, limit, time, quant score, RSI, trailing buy/sell, EMA cross. Watched every 3 seconds in the background and persisted to the DB.
@@ -258,6 +258,8 @@ chmod +x run.sh                    # first time only
 
 - `run.sh` activates the virtual environment and installs dependencies for you. **`requirements.txt` is the single source of truth** for dependencies, and `run.sh` reads that file.
 - The `holidays` package is **not** auto-upgraded at startup — if the holiday calendar changed silently on every launch, trading-hour decisions would change without anyone noticing. Run `tools/update_holidays.sh` from cron weekly instead.
+- **Days with shifted sessions are table-driven.** On the CSAT day (every session delayed by one hour, regular session 10:00–16:30) and the first trading day of the year (10:00 open) every 09:00/15:30 literal would be wrong, so session phase, trading window, open-delay hold, settled-close baseline and NXT phase all go through one source (`api.krx_session_shift`). The first trading day is computed from the calendar, but **the CSAT date must be entered by hand in `config.KRX_SESSION_SHIFT_DAYS` each year once announced** (entered through 2026-11-19). From October on, the startup check warns if the current year's CSAT date is missing.
+- **The system timezone must be KST.** Every domestic session and holiday decision trusts local time as KST. If a laptop boots abroad or a Raspberry Pi image runs on UTC, the startup check reports a failure and **the auto-trader's time gate stays closed** (manual menus still work). Run `timedatectl set-timezone Asia/Seoul` (Linux) and restart.
 - **One instance per mode, per host.** A second launch names the process already holding the mode and exits — two instances fight over Telegram polling (409), the KIS rate/websocket/token budget, and the same DB file. Add `--allow-duplicate` for a read-only second instance (the account lock still blocks live orders).
 - **Chart web dashboard (`--webchart`)** — view generated charts in a browser when no image viewer is available (SSH / headless). It is a static file server running as a daemon thread inside the same process, serving `chart/` only, at `http://<server IP>:9095/` by default.
   - Change the port/binding with the `WEBCHART_PORT` / `WEBCHART_HOST` environment variables. **Avoid 6000, 6566, 6665-6669, 6697 and 10080** — browsers block those ports and return `ERR_UNSAFE_PORT`.
@@ -292,7 +294,7 @@ Secrets live in **environment variables**. Put them in a shell profile such as `
 | OpenDART | `DART_API_KEY` | optional | Domestic disclosure/dividend/financial features disabled |
 | FRED | `FRED_API_KEY` | optional | Only US indicator dates are missing |
 | TradingView | `TV_USERNAME` `TV_PASSWORD` | optional | Anonymous mode (lower quota and stability) |
-| KRX Open API | `KRX_OPENAPI_KEY` | optional | Stock dailies, indices, VKOSPI200, futures and spot gold fall back to alternate sources |
+| KRX Open API | `KRX_OPENAPI_KEY` | recommended | The **primary source** for domestic dailies, indices, VKOSPI200, futures and spot gold (§6.8). Without it they fall back to FDR and other alternate sources |
 | Trading journal sync | `JOURNAL_API_URL` `JOURNAL_API_KEY` and others | optional | Journal sync disabled |
 
 ---
@@ -487,6 +489,7 @@ my-stock-hts/
 │   ├── utils.py            #   Dates, formatting, shared helpers
 │   ├── jsonio.py           #   JSON load/save helpers
 │   ├── caching.py          #   TTL cache (item caps, auto eviction)
+│   ├── vivid_colors.py     #   Pins the 16 named colours to 256-colour codes (theme-independent)
 │   ├── executors.py        #   Global thread pools (AI, IO, Telegram)
 │   ├── trading_cost.py     #   Single source for fees and taxes
 │   ├── trade_tags.py       #   Single source for trade-reason tags (balance screen + Telegram)
@@ -532,6 +535,7 @@ my-stock-hts/
 │   │   ├── discover.py     #     [7-4] Candidate discovery
 │   │   ├── events.py       #     [6-5] Dividend/earnings calendar
 │   │   ├── econ_events.py  #     Key economic events (FRED, Fed, BOJ)
+│   │   ├── scan.py         #     Shared parallel fetch collector (failure counts shown on screen)
 │   │   ├── disclosure.py   #     [6-6] Disclosure monitoring
 │   │   ├── insider.py      #     [6-7] Supply and overhang signals
 │   │   └── financials.py   #     [6-8] Financial snapshot
@@ -540,7 +544,8 @@ my-stock-hts/
 │   ├── paper_broker.py     # Paper-mode virtual broker (intercepts at the api layer)
 │   ├── paper_report.py     # [9-6] Paper account reporting
 │   ├── reserved_order_monitor.py # Reserved-order watcher thread
-│   ├── krx_daily.py        # Domestic daily bars (pykrx/FDR, KRX portal — close swapped to the regular-session close by api/toss)
+│   ├── krx_daily.py        # Domestic daily bars (Open API first → FDR fallback; today's bar appended from FDR — its close swapped to the regular-session close by api/toss)
+│   ├── krx_openapi.py      # KRX Open API primary source (per-date snapshots in data/krx_openapi.db, backfill, split adjustment)
 │   ├── krx_data.py         # Official KRX data (gold, indices, derivatives, flows)
 │   ├── intraday_bars.py    # Intraday bar collection/cache (tvDatafeed)
 │   ├── dart_api.py         # OpenDART integration
@@ -602,7 +607,7 @@ my-stock-hts/
 - **Unified real-time price** — the analysis screen and the auto-trader compute indicators from the same intraday price through a single entry point (`indicators.apply_realtime_price`).
 - **WebSocket quotes and fill notifications (KIS)** — KIS WS pushes prices and volume strength (automatic REST fallback when unsubscribed or disconnected), and fill notifications (AES256-CBC) wake fill confirmation immediately. A single connection caps at 41 subscriptions, so **holdings then buy candidates are always subscribed** and the remaining slots rotate. `USE_WEBSOCKET` applies without a restart.
 - **WebSocket order events (Toss, mode 3)** — Toss mode supports WebSocket too, but subscribes to **order events (`personal:order`) only**. An event is never trusted on its content: it wakes an order-history reconciliation so fills are confirmed immediately, and REST polling remains in place if the socket fails. **Quotes are not subscribed** — Toss realtime quotes merge NXT, so cumulative volume cannot be separated out. It needs no extra environment variables (the Toss app key is reused) and is toggled by the same `USE_WEBSOCKET`.
-- **Backtest/live data parity** — domestic backtests always use official KRX data (pykrx/FDR) regardless of mode; since 2026-09-14 the KRX-portal daily close is the after-market final print, so bars from that date on differ slightly in close from live trading (regular-session-close bars). A **warning** is raised when the retrieved window is shorter than requested, so truncation is never silent.
+- **Backtest/live data parity** — domestic backtests always use the same official KRX dailies as live trading (Open API first → FDR fallback) regardless of mode. The Open API close is the regular-session close, identical to the live bars; only ranges served by FDR alone (no key, not yet backfilled) differ slightly from 2026-09-14 on, where the portal close is the after-market final print. A **warning** is raised when the retrieved window is shorter than requested, so truncation is never silent.
 
 **Observability & operations**
 - **Signal ledger** — live-only gates that daily bars cannot reproduce (volume strength, ask/bid ratio, same-day re-entry block) record their verdicts in the DB, **one row per (date, symbol)**, retained for 3 years by default. "Blocked all day" is distinguishable from "blocked on some cycles". Auto-trading logs are kept 120 days, separate from general logs (30 days). Analyze with `python3 tools/audit_signal_ledger.py`.

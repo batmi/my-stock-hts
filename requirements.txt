@@ -51,7 +51,9 @@ cryptography>=41.0
 yfinance>=0.2.40
 # pykrx / finance-datareader: 국내 일봉을 'KRX 정규장 기준'으로 조회한다.
 #  토스 캔들은 NXT 장전·장후 체결이 섞여 ATR 이 6~15% 부풀고 ADX 가 최대 9.45 어긋난다.
-#  pykrx 1순위 / FDR 폴백으로 이중화한다.
+#  [2026-09-18] 정본은 KRX Open API(KRX_OPENAPI_KEY, modules/krx_openapi.py)이고 FDR 은 폴백·
+#  오늘 봉 덧대기다. pykrx 는 KRX 웹 스크래핑 차단으로 KRX_WEB_SCRAPING_ALLOWED(기본 OFF)
+#  뒤의 마지막 폴백으로만 남았다 — import 는 시도하므로 설치는 유지한다.
 pykrx>=1.0.45
 finance-datareader>=0.9.90
 # beautifulsoup4: 테마·뉴스 HTML 파싱(modules/theme_analysis.py).

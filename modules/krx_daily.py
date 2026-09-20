@@ -1,4 +1,9 @@
-"""국내 일봉을 'KRX 정규장 기준'으로 조회한다 (pykrx 1순위 / FinanceDataReader 폴백).
+"""국내 일봉을 'KRX 정규장 기준'으로 조회한다.
+
+[출처 순서 · 2026-09-18] KRX Open API(확정분, data/krx_openapi.db 스냅샷) 1순위 → FinanceDataReader
+ 폴백 → pykrx 는 KRX_WEB_SCRAPING_ALLOWED 가 켜졌을 때만 맨 뒤(get_daily 의 sources). Open API 의
+ 종가는 정규장 15:30 종가고, 아직 안 실린 오늘·직전 영업일 봉만 FDR 로 덧댄다(_fetch_openapi).
+ 아래 실측·수치는 pykrx/FDR 시절(2026-07)의 것이라 순서 서술만 낡았을 뿐 결론은 같다.
 
 [왜 필요한가]
 토스 캔들은 SOR 통합값이라 NXT 프리마켓(08:00~09:00)·애프터마켓(15:30~20:00) 체결이
