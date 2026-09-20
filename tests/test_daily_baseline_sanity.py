@@ -202,3 +202,16 @@ def test_집계_결손은_기준선_갱신을_막는다():
         "날짜 변경 갱신이 자산 집계의 결손 표식을 보지 않는다"
     assert "is_plausible_baseline" in tail, \
         "날짜 변경 갱신이 타당성 검사를 지나지 않는다"
+
+
+def test_날짜가_바뀌면_DB_백업을_뜬다():
+    """[2026-09-20 백업 복원 리허설] 백업이 기동 경로에만 있으면 무중단 운용에서 기동일에 멈춘다.
+
+    날짜 변경 블록이 db.backup() 을 부르는지 본다(같은 날은 backup() 자신이 건너뛴다).
+    """
+    import modules.auto_trade.trader as T
+
+    src = inspect.getsource(T.AutoTrader._run_loop)
+    head = src[:src.index("당일 시작 자산 갱신")]
+    tail = head[head.rindex("날짜 변경 감지"):]
+    assert "db_manager.db.backup()" in tail, "날짜 변경 시 DB 백업을 뜨지 않는다"

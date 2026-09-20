@@ -3920,6 +3920,13 @@ class AutoTrader:
                             self.resume_buys(reason="날짜 변경 — 일일 손실 한도 기준 재설정")
                             api.send_telegram_message("🔄 [방어 모드 해제] 날짜가 변경되어 신규 매수를 재개합니다.")
 
+                        # [Fix 2026-09-20 · 백업 복원 리허설] 백업은 기동 시 한 번(위 start 경로)뿐이었다.
+                        #  무중단 운용에서는 재기동이 없으니 마지막 백업이 기동일에 멈춘다 — 파이가 한 달
+                        #  돌면 한 달 묵은 백업만 남는다. 날짜가 바뀔 때 하루치를 뜬다(같은 날은 건너뛴다).
+                        _bk = db_manager.db.backup()
+                        self.log(f"[DB 백업] {os.path.basename(_bk)}" if _bk
+                                 else "[DB 백업] 실패 — 백업 없이 진행합니다(운영자 확인 필요)")
+
                         try:
                             acnt = config.session.auto_acnt_prdt_cd
                             

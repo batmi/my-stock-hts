@@ -191,6 +191,10 @@ def _connect():
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.executescript(_SCHEMA)
+    # [2026-09-20] 전일대비(CMPPREVDD_PRC) — 기준가 = 종가 − 전일대비. 기존 파일엔 없으니 붙인다.
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(stock_daily)")}
+    if "chg" not in cols:
+        conn.execute("ALTER TABLE stock_daily ADD COLUMN chg REAL")
     return conn
 
 
@@ -307,11 +311,12 @@ def _store(conn, api_id, bas_dd, rows):
     if api_id in STOCK_APIS:
         market = STOCK_API_MARKET.get(api_id, "")
         conn.executemany(
-            "INSERT OR REPLACE INTO stock_daily VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO stock_daily (bas_dd, code, market, name, open, high, low, close, volume, "
+            "value, marcap, shares, chg) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [(bas_dd, str(r.get("ISU_CD", "")).strip(), (r.get("MKT_NM") or market).strip().upper(), r.get("ISU_NM"),
               _num(r.get("TDD_OPNPRC")), _num(r.get("TDD_HGPRC")), _num(r.get("TDD_LWPRC")),
               _num(r.get("TDD_CLSPRC")), _num(r.get("ACC_TRDVOL")), _num(r.get("ACC_TRDVAL")),
-              _num(r.get("MKTCAP")), _num(r.get("LIST_SHRS")))
+              _num(r.get("MKTCAP")), _num(r.get("LIST_SHRS")), _num(r.get("CMPPREVDD_PRC")))
              for r in rows if r.get("ISU_CD")])
     elif api_id in ("kospi_dd_trd", "kosdaq_dd_trd", "drvprod_dd_trd"):
         conn.executemany(
@@ -551,7 +556,7 @@ def stock_daily(code, lookback_days, max_calls=None, now=None):
         return None
     with _DB_LOCK, _connect() as conn:
         rows = conn.execute(
-            "SELECT bas_dd, open, high, low, close, volume, shares FROM stock_daily "
+            "SELECT bas_dd, open, high, low, close, volume, shares, chg FROM stock_daily "
             "WHERE code=? AND bas_dd BETWEEN ? AND ? ORDER BY bas_dd", (code, span[0], span[1])).fetchall()
     df = _finish([r[:6] for r in adjust_splits(rows)], "OPENAPI")
     if df is None:
@@ -562,22 +567,65 @@ def stock_daily(code, lookback_days, max_calls=None, now=None):
 
 SPLIT_MIN_RATIO = 1.5     # 상장주식수가 이 배수 이상 변하고
 SPLIT_GAP_TOL = 0.15      # 직전 종가/당일 시가가 같은 배수와 15% 안에서 맞으면 분할·병합으로 본다
+BASE_PRICE_TOL = 0.01     # 기준가가 직전 종가와 1% 넘게 다르면 거래소가 기준가를 바꾼 날(기업행위)
 
 
 def adjust_splits(rows):
-    """원주가 → 수정주가. rows = [(bas_dd, open, high, low, close, volume, shares), ...] 오름차순.
+    """원주가 → 수정주가. rows = [(bas_dd, open, high, low, close, volume, shares[, chg]), ...] 오름차순.
 
     [왜] Open API 일별매매는 **그 날의 원주가**다(pykrx adjusted=True·FDR 은 수정주가).
      액면분할(삼성전자 2018-05-04 50:1)·병합이 조회 창 안에 있으면 시계열이 한 번에 1/50 로
      꺾여 EMA120·52주 밴드·ATR 이 전부 틀린다. 폴백 소스와 기준을 맞추려면 여기서 고쳐야 한다.
-    [어떻게] 분할·병합은 상장주식수(LIST_SHRS)가 r 배 되면서 가격이 1/r 이 되는 날이다.
-     유상증자·전환은 주식수만 늘고 가격은 그만큼 뛰지 않으므로 **두 조건이 같이 맞을 때만**
-     보정한다(오탐이 나면 없는 분할을 만들어 낸다 — 두 조건 결합이 그 방어다).
-     보정은 그 날 **이전** 봉의 가격을 1/r, 거래량을 r 배 한다(수정주가 관행).
+
+    [1순위 · 기준가 — 2026-09-20] 거래소는 기업행위(분할·병합·유상증자 권리락·인적분할·감자)가
+     있는 날 **기준가를 새로 정하고**, 전일대비(CMPPREVDD_PRC)는 그 기준가에 대한 값이다.
+     그래서 `기준가 = 종가 − 전일대비` 이고, 기준가/직전 종가가 곧 거래소가 정한 보정 배율이다.
+     실측: SKT 2021-11-29(5:1 분할+인적분할) 57,900−4,500=53,400 vs 309,500 → ÷5.8 ·
+     현대일렉트릭 2017-11-17(권리락) 117,500−2,000=115,500 vs 229,500 → ÷2.0 ·
+     삼성전자 2018-05-04 51,900+1,100=53,000 vs 2,650,000 → ÷50. 이 셋 중 종전 규칙(아래)은
+     삼성전자만 잡았다 — 권리락은 주식수가 안 변하고, SKT 는 분할과 인적분할이 겹쳐 갭이 컸다.
+     수정주가 감사(tools/audit_price_adjustment.py)에서 -90%·-50% 가짜 봉으로 드러났다.
+    [2순위 · 주식수] chg 가 없는 행(2026-09-20 이전 적재분·재수집 전)은 종전 규칙 —
+     상장주식수가 r 배 되면서 직전 종가/시가가 r 과 15% 안에서 맞을 때만.
+     보정은 그 날 **이전** 봉의 가격에 배율을 곱하고 거래량은 나눈다(수정주가 관행).
     """
     rows = [list(r) for r in rows]
     if len(rows) < 2:
         return rows
+    factors = []          # (index, price_mult) — 이 index 이전 봉에 곱한다
+    for i in range(1, len(rows)):
+        c_prev, o, c = rows[i - 1][4], rows[i][1], rows[i][4]
+        if not c_prev:
+            continue
+        chg = rows[i][7] if len(rows[i]) > 7 else None
+        if chg is not None and c:
+            base = c - chg
+            if base > 0 and abs(base / c_prev - 1.0) > BASE_PRICE_TOL:
+                factors.append((i, base / c_prev))
+            continue
+        sh_prev, sh = rows[i - 1][6], rows[i][6]
+        if not sh_prev or not sh or not o:
+            continue
+        r = sh / sh_prev
+        if r >= SPLIT_MIN_RATIO or r <= 1.0 / SPLIT_MIN_RATIO:
+            gap = c_prev / o           # 분할이면 ≈ r
+            if abs(gap / r - 1.0) <= SPLIT_GAP_TOL:
+                factors.append((i, 1.0 / r))
+    if not factors:
+        return rows
+    mult = 1.0
+    j = len(factors) - 1
+    for i in range(len(rows) - 1, -1, -1):
+        while j >= 0 and factors[j][0] > i:
+            mult *= factors[j][1]
+            j -= 1
+        if mult != 1.0:
+            for k in (1, 2, 3, 4):
+                if rows[i][k] is not None:
+                    rows[i][k] = rows[i][k] * mult
+            if rows[i][5] is not None:
+                rows[i][5] = rows[i][5] / mult
+    return rows
     factors = []          # (index, price_mult) — 이 index 이전 봉에 곱한다
     for i in range(1, len(rows)):
         sh_prev, sh = rows[i - 1][6], rows[i][6]
@@ -720,6 +768,55 @@ def listing_map(max_calls=None, now=None):
         out.setdefault(code, {"name": (name or "").strip(), "marcap": float(marcap or 0.0),
                               "market": (market or "").upper(), "list_dd": "", "secugrp": market or "", "kind": ""})
     return out
+
+
+def days_without_chg(api_ids=STOCK_APIS):
+    """전일대비(chg)가 없는 채 적재된 (api_id, bas_dd) — 최신부터. 2026-09-20 이전 적재분 재수집용.
+
+    서비스별 시장 매핑으로 날짜를 찾는다(ETF/ETN 은 market 칸이 'ETF'/'ETN'). 재수집은
+    tools/krx_openapi_backfill.py --refetch-chg 가 예산 안에서 한다 — 그 전까지는 adjust_splits
+    가 주식수 규칙으로 폴백하므로 서비스는 끊기지 않는다.
+    """
+    out = []
+    with _DB_LOCK, _connect() as conn:
+        for api_id in api_ids:
+            market = STOCK_API_MARKET.get(api_id, "")
+            if not market:
+                continue
+            rows = conn.execute("SELECT DISTINCT bas_dd FROM stock_daily WHERE market=? AND chg IS NULL AND close IS NOT NULL "
+                                "ORDER BY bas_dd DESC", (market,)).fetchall()
+            out += [(api_id, r[0]) for r in rows]
+    out.sort(key=lambda t: t[1], reverse=True)
+    return out
+
+
+def refetch(items, max_calls, progress=None, workers=1):
+    """(api_id, bas_dd) 목록을 다시 받아 덮어쓴다(INSERT OR REPLACE). 반환 (남은 수, 호출 수)."""
+    batch = list(items)[:int(max_calls)]
+    calls = 0
+
+    def _one(item):
+        api_id, dd = item
+        return api_id, dd, _call(api_id, dd)
+
+    if int(workers) <= 1:
+        results = map(_one, batch)
+        pool = None
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+        pool = ThreadPoolExecutor(max_workers=int(workers))
+        results = pool.map(_one, batch)
+    try:
+        for api_id, dd, rows in results:
+            calls += 1
+            with _DB_LOCK, _connect() as conn:
+                _store(conn, api_id, dd, rows)
+            if progress:
+                progress(api_id, dd, len(rows), calls, len(items))
+    finally:
+        if pool is not None:
+            pool.shutdown(wait=False, cancel_futures=True)
+    return len(items) - calls, calls
 
 
 def coverage():

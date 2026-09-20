@@ -39,6 +39,9 @@ def main():
     ap.add_argument("--max-calls", type=int, default=9000, help="이번 실행의 호출 상한(일 한도 10,000)")
     ap.add_argument("--workers", type=int, default=3, help="동시 호출 수(응답이 2초 남짓이라 직렬은 느리다)")
     ap.add_argument("--status", action="store_true", help="적재 상태만 보고 끝낸다")
+    ap.add_argument("--refetch-chg", action="store_true",
+                    help="전일대비(chg) 없이 적재된 종목 일봉을 다시 받는다(2026-09-20 이전 적재분). "
+                         "기준가 보정(권리락·인적분할)에 필요. 예산 안에서 최신부터, 여러 날에 나눠도 된다")
     args = ap.parse_args()
 
     ok, msg = oa.status_text()
@@ -55,6 +58,19 @@ def main():
     start_dd = (datetime.strptime(end_dd, "%Y%m%d") - timedelta(days=args.days)).strftime("%Y%m%d")
     budget = args.max_calls
     t0 = time.time()
+    if args.refetch_chg:
+        todo = oa.days_without_chg()
+        print(f"\n[재수집] 전일대비 없는 종목 일봉 {len(todo):,}건 (예산 {budget:,})")
+        if todo:
+            def _p(api_id, dd, n, calls, total):
+                if calls % 50 == 0 or calls == min(total, budget):
+                    print(f"  {calls:,}/{total:,}  {api_id} {dd} {n}행  ({time.time() - t0:.0f}s)", flush=True)
+            try:
+                remaining, calls = oa.refetch(todo, budget, progress=_p, workers=args.workers)
+                print(f"  받음 {calls:,} · 남음 {remaining:,}" + ("  → 내일 다시 실행하면 이어서 받는다" if remaining else ""))
+            except oa.OpenAPIError as e:
+                print(f"  [중단] {e}")
+        return
     for group in [g.strip() for g in args.only.split(",") if g.strip()]:
         apis = GROUPS.get(group)
         if not apis:

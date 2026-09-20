@@ -41,7 +41,10 @@ def store(tmp_path, monkeypatch):
             if api_id == "stk_bydd_trd":
                 return _stock_rows(dd, {"005930": 100 + int(dd[-2:]), "000660": 150})
             if api_id == "ksq_bydd_trd":
-                return _stock_rows(dd, {"247540": 500 + int(dd[-2:])})     # 코스닥은 다른 종목
+                rows = _stock_rows(dd, {"247540": 500 + int(dd[-2:])})     # 코스닥은 다른 종목
+                for r in rows:
+                    r["MKT_NM"] = "KOSDAQ"
+                return rows
             if api_id == "etf_bydd_trd":
                 rows = _stock_rows(dd, {"0080G0": 9000})
                 for r in rows:
@@ -222,8 +225,8 @@ def test_gold_and_listing(store):
 def test_a_trading_halt_bar_with_zero_ohlc_is_dropped_but_empty_ohlc_is_flattened(store):
     oa.stock_daily("005930", 4, now=NOW)               # 먼저 적재해 두고 한 봉을 거래정지 모양으로 바꾼다
     with oa._DB_LOCK, oa._connect() as conn:
-        conn.execute("INSERT OR REPLACE INTO stock_daily VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                     ("20260916", "005930", "KOSPI", "n", 0.0, 0.0, 0.0, 116.0, 0.0, 0.0, 0.0, 1000.0))
+        conn.execute("INSERT OR REPLACE INTO stock_daily VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                     ("20260916", "005930", "KOSPI", "n", 0.0, 0.0, 0.0, 116.0, 0.0, 0.0, 0.0, 1000.0, None))
     df = oa.stock_daily("005930", 4, now=NOW)
     assert "20260916" not in list(df["date"])          # 거래정지(0원 봉)는 버린다
     flat = oa.index_daily("KOSPI", 4, now=NOW)         # 빈 시·고·저(None)는 종가로 평탄화
@@ -323,3 +326,40 @@ def test_a_delisted_stock_gets_no_fdr_tail(store, monkeypatch):
     df = krx_daily.get_daily("005930", lookback_days=7, use_cache=False)
     assert df.attrs["source"] == "OPENAPI" and not called
     assert str(df["date"].iloc[-1]) == "20260914"
+
+
+def test_exchange_base_price_drives_the_adjustment_and_shares_rule_is_the_fallback():
+    """기준가(종가−전일대비)가 직전 종가와 다르면 그 배율로 이전 봉을 되감는다 — 권리락·인적분할도.
+
+    SKT 2021-11-29 형: 주식수 ×3.04 인데 가격은 ÷5.8(분할+인적분할) → 종전 규칙은 갭 47% 로 기각.
+    현대일렉트릭 2017-11-17 형: 주식수 불변·기준가 ÷2(권리락) → 종전 규칙은 아예 못 봄.
+    """
+    skt = [("20211025", 315500, 316000, 309000, 309500, 100, 72_060_143, 1000),
+           ("20211129", 53400, 58000, 53000, 57900, 11_000_000, 218_833_144, 4500)]
+    out = oa.adjust_splits(skt)
+    assert out[0][4] == pytest.approx(309500 * 53400 / 309500) and out[0][4] == pytest.approx(53400)
+    assert out[0][5] == pytest.approx(100 * 309500 / 53400)
+    assert out[1][4] == 57900
+
+    rights = [("20171116", 225500, 230000, 225000, 229500, 100, 3_710_107, 4000),
+              ("20171117", 117500, 118000, 115000, 117500, 200, 3_710_107, 2000)]
+    out = oa.adjust_splits(rights)
+    assert out[0][4] == pytest.approx(229500 * 115500 / 229500)
+
+    ordinary = [("20200101", 100, 110, 90, 100, 10, 1000, 1), ("20200102", 101, 111, 91, 103, 10, 1000, 3)]
+    assert oa.adjust_splits(ordinary)[0][4] == 100                     # 기준가 = 직전 종가 → 보정 없음
+
+    legacy = [("20180503", 50500, 51500, 49500, 50500, 100, 1000), ("20180504", 1010, 1030, 990, 1000, 5000, 50000)]
+    assert oa.adjust_splits(legacy)[0][4] == pytest.approx(1010.0)     # chg 없으면 주식수 규칙
+
+
+def test_days_without_chg_lists_legacy_rows_and_refetch_fills_them(store):
+    oa.ensure(oa.STOCK_APIS, "20260916", "20260917", now=NOW)
+    with oa._DB_LOCK, oa._connect() as conn:
+        conn.execute("UPDATE stock_daily SET chg=NULL WHERE bas_dd='20260916'")
+    todo = oa.days_without_chg()
+    assert {dd for _, dd in todo} == {"20260916"} and ("stk_bydd_trd", "20260916") in todo
+    n = len(store)
+    remaining, calls = oa.refetch(todo, 10)
+    assert remaining == 0 and calls == len(todo) and len(store) == n + calls
+    assert oa.days_without_chg() == []

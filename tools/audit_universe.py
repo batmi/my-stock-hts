@@ -26,6 +26,9 @@
 
 [실행] python3 tools/audit_universe.py --axis A --days 3650 --trials 15 --seeds 3
        python3 tools/audit_universe.py --axis B --days 3650 --trials 15 --seeds 3 --dead 40
+       python3 tools/audit_universe.py --axis C --days 3650 --trials 15 --seeds 3 --extend-pool 300
+         (축 C · 2026-09-20: Open API 날짜별 스냅샷으로 창 시작일의 시총 상위 pool 에서 뽑는 진짜
+          시점 유니버스 — 폐지 종목이 그 시점의 실제 비율로 섞이고 look-ahead 가 없다)
 """
 import argparse
 import os
@@ -214,6 +217,17 @@ def _pit_date(days):
     """
     import datetime as _dt
     d = (_dt.date.today() - _dt.timedelta(days=int(days))).strftime("%Y%m%d")
+    # [2026-09-20] Open API 저장소의 거래일(행이 있는 날)로 당긴다 — pykrx(로그인 스크래핑)는
+    #  기본 OFF 다. 저장소에 그 구간이 없으면 원래 날짜로 간다.
+    try:
+        from modules import krx_openapi as oa
+        with oa._DB_LOCK, oa._connect() as conn:
+            row = conn.execute("SELECT MAX(bas_dd) FROM fetched WHERE api_id='stk_bydd_trd' AND n>0 "
+                               "AND bas_dd<=?", (d,)).fetchone()
+        if row and row[0] and (int(d) - int(row[0])) < 10_00:     # 열흘 안쪽이면 그 날
+            return row[0]
+    except Exception:       # noqa: BLE001
+        pass
     try:
         from pykrx import stock
         return stock.get_nearest_business_day_in_a_week(d)
@@ -245,6 +259,15 @@ def _pit_marcap(date):
         df = pd.read_csv(f, dtype={"ticker": str})
         return dict(zip(df["ticker"], df["marcap"]))
 
+    # [2026-09-20] KRX Open API 날짜별 스냅샷이 정본이다 — 그날 거래된 **전 종목**(뒤에 폐지된
+    #  것 포함)의 시총·이름·시장이 들어 있어 로그인 없이 진짜 시점 유니버스를 만든다.
+    snap = _pit_snapshot(date)
+    if snap:
+        pd.DataFrame({"ticker": list(snap), "marcap": [v["marcap"] for v in snap.values()]}).to_csv(
+            f, index=False, encoding="utf-8")
+        print(f"[PIT] {date} 시총 스냅샷 생성(Open API) — {len(snap):,}종목 (KOSPI+KOSDAQ)", flush=True)
+        return {c: v["marcap"] for c, v in snap.items()}
+
     try:
         from pykrx import stock
     except Exception as e:      # noqa: BLE001
@@ -270,7 +293,35 @@ def _pit_marcap(date):
     return dict(zip(out.index.astype(str), out["시가총액"]))
 
 
-def _name_map():
+_PIT_SNAPSHOTS = {}
+
+
+def _pit_snapshot(date):
+    """Open API 저장소에서 그날의 {코드: {'name','market','marcap'}} (KOSPI·KOSDAQ 주권만).
+
+    비어 있으면(그날 미적재) {} — 호출부가 다른 경로로 간다. 시장은 backtest 에 등록해
+    폐지 종목도 제 지수로 시장 필터를 받게 한다([[audit-universe-market-filter-bug]]).
+    """
+    if date in _PIT_SNAPSHOTS:
+        return _PIT_SNAPSHOTS[date]
+    out = {}
+    try:
+        from modules import krx_openapi as oa
+        from modules import backtest as _bt
+        with oa._DB_LOCK, oa._connect() as conn:
+            rows = conn.execute("SELECT code, name, market, marcap FROM stock_daily WHERE bas_dd=? "
+                                "AND market IN ('KOSPI','KOSDAQ') AND marcap>0", (date,)).fetchall()
+        for code, name, market, marcap in rows:
+            out[str(code)] = {"name": (name or "").strip(), "market": market, "marcap": float(marcap)}
+        if out:
+            _bt.register_market_types({c: v["market"] for c, v in out.items()})
+    except Exception as e:      # noqa: BLE001
+        print(f"[PIT] Open API 스냅샷 조회 실패({date}): {type(e).__name__}: {e}", flush=True)
+    _PIT_SNAPSHOTS[date] = out
+    return out
+
+
+def _name_map(pit_date=None):
     """{코드: 이름} — 현재 상장 목록과 폐지 목록을 합친다.
 
     PIT 유니버스에는 **지금은 없는 종목**이 섞이므로(그게 요점이다) 폐지 목록의 이름까지
@@ -278,6 +329,9 @@ def _name_map():
     코드 기반 우선주 필터는 그대로 걸린다.
     """
     out = {}
+    if pit_date:
+        for c, v in _pit_snapshot(pit_date).items():     # 그날 이름이 가장 정확하다(폐지 종목 포함)
+            out.setdefault(c, v["name"])
     for kind, code_col in (("KRX", "Code"), ("KRX-DELISTING", "Symbol")):
         try:
             df = _listing(kind)
@@ -351,10 +405,11 @@ def extend_targets(exclude, limit, mode="marcap", pool=500, seed=20260816, pit_d
             raise ValueError("mode='pit' 은 pit_date 가 필요하다")
         caps = _pit_marcap(pit_date)
         if not caps:
-            print("[PIT] 그 시점 시총을 받지 못했다 — KRX_ID/KRX_PW 를 확인하라. "
+            print("[PIT] 그 시점 시총을 받지 못했다 — Open API 저장소에 그 날짜가 없다"
+                  "(tools/krx_openapi_backfill.py --days 4050 --only stocks). "
                   "(--extend-mode random 으로는 계속 잴 수 있다)", flush=True)
             return []
-        names = _name_map()
+        names = _name_map(pit_date)
         cand = [(c, names.get(c, c)) for c in caps
                 if c not in exclude and not _is_excluded_ticker(c, names.get(c, ""))]
         cand.sort(key=lambda t: caps[t[0]], reverse=True)
@@ -368,6 +423,31 @@ def extend_targets(exclude, limit, mode="marcap", pool=500, seed=20260816, pit_d
     if mode == "random":
         return _hash_draw(cand, pool, limit, seed)
     return cand[:limit]
+
+
+def _pit_fit_top(codes, pit_date, days, k):
+    """pit_date 까지의 봉으로 적합도를 매겨 상위 k 코드. 이력이 130봉 미만이면 제외(신규상장)."""
+    from modules import backtest as _bt
+    from modules import krx_daily
+    from modules.manage.discover import _fit_score
+    from tools.audit_discover_fit import fit_at
+    scored = []
+    for c in codes:
+        try:
+            df = krx_daily.get_daily(c, lookback_days=int(days) + 400)
+            if df is None or df.empty:
+                continue
+            df = df[df["date"].astype(str) <= pit_date].reset_index(drop=True)
+            if len(df) < 130:
+                continue
+            df = _bt.compute_price_indicators(df)
+            f = fit_at(df, len(df) - 1)
+            if f:
+                scored.append((_fit_score(f), c))
+        except Exception:       # noqa: BLE001 - 한 종목의 실패가 팔을 막지 않는다
+            continue
+    scored.sort(reverse=True)
+    return [c for _s, c in scored[:k]]
 
 
 def dead_targets(limit, since="2016-01-01", markets=("KOSPI", "KOSDAQ")):
@@ -492,7 +572,9 @@ def main():
     ap.add_argument("--as-of", default=None, metavar="YYYY-MM-DD",
                     help="--refresh-listing 과 함께: 세 목록을 그 날짜로 맞춰 받는다. "
                          "스냅샷 날짜가 갈렸을 때 한 시점으로 되맞추는 용도")
-    ap.add_argument("--axis", default="A", choices=["A", "B"])
+    ap.add_argument("--axis", default="A", choices=["A", "B", "C"],
+                    help="A=크기 · B=현행풀에 폐지 종목을 섞음 · C=**그 시점 시총 상위 pool 에서 뽑는 "
+                         "진짜 시점(PIT) 유니버스**(Open API 스냅샷, 폐지 종목이 자연 비율로 섞임)")
     ap.add_argument("--trials", type=int, default=15)
     ap.add_argument("--days", type=int, default=3650)
     ap.add_argument("--seeds", type=int, default=3)
@@ -550,6 +632,25 @@ def main():
         dt = dead_targets(need)
         dead_dfs, dead_mf, _dd = prep(dt, args.days, f"폐지 풀(요청 {len(dt)})")
         mf.update({c: dead_mf.get(c, set()) for c in dead_dfs})
+    pit_dfs, pit_date, fit_codes = {}, None, []
+    if args.axis == "C":
+        # [축 C · 2026-09-20] 축 B 는 '현행 44 + 폐지 40' 이라 폐지 비율을 사람이 정했다.
+        #  여기서는 창 시작일에 실제로 상장돼 있던 시총 상위 pool 에서 뽑는다 — 뒤에 망한 종목이
+        #  **그 시점의 실제 비율**로 들어오고, '지금 큰 종목을 과거에 심는' look-ahead 도 없다.
+        pit_date = _pit_date(args.days)
+        pt = extend_targets(set(), args.extend_pool, mode="pit", pool=args.extend_pool,
+                            seed=args.seed, pit_date=pit_date)
+        if not pt:
+            raise SystemExit(1)
+        pit_dfs, pit_mf, _pd = prep(pt, args.days, f"PIT 풀({pit_date} 시총 상위 {args.extend_pool})")
+        mf.update({c: pit_mf.get(c, set()) for c in pit_dfs})
+        ended = sum(1 for c, d in pit_dfs.items() if str(d["date"].iloc[-1]) < dates[-1][:6] + "00")
+        print(f"[준비] PIT 풀 확정 {len(pit_dfs)}종목 · 창 안에서 봉이 끝난(폐지·정지) 종목 {ended}")
+        # [PIT 적합도] 그 시점까지의 봉으로만 탐색 메뉴의 적합도(discover._fit_score)를 매겨 상위 sample 개를
+        #  고정 유니버스로 삼는다 — '2016년에 이 도구로 골랐다면'. 현행풀 − PIT적합도 = look-ahead(+생존),
+        #  PIT적합도 − PIT무작위 = 선별 효과. 둘을 가르려고 둔 팔이다.
+        fit_codes = _pit_fit_top(list(pit_dfs), pit_date, args.days, args.sample)
+        print(f"[준비] PIT 적합도 상위 {len(fit_codes)}종목: " + ", ".join(fit_codes[:8]) + " …")
     if args.axis == "B":
         dt = dead_targets(args.dead)
         dead_dfs, dead_mf, _dd = prep(dt, args.days, f"폐지 풀(요청 {len(dt)})")
@@ -565,7 +666,7 @@ def main():
         "RISE_SCORE": config.ANALYSIS_THRESHOLDS["RISE_SCORE"],
         "WEIGHTS": config.SCORING_WEIGHTS,
     }
-    allf = dict(dfs); allf.update(dead_dfs); allf.update(ext_dfs)
+    allf = dict(dfs); allf.update(dead_dfs); allf.update(ext_dfs); allf.update(pit_dfs)
     status = pb.precompute_status(allf, thresholds)
     print(f"[준비] 거래일 {len(dates)}일 ({dates[0]}~{dates[-1]})")
 
@@ -594,6 +695,7 @@ def main():
     live_codes = list(dfs)
     dead_codes = list(dead_dfs)
     ext_codes = list(ext_dfs)
+    pit_codes = list(pit_dfs)
     pool_a = live_codes + ext_codes
     if args.axis == "A":
         sizes = [int(x) for x in args.sizes.split(",") if x]
@@ -603,6 +705,12 @@ def main():
             tag = " (현행)" if s == len(live_codes) else (" +확장" if s > len(live_codes) else "")
             arms.append((f"{s}종목{tag}", s, []))
         base_label = next((l for l, s, _ in arms if s == len(live_codes)), arms[-1][0])
+    elif args.axis == "C":
+        arms = [(f"현행풀·{lbl}", args.sample, ov) for lbl, ov in DIALS]
+        arms += [(f"PIT풀·{lbl}", args.sample, ov) for lbl, ov in DIALS]
+        if fit_codes:
+            arms.append(("PIT적합도·현행", len(fit_codes), []))
+        base_label = "현행풀·현행"
     else:
         arms = [(f"현행풀·{lbl}", args.sample, ov) for lbl, ov in DIALS]
         arms += [(f"폐지포함·{lbl}", args.sample, ov) for lbl, ov in DIALS]
@@ -623,6 +731,10 @@ def main():
                     pool = pool_a if args.axis == "A" else live_codes
                     if args.axis == "B" and lbl.startswith("폐지포함"):
                         pool = live_codes + dead_codes
+                    if args.axis == "C" and lbl.startswith("PIT풀"):
+                        pool = pit_codes
+                    if args.axis == "C" and lbl.startswith("PIT적합도"):
+                        pool = fit_codes            # 고정 유니버스 — 시행마다 같다
                     if args.axis == "A" and args.dead_frac > 0 and dead_codes:
                         nd = min(int(round(n * args.dead_frac)), len(dead_codes))
                         pick = (r2.sample(dead_codes, nd)
@@ -647,9 +759,9 @@ def main():
     print(" " * 60, end="\r")
 
     W = 118
-    title = ("유니버스 크기 — 몇 종목을 보고 있어야 하는가"
-             if args.axis == "A" else
-             f"생존 편향 — 폐지 {len(dead_codes)}종목을 섞으면 결론이 바뀌는가")
+    title = {"A": "유니버스 크기 — 몇 종목을 보고 있어야 하는가",
+             "B": f"생존 편향 — 폐지 {len(dead_codes)}종목을 섞으면 결론이 바뀌는가",
+             "C": f"시점(PIT) 유니버스 — {pit_date} 시총 상위 {len(pit_codes)}에서 뽑으면 결론이 바뀌는가"}[args.axis]
     print(f"\n{'=' * W}\n{title} — {args.trials}회 × 씨드 {args.seeds}개 (기준선 {base_label})\n{'=' * W}")
     for wname, wdates in windows:
         res = all_results[wname]
@@ -677,6 +789,12 @@ def main():
     if args.axis == "A":
         print("[읽는 법] 종목을 늘려도 성과가 그대로면 커버리지는 이미 충분하다. 늘수록 좋아지면 관심종목을 늘려라.")
         print("          현금% 가 함께 내려가는지 볼 것 — 슬롯을 못 채우는 것이 진짜 병목이면 여기서 드러난다.")
+    elif args.axis == "C":
+        print("[읽는 법] 현행풀 − PIT풀 = 생존 편향 + 유니버스 look-ahead 를 합친 프리미엄(현행풀은 '지금 살아 있고"
+              " 지금 고른' 종목이다). 다이얼 순위가 두 풀에서 같으면 기존 결론은 안전하다.")
+        print("          PIT적합도(그 시점 적합도 상위 고정) − PIT풀 = 선별 효과, 현행풀 − PIT적합도 = look-ahead·생존.")
+        print("[한계] PIT 풀은 그 시점 시총 상위(거래 가능성)만 통제한 무작위라 관심종목의 '적합도 정렬'은 없다 —"
+              " 프리미엄에는 선별 효과도 섞여 있다. 폐지 종목은 마지막 봉 종가로 청산되므로 여전히 낙관 쪽이다.")
     else:
         print("[읽는 법] 절대 성과 차이 = 생존 프리미엄. 다이얼 순위가 두 풀에서 같으면 기존 결론은 안전하다.")
         print("[한계] 폐지 종목은 창 중간에 데이터가 끝난다. 그 종목이 뽑힌 시행은 실질 유니버스가 작아진다.")

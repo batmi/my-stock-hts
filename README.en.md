@@ -616,6 +616,10 @@ my-stock-hts/
 - **Persistent daily-bar cache** — kept per trading day on disk, so restarts do not re-fetch the same day.
 - **Skips unneeded order-book calls**, and **worker count is matched to TPS**.
 
+**DB backup and restore**
+- On auto-trading start and **at each date change**, one `db/backups/trade_history_YYYYMMDD.db` per day is taken (SQLite backup API, consistent snapshot including WAL; last 7 kept). Average cost, trailing highs, stop levels and trade history live only in this file.
+- If `PRAGMA integrity_check` fails at start-up, auto trading refuses to start. To restore: ① stop every instance → ② move `db/trade_history.db` and its `-wal`/`-shm` sidecars aside → ③ `cp db/backups/trade_history_<date>.db db/trade_history.db` → ④ restart (missing columns are added by the migrations) → ⑤ if you use the journal web app, **re-sync** (section 10). Restore rehearsal 2026-09-20: backup integrity ok, boot/read/write fine.
+
 ---
 
 ## 9. Telegram Bot
