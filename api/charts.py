@@ -268,9 +268,9 @@ def _fetch_kis_weekly_overseas(code, lookback_days=1100):
 # [추가] 지수 전용 소스 라우팅 (지수 화면 ↔ 차트 분석 공유)
 # ==========================================================
 #  지수 화면(메뉴 1)은 국내 지수를 모드별 소스 체인(KIS/토스/tvDatafeed/yfinance)으로,
-#  미국채 현물·HY OAS를 tvDatafeed 전용 소스로 조회한다. 차트 분석(메뉴 3-5)이 목록의
+#  미국채 현물을 tvDatafeed 전용 소스로 조회한다. 차트 분석(메뉴 3-5)이 목록의
 #  yfinance 티커를 그대로 쓰면 같은 지수인데 다른 값이 나오거나(코스피200·코스닥150),
-#  자리표시자 티커(^VKOSPI·^K200FUT·^US02Y·^HYOAS·^KRXGOLD)는 아예 조회가 실패한다.
+#  자리표시자 티커(^VKOSPI·^K200FUT·^US02Y·^KRXGOLD)는 아예 조회가 실패한다.
 #  → get_chart_data가 코드만 보고 같은 소스를 고르도록 여기서 한 번에 판정한다.
 
 # 국내 지수 내부 코드 (market.resolve_index_source가 돌려주는 값) → get_domestic_index_data
@@ -282,7 +282,7 @@ DOMESTIC_INDEX_SOURCE_CODES = (
 def index_source_kind(code):
     """지수 전용 소스가 필요한 코드인지 판정한다.
 
-    Returns: 'domestic'(국내 지수 소스 체인) | 'tv_spot'(미국채 현물) | 'fred'
+    Returns: 'domestic'(국내 지수 소스 체인) | 'tv_spot'(미국채 현물)
              | 'krx_gold'(KRX 금현물, 네이버) | None(일반 경로)
     """
     if not code:
@@ -291,8 +291,6 @@ def index_source_kind(code):
         return 'domestic'
     if code in config.US_TREASURY_SPOT_TICKERS:
         return 'tv_spot'
-    if code in config.FRED_INDEX_TICKERS:
-        return 'fred'
     if code in config.KRX_GOLD_TICKERS:
         return 'krx_gold'
     return None
@@ -337,8 +335,8 @@ def _index_source_long_daily(code, kind, lookback_days=WEEKLY_LOOKBACK_DAYS):
     """지수 전용 소스에서 **주봉용 긴 일봉**(기본 ~3년)을 받는다. 실패하면 None.
 
     [왜 따로 받나 · 2026-09-04] 지수 소스는 네이티브 주봉이 없어 일봉을 묶는데, 그 재료가
-    화면용으로 짧게 잡혀 있었다 — KRX 금현물은 300거래일(_KRX_GOLD_PAGES x 60), 국채 현물·
-    HY OAS 는 n_bars=300. 묶으면 60주, 즉 주봉이 1년치밖에 안 나왔다(KIS 주봉은 ~157주).
+    화면용으로 짧게 잡혀 있었다 — KRX 금현물은 300거래일(_KRX_GOLD_PAGES x 60), 국채 현물은
+    n_bars=300. 묶으면 60주, 즉 주봉이 1년치밖에 안 나왔다(KIS 주봉은 ~157주).
 
     긴 일봉은 화면 캐시를 거치지 않고 소스에서 곧장 받는다 — 화면 일봉 캐시는 300봉짜리라
     거기에 얹으면 다시 짧아진다. 실패하면 호출부가 종전의 짧은 경로로 되돌아간다.
@@ -353,10 +351,8 @@ def _index_source_long_daily(code, kind, lookback_days=WEEKLY_LOOKBACK_DAYS):
             return krx_data.get_index_daily(code, lookback_days)
         # tvDatafeed 계열은 봉 수로 요청한다(연 ≈ 250거래일).
         bars = max(int(lookback_days * 250 / 365), 300)
-        if kind == 'tv_spot':
-            return analysis.get_us_treasury_spot_data(
-                config.US_TREASURY_SPOT_TICKERS[code], n_bars=bars)
-        return analysis.get_fred_data(config.FRED_INDEX_TICKERS[code], n_bars=bars)
+        return analysis.get_us_treasury_spot_data(
+            config.US_TREASURY_SPOT_TICKERS[code], n_bars=bars)
     except Exception as e:      # noqa: BLE001 - 긴 창 실패가 차트를 막아서는 안 된다
         logger.debug(f"[API] 지수 주봉용 긴 일봉 실패({code}/{kind}): {e}")
         return None
@@ -365,7 +361,7 @@ def _index_source_long_daily(code, kind, lookback_days=WEEKLY_LOOKBACK_DAYS):
 def _index_source_chart_data(code, kind, period_type='daily'):
     """지수 전용 소스에서 차트 데이터를 조회한다(일봉 / 주봉=일봉 리샘플링).
 
-    네 소스 모두 일봉만 제공하므로 시봉·분봉은 빈 DataFrame을 돌려준다
+    세 소스 모두 일봉만 제공하므로 시봉·분봉은 빈 DataFrame을 돌려준다
     (호출부 chart.generate_visual_chart가 사전에 안내하고 차단한다).
     """
     if period_type in ('hourly', 'intraday'):
@@ -394,15 +390,13 @@ def _index_source_fetch(code, kind):
         return analysis.get_domestic_index_data(code)
     if kind == 'tv_spot':
         return analysis.get_us_treasury_spot_data(config.US_TREASURY_SPOT_TICKERS[code])
-    if kind == 'krx_gold':
-        return analysis.get_krx_gold_data(config.KRX_GOLD_TICKERS[code])
-    return analysis.get_fred_data(config.FRED_INDEX_TICKERS[code])
+    return analysis.get_krx_gold_data(config.KRX_GOLD_TICKERS[code])
 
 
 def _get_weekly_chart_data(code, is_overseas):
     """주봉 차트 데이터. KIS 네이티브 주봉(국내 W / 해외 GUBN=1)으로 ~3년치를 조회하고,
     KIS 주봉이 없는 경로(지수·환율·원자재는 yfinance 1wk, 토스 개별종목은 일봉 리샘플링)로 보강한다."""
-    # [추가] 국내 지수·미국채 현물·HY OAS·KRX 금은 지수 화면과 동일한 전용 소스(일봉 리샘플링)를 쓴다.
+    # [추가] 국내 지수·미국채 현물·KRX 금은 지수 화면과 동일한 전용 소스(일봉 리샘플링)를 쓴다.
     kind = index_source_kind(code)
     if kind:
         return _index_source_chart_data(code, kind, 'weekly')
@@ -545,7 +539,7 @@ def get_chart_data(code, is_overseas=False, period_type='daily', realtime=True):
     if period_type == 'weekly':
         return _get_weekly_chart_data(code, is_overseas)
 
-    # [추가] 지수 전용 소스(국내 지수·미국채 현물·HY OAS·KRX 금)는 모드/티커와 무관하게 지수 화면과
+    # [추가] 지수 전용 소스(국내 지수·미국채 현물·KRX 금)는 모드/티커와 무관하게 지수 화면과
     #  같은 소스로 조회한다. 일반 경로로 흘리면 KIS 종목 차트 TR·yfinance 자리표시자로 넘어가
     #  조회가 실패하거나 표와 다른 값이 나온다.
     _idx_kind = index_source_kind(code)

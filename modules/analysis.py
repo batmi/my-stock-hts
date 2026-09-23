@@ -197,8 +197,8 @@ def _get_tvdatafeed(force=False):
     #  [Fix 2026-09-04] **초기화 실패에도 회로차단을 건다.** 종전에는 생성이 실패하면
     #   인스턴스가 None 으로 남고, 다음 호출이 곧바로 초기화를 통째로 다시 밟았다.
     #   그 안에는 캐시 토큰이 없을 때의 실제 로그인(_tv_signin, HTTP POST)이 들어 있다.
-    #   토스 모드 지수 화면 한 번이 tvDatafeed 를 7회 부르므로(코스피200·코스닥150·
-    #   국채 4테너·HY OAS), TV 가 흔들리는 동안 로그인 시도가 화면 한 번에 7회씩 나갔다
+    #   토스 모드 지수 화면 한 번이 tvDatafeed 를 6회 부르므로(코스피200·코스닥150·
+    #   국채 4테너), TV 가 흔들리는 동안 로그인 시도가 화면 한 번에 6회씩 나갔다
     #   — TradingView 는 반복 로그인에 캡차를 물린다(토큰 캐시를 7일 두는 이유와 같다).
     #   차단 중에는 조용히 None 을 돌려주고, 호출부는 이미 그 경우를 다룬다(폴백/캐시).
     if not force and _tv_circuit_open():
@@ -472,8 +472,8 @@ _US_TREASURY_NEG_TTL_SEC = 180  # 실패 음성 캐시(익명 웹소켓 다운 �
 #  1회만 수행해 지수 화면 콜드스타트가 수십 초 지연되는 것을 막는다.
 #
 #  [확대 2026-08-19] 종전에는 국채 경로만 이 차단을 썼다. 그런데 토스 모드 지수 화면은
-#  코스피200·코스닥150·국채 4개 테너·HY OAS까지 **7개가 tvDatafeed**를 쓰고, 그 호출은
-#  _TVDATAFEED_LOCK으로 한 번에 하나씩만 돈다. TV가 흔들릴 때 국내 지수(4회)·FRED(4회)가
+#  코스피200·코스닥150·국채 4개 테너까지 **6개가 tvDatafeed**를 쓰고, 그 호출은
+#  _TVDATAFEED_LOCK으로 한 번에 하나씩만 돈다. TV가 흔들릴 때 국내 지수(4회)·국채(6회)가
 #  각자 재시도 예산을 다 쓰면 직렬 대기가 분 단위로 쌓여 화면이 멈춘 것처럼 보인다
 #  (실측 신고: 전체 지수 96%에서 정지). 그래서 신호를 **세 경로가 공유**한다.
 _TV_ANY_FAIL_TIME = None
@@ -596,93 +596,6 @@ def get_us_treasury_spot_data(symbol, n_bars=300):
         return out
     except Exception as e:
         logger.debug(f"[TVDATAFEED] {symbol} 스키마 변환 실패: {e}")
-        ent["fail"] = now
-        return cached
-
-# [추가] FRED 계열(HY OAS 등) 캐시 — 국채 현물(_US_TREASURY_SPOT_CACHE)과 같은 구조.
-#  FRED는 일 1회 갱신되는 거시 시계열이라 장중 재조회 가치가 낮다 → TTL을 국채(120s)보다
-#  길게 잡아 tvDatafeed 전역 락 경합 자체를 줄인다.
-_FRED_CACHE = {}            # symbol -> {"df": DataFrame, "time": datetime, "fail": datetime|None}
-_FRED_TTL_SEC = 1800        # 30분 (일 1회 갱신 시계열)
-_FRED_NEG_TTL_SEC = 180     # 실패 음성 캐시 — 익명 웹소켓 다운 시 매 렌더 재시도로 UI가 지연되는 것 방지
-
-
-def reset_fred_failures():
-    """FRED 음성 캐시를 해제한다(사용자가 지수 화면에서 명시적으로 재시도할 때)."""
-    reset_tvdatafeed_circuit()   # 재시도인데 회로가 닫혀 있으면 1회 시도로 끝나 무의미하다
-    for ent in _FRED_CACHE.values():
-        ent["fail"] = None
-
-
-def get_fred_data(symbol, n_bars=300):
-    """FRED 일봉을 tvDatafeed로 조회한다(TTL 캐시 + 재시도).
-
-    [종전] 단 1회만 시도하고 캐시도 폴백도 없었다. 그런데 익명 웹소켓은 웜 인스턴스에서도
-     ~1/3 확률로 빈 응답을 주고 실패가 버스트로 몰린다(_fetch_index_via_tvdatafeed 주석).
-     같은 소스를 쓰는 국내 지수는 4회, 국채 현물은 최대 6회 재시도 + 성공값 폴백을 두었는데
-     이 경로만 무방비여서, tvDatafeed 호출이 많은 토스/가상투자 모드(코스피200·코스닥150이
-     tvDatafeed 1순위)에서 HY OAS만 상시 실패로 보였다. 재시도 정책을 지수 경로와 맞춘다.
-    """
-    now = datetime.now()
-    ent = _FRED_CACHE.setdefault(symbol, {"df": None, "time": None, "fail": None})
-    cached = ent["df"]
-    # 국채 현물 경로와 같은 이유로 '요청했던 n_bars'를 캐시 적중 조건에 넣는다(주봉 3년).
-    if (cached is not None and ent["time"] and ent.get("n_bars", 0) >= n_bars
-            and (now - ent["time"]).total_seconds() < _FRED_TTL_SEC):
-        return cached
-    if ent["fail"] and (now - ent["fail"]).total_seconds() < _FRED_NEG_TTL_SEC:
-        return cached  # 음성 캐시 구간엔 만료된 성공 캐시라도 재사용(없으면 None)
-
-    tv = _get_tvdatafeed()
-    if tv is None:
-        return cached
-    try:
-        from tvDatafeed import Interval
-    except Exception:
-        return cached
-
-    df = None
-    # 익명 웹소켓 간헐 실패 대응(국내 지수 경로와 동일 재시도 정책).
-    #  [회로차단 2026-08-19] TV가 전면으로 흔들리는 중이면 1회만 — 같은 락을 기다리는
-    #  다른 지수까지 이 재시도 시간을 그대로 물려받는다.
-    max_attempts = 1 if _tv_circuit_open(now) else 4
-    _t0 = time.time()
-    for attempt in range(max_attempts):
-        try:
-            with _TVDATAFEED_LOCK:
-                df = tv.get_hist(symbol=symbol, exchange="FRED",
-                                 interval=Interval.in_daily, n_bars=n_bars)
-            if df is not None and not df.empty:
-                break
-        except Exception as e:
-            logger.debug(f"[TVDATAFEED] FRED:{symbol} 조회 오류(attempt={attempt}): {e}")
-            df = None
-        if attempt < max_attempts - 1:
-            time.sleep(0.8 * (attempt + 1))   # 페이싱 후 재시도(점증 백오프)
-
-    if df is None or df.empty:
-        logger.warning(f"[TVDATAFEED] FRED:{symbol} 데이터 없음 — {max_attempts}회 시도 실패 "
-                       f"({time.time() - _t0:.1f}s)")
-        ent["fail"] = now
-        _tv_note_failure(now)
-        return cached
-    _tv_note_success()
-
-    try:
-        out = df.reset_index().rename(columns={'datetime': 'date'})
-        for col in ['open', 'high', 'low', 'close', 'volume']:
-            if col not in out.columns:
-                out[col] = 0.0
-        out = out[['date', 'open', 'high', 'low', 'close', 'volume']].copy()
-        out = out.sort_values('date', ascending=True).reset_index(drop=True)
-        out.attrs['source'] = 'TVDATAFEED'
-        ent["df"] = out
-        ent["time"] = now
-        ent["n_bars"] = n_bars   # 이 캐시가 무엇을 달라고 해서 받은 것인지
-        ent["fail"] = None
-        return out
-    except Exception as e:
-        logger.debug(f"[TVDATAFEED] FRED:{symbol} 스키마 변환 실패: {e}")
         ent["fail"] = now
         return cached
 

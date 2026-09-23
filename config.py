@@ -3080,10 +3080,10 @@ US_TREASURY_SPOT_TICKERS = {
     "^US02Y": "US02Y", "^FVX": "US05Y", "^TNX": "US10Y", "^TYX": "US30Y",
 }
 
-# FRED 계열 지수 티커 → FRED 심볼 (tvDatafeed FRED 거래소 전용, 야후 미제공)
-FRED_INDEX_TICKERS = {
-    "^HYOAS": "BAMLH0A0HYM2",  # HY OAS (신용위험)
-}
+# [2026-09-23] FRED 계열 지수(HY OAS)는 목록에서 내렸다 — TradingView 가 FRED 경제지표를
+#  유료 그룹(economics_paid)으로 묶어 무료·익명 세션 모두 permission denied 를 돌려준다.
+#  재시도는 series_completed 를 못 받고 타임아웃까지 기다리므로 조회 한 번에 25초를 버렸다.
+#  값을 못 받는 행을 '수신 실패'로 남겨 두지 않고 지운다(묵은 값·빈 행은 빼는 게 이 프로젝트의 선택).
 
 # ==========================================================
 # [설정] KRX 금현물 (KRX Gold Spot)
@@ -3155,7 +3155,7 @@ US_TREASURY_YIELD_BANDS = {
 INDICES_GROUPS = {
     "1": {"name": "국내 지수 (Domestic Indices)", "indices": ["코스피", "코스피200", "코스피200선물", "V코스피200", "코스닥", "코스닥150", "KRX 금현물"]},
     "2": {"name": "미국 지수 (US Indices)", "indices": ["나스닥 선물", "나스닥", "S&P500 선물", "S&P500", "다우존스 선물", "다우존스", "러셀2000 선물", "러셀2000"]},
-    "3": {"name": "섹터 및 지표 (Sectors & Indicators)", "indices": ["London - Samsung GDR", "SOX (반도체)", "DRG (제약)", "NBI (바이오)", "BKX (은행)", "DJT (운송)", "DJU (유틸/전력)", "XAL (항공)", "XOI (에너지)", "HUI (금광)", "VIX (변동성)", "HY OAS (신용위험)", "MSCI 전세계", "MSCI 선진국", "MSCI 신흥국"]},
+    "3": {"name": "섹터 및 지표 (Sectors & Indicators)", "indices": ["London - Samsung GDR", "SOX (반도체)", "DRG (제약)", "NBI (바이오)", "BKX (은행)", "DJT (운송)", "DJU (유틸/전력)", "XAL (항공)", "XOI (에너지)", "HUI (금광)", "VIX (변동성)", "MSCI 전세계", "MSCI 선진국", "MSCI 신흥국"]},
     "4": {"name": "금리 및 환율 (Rates & FX)", "indices": ["달러인덱스", "달러환율", "미국채 2년물 금리", "미국채 5년물 금리", "미국채 10년물 금리", "미국채 30년물 금리"]},
     "5": {"name": "글로벌 지수 (Global Indices)", "indices": ["Japan - 닛케이", "Taiwan - 대만가권", "Hong Kong - 항셍", "China - 상해종합", "UK - FTSE 100", "France - CAC 40", "Germany - DAX 40", "Europe - STOXX 50"]},
     "6": {"name": "원자재 (Commodities)", "indices": ["금", "은", "구리", "브랜트유", "WTI 원유", "가솔린 RBOB", "디젤 ULSD", "천연가스", "밀"]},

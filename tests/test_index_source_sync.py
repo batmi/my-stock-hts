@@ -1,10 +1,10 @@
 """지수 소스 선정 로직 동기화 회귀 테스트.
 
 [왜 묻는가] 지수 화면·개별 지수 분석(메인 1)은 국내 지수를 모드별 소스 체인
-(KIS/토스/tvDatafeed/yfinance)으로, 미국채 현물·HY OAS를 tvDatafeed 전용 소스로 조회한다.
+(KIS/토스/tvDatafeed/yfinance)으로, 미국채 현물을 tvDatafeed 전용 소스로 조회한다.
 그런데 차트 분석(메인 3-5)은 지수 목록의 yfinance 티커를 그대로 넘겨,
   - 코스피200·코스닥150이 모드별 소스를 타지 못하고(표와 차트 값이 어긋남)
-  - 자리표시자 티커(^VKOSPI·^K200FUT·^US02Y·^HYOAS)는 조회 자체가 실패했다.
+  - 자리표시자 티커(^VKOSPI·^K200FUT·^US02Y)는 조회 자체가 실패했다.
 소스 선정을 market.resolve_index_source / api.index_source_kind 한 곳으로 모으고,
 양쪽 진입점이 같은 규칙을 쓰는지 검증한다.
 """
@@ -61,11 +61,10 @@ def test_해외지수는_목록티커를_그대로_쓴다():
     assert api.index_source_kind("^IXIC") is None
 
 
-def test_미국채_현물과_HYOAS는_전용소스로_판정된다():
+def test_미국채_현물은_전용소스로_판정된다():
     # 이름이 아니라 티커로 넘어와도 지수 화면과 같은 소스를 골라야 한다.
     for ticker in config.US_TREASURY_SPOT_TICKERS:
         assert api.index_source_kind(ticker) == 'tv_spot'
-    assert api.index_source_kind("^HYOAS") == 'fred'
 
 
 def test_미국채_티커맵은_지수목록과_정합적이다():
@@ -203,13 +202,6 @@ def test_미국채_2년물_차트는_tvDatafeed_현물을_쓴다():
     with patch.object(analysis, 'get_us_treasury_spot_data', return_value=_src_df()) as m:
         df = api.get_chart_data("^US02Y", is_overseas=True, period_type='daily')
     m.assert_called_once_with("US02Y")
-    assert not df.empty
-
-
-def test_HYOAS_차트는_FRED를_쓴다():
-    with patch.object(analysis, 'get_fred_data', return_value=_src_df()) as m:
-        df = api.get_chart_data("^HYOAS", is_overseas=True, period_type='daily')
-    m.assert_called_once_with(config.FRED_INDEX_TICKERS["^HYOAS"])
     assert not df.empty
 
 

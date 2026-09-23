@@ -1,6 +1,6 @@
 """지수 주봉도 3년을 덮어야 한다.
 
-[배경 · 2026-09-04] 지수 전용 소스(국내 지수·미국채 현물·HY OAS·KRX 금현물)는 네이티브
+[배경 · 2026-09-04] 지수 전용 소스(국내 지수·미국채 현물·KRX 금현물)는 네이티브
 주봉이 없어 일봉을 주 단위로 묶는다. 그런데 그 재료가 **화면용으로 짧게** 잡혀 있었다 —
 금현물 300거래일(_KRX_GOLD_PAGES x 60), 국채·OAS n_bars=300. 묶으면 60주, 즉 주봉이
 1년치밖에 안 나왔다(KIS 네이티브 주봉은 lookback_days=1100 ≈ 157주).
@@ -105,16 +105,14 @@ def test_krx_backed_sources_are_asked_for_three_years(monkeypatch, code, kind, a
     assert len(df) == 750
 
 
-@pytest.mark.parametrize("kind,fn", [("tv_spot", "get_us_treasury_spot_data"),
-                                     ("fred", "get_fred_data")])
+@pytest.mark.parametrize("kind,fn", [("tv_spot", "get_us_treasury_spot_data")])
 def test_tvdatafeed_sources_are_asked_for_more_bars(monkeypatch, kind, fn):
     from modules import analysis
     got = {}
 
     monkeypatch.setattr(analysis, fn,
                         lambda sym, n_bars=300: got.update(n=n_bars) or _daily(n_bars))
-    code = (list(config.US_TREASURY_SPOT_TICKERS) if kind == "tv_spot"
-            else list(config.FRED_INDEX_TICKERS))[0]
+    code = list(config.US_TREASURY_SPOT_TICKERS)[0]
     api._index_source_long_daily(code, kind)
     assert got['n'] > 700, f"{got['n']}봉 — 3년(≈750거래일)에 못 미친다"
 

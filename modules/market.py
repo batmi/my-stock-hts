@@ -189,9 +189,7 @@ def is_market_open_for_index(name):
     """현재 시각 기준으로 해당 지수의 실시간 거래가 진행 중인지 판별한다."""
     if name in CRYPTO_INDICES:
         return True
-    if name == "HY OAS (신용위험)":
-        return False
-        
+
     kst_now = datetime.now()
     h = kst_now.hour
     m = kst_now.minute
@@ -307,7 +305,7 @@ ALL_INDICES = [
     # 2. 미국 지수
     ("나스닥 선물", "NQ=F"), ("나스닥", "^IXIC"), ("S&P500 선물", "ES=F"), ("S&P500", "^GSPC"), ("다우존스 선물", "YM=F"), ("다우존스", "^DJI"), ("러셀2000 선물", "RTY=F"), ("러셀2000", "^RUT"),
     # 3. 섹터 및 지표
-    ("SOX (반도체)", "^SOX"), ("DRG (제약)", "^DRG"), ("NBI (바이오)", "^NBI"), ("BKX (은행)", "^BKX"), ("DJT (운송)", "^DJT"), ("DJU (유틸/전력)", "^DJU"), ("XAL (항공)", "^XAL"), ("XOI (에너지)", "^XOI"), ("HUI (금광)", "^HUI"), ("VIX (변동성)", "^VIX"), ("HY OAS (신용위험)", "^HYOAS"),
+    ("SOX (반도체)", "^SOX"), ("DRG (제약)", "^DRG"), ("NBI (바이오)", "^NBI"), ("BKX (은행)", "^BKX"), ("DJT (운송)", "^DJT"), ("DJU (유틸/전력)", "^DJU"), ("XAL (항공)", "^XAL"), ("XOI (에너지)", "^XOI"), ("HUI (금광)", "^HUI"), ("VIX (변동성)", "^VIX"),
     ("MSCI 전세계", "ACWI"), ("MSCI 선진국", "URTH"), ("MSCI 신흥국", "EEM"),
     # 4. 금리 및 환율
     #  미국채 2년물은 야후에 현물 금리 지수 티커(^FVX류)가 없고 CBOT 금리선물(2YY=F)은 유동성
@@ -410,7 +408,7 @@ def resolve_index_source(name, code):
     국내 지수는 yfinance 티커 대신 모드별 소스 체인(KIS/토스/tvDatafeed/yfinance)을 타는
     내부 코드로 바꾸고, 코스피200선물은 표시 세션(주간 F/야간 CM)에 맞는 KIS 선물 코드로
     바꾼다. 그 외(해외 지수·원자재·환율·미국채)는 목록 티커를 그대로 쓴다
-    (미국채 현물·HY OAS는 티커 기준으로 api.get_chart_data가 tvDatafeed 소스를 선택).
+    (미국채 현물은 티커 기준으로 api.get_chart_data가 tvDatafeed 소스를 선택).
     """
     if name == "코스피200선물":
         return f"K200FUT_{'CM' if _k200_night_session() else 'F'}", False
@@ -674,7 +672,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
         chart_calc_price = None # [추가] 지표 계산용 원본 가격 보존
         
         use_fast_info = False
-        is_spot_source = False  # [추가] 지수 전용 소스(국채 현물·FRED·네이버 금)로 값을 채웠는가
+        is_spot_source = False  # [추가] 지수 전용 소스(국채 현물·네이버 금)로 값을 채웠는가
 
         # [추가] 미국채 금리: 현물(TVC:USxxY)을 tvDatafeed로 1차 조회한다. 현물 금리는
         #  아시아장에도 거의 24시간 갱신되어 선물 프록시 추정 없이 실제 호가를 표시할 수 있다.
@@ -702,30 +700,6 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             if name == "미국채 2년물 금리" and not is_spot_source:
                 return {'status': 'failed', 'name': name, 'src': 'TradingView'}
 
-        if name == "HY OAS (신용위험)":
-            got_fred = False
-            try:
-                tv_df = analysis.get_fred_data(config.FRED_INDEX_TICKERS["^HYOAS"])
-                if tv_df is not None and not tv_df.empty and len(tv_df) >= 2:
-                    got_fred = True
-                    df_daily = tv_df.copy()
-                    df_daily['date'] = pd.to_datetime(df_daily['date'])
-                    df_daily.set_index('date', inplace=True)
-                    current = float(df_daily['close'].iloc[-1])
-                    prev = float(df_daily['close'].iloc[-2])
-                    chart_calc_price = current
-                    hi_max = float(df_daily['high'].tail(250).max() or 0)
-                    high_52 = hi_max if hi_max > 0 else float(df_daily['close'].tail(250).max())
-                    use_fast_info = True
-                    is_spot_source = True  # 동일한 플래그로 yfinance 폴백 생략
-            except Exception as e:
-                logger.debug(f"HY OAS 조회 실패: {e}")
-            # [Fix] 야후는 ^HYOAS를 제공하지 않는다. 종전에는 실패 시 아래 yfinance 분기로
-            #  흘러가 실패 소스가 'yfinance'로 잘못 안내됐다(실제 소스는 TradingView/FRED).
-            #  국채 현물은 같은 이유로 이미 early return 하는데 이 경로만 빠져 있었다.
-            if not got_fred:
-                return {'status': 'failed', 'name': name, 'src': 'TradingView'}
-
         if name == KRX_GOLD_INDEX:
             got_gold = False
             try:
@@ -746,7 +720,7 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             except Exception as e:
                 logger.debug(f"KRX 금(네이버) 조회 실패: {e}")
             # 야후는 KRX 금현물을 제공하지 않는다(^KRXGOLD는 자리표시자) → 폴백 없이 실패 표시.
-            #  국채 현물·HY OAS가 같은 이유로 early return 하는 것과 같다.
+            #  국채 현물이 같은 이유로 early return 하는 것과 같다.
             if not got_gold:
                 return {'status': 'failed', 'name': name, 'src': '네이버'}
 
@@ -1210,11 +1184,6 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
             elif 20 <= current < 30: display_name = f"[orange3]{name}[/]"
             elif 30 <= current < 40: display_name = f"[red]{name}[/]"
             elif current >= 40: display_name = f"[magenta]{name}[/]"
-        elif name == "HY OAS (신용위험)":
-            if current >= 8.0: display_name = f"[magenta]{name}[/]"
-            elif 5.0 <= current < 8.0: display_name = f"[red]{name}[/]"
-            elif 4.0 <= current < 5.0: display_name = f"[orange3]{name}[/]"
-            elif current < 4.0: display_name = f"[green]{name}[/]"
         elif name == "달러인덱스":
             if current >= 115: display_name = f"[magenta]{name}[/]"
             elif 110 <= current < 115: display_name = f"[red]{name}[/]"
@@ -1385,8 +1354,8 @@ def _show_market_indices_core(target_indices=None):
             for group_name, t_list in groups_to_fetch:
                 if not t_list: continue
 
-                # [추가] 코스닥150·V코스피200·코스피200선물·미국채2년·HYOAS·KRX 금은 yfinance를 호출하지 않도록 필터링 (야후 미제공 티커)
-                yf_t_list = [t for t in t_list if t not in ("^KQ150", "^VKOSPI", "^K200FUT", "^US02Y", "^HYOAS", "^KRXGOLD")]
+                # [추가] 코스닥150·V코스피200·코스피200선물·미국채2년·KRX 금은 yfinance를 호출하지 않도록 필터링 (야후 미제공 티커)
+                yf_t_list = [t for t in t_list if t not in ("^KQ150", "^VKOSPI", "^K200FUT", "^US02Y", "^KRXGOLD")]
                 if not yf_t_list:
                     continue
 
@@ -1817,9 +1786,6 @@ def show_market_indices(interval=0):
                                 #  음성 캐시(600s) 동안 재시도가 즉시 실패해 무의미하다.
                                 if any(n in config.US_TREASURY_SPOT_SYMBOLS for n in failed_list):
                                     analysis.reset_us_treasury_spot_failures()
-                                # HY OAS도 같은 이유로 음성 캐시(180s)를 풀어야 재시도가 의미를 갖는다.
-                                if "HY OAS (신용위험)" in failed_list:
-                                    analysis.reset_fred_failures()
                                 # KRX 금(네이버)도 같은 이유로 음성 캐시(180s)를 풀어 준다.
                                 if KRX_GOLD_INDEX in failed_list:
                                     analysis.reset_krx_gold_failures()
