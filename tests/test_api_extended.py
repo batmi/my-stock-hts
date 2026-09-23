@@ -5,14 +5,21 @@ import config
 
 @patch('api.session.get')
 def test_get_stock_name_by_code_domestic(mock_get):
-    """국내 종목명 크롤링 테스트"""
-    # 네이버 금융 응답 Mock
+    """국내 종목명 — 마스터가 모르면 네이버 JSON API(stockName)로 받는다.
+
+    [2026-09-24] 종전 mock 은 09-13 에 폐기된 HTML og:title 형식이었는데도 통과했다 — 테스트가
+    urllib 로 **실제 KIS 마스터를 내려받아** 거기서 이름을 얻고 있었기 때문이다(conftest 가 이제 막는다).
+    마스터를 명시적으로 '모름'으로 두고 현재 경로를 검증한다.
+    """
     mock_resp = MagicMock()
-    mock_resp.text = '<meta property="og:title" content="삼성전자 : 네이버 금융">'
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"stockName": "삼성전자"}
     mock_get.return_value = mock_resp
-    
-    name = api.get_stock_name_by_code("005930", False)
+
+    with patch("modules.analysis.get_stock_name_from_master", return_value=None):
+        name = api.get_stock_name_by_code("005930", False)
     assert name == "삼성전자"
+    assert "m.stock.naver.com/api/stock/005930/basic" in mock_get.call_args.args[0]
 
 @patch('api.yf.Ticker')
 def test_get_stock_name_by_code_overseas(mock_ticker):

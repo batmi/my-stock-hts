@@ -60,6 +60,30 @@ def isolate_production_db(tmp_path_factory):
 
 
 @pytest.fixture(scope="session", autouse=True)
+def isolate_krx_openapi_snapshot(tmp_path_factory):
+    """[격리 · 2026-09-24] KRX Open API 스냅샷(data/krx_openapi.db)도 운영 데이터다.
+
+    인증키(KRX_OPENAPI_KEY)가 셸에 있으면 is_configured() 가 참이라, mock 이 준 프레임이
+    '부족'으로 판정된 테스트는 다음 소스인 **맥북의 실제 스냅샷**으로 내려가 진짜 지수를 읽었다
+    (실측: test_market_regime_bear 가 하락 mock 대신 실제 코스피 269봉·7,017 을 읽어 PendUp —
+    09-20 엔 통과, 09-24 엔 실패. 결과가 시장에 따라 바뀌는 테스트는 신뢰할 수 없다).
+    차단 응답은 저장되지 않아 쓰기 오염은 없었지만, 읽기도 막는다 — 빈 임시 DB 를 가리킨다.
+    스냅샷 자체를 검증하는 테스트는 각자 경로를 다시 지정한다(test_krx_openapi).
+    """
+    path = tmp_path_factory.mktemp("krx_openapi") / "krx_openapi.db"
+    prev = getattr(config, "KRX_OPENAPI_DB_PATH", None)
+    config.KRX_OPENAPI_DB_PATH = str(path)
+    yield str(path)
+    if prev is None:
+        try:
+            delattr(config, "KRX_OPENAPI_DB_PATH")
+        except AttributeError:
+            pass
+    else:
+        config.KRX_OPENAPI_DB_PATH = prev
+
+
+@pytest.fixture(scope="session", autouse=True)
 def setup_config(isolate_production_db):
     """테스트 세션 동안 사용할 설정 초기화 (한투증권 모드).
 
@@ -200,6 +224,34 @@ def block_side_effects_for_whole_session():
         return _orig_request(self, method, url, *args, **kwargs)
 
     mp.setattr(_requests.Session, "request", _guarded_request)
+
+    #  [Fix 2026-09-24] **urllib 도 requests 를 비켜 간다.** KIS 종목 마스터(kospi/kosdaq_code.mst.zip)는
+    #   analysis._get_master_stock_list 가 urllib.request.urlretrieve 로 받는다. 위 차단은 requests 만 보므로
+    #   실측(트립와이어) 테스트 11개가 **매 실행마다 dws.co.kr 에서 마스터를 22번 실제로 받았다** — 느리고,
+    #   오프라인이면 결과가 갈리고, 그날 마스터 내용이 판정에 섞인다. 네트워크 실패처럼 OSError 로 막는다
+    #   (호출부는 이미 다운로드 실패를 다룬다 — 막아도 결과 동일함을 전체 실행으로 확인).
+    import urllib.request as _urlreq
+
+    _orig_urlretrieve, _orig_urlopen = _urlreq.urlretrieve, _urlreq.urlopen
+
+    def _is_local(u):
+        #  웹차트 대시보드 테스트는 로컬 테스트 서버(127.0.0.1)에 urlopen 으로 붙는다 — 막지 않는다.
+        from urllib.parse import urlsplit
+        return (urlsplit(str(u)).hostname or "") in ("127.0.0.1", "localhost", "::1")
+
+    def _blocked_urlretrieve(url, *a, **k):
+        if _is_local(url):
+            return _orig_urlretrieve(url, *a, **k)
+        raise OSError(f"{_BLOCKED_MSG} (urllib: {url})")
+
+    def _blocked_urlopen(url, *a, **k):
+        u = getattr(url, "full_url", url)
+        if _is_local(u):
+            return _orig_urlopen(url, *a, **k)
+        raise OSError(f"{_BLOCKED_MSG} (urllib: {u})")
+
+    mp.setattr(_urlreq, "urlretrieve", _blocked_urlretrieve)
+    mp.setattr(_urlreq, "urlopen", _blocked_urlopen)
 
     #  [Fix 2026-09-06] **yfinance 는 requests.Session 을 쓰지 않는다.**
     #   위 _LIVE_HOSTS 에 finance.yahoo.com 이 있어 막힌다고 믿었지만, yfinance 는

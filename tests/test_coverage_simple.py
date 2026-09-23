@@ -103,20 +103,22 @@ def test_get_stock_market_type_cached():
     
     assert trader._get_stock_market_type('005930') == 'KOSPI'
 
-@patch('modules.auto_trade.api.get_current_price_data')
-def test_get_stock_market_type_api(mock_api):
-    """시장 구분 API 조회 테스트"""
+def test_get_stock_market_type_api():
+    """시장 구분 — 정본(analysis.get_market_type: 마스터→KRX 목록)이 답한 값만 캐시한다.
+
+    [2026-09-24] 종전 테스트는 현재가 API 의 rprs_mrkt_kor_name 을 mock 했지만 그 경로는 이미 없다
+    ([[market-type-single-source]]). 그래도 통과한 건 테스트가 urllib 로 실제 KIS 마스터를 받아서였다.
+    """
     trader = auto_trade.AutoTrader()
-    if '000660' in trader.stock_market_map:
-        del trader.stock_market_map['000660']
-        
-    mock_api.return_value = {
-        'rt_cd': '0',
-        'output': {'rprs_mrkt_kor_name': '유가증권'}
-    }
-    
-    assert trader._get_stock_market_type('000660') == 'KOSPI'
+    trader.stock_market_map.pop('000660', None)
+    with patch('modules.analysis.get_market_type', return_value='KOSPI'):
+        assert trader._get_stock_market_type('000660') == 'KOSPI'
     assert trader.stock_market_map['000660'] == 'KOSPI'
+
+    trader.stock_market_map.pop('000660', None)
+    with patch('modules.analysis.get_market_type', return_value=None):
+        assert trader._get_stock_market_type('000660') == 'KOSPI'   # 이번 주기만 진행
+    assert '000660' not in trader.stock_market_map                 # 모름은 굳히지 않는다
 
 def test_check_buy_conditions_low_cash():
     """예수금 부족 시 매수 중단 테스트"""

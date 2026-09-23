@@ -158,8 +158,10 @@ def test_theme_analysis_ui_score_params(mock_db_rule, mock_regime, mock_chart, m
     with patch.dict('config.MARKET_REGIME_PARAMS', {'USE_ADAPTIVE_THRESHOLD': True}), \
          patch('rich.prompt.Prompt.ask', side_effect=["5", "005930", "y", "n"]), \
          patch('modules.analysis.classify_stock_state') as mock_classify, \
+         patch('modules.analysis.get_market_type', return_value="KOSPI"), \
          patch('api.get_stock_name_by_code', return_value="삼성전자"):
-        
+        #  [2026-09-24] 국면 보정은 시장 구분을 알 때만 붙는다. 종전엔 실제 KIS 마스터 다운로드가
+        #   KOSPI 를 답해 줘서 통과했다 — 전제를 명시한다.
         theme_analysis._analyze_stock_ui()
         
         mock_classify.assert_called()

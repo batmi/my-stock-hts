@@ -45,14 +45,18 @@ def test_adjust_to_tick_comprehensive():
 # --- api.py coverage ---
 @patch('api.session.get')
 def test_get_stock_name_domestic_parsing(mock_get):
-    """국내 종목명 파싱 테스트"""
+    """국내 종목명 — 마스터가 모르면 네이버 JSON API(stockName). [2026-09-24] 옛 og:title mock 은
+    실제 KIS 마스터 다운로드 덕에 통과하고 있었다(conftest 가 이제 막는다)."""
     mock_resp = MagicMock()
-    mock_resp.text = '<meta property="og:title" content="삼성전자 : 네이버 금융">'
+    mock_resp.status_code = 200
     mock_get.return_value = mock_resp
-    assert api.get_stock_name_by_code("005930", False) == "삼성전자"
-
-    mock_resp.text = '<meta property="og:title" content="SK하이닉스(000660) : 네이버 금융">'
-    assert api.get_stock_name_by_code("000660", False) == "SK하이닉스"
+    with patch("modules.analysis.get_stock_name_from_master", return_value=None):
+        mock_resp.json.return_value = {"stockName": "삼성전자"}
+        assert api.get_stock_name_by_code("005930", False) == "삼성전자"
+        mock_resp.json.return_value = {"stockName": " SK하이닉스 "}
+        assert api.get_stock_name_by_code("000660", False) == "SK하이닉스"
+        mock_resp.json.return_value = {}
+        assert api.get_stock_name_by_code("999999", False) == "999999"   # 모르면 코드 그대로
 
 @patch.dict('sys.modules', {'tradingview_screener': None})
 @patch('api.yf.Ticker')
