@@ -1657,11 +1657,19 @@ class AutoTrader:
                 msg += f"• {label}: 확인 불가\n"
 
         # [시장 필터링] 섹션 출력
-        #  필터가 꺼져 있으면 판정 결과를 줄줄이 찍지 않는다 — 매수를 막지 않는데
-        #  '보류'라고 적히면 오독한다(종전에는 OFF 여도 종목별 상태를 그대로 찍었다).
+        #  [2026-09-23] 필터가 꺼져 있어도 판정 결과를 함께 적는다 — 지수가 지금 그 선의
+        #   어느 쪽에 있는지, 몇 봉째인지, 무슨 값·출처로 본 것인지는 필터를 켤지 말지를
+        #   정하는 근거이므로 OFF 라고 가릴 이유가 없다. 다만 '보류'가 매수를 막고 있다는
+        #   말로 읽히면 안 되므로(종전에 감춘 이유가 그것이었다) 종목 줄 끝에 (미적용)을
+        #   붙인다. 근거 줄(└ ...)은 상태가 아니라 숫자라 그대로 둔다.
         msg += f"\n[시장 필터링] ({filter_str}, SMA {filter_ma}일{band_txt} 기준)\n"
         if not use_filter:
             msg += "• 필터 비활성 — 시장 상태와 무관하게 매수를 허용합니다\n"
+            if market_flt_msgs:
+                for line in market_flt_msgs:
+                    msg += (f"{line} (미적용)\n" if line.startswith("• ") else f"{line}\n")
+            else:
+                msg += "• 필터링 상태 확인 불가\n"
         elif market_flt_msgs:
             msg += "\n".join(market_flt_msgs) + "\n"
         else:
