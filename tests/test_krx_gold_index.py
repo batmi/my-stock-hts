@@ -76,11 +76,17 @@ def _fake_get(quote=None, total_pages=5, page_size=None, prices=None):
 
 @pytest.fixture(autouse=True)
 def _clear_gold_cache():
-    # 아래 대부분은 **네이버 폴백 경로**를 검증한다. 개발자가 KRX_ID를 셸에 걸어 둔 채
-    #  돌리면 1순위(KRX)로 새어 결과가 갈리므로, 여기서 자격증명을 비워 경로를 고정한다.
-    #  KRX 경로 자체는 아래 'KRX 공식' 절에서 _krx_gold_official을 직접 목으로 잡아 검증한다.
+    # 아래 대부분은 **네이버 폴백 경로**를 검증한다 → 1순위(KRX 공식)를 여기서 막아 경로를
+    #  고정한다. KRX 경로 자체는 아래 'KRX 공식' 절에서 _krx_gold_official을 직접 목으로
+    #  잡아 검증한다(그 patch 가 이 fixture 의 것을 덮어쓴다).
+    #
+    #  [왜 목인가 · 2026-09-23] 종전에는 KRX_ID/KRX_PW 를 비워 경로를 고정했다. 그런데
+    #   웹계정 스크래핑이 폐기되고 정본이 KRX Open API(날짜별 스냅샷 SQLite)로 바뀌면서
+    #   그 환경변수는 아무것도 가르지 않게 됐다 — 자격증명 없이도 디스크 스냅샷으로 1순위가
+    #   성공해, 네이버를 겨눈 여섯 건이 source='KRX' 를 받고 무너졌다. 경로를 가르는 것은
+    #   이제 환경변수가 아니라 이 함수의 성공 여부이므로 그 자리를 직접 막는다.
     analysis._KRX_GOLD_CACHE.clear()
-    with patch.dict(os.environ, {"KRX_ID": "", "KRX_PW": ""}):
+    with patch.object(analysis, '_krx_gold_official', return_value=None):
         yield
     analysis._KRX_GOLD_CACHE.clear()
 

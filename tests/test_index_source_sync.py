@@ -18,7 +18,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import api
 import config
-from modules import analysis, market
+from modules import analysis, krx_data, market
 
 
 def _src_df(periods=120):
@@ -180,10 +180,17 @@ def test_국내지수_차트는_지수화면과_같은_소스를_탄다():
 
 
 def test_국내지수_주봉은_일봉_리샘플링으로_제공된다():
-    with patch.object(analysis, 'get_domestic_index_data', return_value=_src_df()):
+    """[2026-09-04 이후] 주봉 재료는 화면용 짧은 소스가 아니라 3년 창을 따로 받는다
+    (api._index_source_long_daily → krx_data.get_index_daily). 그 자리를 막지 않으면
+    테스트가 디스크에 쌓인 KRX 스냅샷을 그대로 읽어, 창 길이에 따라 결과가 흔들린다
+    (실측: 158주를 받아 '주봉 120개 미만' 단언이 깨졌다)."""
+    long_daily = _src_df(750)
+    with patch.object(krx_data, 'get_index_daily', return_value=long_daily) as m, \
+         patch.object(analysis, 'get_domestic_index_data', return_value=_src_df()):
         w = api.get_chart_data("KOSPI200", is_overseas=False, period_type='weekly')
+    m.assert_called_once()
     assert not w.empty
-    assert len(w) < 120  # 일봉보다 적은 주봉 수
+    assert 0 < len(w) < len(long_daily) / 4   # 일봉을 주 단위로 묶었다
     assert list(w.columns) == ['date', 'open', 'high', 'low', 'close', 'volume']
 
 
