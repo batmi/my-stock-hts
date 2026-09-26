@@ -19,6 +19,17 @@ if exist ".venv\Scripts\python.exe" (
 echo --- 환경 확인 ---
 %PYTHON_PATH% --version
 
+:: 2-1. 파이썬 최소 버전(3.10) 확인 — run.sh 3-1 과 같은 가드(2026-09-26).
+::  3.9 이하로 만든 가상환경이면 holidays(>=0.103) 설치가 실패해 목록 전체가 설치되지 않고,
+::  설치를 우회해도 기동 도중 문법 오류로 죽는다. 원인이 버전이라는 것을 여기서 바로 알린다.
+%PYTHON_PATH% -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>&1
+if errorlevel 1 (
+    echo [중단] Python 3.10 이상이 필요합니다. 경로: %PYTHON_PATH%
+    echo   가상환경이 구버전으로 만들어졌다면 지우고 새 파이썬으로 다시 만드세요:
+    echo     rmdir /s /q .venv ^&^& py -3.12 -m venv .venv ^&^& run.bat
+    exit /b 1
+)
+
 :: 3. 미설치 라이브러리 스캔 — requirements.txt 가 단일 소스(run.sh 와 같은 규칙).
 ::  [2026-09-20] 종전에는 목록이 여기 하드코딩돼 있어 run.sh·requirements.txt 와 갈라졌다:
 ::   폐기된 google-generativeai 를 요구하고(정본은 google-genai), tvdatafeed·FinanceDataReader
@@ -42,7 +53,12 @@ if not "!MISSING_LIBS!"=="" (
         echo [진행] 설치를 시작합니다...
         :: requirements.txt 를 통째로 넘긴다 — 버전 하한·git URL(tvdatafeed) 해석은 pip 가 맡는다.
         %PIP_PATH% install -r requirements.txt
-        echo [완료] 설치가 끝났습니다.
+        :: pip 는 해석 단계에서 하나만 실패해도 전부를 설치하지 않는다 — 종료 코드로 판정한다(run.sh 와 같다).
+        if errorlevel 1 (
+            echo [실패] pip 설치가 오류로 끝났습니다(위 ERROR 참고^).
+        ) else (
+            echo [완료] 설치가 끝났습니다.
+        )
         set STILL_MISSING=
         for /f "usebackq delims=" %%L in (`%PYTHON_PATH% tools\missing_requirements.py`) do (
             set STILL_MISSING=!STILL_MISSING! %%L
@@ -57,8 +73,8 @@ if not "!MISSING_LIBS!"=="" (
     )
 )
 
-:: 5. (제거됨) holidays 자동 업그레이드 — 휴장일 판정 라이브러리가 기동마다 조용히 바뀌면
-::  매매 시간 판단이 사람 모르게 달라진다(run.sh 8번 주석). 갱신은 명시적으로:
+:: 5. holidays 갱신은 기동 스크립트가 하지 않는다 — 앱이 7일마다 백그라운드에서 갱신하고
+::  갱신 전후 휴장일 차이를 알린다(modules/holiday_calendar_update, 2026-09-20). 수동 실행은:
 ::    %PIP_PATH% install --upgrade holidays
 
 :: 6. yfinance 캐시 자동 정리 (DB Lock 에러 사전 방지)
