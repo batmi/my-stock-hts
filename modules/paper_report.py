@@ -8,6 +8,7 @@
 관리 기능**만 담당한다: 시드 입출금, 계좌 초기화, 그리고 실계좌 화면이 알 수 없는
 '시드 대비 성과'와 백테스트 분포 대비 위치.
 """
+import concurrent.futures
 import logging
 from datetime import datetime
 
@@ -252,9 +253,12 @@ class _HeatShim:
         pass
 
 
-def _position_open_risk(positions):
+def _position_open_risk(positions, prices=None):
     """종목별 (손절선, 오픈 리스크)·남은 예산·실효 캡(%)·스케일 반영 여부.
     실패 시 ({}, None, None, False).
+
+    prices: {code: 평가가} — 호출부가 이미 받아 둔 값. 없으면 valuation_price 로 구한다
+     (같은 화면에서 종목마다 시세를 두 번 받지 않게 한다).
 
     [detail] 종전에는 총합에서 손절선을 되짚었다(충분히 높은 가격을 넣어 0 클립을 피한 뒤
     빼는 역산). 히트 기준이 매수가로 바뀌면서 그 트릭은 성립하지 않는다 — 이익이 잠긴
@@ -272,8 +276,9 @@ def _position_open_risk(positions):
 
         entries = [{'pdno': p["code"], 'hldg_qty': str(p["qty"]),
                     'pchs_avg_pric': f'{p["avg_price"]:.4f}',
-                    'prpr': str(int(paper_broker.valuation_price(code=p["code"],
-                                                                 fallback=p["avg_price"])))}
+                    'prpr': str(int((prices or {}).get(p["code"])
+                                    or paper_broker.valuation_price(code=p["code"],
+                                                                    fallback=p["avg_price"])))}
                    for p in positions]
         total, detail = rm.compute_portfolio_heat(
             entries, {p["code"]: buy_map.get(p["code"]) or [] for p in positions},
@@ -369,14 +374,36 @@ def _print_verification_detail(perf):
         #  +1 은 리스크 예산 산출(포지션 전체를 한 번에 계산한다).
         task = progress.add_task("[cyan]포지션 판정 상태 계산 중...[/cyan]",
                                  total=len(positions) + 1)
-        risk_by_code, budget_left, heat_cap, scale_known = _position_open_risk(positions)
+
+        #  [병렬 조회 · 2026-09-27] 종목마다 평가가(KIS 일봉 3페이지)와 지표용 일봉(KRX 460일
+        #   + FDR 덧대기)을 받는데, 종전에는 이것을 한 종목씩 차례로 돌았고 평가가는 리스크
+        #   산출과 표에서 두 번 받았다. 원격 조회만 먼저 병렬로 끝내 두고(시세 조회는 락 없는
+        #   GET 이라 TPS 게이트가 한도를 지킨다 — analysis 병렬 진단과 같은 방식), 두 곳 모두
+        #   그 값을 쓴다. DB 조회와 표 조립은 아래에서 메인 스레드가 순서대로 한다.
+        def _fetch(p):
+            # 총자산과 같은 규칙으로 평가한다(장 종료 후 = KRX 확정 종가). 종전에는
+            #  _current_price 라 표만 NXT 최종가였고, 총자산과 합계가 어긋났다.
+            cur = paper_broker.valuation_price(p["code"], p["avg_price"])
+            # 지표(ATR)는 트레일링 고점이 있을 때만 쓴다 — 아래 TS 계산 주석 참조.
+            high = float(highs.get(p["code"]) or 0.0)
+            ind = _position_indicators(p["code"], cur) if high else None
+            return cur, ind
+
+        fetched = {}
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=min(len(positions), config.analysis_max_workers())) as ex:
+            futures = {ex.submit(_fetch, p): p["code"] for p in positions}
+            for fut in concurrent.futures.as_completed(futures):
+                fetched[futures[fut]] = fut.result()
+                progress.advance(task)
+
+        risk_by_code, budget_left, heat_cap, scale_known = _position_open_risk(
+            positions, prices={c: v[0] for c, v in fetched.items()})
         heat_cap_amt = (perf["total"] * heat_cap / 100.0) if heat_cap else 0.0
         progress.advance(task)
 
         for p in positions:
-            # 총자산과 같은 규칙으로 평가한다(장 종료 후 = KRX 확정 종가). 종전에는
-            #  _current_price 라 표만 NXT 최종가였고, 총자산과 합계가 어긋났다.
-            cur = paper_broker.valuation_price(p["code"], p["avg_price"])
+            cur, ind = fetched[p["code"]]
             profit = (cur - p["avg_price"]) / p["avg_price"] * 100 if p["avg_price"] else 0.0
             held = _holding_days(p.get("first_buy_at"))
             try:
@@ -398,7 +425,7 @@ def _print_verification_detail(perf):
                 #   변동성이 큰 날 — 정확히 이 표기를 고치게 만든 상황 — 에 발동선이 다시
                 #   어긋나므로 같은 보정을 태운다. chart_overlay_price 가 정규장 밖에서는
                 #   0.0 을 돌려주므로 장 종료 후에는 KRX 확정 종가가 그대로 남는다.
-                ind = _position_indicators(p["code"], cur)
+                #  (지표는 위 _fetch 에서 미리 받아 두었다.)
                 ts = engine.compute_trailing_stop(high, p["avg_price"], cur, ind=ind)
 
             if ts is None:
@@ -442,7 +469,6 @@ def _print_verification_detail(perf):
                        ts_txt, stop_txt, sl_txt, room_txt, risk_txt)
             if pt.row_count % 5 == 0 and pt.row_count < len(positions):
                 pt.add_section()
-            progress.advance(task)
     config.console.print(pt)
 
     # 리스크 예산 — 개별 행의 '예산비'가 무엇의 몫인지 여기서 분모를 밝힌다.

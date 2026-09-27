@@ -121,3 +121,23 @@ def test_표_폭이_상한을_넘지_않는다(capsys):
     assert rules, "표가 렌더되지 않았다"
     assert max(len(ln) for ln in rules) <= 135, \
         f"보유 포지션 상세 표가 {max(len(ln) for ln in rules)}열 — 상한 135열을 넘었다"
+
+
+def test_종목마다_평가가를_한_번만_받는다(capsys):
+    """평가가는 종목당 원격 조회(KIS 일봉 3페이지)다. 리스크 산출과 표가 각자 받으면
+    같은 화면에서 종목 수의 두 배를 순서대로 기다린다 — 진행률이 멈춘 듯 보이던 원인이다.
+    한 번 받은 값을 두 곳이 같이 쓰는지, 표의 순서가 보유 순서 그대로인지 본다.
+    """
+    positions = [_position(code="005930", name="삼성전자"),
+                 _position(code="000660", name="SK하이닉스")]
+    real = paper_broker.valuation_price
+    calls = []
+
+    def counting(code, fallback=0.0):
+        calls.append(code)
+        return real(code, fallback)
+
+    with patch.object(paper_broker, "valuation_price", side_effect=counting):
+        out = _render(capsys, positions, {"005930": 82000.0, "000660": 82000.0})
+    assert sorted(calls) == ["000660", "005930"], f"평가가 조회가 중복됐다: {calls}"
+    assert out.index("삼성전자") < out.index("SK하이닉스"), "표 순서가 보유 순서와 다르다"
