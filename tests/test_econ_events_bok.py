@@ -92,7 +92,11 @@ def test_bok_is_wired_into_collect_and_counted_as_a_source():
 def test_seed_help_no_longer_asks_for_manual_bok_entry():
     import json
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # 저장소의 실제 시드 파일
-    seed = json.load(open(os.path.join(root, "json", "econ_calendar_seed.json"), encoding="utf-8"))
+    path = os.path.join(root, "json", "econ_calendar_seed.json")
+    # json/ 은 git 무시 대상이라 시드 파일은 운영자가 만든 PC 에만 있다(없어도 _load_seed 는 정상).
+    if not os.path.exists(path):
+        pytest.skip("로컬 시드 파일 없음 — json/econ_calendar_seed.json 은 저장소에 포함되지 않는다")
+    seed = json.load(open(path, encoding="utf-8"))
     help_text = " ".join(seed.get("_help", []))
     assert "자동 수집이 불가능" not in help_text
     assert "자동 수집" in help_text

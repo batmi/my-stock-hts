@@ -8,6 +8,7 @@
 """
 import os
 import re
+import subprocess
 
 import pytest
 
@@ -34,12 +35,28 @@ def _tree_entries(readme):
     return entries
 
 
+def _git_ignored(paths):
+    """paths 중 .gitignore 에 걸리는 것의 집합. git 이 없으면 빈 집합(= 종전처럼 엄격)."""
+    if not paths:
+        return set()
+    try:
+        r = subprocess.run(["git", "check-ignore", "--stdin"], cwd=ROOT, input="\n".join(paths),
+                           capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    return set(r.stdout.split())
+
+
 @pytest.mark.parametrize("readme", READMES)
 def test_every_tree_entry_exists(readme):
     entries = _tree_entries(readme)
     assert len(entries) > 50, "트리를 못 읽었다 — 그림 형식이 바뀌었으면 정규식을 고쳐라"
     ghosts = [e for e in entries
               if "{" not in e and "*" not in e and not os.path.exists(os.path.join(ROOT, e))]
+    # 런타임에 생기는 git 무시 파일(json/restricted_stocks.json 등)은 앱을 돌린 PC 에만 있다.
+    #  저장소 트리 대조 대상이 아니므로 뺀다 — 안 빼면 새로 클론한 PC 에서만 실패한다.
+    ignored = _git_ignored(ghosts)
+    ghosts = [e for e in ghosts if e not in ignored]
     assert not ghosts, f"{readme} 트리에 없는 파일이 적혀 있다: {ghosts}"
 
 
