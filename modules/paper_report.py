@@ -192,14 +192,21 @@ def _position_indicators(code, current_price):
     한 단계라도 빠지면 같은 포지션의 TS 상태가 화면마다 갈린다.
 
     관찰모드는 국내 전용이다(paper_broker 전 경로가 is_overseas=False).
+
+    [일봉 소스 · 2026-09-27] ①은 9-2 와 같은 api.get_chart_data 다. 종전에는
+     backtest.get_backtest_data(days=60)였는데, 그 경로는 워밍업을 붙여 460일을 요구한다.
+     KRX Open API 저장소에 그만큼이 없으면 화면을 열 때마다 인라인 적재(호출 캡 60건, 건당
+     2초 남짓 · 직렬)가 돌아 진행률이 약 2분 멈췄고, 캡에 걸려 구간이 불완전하니 결국 FDR 로
+     폴백했다 — 기다린 값을 쓰지도 못했다(라즈베리파이 5 실측 2026-09-27: 결손 1075건 중 60건).
+     게다가 9-2·실제 청산 판정(analyze_sell 에 넘기는 df)과 다른 일봉이라 이 함수의 목적
+     (같은 순서·같은 입력)에도 어긋났다. 차트 캐시(6시간 + 디스크)는 평가가 조회
+     (valuation_price → 같은 get_chart_data)가 이미 채워 두므로 대개 추가 조회도 없다.
     """
     try:
         import api
-        from modules import backtest
         from modules.auto_trade import indicators
 
-        # days 는 워밍업 길이를 정할 뿐 잘라내지 않는다(get_backtest_data: days + 400).
-        df = backtest.get_backtest_data(code, is_overseas=False, days=60)
+        df = api.get_chart_data(code, is_overseas=False)
         if df is None or df.empty:
             return None
         indicators.apply_realtime_price(df, api.chart_overlay_price(current_price, False))
@@ -375,8 +382,7 @@ def _print_verification_detail(perf):
         task = progress.add_task("[cyan]포지션 판정 상태 계산 중...[/cyan]",
                                  total=len(positions) + 1)
 
-        #  [병렬 조회 · 2026-09-27] 종목마다 평가가(KIS 일봉 3페이지)와 지표용 일봉(KRX 460일
-        #   + FDR 덧대기)을 받는데, 종전에는 이것을 한 종목씩 차례로 돌았고 평가가는 리스크
+        #  [병렬 조회 · 2026-09-27] 종목마다 평가가(KIS 일봉 3페이지)와 지표용 일봉을 받는데, 종전에는 이것을 한 종목씩 차례로 돌았고 평가가는 리스크
         #   산출과 표에서 두 번 받았다. 원격 조회만 먼저 병렬로 끝내 두고(시세 조회는 락 없는
         #   GET 이라 TPS 게이트가 한도를 지킨다 — analysis 병렬 진단과 같은 방식), 두 곳 모두
         #   그 값을 쓴다. DB 조회와 표 조립은 아래에서 메인 스레드가 순서대로 한다.

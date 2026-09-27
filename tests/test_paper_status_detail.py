@@ -141,3 +141,31 @@ def test_종목마다_평가가를_한_번만_받는다(capsys):
         out = _render(capsys, positions, {"005930": 82000.0, "000660": 82000.0})
     assert sorted(calls) == ["000660", "005930"], f"평가가 조회가 중복됐다: {calls}"
     assert out.index("삼성전자") < out.index("SK하이닉스"), "표 순서가 보유 순서와 다르다"
+
+
+def test_지표는_9_2와_같은_차트_경로에서_낸다():
+    """지표용 일봉은 9-2·실제 청산 판정과 같은 api.get_chart_data 여야 한다.
+
+    백테스트 경로(get_backtest_data)는 워밍업을 붙여 460일을 요구해, KRX Open API 저장소에
+    그만큼이 없으면 화면을 열 때마다 인라인 적재(호출 캡 60건 · 직렬)가 돌아 진행률이 약 2분
+    멈췄다(라즈베리파이 5 실측 2026-09-27). 입력이 다르면 TS 발동선도 9-2 와 갈린다.
+    """
+    import pandas as pd
+
+    from modules import backtest
+
+    n = 250
+    df = pd.DataFrame({
+        "date": [f"2025{(i // 28) % 12 + 1:02d}{i % 28 + 1:02d}" for i in range(n)],
+        "open": [100.0 + i for i in range(n)], "high": [102.0 + i for i in range(n)],
+        "low": [98.0 + i for i in range(n)], "close": [101.0 + i for i in range(n)],
+        "volume": [1000.0] * n,
+    })
+    with patch("api.get_chart_data", return_value=df) as chart, \
+         patch("api.chart_overlay_price", return_value=0.0), \
+         patch.object(backtest, "get_backtest_data",
+                      side_effect=AssertionError("백테스트 경로를 탔다")) as bt:
+        ind = paper_report._position_indicators("005930", 350.0)
+    assert ind, "지표가 산출되지 않았다"
+    chart.assert_called_once_with("005930", is_overseas=False)
+    bt.assert_not_called()
