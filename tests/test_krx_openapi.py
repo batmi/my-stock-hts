@@ -459,3 +459,60 @@ def test_status_text_reports_a_store_gap(store, monkeypatch):
     monkeypatch.setattr(oa, "stock_gap", lambda *a, **k: 0)
     ok, msg = oa.status_text()
     assert ok and "결손" not in msg
+
+
+# ---------------------------------------------------------------------------
+# [2026-10-02] 백그라운드 적재가 잠금을 쥔 동안 화면·판정 경로가 멈추지 않는다
+#  재현(수정 전): 300콜 백그라운드 적재 중 listing_map() 이 적재가 끝날 때까지 20.7초 멈췄다.
+#  운영 환산(3,000콜·건당 2초·워커 3) 최대 약 33분 — 마스터에 없는 종목의 시장 판정·종목명·테마 화면이 선다.
+# ---------------------------------------------------------------------------
+def _slow_bg_setup(tmp_path, monkeypatch, per_call=0.05, budget=300):
+    import time as _t
+    monkeypatch.setattr(config, "KRX_OPENAPI_DB_PATH", str(tmp_path / "oa.db"), raising=False)
+    monkeypatch.setattr(config, "KRX_OPENAPI_BACKGROUND_FILL", True, raising=False)
+    monkeypatch.setattr(config, "KRX_OPENAPI_BACKGROUND_MAX_CALLS", budget, raising=False)
+    monkeypatch.setattr(oa, "api_key", lambda: "x")
+    monkeypatch.setattr(oa, "_call", lambda api_id, dd: (_t.sleep(per_call), [])[1])
+    monkeypatch.setattr(oa, "ENSURE_WAIT_SEC", 0.5)
+
+
+def test_listing_map_does_not_wait_for_the_background_fill(tmp_path, monkeypatch):
+    import time as _t
+    from datetime import datetime as _dt
+    _slow_bg_setup(tmp_path, monkeypatch)
+    now = _dt(2026, 10, 2, 12, 0)
+    try:
+        oa.stock_daily("005930", 400, now=now)            # 결손이 커서 백그라운드 적재가 뜬다
+        _t.sleep(0.2)
+        assert oa.background_fill_running()
+        t0 = _t.time()
+        oa.listing_map(now=now)
+        assert _t.time() - t0 < 2.0, "listing_map 이 백그라운드 적재를 기다렸다"
+        assert oa.background_fill_running(), "적재가 이미 끝나 버려 검증이 성립하지 않는다"
+    finally:
+        oa.wait_background_fill(60)
+
+
+def test_inline_ensure_gives_up_after_the_wait_cap(tmp_path, monkeypatch):
+    import threading
+    import time as _t
+    _slow_bg_setup(tmp_path, monkeypatch)
+    held = threading.Event()
+    release = threading.Event()
+
+    def _hold():
+        with oa._ENSURE_LOCK:
+            held.set()
+            release.wait(5)
+
+    th = threading.Thread(target=_hold, daemon=True)
+    th.start()
+    held.wait(2)
+    try:
+        t0 = _t.time()
+        with pytest.raises(oa.EnsureBusy):
+            oa.ensure(list(oa.STOCK_APIS), "20260901", "20260902", lock_timeout=0.3)
+        assert _t.time() - t0 < 1.5
+    finally:
+        release.set()
+        th.join(2)

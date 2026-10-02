@@ -449,7 +449,11 @@ def missing_days(api_ids, start_dd, end_dd, now=None):
     return out
 
 
-def ensure(api_ids, start_dd, end_dd, max_calls=None, now=None, progress=None, workers=1):
+class EnsureBusy(Exception):
+    """다른 적재(대개 백그라운드)가 잠금을 쥐고 있어 lock_timeout 안에 못 들어갔다 — '결손 남음'과 같게 다룬다."""
+
+
+def ensure(api_ids, start_dd, end_dd, max_calls=None, now=None, progress=None, workers=1, lock_timeout=None):
     """[start, end] 의 빠진 날짜를 최신부터 받아 채운다.
 
     반환 (남은 결손 수, 이번에 한 호출 수). max_calls 를 넘기면 거기서 멈춘다 — 남은 결손이
@@ -458,8 +462,18 @@ def ensure(api_ids, start_dd, end_dd, max_calls=None, now=None, progress=None, w
     저장은 한 스레드씩 한다. 앱 안(인라인)은 1 이다.
     """
     api_ids = [a for a in api_ids if a in API]
-    with _ENSURE_LOCK:
+    #  [2026-10-02] lock_timeout 을 주면 그만큼만 기다리고 EnsureBusy 를 올린다. 백그라운드 적재는
+    #   잠금을 수십 분(최대 3,000콜) 쥐므로, 화면·자동매매 경로는 반드시 상한을 줘야 한다 —
+    #   종전 listing_map 은 상한 없이 들어가 적재가 끝날 때까지 멈췄다(재현: 300콜 적재 중 20.7초).
+    if lock_timeout is None:
+        with _ENSURE_LOCK:
+            return _ensure_locked(api_ids, start_dd, end_dd, max_calls, now, progress, workers)
+    if not _ENSURE_LOCK.acquire(timeout=lock_timeout):
+        raise EnsureBusy(f"다른 적재가 진행 중({lock_timeout}s 대기 초과)")
+    try:
         return _ensure_locked(api_ids, start_dd, end_dd, max_calls, now, progress, workers)
+    finally:
+        _ENSURE_LOCK.release()
 
 
 def _ensure_locked(api_ids, start_dd, end_dd, max_calls, now, progress, workers):
@@ -598,11 +612,13 @@ def _ensure_or_none(api_ids, lookback_days, max_calls, now=None):
         if len(todo) > _max_inline_calls():
             _start_background_fill(list(api_ids), start_dd, end_dd, now=now)
             return _stored_span(api_ids, start_dd, end_dd, now=now)
-        if not _ENSURE_LOCK.acquire(timeout=ENSURE_WAIT_SEC):
-            return _stored_span(api_ids, start_dd, end_dd, now=now)
-        _ENSURE_LOCK.release()
     try:
-        remaining, _ = ensure(api_ids, start_dd, end_dd, max_calls=max_calls, now=now)
+        #  잠금을 '잡았다 놓고 다시 잡는' 탐침은 그 틈에 백그라운드 적재가 끼어들 수 있었다 —
+        #   대기 상한을 ensure 자체에 넘긴다(인라인만. 도구·백그라운드는 상한 없이 기다린다).
+        remaining, _ = ensure(api_ids, start_dd, end_dd, max_calls=max_calls, now=now,
+                              lock_timeout=ENSURE_WAIT_SEC if inline else None)
+    except EnsureBusy:
+        return _stored_span(api_ids, start_dd, end_dd, now=now)
     except OpenAPIError as e:
         logger.warning(f"[KRX-OPENAPI] 적재 실패({','.join(api_ids)}): {e} — 받아 둔 확정분만 쓴다")
         return _stored_span(api_ids, start_dd, end_dd, now=now)
@@ -823,11 +839,17 @@ def listing_map(max_calls=None, now=None):
         return None
     end_dd = latest_available_dd(now)
     fresh = False
-    if time.time() >= _DISABLED_UNTIL[0]:
+    #  [2026-10-02] 백그라운드 적재 중이면 기다리지 않고 저장분을 쓴다(목록은 하루 묵어도 무해).
+    #   상한 없이 ensure 에 들어가면 적재가 끝날 때까지(최대 수십 분) 시장 판정·종목명이 멈춘다.
+    busy = max_calls is None and background_fill_running()
+    if time.time() >= _DISABLED_UNTIL[0] and not busy:
         try:
             remaining, _ = ensure(list(BASE_INFO_APIS) + list(STOCK_APIS), end_dd, end_dd,
-                                  max_calls=max_calls, now=now)
+                                  max_calls=max_calls, now=now,
+                                  lock_timeout=ENSURE_WAIT_SEC if max_calls is None else None)
             fresh = remaining == 0
+        except EnsureBusy:
+            pass
         except OpenAPIError as e:
             logger.warning(f"[KRX-OPENAPI] 상장목록 적재 실패: {e} — 받아 둔 최신 스냅샷을 쓴다")
     if not fresh:
