@@ -73,7 +73,12 @@ def isolate_krx_openapi_snapshot(tmp_path_factory):
     path = tmp_path_factory.mktemp("krx_openapi") / "krx_openapi.db"
     prev = getattr(config, "KRX_OPENAPI_DB_PATH", None)
     config.KRX_OPENAPI_DB_PATH = str(path)
+    #  [2026-10-02] 빈 임시 DB 라 결손이 캡을 넘는다 — 백그라운드 적재 스레드가 테스트 밖으로 새어
+    #   (차단된) 네트워크를 두드리지 않게 끈다. 그 경로를 시험하는 테스트만 켠다(test_krx_openapi).
+    prev_bg = getattr(config, "KRX_OPENAPI_BACKGROUND_FILL", True)
+    config.KRX_OPENAPI_BACKGROUND_FILL = False
     yield str(path)
+    config.KRX_OPENAPI_BACKGROUND_FILL = prev_bg
     if prev is None:
         try:
             delattr(config, "KRX_OPENAPI_DB_PATH")

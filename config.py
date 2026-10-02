@@ -3463,6 +3463,12 @@ KRX_OPENAPI_DB_PATH = os.path.join(DATA_DIR, "krx_openapi.db")
 #   비어 있으면 부분 이력 대신 None 을 돌려주고 종전 소스로 폴백한다(구멍 난 시계열 금지).
 KRX_OPENAPI_MAX_INLINE_CALLS = 60
 KRX_OPENAPI_CALL_INTERVAL_SEC = 0.2        # 호출 간격(초). 일 한도 10,000회와 별개로 서버 예의
+#  [2026-10-02] 결손이 인라인 캡을 넘으면 호출한 스레드가 기다리지 않고 **백그라운드 한 스레드**가
+#   채운다(그동안은 종전 소스로 폴백). 종전엔 캡 60콜(건당 2초 남짓·잠금 안 직렬)을 다 받고서야
+#   None 을 돌려줘 화면·자동매매 주기가 종목당 2분씩 멈췄다(파이 실측 2026-09-27: 결손 1,075건).
+#   한 번의 백그라운드 적재가 쓸 수 있는 호출 수 — 일 한도 10,000 은 맥북·파이가 같은 키면 합산된다.
+KRX_OPENAPI_BACKGROUND_FILL = True
+KRX_OPENAPI_BACKGROUND_MAX_CALLS = 3000
 #  data.krx.co.kr 웹 화면 스크래핑(pykrx 지수/수급/업종·krx_data 로그인 경로)을 허용할지.
 #   기본 False — 약관 제10조 제2호 위반이며 재탐지 시 다시 차단된다. True 로 켜도 KRX_ID/KRX_PW 가
 #   있어야만 동작한다. 켜야 할 이유가 생기면 그 이유를 여기 적을 것.

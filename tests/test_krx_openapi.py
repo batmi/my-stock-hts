@@ -29,6 +29,7 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "KRX_OPENAPI_DB_PATH", str(tmp_path / "oa.db"), raising=False)
     monkeypatch.setattr(config, "KRX_OPENAPI_CALL_INTERVAL_SEC", 0.0, raising=False)
     monkeypatch.setattr(config, "KRX_OPENAPI_MAX_INLINE_CALLS", 60, raising=False)
+    monkeypatch.setattr(config, "KRX_OPENAPI_BACKGROUND_FILL", False, raising=False)   # 켜는 테스트만 켠다
     monkeypatch.setenv(oa.ENV_KEY, "TESTKEY")
     oa._DISABLED_UNTIL[0] = 0.0
     calls = []
@@ -411,3 +412,50 @@ def test_concurrent_callers_do_not_fetch_the_same_missing_days_twice(store, monk
         t.join()
     assert not errors
     assert len(store) == len(set(store)), "같은 (서비스, 날짜)를 두 번 받았다"
+
+
+def test_a_large_gap_is_filled_in_the_background_without_blocking_the_caller(store, monkeypatch):
+    """[2026-10-02] 캡을 넘는 결손은 호출한 스레드가 받지 않는다 — 백그라운드 한 스레드가 채운다.
+
+    종전엔 캡(60콜·건당 2초)을 다 받고서야 None 을 돌려줘 자동매매 주기가 종목당 2분 멈췄다.
+    """
+    import threading
+    monkeypatch.setattr(config, "KRX_OPENAPI_BACKGROUND_FILL", True, raising=False)
+    monkeypatch.setattr(config, "KRX_OPENAPI_MAX_INLINE_CALLS", 2, raising=False)
+    caller = threading.current_thread().name
+    seen = []
+    orig = oa._call                                  # 픽스처의 가짜 _call — 누가 불렀는지 기록
+    monkeypatch.setattr(oa, "_call", lambda a, d: seen.append(threading.current_thread().name) or orig(a, d))
+    try:
+        assert oa.stock_daily("005930", 10, now=NOW) is None          # 즉시 폴백(부분 이력 금지)
+        assert oa.wait_background_fill(10)
+    finally:
+        oa.wait_background_fill(10)
+    assert seen and caller not in seen, "호출한 스레드가 직접 받았다 — 기다리지 않아야 한다"
+    df = oa.stock_daily("005930", 10, now=NOW)                         # 채워진 뒤엔 저장소로 답한다
+    assert df is not None and list(df["date"])[-1] == "20260917"
+
+
+def test_only_one_background_fill_runs_at_a_time(store, monkeypatch):
+    import threading
+    monkeypatch.setattr(config, "KRX_OPENAPI_BACKGROUND_FILL", True, raising=False)
+    gate = threading.Event()
+    orig = oa._call
+    monkeypatch.setattr(oa, "_call", lambda a, d: (gate.wait(5), orig(a, d))[1])
+    try:
+        assert oa._start_background_fill(list(oa.STOCK_APIS), "20260910", "20260917", now=NOW)
+        assert not oa._start_background_fill(list(oa.STOCK_APIS), "20260910", "20260917", now=NOW)
+        assert oa.stock_daily("005930", 7, now=NOW) is None             # 도는 동안엔 저장소만(비어 있음)
+    finally:
+        gate.set()
+        assert oa.wait_background_fill(10)
+
+
+def test_status_text_reports_a_store_gap(store, monkeypatch):
+    """파이 저장소가 비어 있어도 기동 점검은 '사용'만 찍었다 — 결손을 보이게 한다."""
+    monkeypatch.setattr(oa, "latest_available_dd", lambda now=None: "20260917")
+    ok, msg = oa.status_text()
+    assert ok and "저장소 결손" in msg and "krx_openapi_backfill" in msg
+    monkeypatch.setattr(oa, "stock_gap", lambda *a, **k: 0)
+    ok, msg = oa.status_text()
+    assert ok and "결손" not in msg

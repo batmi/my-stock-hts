@@ -132,7 +132,26 @@ def status_text():
                        f"~/.htsrc 에 export 하고 재기동하세요(종목 일봉·지수·금현물은 종전 소스로 폴백).")
     if time.time() < _DISABLED_UNTIL[0]:
         return False, f"KRX Open API 일시 비활성 — {_DISABLED_REASON[0]}"
-    return True, "KRX Open API 사용 (종목 일봉·지수·V코스피200·코스피200선물·금현물, 전일 확정분)"
+    msg = "KRX Open API 사용 (종목 일봉·지수·V코스피200·코스피200선물·금현물, 전일 확정분)"
+    gap = stock_gap()
+    if gap > _max_inline_calls():
+        # [2026-10-02] 파이 저장소가 복사·백필 없이 비어 있어도 기동 점검은 '사용'만 찍었다 —
+        #  그동안 일봉은 조용히 종전 소스였다. 결손을 보이게 한다(첫 조회가 백그라운드로 채운다).
+        msg += (f" — 저장소 결손 {gap:,}건(최근 {STATUS_GAP_DAYS}일 종목 일봉): 첫 조회 때 백그라운드로 "
+                f"채우며 그동안은 종전 소스. 한 번에 받으려면 tools/krx_openapi_backfill.py --days 1200")
+    return True, msg
+
+
+STATUS_GAP_DAYS = 400       # 기동 점검이 보는 구간 — 화면·자동매매 일봉(_CHART_FETCH_DAYS)과 같다
+
+
+def stock_gap(days=STATUS_GAP_DAYS, now=None):
+    """최근 days 일 종목 일봉 저장소 결손 수(서비스×날짜). 조회 실패면 0(표시용)."""
+    try:
+        end_dd = latest_available_dd(now)
+        return len(missing_days(list(STOCK_APIS), _start_dd(days, end_dd), end_dd, now=now))
+    except Exception:       # noqa: BLE001 - 상태 문구가 기동을 막으면 안 된다
+        return 0
 
 
 def _db_path():
@@ -504,17 +523,84 @@ def _stored_span(api_ids, start_dd, end_dd, now=None):
     return start_dd, kept[-1]
 
 
+_BG_LOCK = threading.Lock()
+_BG_THREAD = [None]
+ENSURE_WAIT_SEC = 30        # 인라인 호출이 다른 적재를 기다리는 최대 시간 — 넘으면 저장소만 쓴다
+
+
+def _background_fill_enabled():
+    return bool(getattr(config, "KRX_OPENAPI_BACKGROUND_FILL", True))
+
+
+def background_fill_running():
+    t = _BG_THREAD[0]
+    return t is not None and t.is_alive()
+
+
+def wait_background_fill(timeout=None):
+    """백그라운드 적재가 끝날 때까지 기다린다(테스트·도구용). 끝났으면 True."""
+    t = _BG_THREAD[0]
+    if t is None:
+        return True
+    t.join(timeout)
+    return not t.is_alive()
+
+
+def _start_background_fill(api_ids, start_dd, end_dd, now=None):
+    """큰 결손을 백그라운드 한 스레드로 채운다(single-flight). 이미 돌고 있으면 아무것도 안 한다."""
+    with _BG_LOCK:
+        if background_fill_running():
+            return False
+        budget = int(getattr(config, "KRX_OPENAPI_BACKGROUND_MAX_CALLS", 3000) or 0)
+        if budget <= 0:
+            return False
+
+        def _run():
+            t0 = time.time()
+            try:
+                remaining, calls = ensure(api_ids, start_dd, end_dd, max_calls=budget, now=now, workers=3)
+                logger.warning(f"[KRX-OPENAPI] 백그라운드 적재 끝 — {','.join(api_ids)} {start_dd}~{end_dd} "
+                               f"{calls}건 · 남음 {remaining} · {time.time() - t0:.0f}s")
+            except OpenAPIError as e:
+                logger.warning(f"[KRX-OPENAPI] 백그라운드 적재 중단: {e}")
+            except Exception as e:      # noqa: BLE001 - 백그라운드 실패가 앱을 죽이면 안 된다
+                logger.warning(f"[KRX-OPENAPI] 백그라운드 적재 오류: {type(e).__name__}: {e}")
+
+        t = threading.Thread(target=_run, name="krx-openapi-fill", daemon=True)
+        _BG_THREAD[0] = t
+        t.start()
+    logger.warning(f"[KRX-OPENAPI] 저장소 결손이 커서 백그라운드로 채운다 — {','.join(api_ids)} "
+                   f"{start_dd}~{end_dd}. 그동안은 종전 소스로 폴백한다")
+    return True
+
+
 def _ensure_or_none(api_ids, lookback_days, max_calls, now=None):
     """구간을 채우고 완전하면 (start, end), 아니면 None.
 
     네트워크를 못 쓰는 동안(쿨다운·호출 실패)은 저장소만으로 완전한 구간을 돌려준다 — 최신
     하루가 비어 있을 뿐이면 그 전날까지. 호출부(krx_daily._fetch_openapi)가 그 뒤는 FDR 로
     덧대므로 오늘 봉이 빠지지 않는다. 중간에 구멍이 있으면 부분 이력 대신 None(모듈 규약).
+
+    [2026-10-02 · 인라인은 기다리지 않는다] 결손이 인라인 캡을 넘으면 받지 않고 백그라운드
+     적재를 띄운 뒤 저장소만으로 답한다(대개 None → 종전 소스). 종전엔 캡만큼(60콜·건당 2초
+     남짓) 받고서야 None 을 돌려줘 화면·자동매매 주기가 종목당 2분씩 멈췄고, 잠금 때문에 다른
+     워커도 줄을 섰다. 다른 적재가 잠금을 쥐고 있으면 ENSURE_WAIT_SEC 까지만 기다린다.
     """
     end_dd = latest_available_dd(now)
     start_dd = _start_dd(lookback_days, end_dd)
     if time.time() < _DISABLED_UNTIL[0]:
         return _stored_span(api_ids, start_dd, end_dd, now=now)
+    inline = max_calls is None
+    if inline and _background_fill_enabled():
+        if background_fill_running():
+            return _stored_span(api_ids, start_dd, end_dd, now=now)
+        todo = missing_days([a for a in api_ids if a in API], start_dd, end_dd, now=now)
+        if len(todo) > _max_inline_calls():
+            _start_background_fill(list(api_ids), start_dd, end_dd, now=now)
+            return _stored_span(api_ids, start_dd, end_dd, now=now)
+        if not _ENSURE_LOCK.acquire(timeout=ENSURE_WAIT_SEC):
+            return _stored_span(api_ids, start_dd, end_dd, now=now)
+        _ENSURE_LOCK.release()
     try:
         remaining, _ = ensure(api_ids, start_dd, end_dd, max_calls=max_calls, now=now)
     except OpenAPIError as e:
