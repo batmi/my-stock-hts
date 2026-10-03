@@ -78,9 +78,16 @@ def realized_profit(buy_price, sell_price, qty, is_overseas=False):
      '출금'으로 오인된다([[daily-asset-baseline-transfers]] 사고와 같은 경로). 그래서 그 식만
      profit_amt − cost_amt 를 쓴다(db.get_realized_profit_between). 두 모드 모두 그 차가 순손익이다.
     """
-    gross, grate = gross_realized_profit(buy_price, sell_price, qty)
-    if gross == 0 and grate == 0:
+    #  입력 불량('모름')은 입력으로 가린다. 종전엔 (총차익, 비율)이 (0, 0)이면 불량으로 봤는데,
+    #   [2026-10-03 감사] 매도가 = 매수가인 **본전 매도**도 정확히 (0, 0)이라 왕복 비용이 통째로 사라졌다 —
+    #   가상투자는 −비용 대신 0원(승률·손익비 왜곡), 실거래는 cost_amt=0(원금 불변량이 비용만큼 어긋남).
+    try:
+        valid = int(qty or 0) > 0 and float(buy_price or 0) > 0 and float(sell_price or 0) > 0
+    except (TypeError, ValueError):
+        valid = False
+    if not valid:
         return 0.0, 0.0, 0.0            # 입력 불량 — '모름'
+    gross, grate = gross_realized_profit(buy_price, sell_price, qty)
     cost = round_trip_cost(buy_price, sell_price, qty, is_overseas)
     if costs_in_realized():
         net = gross - cost

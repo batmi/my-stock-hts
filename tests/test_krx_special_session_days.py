@@ -129,3 +129,33 @@ def test_시간대가_KST_가_아니면_자동매매_시간_게이트가_닫힌�
     with patch("modules.auto_trade.common.datetime") as dt:
         dt.now.return_value = _at("1100", "20261118")
         assert common.is_system_market_open() is True
+
+
+# [2026-10-03 감사] 주문 경로의 창 판정이 수능일 이동을 안 보던 자리 — 정본(domestic_session_phase)과 맞춘다.
+@pytest.mark.parametrize("hhmm, expected", [("1600", False), ("1629", False), ("1700", True), ("2000", True)])
+def test_수능일_16시대_정규장을_애프터로_읽지_않는다(hhmm, expected):
+    assert api.krx_after_window(_at(hhmm)) is expected
+
+
+def test_보통날_애프터_창은_그대로다():
+    assert api.krx_after_window(_at("1600", "20261118")) is True
+    assert api.krx_after_window(_at("1559", "20261118")) is False
+
+
+def test_수능일_정규장_마지막_30분에_ETF_를_거래불가로_보지_않는다():
+    assert api.domestic_etf_untraded_window(_at("1610")) is False      # 정규장 — 손절 매도가 돌아야 한다
+    assert api.domestic_etf_untraded_window(_at("1640")) is True       # 휴게
+    assert api.domestic_etf_untraded_window(_at("1710")) is True       # 애프터(ETF 미취급)
+
+
+@pytest.mark.parametrize("hhmm, expected", [("0830", False), ("0930", True), ("0949", True), ("1000", False)])
+def test_수능일_NXT_프리마켓_주문창이_한_시간_밀린다(hhmm, expected):
+    assert api.nxt_order_window(_at(hhmm)) is expected
+
+
+def test_주문_유형코드는_수능일_16시10분에_정규장_코드_그대로다():
+    with patch("api.sessions.datetime") as dt:
+        dt.now.return_value = _at("1610"); dt.strptime = datetime.strptime
+        assert api.after_market_ord_dvsn("00") == "00"
+        dt.now.return_value = _at("1710")
+        assert api.after_market_ord_dvsn("00") == "41"

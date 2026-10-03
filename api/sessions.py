@@ -375,8 +375,20 @@ def nxt_order_window(now=None):
 
     NXT 는 시장가를 받지 않는다. True 면 호출부는 시장가를 현재가 지정가로 바꿔야 한다.
     """
-    hm = (now or datetime.now()).strftime("%H%M")
-    return any(lo <= hm <= hi for lo, hi in NXT_ORDER_WINDOWS)
+    now = now or datetime.now()
+    hm, day = now.strftime("%H%M"), now.strftime("%Y%m%d")
+    #  [2026-10-03 감사] 수능일엔 NXT 프리마켓도 1시간 밀린다(09:00~09:49) — 경계를 그 날 값으로 읽는다.
+    return any(krx_hm(lo, "open", day) <= hm <= krx_hm(hi, "open", day) for lo, hi in NXT_ORDER_WINDOWS)
+
+
+def _krx_after_start(now):
+    """그 날 KRX 애프터마켓 시작 시각. 수능일엔 정규장 마감과 함께 밀린다(domestic_session_phase 와 같은 경계).
+
+    [2026-10-03 감사] 종전엔 "1600" 고정이라 수능일(정규장 10:00~16:30) 16:00~16:30 이 **정규장인데**
+     애프터로 판정됐다 — 주문이 애프터 전용 유형코드(41/44)로 바뀌어 KRX 로 직행하고, ETF/ETN 은
+     '거래 불가'로 손절 매도까지 건너뛰었다. 종료(20:00)는 모든 판정이 고정값으로 쓴다.
+    """
+    return krx_hm("1600", "close", now.strftime("%Y%m%d"))
 
 
 def domestic_etf_untraded_window(now=None):
@@ -389,8 +401,8 @@ def domestic_etf_untraded_window(now=None):
     """
     if _api().nxt_order_window(now) or domestic_break_window(now):
         return True
-    hm = (now or datetime.now()).strftime("%H%M")
-    return "1600" <= hm <= "2000"
+    now = now or datetime.now()
+    return _krx_after_start(now) <= now.strftime("%H%M") <= "2000"
 
 
 def krx_after_window(now=None):
@@ -400,8 +412,8 @@ def krx_after_window(now=None):
      종목 · 경쟁매매 거래 불가")로 거부됐다. NXT 가 닫힌 시간이라 SOR 이 고를 두 번째 시장이
      없다. 주문 경로는 이 구간에 거래소를 KRX 로 직접 지정한다(api/orders.py).
     """
-    hm = (now or datetime.now()).strftime("%H%M")
-    return "1600" <= hm <= "2000"
+    now = now or datetime.now()
+    return _krx_after_start(now) <= now.strftime("%H%M") <= "2000"
 
 
 def domestic_break_window(now=None):

@@ -244,3 +244,21 @@ def test_overseas_sell_includes_the_sec_fee():
     assert config.OVERSEAS_SELL_FEE_RATE == pytest.approx(
         config.OVERSEAS_BUY_FEE_RATE + 0.0000206, abs=1e-9)
     assert config.OVERSEAS_BUY_FEE_RATE == pytest.approx(0.0025)
+
+
+# [2026-10-03 감사] 본전 매도(매도가 = 매수가)를 '입력 불량'으로 읽어 왕복 비용이 사라지던 자리.
+def test_break_even_sell_keeps_its_round_trip_cost(monkeypatch):
+    from core import trading_cost as tc
+    cost = tc.round_trip_cost(10_000, 10_000, 100)
+    assert cost > 0
+    monkeypatch.setattr(config.session, "is_paper", False, raising=False)
+    assert tc.realized_profit(10_000, 10_000, 100) == (0.0, 0.0, float(cost))
+    monkeypatch.setattr(config.session, "is_paper", True, raising=False)
+    amt, rate, c = tc.realized_profit(10_000, 10_000, 100)
+    assert amt == -cost and rate < 0 and c == 0.0
+
+
+def test_bad_input_is_still_unknown():
+    from core import trading_cost as tc
+    for args in ((0, 10_000, 100), (10_000, 0, 100), (10_000, 10_000, 0), (None, 10_000, 100), ("x", 1, 1)):
+        assert tc.realized_profit(*args) == (0.0, 0.0, 0.0)
