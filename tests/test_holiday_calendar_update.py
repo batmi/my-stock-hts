@@ -93,3 +93,39 @@ def test_scheduler_and_startup_are_wired():
     main = open(os.path.join(root, "main.py"), encoding="utf-8").read()
     assert "_check_holidays_package" in sched and "holiday_calendar_update" in sched
     assert "holiday_calendar_update" in main and "start_background_check" in main
+
+
+# [2026-10-03 감사] 실행 중 pip 가 파일을 갈아 끼우기 전에, 이 프로세스가 쓸 달력을 미리 올려 둔다.
+def test_calendars_are_warmed_before_pip_replaces_files():
+    order = []
+    snap = _snap("0.103", ["2026-10-03"])
+    with patch.object(H, "_snapshot_in_fresh_interpreter", side_effect=[snap, dict(snap)]), \
+         patch.object(H, "calendar_snapshot", side_effect=lambda **k: order.append("warm")), \
+         patch.object(H, "_pip_upgrade", side_effect=lambda: order.append("pip") or (True, "")):
+        H.run_if_due(force=True, notify=False, now=datetime(2026, 9, 20))
+    assert order == ["warm", "pip"]
+
+
+def test_warm_import_loads_the_lazy_financial_modules():
+    """지연 import 되는 거래소 달력이 예열 뒤 sys.modules 에 올라와 있어야 pip 뒤 조회가 새 파일을 안 읽는다."""
+    pytest.importorskip("holidays")
+    import sys
+    H._warm_in_process_calendars()
+    assert "holidays.financial.ny_stock_exchange" in sys.modules
+
+
+def test_change_is_not_lost_when_the_post_pip_snapshot_fails():
+    """pip 는 됐는데 사후 스냅샷이 실패하면, 다음 시도의 '갱신 전'은 이미 새 버전이다 — 옛 기준을 보관한다."""
+    before = _snap("0.103", ["2026-10-03"])
+    after = _snap("0.104", ["2026-10-03", "2026-10-10"])
+    sent = []
+    with patch.object(H, "_warm_in_process_calendars"), \
+         patch.object(H, "_pip_upgrade", return_value=(True, "")), \
+         patch("api.send_telegram_message", side_effect=lambda m, **k: sent.append(m)):
+        with patch.object(H, "_snapshot_in_fresh_interpreter", side_effect=[before, RuntimeError("timeout")]):
+            assert H.run_if_due(force=True, now=datetime(2026, 9, 20))["ok"] is False
+        assert H.is_due(now=datetime(2026, 9, 21)) is True
+        with patch.object(H, "_snapshot_in_fresh_interpreter", side_effect=[after]):   # 사후만 다시 받는다
+            res = H.run_if_due(force=True, now=datetime(2026, 9, 21))
+    assert res["ok"] and res["changes"]["KR"]["added"] == ["2026-10-10"] and sent
+    assert "pending_before" not in json.load(open(H._state_file(), encoding="utf-8"))

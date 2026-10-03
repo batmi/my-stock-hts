@@ -59,6 +59,7 @@ class SystemScheduler:
             self._wake = threading.Event()
             self.last_holiday_notified_date = None
             self.last_holidays_pkg_check = 0.0     # holidays 패키지 자동 갱신 점검(하루 1회 판정, 실제 갱신은 7일)
+            self.last_csat_check = 0.0             # 수능일(KICE) 재수집 — 하루 1회
             self.last_briefing_date = None
             self.last_calendar_alert_date = None
             self.last_heartbeat_time = time.time()
@@ -112,6 +113,7 @@ class SystemScheduler:
                     self._check_market_halt()
                 self._check_heartbeat()
                 self._check_holidays_package()
+                self._check_csat_date()
             except Exception as e:
                 logger.error(f"[Scheduler] 스케줄러 루프 에러: {e}", exc_info=True)
 
@@ -343,6 +345,28 @@ class SystemScheduler:
         if holiday_calendar_update.is_due():
             threading.Thread(target=holiday_calendar_update.run_if_due, daemon=True,
                              name="HolidaysUpdate").start()
+
+    def _check_csat_date(self):
+        """수능일 재수집 — 하루 한 번 KICE 에서 다시 받고, 10~11월에 올해 날짜를 모르면 텔레그램으로 알린다.
+
+        기동 점검만으로는 오래 켜 둔 프로세스가 여름에 공표되는 날짜를 놓친다(api.sessions.csat_watch_text).
+        네트워크 조회라 스케줄러 루프를 붙잡지 않도록 백그라운드에서 돈다.
+        """
+        now = time.time()
+        if now - self.last_csat_check < 86400:
+            return
+        self.last_csat_check = now
+
+        def _job():
+            try:
+                from api import sessions
+                warn = sessions.csat_watch_text()
+                if warn:
+                    logger.warning(warn)
+                    api.send_telegram_message(warn)
+            except Exception as e:      # noqa: BLE001 - 재수집 실패는 다음 날 다시 본다
+                logger.debug(f"[Scheduler] 수능일 재수집 실패: {e}")
+        threading.Thread(target=_job, daemon=True, name="CsatRefresh").start()
 
     def _check_heartbeat(self):
         """1분 주기 하트비트 점검.

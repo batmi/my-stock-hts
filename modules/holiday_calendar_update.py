@@ -168,11 +168,30 @@ def run_if_due(force=False, notify=True, now=None):
         _RUN_LOCK.release()
 
 
+def _warm_in_process_calendars():
+    """이 프로세스가 앞으로 쓸 달력 모듈을 **pip 전에** 미리 import 해 둔다.
+
+    [2026-10-03 감사] holidays 는 거래소 달력(holidays.financial.*)을 첫 financial_holidays 호출 때
+     지연 import 한다(실측 0.105: KR·US 생성 뒤에도 financial 모듈 0개 → XNYS 한 번에 26개). 지수 화면을
+     아직 안 연 프로세스에서 pip 가 파일을 갈아 끼우면, 그 뒤 첫 조회가 **새 버전 모듈을 옛 버전 기반
+     클래스 위에** 올리거나(설치 도중이면 파일이 없어) 실패한다. market_calendar 는 실패를 그 해 내내
+     '휴장 없음'으로 캐시하므로 해외 휴장일 표기가 조용히 꺼진다 — '다음 기동부터 적용' 약속이 깨진다.
+     스냅샷과 같은 달력을 지금 한 번 만들어 두면 이후 조회는 이미 올라온 모듈만 쓴다.
+    """
+    try:
+        calendar_snapshot(horizon_days=1)
+    except Exception as e:      # noqa: BLE001 - 예열 실패는 갱신을 막지 않는다(종전과 같은 위험으로 돌아갈 뿐)
+        logger.debug(f"[휴장일 달력 갱신] 달력 예열 실패: {e}")
+
+
 def _run(notify, now):
     state = _load_state()
     stamp = (now or datetime.now()).strftime("%Y-%m-%d")
     try:
-        before = _snapshot_in_fresh_interpreter()
+        #  지난 시도가 pip 는 성공하고 사후 스냅샷에서 실패했다면, 그때의 '갱신 전'과 비교한다 —
+        #   지금 새로 받으면 이미 새 버전이라 차이가 0 으로 보여 바뀐 휴장일이 알림 없이 묻힌다.
+        before = state.get("pending_before") or _snapshot_in_fresh_interpreter()
+        _warm_in_process_calendars()
         ok, pip_tail = _pip_upgrade()
         if not ok:
             #  네트워크 단절 등 — 다음 주에 다시 본다. 오늘로 도장은 찍지 않아 내일 다시 시도한다.
@@ -182,7 +201,11 @@ def _run(notify, now):
             _save_state(state)
             return {"ok": False, "before": before.get("version"), "after": before.get("version"),
                     "changes": {}, "message": msg}
-        after = _snapshot_in_fresh_interpreter()
+        try:
+            after = _snapshot_in_fresh_interpreter()
+        except Exception:
+            state["pending_before"] = before       # 다음 시도가 이 기준으로 비교한다
+            raise
     except Exception as e:      # noqa: BLE001 - 갱신 실패는 운용을 막지 않는다
         msg = f"[휴장일 달력 갱신] 실패 — {e}"
         logger.warning(msg)
@@ -192,6 +215,7 @@ def _run(notify, now):
 
     changes = diff_snapshots(before, after)
     message = format_report(before.get("version"), after.get("version"), changes)
+    state.pop("pending_before", None)
     state.update({"last_check": stamp, "last_attempt": stamp, "version": after.get("version"),
                   "last_changes": changes, "last_error": None})
     _save_state(state)

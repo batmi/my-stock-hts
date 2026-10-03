@@ -280,8 +280,7 @@ def krx_session_shift(day=None):
     hit = _SHIFT_CACHE.get(day)
     if hit is not None:
         return hit
-    table = {**_load_auto_shift_days(), **(getattr(config, "KRX_SESSION_SHIFT_DAYS", {}) or {})}
-    ent = table.get(day)
+    ent = _known_shift_table().get(day)
     if ent:
         out = (int(ent[0]), int(ent[1]))
     elif day[4:6] == "01" and _is_first_trading_day_of_year(day):
@@ -338,11 +337,32 @@ def local_tz_is_kst(now=None):
     return int(off) == KST_UTC_OFFSET_SEC
 
 
+def _known_shift_table():
+    return {**_load_auto_shift_days(), **(getattr(config, "KRX_SESSION_SHIFT_DAYS", {}) or {})}
+
+
+def csat_watch_text(now=None):
+    """스케줄러용 — 수능일을 KICE 에서 다시 받고, 10~11월인데 올해 수능일을 모르면 경고문을 돌려준다(알면 None).
+
+    [2026-10-03 감사] 자동 수집이 기동 점검에서만 돌았다. KICE 는 다음 수능일을 그 해 여름에야 싣는데,
+     파이는 몇 달씩 재기동 없이 돈다 — 봄에 기동한 프로세스는 11월까지 그 날을 모른 채 15:30 에 감시를
+     멈추고, 기동 점검의 경고도 다시는 나오지 않는다. holidays 갱신처럼 실행 중에도 주기적으로 받는다.
+    """
+    now = now or datetime.now()
+    ok, msg = refresh_session_shift_table()
+    if now.month not in (10, 11):
+        return None
+    if any(d.startswith(str(now.year)) for d in _known_shift_table()):
+        return None
+    return (f"⚠️ [수능일 미확인] {msg}. {now.year}년 수능일을 알 수 없습니다 — 그 날 정규장이 1시간 밀리는데 "
+            f"시스템은 15:30 에 감시를 멈춥니다. 확인해 config.KRX_SESSION_SHIFT_DAYS 에 넣고 재기동하세요.")
+
+
 def krx_session_status_text():
     """기동 점검용 한 줄 — 수능일을 KICE 에서 갱신하고, 올해 수능일을 아는지 말한다(10월 이후 모르면 경고)."""
     now = datetime.now()
     ok, msg = refresh_session_shift_table()
-    table = {**_load_auto_shift_days(), **(getattr(config, "KRX_SESSION_SHIFT_DAYS", {}) or {})}
+    table = _known_shift_table()
     this_year = sorted(d for d in table if d.startswith(str(now.year)))
     if now.month >= 10 and not this_year:
         return False, (f"{msg}. {now.year}년 수능일을 알 수 없습니다 — 그 날 정규장이 1시간 밀리는데 시스템은 "

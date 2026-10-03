@@ -94,3 +94,43 @@ def test_a_broken_auto_file_does_not_break_the_lookup(monkeypatch):
     api.sessions._SHIFT_CACHE.clear()
     open(api.sessions._shift_auto_file(), "w", encoding="utf-8").write("{not json")
     assert api.krx_session_shift("20261119") == (0, 0)
+
+
+# [2026-10-03 감사] 자동 수집이 기동 점검에서만 돌던 구멍 — 오래 켜 둔 프로세스도 매일 다시 받는다.
+def test_runtime_watch_learns_the_day_published_after_startup(monkeypatch):
+    monkeypatch.setattr(config, "KRX_SESSION_SHIFT_DAYS", {}, raising=False)
+    api.sessions._SHIFT_CACHE.clear()
+    assert api.krx_session_shift("20261119") == (0, 0)     # 기동 때는 아직 몰랐다
+    with patch("requests.get", return_value=_Res(_page())):
+        warn = api.sessions.csat_watch_text(now=datetime(2026, 10, 5))
+    assert warn is None
+    assert api.krx_session_shift("20261119") == api.sessions.CSAT_SHIFT
+
+
+def test_runtime_watch_warns_only_in_oct_nov_when_unknown(monkeypatch):
+    monkeypatch.setattr(config, "KRX_SESSION_SHIFT_DAYS", {}, raising=False)
+    with patch("requests.get", side_effect=OSError("offline")):
+        assert api.sessions.csat_watch_text(now=datetime(2026, 7, 1)) is None
+        warn = api.sessions.csat_watch_text(now=datetime(2026, 10, 5))
+    assert warn and "2026" in warn and "15:30" in warn
+
+
+def test_scheduler_runs_the_csat_watch_once_a_day(monkeypatch):
+    from modules import scheduler as S
+    sched = S.SystemScheduler.__new__(S.SystemScheduler)
+    sched.last_csat_check = 0.0
+    sent, started = [], []
+    monkeypatch.setattr(api.sessions, "csat_watch_text", lambda: "⚠️ [수능일 미확인] x")
+    monkeypatch.setattr(api, "send_telegram_message", lambda m, **k: sent.append(m))
+
+    class _T:
+        def __init__(self, target, **k):
+            self.target = target
+
+        def start(self):
+            started.append(1)
+            self.target()
+    monkeypatch.setattr(S.threading, "Thread", _T)
+    sched._check_csat_date()
+    sched._check_csat_date()                 # 같은 날 두 번째는 건너뛴다
+    assert started == [1] and sent == ["⚠️ [수능일 미확인] x"]
