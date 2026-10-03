@@ -102,6 +102,28 @@ def _spread_pick(rows, target, rng):
     return [rng.choice(b) for b in buckets if b]
 
 
+#  업종 기준일이 이만큼 오래되면 화면에 밝힌다(상장목록은 하루 사이 거의 안 변한다 — 며칠은 조르지 않는다).
+DESC_STALE_NOTICE_DAYS = 7
+
+
+def _desc_staleness_note(desc_date, no_industry, today=None):
+    """업종 목록이 오래됐거나 업종을 모르는 후보가 있으면 한 줄 안내, 아니면 None."""
+    from datetime import date, datetime
+    age = None
+    if desc_date:
+        try:
+            age = ((today or date.today()) - datetime.strptime(str(desc_date)[:10], "%Y-%m-%d").date()).days
+        except ValueError:
+            age = None
+    if not no_industry and (age is None or age < DESC_STALE_NOTICE_DAYS):
+        return None
+    head = (f"업종 정보는 {desc_date} 기준입니다({age}일 전, 원본 갱신 중단)" if age is not None
+            and age >= DESC_STALE_NOTICE_DAYS else "업종 정보에 없는 종목이 있습니다")
+    tail = (f" — 업종을 모르는 {no_industry}종목(그 뒤 상장 등)은 방어주·지주회사 규칙이 적용되지 않아 "
+            f"'업종 미상'으로 표시합니다" if no_industry else "")
+    return head + tail
+
+
 def _fetch_candidates(target, pool, exclude_holding, seed=None):
     """후보를 만들고, 단계별로 몇 개가 왜 걸러졌는지 함께 돌려준다.
 
@@ -122,9 +144,16 @@ def _fetch_candidates(target, pool, exclude_holding, seed=None):
     #   krx_daily.fdr_listing 이 '올라와 있는 가장 최근 날짜'로 받아 준다. 시총 순위·업종은
     #   하루 사이 거의 변하지 않으므로 후보를 고르는 이 화면의 의미는 달라지지 않는다.
     krx = krx_daily.fdr_listing("KRX")
+    #  [Fix 2026-10-03] 업종 목록(KRX-DESC)은 캐시 저장소에서 2026-09-17 이후 갱신이 멈췄다(KRX 스크래핑
+    #   차단 시점과 같음 — 회복을 기대하지 않는다). 기본 10일 창으로는 못 찾아 이 메뉴가 통째로 죽었다.
+    #   거슬러 찾는 창은 krx_daily.LISTING_LOOKBACK_DAYS 가 정한다. 오래된 파일을 쓰는 대신 기준일과 업종을
+    #   모르는 종목 수를 화면에 밝힌다(그 종목들엔 방어주·지주회사 규칙이 걸리지 않는다 — 조용히 통과시키지 않는다).
     desc = krx_daily.fdr_listing("KRX-DESC")
-    if krx is None or desc is None:
-        raise RuntimeError("KRX 상장목록·업종 조회 실패 (FDR 캐시 저장소 응답 없음)")
+    desc_date = krx_daily.last_listing_date("KRX-DESC")
+    if krx is None:
+        raise RuntimeError("KRX 상장목록 조회 실패 (FDR 정상 경로·캐시 저장소 모두 응답 없음)")
+    if desc is None:
+        raise RuntimeError(f"KRX 업종 목록 조회 실패 (최근 {krx_daily.LISTING_LOOKBACK_DAYS['KRX-DESC']}일 안에 캐시 파일 없음)")
     krx = krx[krx["Market"].isin(["KOSPI", "KOSDAQ"])].dropna(subset=["Marcap"])
     krx = krx.sort_values("Marcap", ascending=False).head(pool)
     desc = desc.set_index("Code")
@@ -141,6 +170,7 @@ def _fetch_candidates(target, pool, exclude_holding, seed=None):
     steps.append(("이미 보유 중인 관심종목", cut_dup))
 
     kept, cut_type, cut_def, cut_hold, cut_admin, defs = [], 0, 0, 0, 0, []
+    no_industry = 0
     # KOSDAQ 소속부(Dept)에 관리종목·투자주의환기·SPAC이 표기된다. KOSPI는 결측이라
     #  이 경로로는 안 걸리지만, KOSDAQ 쪽 위험 종목만으로도 실익이 크다.
     dept = dict(zip(krx["Code"], krx.get("Dept", krx["Code"] * 0)))
@@ -167,15 +197,21 @@ def _fetch_candidates(target, pool, exclude_holding, seed=None):
         products = desc.loc[code, "Products"] if code in desc.index else ""
         if hasattr(products, "iloc"):
             products = products.iloc[0]
+        if code not in desc.index:
+            no_industry += 1
         kept.append({"code": code, "name": name,
                      "exchange": r["Market"], "marcap": float(r["Marcap"]),
-                     "industry": str(industry or "-"),
+                     "industry": str(industry or "-") if code in desc.index else "업종 미상",
                      "products": str(products or "-")})
     steps.append(("관리종목·투자주의환기", cut_admin))
     steps.append(("우선주·스팩·리츠", cut_type))
     steps.append(("방어주", cut_def))
     if exclude_holding:
         steps.append(("지주회사·기타 금융업", cut_hold))
+    note = _desc_staleness_note(desc_date, no_industry)
+    if note:
+        logger.warning(note)
+        config.console.print(f"[yellow]※ {note}[/yellow]")
 
     rng = random.Random(seed)   # seed=None → 매 실행마다 다른 조합
     # 데이터 확인(_verify_data)이 앞에서부터 채우다 target 개에서 멈추므로, 여유분을

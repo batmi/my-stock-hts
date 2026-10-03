@@ -646,6 +646,14 @@ _FDR_CACHE_BASE = ("https://raw.githubusercontent.com/FinanceData/fdr_krx_data_c
                    "/refs/heads/master/data/listing")
 _FDR_CACHE_DIR = {"KRX": "krx", "KRX-DESC": "desc", "KRX-DELISTING": "delisting"}
 
+#  캐시 저장소에서 며칠까지 거슬러 찾는가(목록 종류별, 기본 10일).
+#   [2026-10-03] 업종 목록(desc)·폐지 목록(delisting)은 저장소에서 2026-09-17 이후 갱신이 멈췄다(KRX 스크래핑
+#   차단 시점과 같음 — 회복을 기대하지 않는다). 10일 창으로는 못 찾아 탐색 메뉴(7-4)와 업종을 쓰는 감사
+#   도구가 통째로 죽었다. 업종·폐지 이력은 몇 달 단위로도 거의 안 바뀌므로 오래된 파일을 쓰고, 기준일은
+#   last_listing_date 로 호출부가 밝힌다. 하루 거슬러 갈 때마다 404 한 번(실측 60일 창 3.8초)이라 무한정 넓히진 않는다.
+LISTING_LOOKBACK_DAYS = {"KRX-DESC": 120, "KRX-DELISTING": 120}
+_DEFAULT_LISTING_LOOKBACK = 10
+
 #  캐시 경로로 받았을 때 **어느 날짜 파일**이었는지. 스냅샷 메타에 적어 두면 여러 목록이
 #  같은 날짜로 고정됐는지 나중에 대조할 수 있다(정상 경로로 받으면 알 수 없어 비어 있다).
 _LAST_LISTING_DATE = {}
@@ -656,7 +664,7 @@ def last_listing_date(kind):
     return _LAST_LISTING_DATE.get(str(kind).upper())
 
 
-def fdr_listing(kind, lookback=10, on=None):
+def fdr_listing(kind, lookback=None, on=None):
     """FDR 상장목록(kind: 'KRX' | 'KRX-DESC' | 'KRX-DELISTING'). 못 받으면 None.
 
     정상 경로(fdr.StockListing)를 먼저 쓰고, 실패하면 캐시 저장소에서 **올라와 있는
@@ -671,6 +679,8 @@ def fdr_listing(kind, lookback=10, on=None):
     _lazy_import()
     key = str(kind).upper()
     sub = _FDR_CACHE_DIR.get(key)
+    if lookback is None:
+        lookback = LISTING_LOOKBACK_DAYS.get(key, _DEFAULT_LISTING_LOOKBACK)
     #  직전 호출의 날짜가 남으면 '정상 경로로 받았다'가 옛 캐시 날짜로 둔갑한다.
     _LAST_LISTING_DATE.pop(key, None)
     if on is None:

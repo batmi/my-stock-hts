@@ -82,7 +82,7 @@ def _listing_paths(kind):
 
 #  [SSOT 2026-09-08] FDR 캐시 지연을 견디는 조회는 modules/krx_daily.fdr_listing 하나다.
 #   운영(탐색 메뉴)과 감사가 같은 실패를 겪으므로 사본을 두지 않는다.
-def _listing_tolerating_cache_lag(kind, lookback=10, on=None):
+def _listing_tolerating_cache_lag(kind, lookback=None, on=None):
     """캐시 저장소에서 목록을 받는다(on 을 주면 그 날짜 기준). 못 받으면 None."""
     from modules import krx_daily
     return krx_daily.fdr_listing(kind, lookback=lookback, on=on)
