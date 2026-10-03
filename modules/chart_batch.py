@@ -247,7 +247,7 @@ def batch_chart_menu():
         menu_items = [
             ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"),
             ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"),
-            ("5", "시장 지수", "Market Indices"), ("6", "직접 입력", "여러 코드를 쉼표로"),
+            ("5", "시장 지수", "Market Indices"), ("6", "직접 입력", "Direct Input, comma-separated"),
             ("7", "선택 비우기", "Clear"), ("8", "차트 생성 실행", "Run"),
         ]
         choice = utils.show_menu("일괄 차트 생성 (Batch Chart)", menu_items,
