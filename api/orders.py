@@ -13,6 +13,7 @@
  '접수되지 않았음'으로 읽으면 안 되는 경우가 이것이다([[unknown-vs-empty]] 와 같은 결).
 """
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 import config
 from core import constants
@@ -111,6 +112,13 @@ def _order_with_exchange_fallback(url_path, market, category, action, data, code
 #  너무 넓으면 직전 주기의 같은 종목 주문을 오인하고, 너무 좁으면 지연된 접수를 놓친다.
 ORDER_RECONCILE_WINDOW_SEC = 180
 
+# '흔적 없음'을 미접수로 단정하기 전에 다시 조회할 대기(초) 목록.
+#  [2026-10-03 감사] ReadTimeout 은 서버가 아직 그 주문을 처리하고 있을 때 가장 흔히 난다 —
+#   바로 그 순간 당일 주문내역을 한 번만 보고 '없음'이면 ORDER_NOT_PLACED 로 끝났다. 그 결과는
+#   일반 실패로 처리돼 pending 에서 빠지므로, 늦게 접수된 주문 위에 다음 주기가 같은 주문을 또 낸다.
+#   응답 유실은 드문 사건이라 몇 초 더 기다리는 비용이 이중 주문보다 훨씬 싸다.
+ORDER_RECONCILE_RECHECK_SEC = (3.0, 7.0)
+
 
 def _reconcile_unknown_order(action, code, qty, reason):
     """응답이 유실된 주문이 실제로 접수됐는지 **조회로** 확인한다.
@@ -132,30 +140,21 @@ def _reconcile_unknown_order(action, code, qty, reason):
     """
     unknown = {'rt_cd': '1', 'msg_cd': 'ORDER_UNKNOWN',
                'msg1': f'주문 결과 불명(응답 유실): {reason}', 'output': {}}
-    try:
-        rows = _reconcile_rows()
-    except Exception as e:
-        logger.error(f"[ORDER_UNKNOWN] 대사 조회 실패 — 결과 불명으로 둔다: {e}")
-        return unknown
-
-    want_side = '02' if action == 'buy' else '01'      # KIS: 01=매도, 02=매수
-    now = datetime.now()
-    cands = []
-    for r in rows:
-        if str(r.get('pdno') or '').strip() != str(code):
-            continue
-        if str(r.get('sll_buy_dvsn_cd') or '') != want_side:
-            continue
+    #  흔적이 없으면 ORDER_RECONCILE_RECHECK_SEC 만큼 기다렸다 다시 본다(상수 주석 참조).
+    #   재조회가 실패해도 첫 조회와 같게 '결과 불명'이다 — 반쪽 확인으로 미접수를 단정하지 않는다.
+    for wait in (0.0, *ORDER_RECONCILE_RECHECK_SEC):
+        if wait:
+            logger.warning(f"[ORDER_UNKNOWN] 접수 흔적 없음 — {wait:g}초 뒤 다시 조회합니다: "
+                           f"{code} {action} {qty}주")
+            time.sleep(wait)
         try:
-            if int(float(r.get('ord_qty') or 0)) != int(qty):
-                continue
-        except (TypeError, ValueError):
-            continue
-        if _order_age_seconds(r, now) > ORDER_RECONCILE_WINDOW_SEC:
-            continue
-        odno = str(r.get('odno') or '').strip()
-        if odno and not _odno_known_to_db(odno):
-            cands.append(odno)
+            rows = _reconcile_rows()
+        except Exception as e:
+            logger.error(f"[ORDER_UNKNOWN] 대사 조회 실패 — 결과 불명으로 둔다: {e}")
+            return unknown
+        cands = _reconcile_candidates(rows, action, code, qty)
+        if cands:
+            break
 
     if len(cands) == 1:
         odno = cands[0]
@@ -177,6 +176,29 @@ def _reconcile_unknown_order(action, code, qty, reason):
         f"단정할 수 없습니다.\n재전송하지 않았습니다 — HTS에서 직접 확인해 주세요.\n"
         f"주문번호 후보: {', '.join(cands)}")
     return unknown
+
+
+def _reconcile_candidates(rows, action, code, qty):
+    """같은 종목·매매구분·수량이고 창 안이며 **DB에 없는** 주문번호들."""
+    want_side = '02' if action == 'buy' else '01'      # KIS: 01=매도, 02=매수
+    now = datetime.now()
+    cands = []
+    for r in rows:
+        if str(r.get('pdno') or '').strip() != str(code):
+            continue
+        if str(r.get('sll_buy_dvsn_cd') or '') != want_side:
+            continue
+        try:
+            if int(float(r.get('ord_qty') or 0)) != int(qty):
+                continue
+        except (TypeError, ValueError):
+            continue
+        if _order_age_seconds(r, now) > ORDER_RECONCILE_WINDOW_SEC:
+            continue
+        odno = str(r.get('odno') or '').strip()
+        if odno and not _odno_known_to_db(odno):
+            cands.append(odno)
+    return cands
 
 
 def _reconcile_rows():

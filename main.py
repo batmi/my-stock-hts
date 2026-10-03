@@ -7,6 +7,8 @@ import re
 import warnings
 
 # google.genai 내부에서 발생하는 Python 3.14 관련 DeprecationWarning 숨김
+#  필터만으로는 부족하다 — pandas 가 다른 스레드에서 전역 필터를 흔든다. 출력 가드는 config 의
+#  install_third_party_deprecation_guard 가 맡는다(아래 import config 직후 설치).
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="google.genai")
 
 
@@ -30,6 +32,7 @@ from rich.markup import escape
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
 import argparse
 import config
+config.install_third_party_deprecation_guard()   # 백그라운드 스레드가 뜨기 전에(config 주석 참조)
 from core import context # [추가]
 
 # [추가] config(rich.console) 로드 후 추가 진행 상태 출력

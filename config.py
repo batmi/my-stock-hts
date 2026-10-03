@@ -46,6 +46,46 @@ def silence_yfinance_numpy_warning():
 # 기본선(yfinance 미로드 경로 대비). 실제 억제는 각 import 지점의 재호출이 담당한다.
 silence_yfinance_numpy_warning()
 
+
+# ==========================================================
+# [경고 출력 가드] 서드파티 DeprecationWarning 은 화면에 찍지 않는다 — 필터가 깨져도
+# ==========================================================
+_SITE_PACKAGE_MARKERS = (f"{os.sep}site-packages{os.sep}", f"{os.sep}dist-packages{os.sep}")
+
+
+def _is_third_party_deprecation(category, filename):
+    return (issubclass(category, (DeprecationWarning, PendingDeprecationWarning))
+            and any(m in str(filename) for m in _SITE_PACKAGE_MARKERS))
+
+
+def install_third_party_deprecation_guard():
+    """warnings.showwarning 을 감싸 site-packages 에서 난 (Pending)DeprecationWarning 을 화면 대신 DEBUG 로그로 보낸다.
+
+    [2026-10-03] 차트 AI 분석 중 google/genai/types.py 의 DeprecationWarning 이 화면에 찍혔다 —
+     main.py 의 ignore 필터가 있는데도. 원인은 필터 목록 자체가 다른 스레드에서 흔들리는 것이다:
+     pandas.api.types.pandas_dtype(astype 등에서 상시 호출)은 `catch_warnings()` 안에서
+     simplefilter("always", DeprecationWarning) 를 거는데, GIL 빌드의 catch_warnings 는 **프로세스 전역**이다.
+       · 그 순간 메인 스레드가 genai 를 처음 import 하면 맨 앞의 'always' 가 우리 ignore 를 가린다.
+       · 두 스레드의 진입·종료가 엇갈리면(A 진입→B 진입→A 종료→B 종료) B 가 'always' 가 얹힌 목록으로
+         복원해 **영구히** 남는다 — 그 뒤로는 모든 서드파티 DeprecationWarning 이 rich 화면을 깬다
+         (재현: tests/test_third_party_deprecation_guard.py).
+     필터는 우리가 지킬 수 없으므로 출력 단계에서 거른다. 파이썬 기본값도 이 경고들을 숨긴다(ignore::
+     DeprecationWarning) — 그 의도를 경합과 무관하게 복원할 뿐이다. 우리 코드의 경고와 다른 범주는 그대로 찍힌다.
+     catch_warnings 는 진입 때의 showwarning 을 저장·복원하므로, 기동 직후 한 번 설치하면 유지된다(멱등).
+    """
+    current = warnings.showwarning
+    if getattr(current, "_third_party_deprecation_guard", False):
+        return
+
+    def _guard(message, category, filename, lineno, file=None, line=None):
+        if _is_third_party_deprecation(category, filename):
+            logging.getLogger("py.warnings").debug(f"{filename}:{lineno}: {category.__name__}: {message}")
+            return
+        return current(message, category, filename, lineno, file, line)
+
+    _guard._third_party_deprecation_guard = True
+    warnings.showwarning = _guard
+
 # [터미널 호환] '흰색'·'회색'을 터미널 팔레트·속성에 맡기지 않고 절대색으로 고정한다.
 #  - rich의 [white]는 ANSI 색 7이라 실제 색을 터미널 팔레트가 정한다. cmux(Ghostty
 #    코어)는 이 값을 어둡게 그려서 '혼조(흰색)'이 회색으로 보이고 '판정 불가

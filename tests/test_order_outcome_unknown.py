@@ -110,6 +110,32 @@ def test_no_trace_means_the_order_never_landed(monkeypatch, no_db_records):
     assert res['msg_cd'] == 'ORDER_NOT_PLACED'
 
 
+def test_a_late_acceptance_is_found_on_recheck_not_called_unplaced(monkeypatch, no_db_records):
+    """[2026-10-03 감사] 타임아웃 직후엔 서버가 아직 처리 중이라 내역에 없을 수 있다.
+    첫 조회만 보고 ORDER_NOT_PLACED 로 끝내면 다음 주기가 같은 주문을 또 낸다 — 다시 본다."""
+    replies = iter([[], [_row()]])
+    monkeypatch.setattr(api, 'get_today_history',
+                        lambda *a, **k: {"rt_cd": "0", "output1": next(replies)})
+    res = api._reconcile_unknown_order("buy", "005930", 10, "ReadTimeout")
+    assert res['msg_cd'] == 'ORDER_RECOVERED' and res['output']['ODNO'] == "0000123456"
+
+
+def test_unplaced_is_concluded_only_after_every_recheck(monkeypatch, no_db_records):
+    calls = []
+    monkeypatch.setattr(api, 'get_today_history',
+                        lambda *a, **k: calls.append(1) or {"rt_cd": "0", "output1": []})
+    res = api._reconcile_unknown_order("buy", "005930", 10, "ReadTimeout")
+    assert res['msg_cd'] == 'ORDER_NOT_PLACED'
+    assert len(calls) == 1 + len(api.orders.ORDER_RECONCILE_RECHECK_SEC)
+
+
+def test_a_failed_recheck_stays_unknown(monkeypatch, no_db_records):
+    replies = iter([{"rt_cd": "0", "output1": []}, {"rt_cd": "1", "msg_cd": "X"}])
+    monkeypatch.setattr(api, 'get_today_history', lambda *a, **k: next(replies))
+    res = api._reconcile_unknown_order("buy", "005930", 10, "ReadTimeout")
+    assert res['msg_cd'] == 'ORDER_UNKNOWN'
+
+
 def test_ambiguity_is_handed_to_the_operator(monkeypatch, no_db_records):
     """후보가 둘이면 어느 것이 이번 주문인지 단정할 수 없다 — 잘못 고르면 남의 주문을
     '내 것'으로 알고 관리하게 된다. 자동으로 정하지 않는다."""

@@ -325,6 +325,42 @@ def _mock_index_chart_df(periods=60):
 
 
 @pytest.fixture(autouse=True)
+def isolate_config_values():
+    """[격리 · 2026-10-03] 테스트가 `config.X = v` 로 직접 바꾼 값을 매 테스트 뒤 되돌린다.
+
+    config 의 대입 라우팅(_ConfigModule.__setattr__)은 GlobalSettings 필드를 settings 객체에 쓰므로,
+    monkeypatch 없이 대입한 값은 **같은 xdist 워커의 다음 테스트로 그대로 샌다**. 실측: 테스트 30여 곳이
+    `config.USE_VOLATILITY_TARGETING = False` 를 되돌리지 않아, 테스트 몇 건을 추가해 분배가 바뀌자
+    test_settings_guardrails·지수 폴백 체인이 실행마다 다른 조합으로 실패했다(기준선에선 우연히 통과).
+    settings 필드는 값으로, 모듈의 기존 대문자 속성은 참조로 복원한다. 새로 생긴 이름은 지우지 않는다 —
+    monkeypatch(raising=False)가 이 픽스처보다 나중에 delattr 로 거두므로 먼저 지우면 KeyError 다.
+    dict 값의 제자리 변경까지는 되돌리지 못한다.
+    """
+    st = config.settings
+    fields = st.model_dump()
+    module_upper = {k: v for k, v in vars(config).items() if k.isupper()}
+    yield
+    if config.settings is not st:
+        config.__dict__["settings"] = st
+    for k, v in fields.items():
+        if getattr(st, k, None) != v:
+            object.__setattr__(st, k, v)
+    cur = vars(config)
+    for k, v in module_upper.items():
+        if cur.get(k) is not v:
+            cur[k] = v
+
+
+@pytest.fixture(autouse=True)
+def no_order_reconcile_wait(monkeypatch):
+    """[2026-10-03] 응답 유실 주문의 '흔적 없음' 재조회 대기(api.orders.ORDER_RECONCILE_RECHECK_SEC)는
+    횟수만 남기고 0초로 — 미접수 경로를 타는 테스트마다 실제로 10초씩 자지 않게 한다."""
+    import api
+    monkeypatch.setattr(api.orders, "ORDER_RECONCILE_RECHECK_SEC",
+                        tuple(0.0 for _ in api.orders.ORDER_RECONCILE_RECHECK_SEC))
+
+
+@pytest.fixture(autouse=True)
 def krx_break_window_closed(request, monkeypatch):
     """[벽시계 격리 · 2026-09-20] 15:30~16:00 KRX 휴게에는 trading.send_order 가 "그래도 주문을
     보내시겠습니까?" 프롬프트를 하나 더 띄운다(2026-09-14 애프터마켓 도입). 그 시간에 스위트를
