@@ -42,7 +42,7 @@ import api
 from brokers import toss_api  # [추가] 토스증권 클라이언트 (mode 3)
 from core import utils
 from core import indicators
-from modules import market, analysis, chart, account, manage, trading, backtest, settings, db_manager
+from modules import market, analysis, chart, chart_batch, account, manage, trading, backtest, settings, db_manager
 from modules import auto_trade, telegram_bot, theme_analysis, db_queue # [추가]
 from modules.reserved_order_monitor import ReservedOrderMonitor # [추가] 예약주문 모니터
 
@@ -1582,7 +1582,8 @@ def main():
                         menu_items = [
                             ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"),
                             ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"),
-                            ("5", "시장 지수", "Market Indices"), ("6", "직접 입력", "Direct Input")
+                            ("5", "시장 지수", "Market Indices"), ("6", "직접 입력", "Direct Input"),
+                            ("7", "일괄 차트 생성", "Batch")
                         ]
                         sub_choice = utils.show_menu("종목 차트 분석 (Chart Analysis)", menu_items, default_choice=last_sub_choice)
                         
@@ -1597,7 +1598,14 @@ def main():
                         context.USER_ACTION_BREADCRUMB.append(f"[{sub_choice}] {sub_map.get(sub_choice, '')}")
                         
                         target_code, target_name, target_ovs = None, None, False
-                        
+
+                        if sub_choice == '7':
+                            # 여러 종목을 골라 같은 유형의 차트를 한 번에(화면·로직은 chart_batch)
+                            chart_batch.batch_chart_menu()
+                            last_sub_choice = sub_choice
+                            action_taken = True
+                            continue
+
                         if sub_choice == '6':
                             utils.print_breadcrumb()
                             raw_input = Prompt.ask("종목코드(6자리/티커) 입력 [dim](이전: b, 메인: q)[/dim]")

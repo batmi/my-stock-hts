@@ -13,6 +13,7 @@ from rich.table import Table
 from rich import box
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
 import os
+import re
 import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
@@ -493,6 +494,89 @@ def search_stock_in_list(stock_list, title="종목 선택", display_func=None, h
         config.console.print(f"[yellow]{len(filtered)}개의 항목이 검색되었습니다. 번호를 선택해주세요.[/yellow]\n")
         current_list = filtered
         hide_list = False # 여러개가 검색되면 목록을 보여줌
+
+def parse_multi_selection(text, n):
+    """여러 번호 입력 → 0기반 인덱스 목록(입력 순서, 중복 제거).
+
+    문법: `1,3,7` · `5-12` · 섞어서 `1, 4-6 9` · `all`(전체).
+    번호 문법이 아니면 None — 호출부가 검색어로 다룬다. 토큰이 **하나뿐인 숫자**가 범위를
+    벗어나도 None 이다: 005930 같은 종목코드를 행 번호로 오인하지 않게 하는 규칙이
+    search_stock_in_list 와 같다. 문법은 맞는데 여러 토큰 중 범위를 벗어난 번호가 있으면
+    ValueError(사용자에게 다시 묻게 한다).
+    """
+    s = (text or "").strip()
+    if not s:
+        return None
+    if s.lower() == "all":
+        return list(range(n))
+    tokens = [t for t in re.split(r"[,\s]+", s) if t]
+    if not all(re.fullmatch(r"\d+(-\d+)?", t) for t in tokens):
+        return None
+    if len(tokens) == 1 and tokens[0].isdigit() and not 1 <= int(tokens[0]) <= n:
+        return None
+    picked = []
+    for t in tokens:
+        lo, _, hi = t.partition("-")
+        lo = int(lo)
+        hi = int(hi) if hi else lo
+        if lo > hi:
+            lo, hi = hi, lo
+        if lo < 1 or hi > n:
+            raise ValueError(f"'{t}' 는 목록 범위(1~{n})를 벗어납니다.")
+        for i in range(lo - 1, hi):
+            if i not in picked:
+                picked.append(i)
+    return picked
+
+
+def select_multiple_from_list(stock_list, title="종목 선택", display_func=None):
+    """리스트에서 여러 종목을 고른다. 고른 항목 리스트, 취소(b/q)면 None.
+
+    번호 문법(parse_multi_selection)과 검색을 함께 받는다. 검색 결과가 여러 개면 그 결과
+    목록에서 다시 번호(또는 all)로 고른다. 결과가 하나면 바로 그 종목을 돌려준다.
+    """
+    current_list = stock_list
+    while True:
+        if title:
+            config.console.print(f"[bold]{title}[/bold]")
+        for i, s in enumerate(current_list):
+            if display_func:
+                config.console.print(display_func(i, s))
+            else:
+                config.console.print(f"[{i+1}] {s.get('name', 'Unknown')} ({s.get('code', 'Unknown')})")
+        config.console.print()
+
+        sel = Prompt.ask("번호 선택 [dim](예: 1,3,5-8 · all)[/dim] 또는 종목명·코드 검색 "
+                         "[dim](이전: b, 메인: q)[/dim]")
+        config.console.print()
+        if sel.lower() in ['b', 'q']:
+            return None
+
+        try:
+            picked = parse_multi_selection(sel, len(current_list))
+        except ValueError as e:
+            config.console.print(f"[red]{e}[/red]\n")
+            continue
+        if picked is not None:
+            if not picked:
+                config.console.print("[yellow]선택된 항목이 없습니다.[/yellow]\n")
+                continue
+            return [current_list[i] for i in picked]
+
+        q = sel.strip()
+        filtered = [s for s in stock_list
+                    if q.lower() in s.get('name', '').lower() or q.upper() in s.get('code', '').upper()]
+        if not filtered:
+            config.console.print(f"[yellow]'{q}' 검색 결과가 없습니다.[/yellow]\n")
+            current_list = stock_list
+            continue
+        if len(filtered) == 1:
+            item = filtered[0]
+            config.console.print(f"[green]검색됨: {item.get('name', '')} ({item.get('code', '')})[/green]\n")
+            return [item]
+        config.console.print(f"[yellow]{len(filtered)}개의 항목이 검색되었습니다. 번호(또는 all)로 선택해주세요.[/yellow]\n")
+        current_list = filtered
+
 
 def validate_and_confirm_stock(code, name, is_overseas, action_text="진행하시겠습니까?"):
     """API를 통해 종목 유효성을 검증하고 사용자에게 진행 여부를 확인합니다."""

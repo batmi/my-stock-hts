@@ -38,7 +38,7 @@ Quotes, orders, analysis, and automated trading all run in the terminal. Each me
 | `[0]` | Settings | Buy/sell strategy, scoring & market regime, risk & allocation, indicator parameters, environment/system. **Changes apply immediately while running and persist across restarts.** |
 | `[1]` | Market Indices | Domestic/US/Europe/Asia indices, sector indices, commodities (gold, silver, copper, oil), FX, US Treasury yields, crypto, and **KRX spot gold**. Index name color encodes the regime (Bull / PendUp / PendDown / Bear). |
 | `[2]` | Stock Analysis | Combines real-time quotes and technical indicators for domestic/US stocks and ETFs into a state: **Buy / Wait / Rise / Interest / Neutral / Caution / Sell**. Per-index deep analysis included. |
-| `[3]` | Chart Analysis | Weekly/daily/hourly/intraday chart images, plus **AI chart image reading** (Gemini Vision). |
+| `[3]` | Chart Analysis | Weekly/daily/hourly/intraday chart images, plus **AI chart image reading** (Gemini Vision). `[7] Batch` collects several stocks (watchlist, indices, direct input; `1,3,5-8`, `all` or search) and renders the same chart type for all of them at once (same quality as a single chart, up to `BATCH_CHART_MAX`=30). |
 | `[4]` | Backtesting | Single stock / **N-slot watchlist portfolio** / **Monte Carlo** (±1% price noise, slippage variance, fill misses, 1,000 runs → mean, VaR 95%, stdev) / **Walk-Forward** validation. Optimization over buy score, RSI cap, stop width, pyramiding depth, and scoring weights runs alongside. |
 | `[5]` | System Trading | Start/stop/status/report/log for the auto-trader, **per-symbol trading rules**, and **restricted symbols**. |
 | `[6]` | Discovery & Financials | Naver theme ranking, **TradingView screener** (9 presets: top movers, gap-up, breakout, pullback, volume momentum, oversold rebound, value turnaround, high dividend, trend reversal — KR/US), AI theme analysis, AI stock diagnosis, investment calendar, disclosure monitoring, supply/overhang signals, financial snapshot. |
@@ -267,6 +267,7 @@ chmod +x run.sh                    # first time only
   - **Drag to reorder cards** — the default order is newest-first, but if you drag a card into place, **that browser** remembers the order (localStorage; the server is not involved). Newly rendered charts appear at the front, newest-first; "최신순으로 되돌리기" at the top resets it.
   - **Delete a card (✕)** — hovering a card reveals ✕, which deletes the chart PNG (and its thumbnail) on the server. Only `*.png` files directly under `chart/` are eligible; since the server is unauthenticated, anyone on the same network can delete, so set `WEBCHART_ALLOW_DELETE=0` on an untrusted network (the button disappears too).
   - To serve charts on their own, run `python tools/web_server.py`.
+  - **Batch generation (`[3]-7`)** — charts for the selected stocks land in the gallery one after another. Without the web dashboard, no viewer is opened; only the `chart/` location is printed.
   - The server **stays up while charts are being rendered** (it is a thread in the same process). It used to be stopped and restarted around rendering, which only made sense while it was a separate process being reclaimed for memory.
 - **Raspberry Pi memory (`CHART_DPI`)** — the memory spike during rendering grows with the square of the DPI. Measured (16x9 inches, RSS delta): `100`->+9MB, `150`->+13MB, `200`->+22MB, `300`->+53MB. matplotlib itself already holds ~145MB, so on a 1GB Pi a 300 DPI spike invites the Linux OOM killer (on 2026-08-26 it did kill the web server process for exactly this reason). On a Pi, prefer `CHART_DPI=150` — a quarter of the spike, and 2400x1350 is plenty readable. The default is unchanged at `300`.
 - **Theme-independent colors** — the 16 named colors (red, blue, …) are emitted as fixed 256-color codes (`core/vivid_colors.py`), so a pastel terminal theme in cmux/iTerm2 etc. no longer washes them out. Set `HTS_VIVID_COLORS=0` to use the terminal theme's colors instead (automatically off on 16-color-only terminals).
@@ -520,6 +521,7 @@ my-stock-hts/
 │   ├── market.py           # [1] Market indices
 │   ├── analysis.py         # [2] Quotes and technical analysis
 │   ├── chart.py            # [3] Chart rendering
+│   ├── chart_batch.py      #     [3]-7 Batch chart generation (many stocks, same quality)
 │   ├── web_dashboard.py    #     Responsive web dashboard for chart galleries
 │   ├── backtest.py         # [4] Single-symbol backtesting
 │   ├── portfolio_backtest.py #   N-slot portfolio backtest (slot competition, cash, heat cap)
