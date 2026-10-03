@@ -2,6 +2,7 @@
 import logging
 from rich.table import Table
 from rich.panel import Panel
+from rich.padding import Padding
 from rich import box
 from rich.prompt import Prompt
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
@@ -929,9 +930,11 @@ def _print_saved_positions(positions):
         price = f"{p['buy_price']:,.2f}{unit}" if p['is_overseas'] else f"{p['buy_price']:,.0f}{unit}"
         
         qty_unit = _qty_unit(p['code'])
-        # '주'(전각, 2칸)와 'g'(반각, 1칸)의 우측 정렬 시 숫자 위치를 맞추기 위해 뒤에 공백(1칸) 추가
-        # rich 라이브러리가 우측 공백을 지우는 것을 방지하기 위해 Zero-width space(\u200b) 사용
-        qty_str = f"{p['qty']:,}{qty_unit} \u200b" if qty_unit == "g" else f"{p['qty']:,}{qty_unit}"
+        # '주'(전각, 2칸)와 'g'(반각, 1칸)의 우측 정렬 시 숫자 위치를 맞추기 위해 'g' 뒤에 1칸을 둔다.
+        # 문자열 끝 공백은 rich 가 지우고, Zero-width space(\u200b)는 rich 가 0칸으로 재지만
+        # 터미널은 1칸으로 그려 뒤 열이 밀린다 — 그래서 문자 대신 Padding 으로 칸을 만든다.
+        qty_text = f"{p['qty']:,}{qty_unit}"
+        qty_str = Padding(qty_text, (0, 1, 0, 0)) if qty_unit == "g" else qty_text
         
         table.add_row(
             str(i), p['name'], p['code'], "해외" if p['is_overseas'] else "국내",
