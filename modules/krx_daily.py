@@ -1,9 +1,17 @@
 """국내 일봉을 'KRX 정규장 기준'으로 조회한다.
 
-[출처 순서 · 2026-09-18] KRX Open API(확정분, data/krx_openapi.db 스냅샷) 1순위 → FinanceDataReader
+[출처 순서 · 2026-09-18] KRX Open API(확정분, data/krx_openapi.db 스냅샷) 1순위 → FDR 경로(네이버 일봉)
  폴백 → pykrx 는 KRX_WEB_SCRAPING_ALLOWED 가 켜졌을 때만 맨 뒤(get_daily 의 sources). Open API 의
- 종가는 정규장 15:30 종가고, 아직 안 실린 오늘·직전 영업일 봉만 FDR 로 덧댄다(_fetch_openapi).
+ 종가는 정규장 15:30 종가고, 아직 안 실린 오늘·직전 영업일 봉만 FDR 경로로 덧댄다(_fetch_openapi).
  아래 실측·수치는 pykrx/FDR 시절(2026-07)의 것이라 순서 서술만 낡았을 뿐 결론은 같다.
+
+[FDR 라이브러리를 부르지 않는다 · 2026-10-04] 'FDR' 표기는 그대로지만 FinanceDataReader 는 더 이상
+ import 하지 않고, 그것이 받던 **같은 원천**을 직접 받는다(_fetch_fdr = 네이버 fchart, fdr_listing =
+ FinanceData GitHub 캐시 CSV). 라이브러리는 ① 모든 요청에 타임아웃이 없어 원천이 응답하지 않으면 조회
+ 스레드가 무한정 멈추고 ② 국내 일봉을 count=6000(약 24년치, 197KB)으로 받아 오늘 봉 1~2개를 덧대는
+ 데도 종목마다 그만큼 내려받으며 ③ StockListing 은 매번 **data.krx.co.kr**(약관 위반으로 IP 를 차단당한
+ 도메인)에 최종 영업일을 먼저 묻고 ④ 실패하면 응답 HTML 을 print 로 화면에 찍었다. 받는 값은 같다
+ (실측 4종목 243봉 OHLCV 100% 일치).
 
 [왜 필요한가]
 토스 캔들은 SOR 통합값이라 NXT 프리마켓(08:00~09:00)·애프터마켓(15:30~20:00) 체결이
@@ -33,6 +41,7 @@
 """
 import io
 import logging
+import re
 import threading
 import time
 from contextlib import redirect_stderr, redirect_stdout
@@ -61,14 +70,13 @@ _CHART_FETCH_DAYS = 400
 # pykrx는 import 시 KRX 로그인 시도 로그를 stderr로 흘린다(선택적 로그인이라 조회에는 무관).
 # 라즈베리파이 로그 오염을 막기 위해 import 구간만 억제한다.
 _pykrx = None
-_fdr = None
 _import_done = False
 _import_lock = threading.RLock()
 
 
 def _lazy_import():
-    """pykrx / FinanceDataReader를 최초 1회만 로드한다(둘 다 없으면 None으로 남는다)."""
-    global _pykrx, _fdr, _import_done
+    """pykrx 를 최초 1회만 로드한다(없으면 None으로 남는다). FDR 은 적재하지 않는다(모듈 독스트링)."""
+    global _pykrx, _import_done
     if _import_done:
         return
     with _import_lock:
@@ -82,11 +90,6 @@ def _lazy_import():
                     _pykrx = _s
                 except Exception as e:      # noqa: BLE001 - 미설치/로드 실패 모두 폴백 대상
                     logger.debug(f"[KRX] pykrx 로드 실패: {e}")
-                try:
-                    import FinanceDataReader as _f
-                    _fdr = _f
-                except Exception as e:      # noqa: BLE001
-                    logger.debug(f"[KRX] FinanceDataReader 로드 실패: {e}")
         finally:
             _import_done = True
         noise = buf.getvalue().strip()
@@ -103,8 +106,30 @@ def _lazy_import():
 
 
 def is_available():
+    """일봉을 받을 길이 있는가. Open API 저장소와 FDR 경로(네이버 직접 조회)는 라이브러리가 필요 없다.
+
+    pykrx 적재(스크래핑 허용 시 맨 뒤 소스)를 여기서 겸해 왔으므로 그 호출은 남긴다.
+    """
     _lazy_import()
-    return _pykrx is not None or _fdr is not None
+    return True
+
+
+# FDR 경로가 직접 받는 원천(모듈 독스트링 [FDR 라이브러리를 부르지 않는다]).
+#  (연결, 읽기) 초 — 네이버 일봉 응답은 실측 0.04~0.09초, GitHub CSV 는 1초 안쪽이다.
+_HTTP_TIMEOUT = (5, 15)
+_HTTP_HEADERS = {"User-Agent": "Mozilla/5.0"}
+_NAVER_DAILY_URL = ("https://fchart.stock.naver.com/sise.nhn?timeframe=day&count={count}"
+                    "&requestType=0&symbol={code}")
+_NAVER_ITEM_RE = re.compile(r'<item data="(.*?)" />', re.DOTALL)
+
+
+def _http_get_text(url):
+    """타임아웃을 건 GET. 200 이 아니면 OSError."""
+    import requests
+    r = requests.get(url, headers=_HTTP_HEADERS, timeout=_HTTP_TIMEOUT)
+    if r.status_code != 200:
+        raise OSError(f"HTTP {r.status_code}: {url}")
+    return r.text
 
 
 def _normalize(df, source):
@@ -169,9 +194,64 @@ def _fetch_pykrx(code, start, end):
 
 
 def _fetch_fdr(code, start, end):
-    if _fdr is None:
+    """FDR 경로 — FDR 의 국내 일봉 원천(네이버 fchart, 수정주가)을 **필요한 봉 수만큼** 직접 받는다.
+
+    count 는 시작일부터 오늘까지의 평일 수 + 여유 10봉이다(거래일은 그보다 적으므로 모자라지 않는다).
+    오늘 봉 덧대기는 12봉 남짓이라 FDR(6000봉) 대비 응답이 197KB → 2KB 로 준다.
+    """
+    s = datetime.strptime(str(start), '%Y%m%d')
+    count = max(10, int((datetime.now() - s).days * 5 / 7) + 10)
+    rows = _NAVER_ITEM_RE.findall(_http_get_text(_NAVER_DAILY_URL.format(count=count, code=code)))
+    if not rows:
         return None
-    return _normalize(_fdr.DataReader(code, start, end), 'FDR')
+    df = pd.read_csv(io.StringIO("\n".join(rows)), sep="|", header=None, dtype={0: str},
+                     names=['date', 'open', 'high', 'low', 'close', 'volume'])
+    df = df[(df['date'] >= str(start)) & (df['date'] <= str(end))]
+    df['date'] = pd.to_datetime(df['date'], format='%Y%m%d', errors='coerce')
+    return _normalize(df, 'FDR')
+
+
+#  이음매 재기준 임계값. 같은 날의 시가는 네이버(정수 반올림)와 Open API(수정주가 소수)가 0.01% 안에서
+#   맞는다(실측 2026-10-04, 4종목 85일 — 애프터마켓이 바꾸는 것은 종가·고저·거래량이고 시가는 아니다).
+#   1% 를 넘게 벌어지면 오늘 수정주가 이벤트(권리락·분할·병합)가 네이버에만 반영된 것이다.
+_SEAM_REBASE_MIN = 0.01
+
+
+def naver_daily(code, start, end):
+    """FDR 경로(네이버 일봉)의 공개 이름 — 감사 도구가 종전 fdr.DataReader 자리에 쓴다(tools/audit_common)."""
+    return _fetch_fdr(code, start, end)
+
+
+def _rebase_to_tail(code, base, tail, last):
+    """오늘 권리락·분할이 있으면 Open API 확정분을 덧댈 봉의 수정주가 기준으로 맞춘다.
+
+    [왜 · 2026-10-04] Open API 의 수정주가는 그 날의 기준가(종가 − 전일대비)로 만든다 — 이벤트 당일
+     D 의 행은 다음 영업일 08:00 에야 실리므로, D 하루 동안 확정분(~D-1)은 **옛 기준**이다. 거기에
+     네이버의 D 봉(새 기준)을 붙이면 50:1 분할이면 −98%, 권리락이면 수 % 의 가짜 갭이 생겨 ATR·EMA·
+     52주 위치·손절선이 하루 동안 통째로 틀어진다. 네이버는 D 에 과거 봉까지 다시 계산해 주므로,
+     겹치는 D-1 시가의 비율이 곧 그 이벤트의 배율이다. 다음 날 Open API 가 같은 배율을 스스로
+     적용하므로 그때부터는 이 보정이 1.0 이 되어 아무 일도 하지 않는다.
+    """
+    hit = tail[tail['date'] == last]
+    try:
+        b_open = float(base['open'].iloc[-1] or 0)
+        t_open = float(hit['open'].iloc[-1]) if not hit.empty else 0.0
+    except (TypeError, ValueError):
+        return base
+    if b_open <= 0 or t_open <= 0:
+        return base
+    ratio = t_open / b_open
+    if abs(ratio - 1.0) < _SEAM_REBASE_MIN:
+        return base
+    out = base.copy()
+    for col in ('open', 'high', 'low', 'close'):
+        out[col] = out[col] * ratio
+    out['volume'] = out['volume'] / ratio
+    out.attrs.update(base.attrs)
+    out.attrs['seam_rebase'] = ratio
+    logger.info(f"[KRX] {code} 오늘 수정주가 이벤트 — Open API 확정분(~{last})을 네이버 기준으로 ×{ratio:.4f} "
+                f"맞춘다(다음 영업일 Open API 게시 뒤엔 불필요)")
+    return out
 
 
 def _fetch_openapi(code, lookback_days):
@@ -206,6 +286,7 @@ def _fetch_openapi(code, lookback_days):
             logger.debug(f"[KRX] Open API 뒤 FDR 덧대기 실패({code}): {ex}")
             tail = None
         if tail is not None and not tail.empty:
+            base = _rebase_to_tail(code, base, tail, last)
             tail = tail[tail['date'] > last]
             if not tail.empty:
                 merged = pd.concat([base, tail[_COLUMNS]], ignore_index=True)
@@ -432,7 +513,7 @@ def _listing_map_from_openapi():
 
 
 def _listing_map_from_fdr():
-    """FinanceDataReader 상장 목록 {코드: {'name','marcap'}}. 실패 시 None.
+    """FDR 상장 목록(캐시 저장소 CSV) {코드: {'name','marcap'}}. 실패 시 None.
 
     [2026-09-17] fdr.StockListing 직접 호출 대신 fdr_listing(캐시 저장소의 최근 날짜로 견딤)을 쓴다 —
      data.krx.co.kr 목록 엔드포인트가 죽어 있는 동안(09-08 404 · 09-17 차단) 여기서 None 이 나면
@@ -659,46 +740,36 @@ _FDR_CACHE_DIR = {"KRX": "krx", "KRX-DESC": "desc", "KRX-DELISTING": "delisting"
 LISTING_LOOKBACK_DAYS = {"KRX-DESC": 120, "KRX-DELISTING": 120}
 _DEFAULT_LISTING_LOOKBACK = 10
 
-#  캐시 경로로 받았을 때 **어느 날짜 파일**이었는지. 스냅샷 메타에 적어 두면 여러 목록이
-#  같은 날짜로 고정됐는지 나중에 대조할 수 있다(정상 경로로 받으면 알 수 없어 비어 있다).
+#  **어느 날짜 파일**을 받았는지. 스냅샷 메타에 적어 두면 여러 목록이 같은 날짜로 고정됐는지
+#  나중에 대조할 수 있다(2026-10-04 부터 언제나 채워진다 — 날짜를 모르는 '정상 경로'가 없어졌다).
 _LAST_LISTING_DATE = {}
 
 
 def last_listing_date(kind):
-    """직전 fdr_listing 이 **캐시에서** 받은 날짜('YYYY-MM-DD'). 정상 경로였으면 None."""
+    """직전 fdr_listing 이 받은 파일의 날짜('YYYY-MM-DD'). 실패했으면 None."""
     return _LAST_LISTING_DATE.get(str(kind).upper())
 
 
 def fdr_listing(kind, lookback=None, on=None):
     """FDR 상장목록(kind: 'KRX' | 'KRX-DESC' | 'KRX-DELISTING'). 못 받으면 None.
 
-    정상 경로(fdr.StockListing)를 먼저 쓰고, 실패하면 캐시 저장소에서 **올라와 있는
-    가장 최근 날짜**로 받는다. 반환 스키마는 둘이 같다 — FDR 의 후처리가
-    'KRX' 는 reset_index 뿐이고 'KRX-DESC' 는 ListingDate 파싱뿐이라 여기서 맞춘다.
+    FDR 캐시 저장소(GitHub CSV)에서 기준일부터 거슬러 **올라와 있는 가장 최근 날짜**로 받는다.
+    스키마는 FDR StockListing 과 같다 — 그 후처리가 'KRX' 는 reset_index 뿐이고 'KRX-DESC' 는
+    ListingDate 파싱뿐이라 여기서 맞춘다.
 
-    on: 기준일('YYYY-MM-DD' 또는 date). 주면 **그 날짜부터 거슬러** 찾고 정상 경로는
-      건너뛴다 — `fdr.StockListing` 은 언제나 '최신'만 주므로 과거를 물을 수단이 없다.
-      감사 유니버스를 여러 목록에 걸쳐 **같은 날짜로 고정**할 때 쓴다
-      ([[audit-universe-reproducibility]]).
+    [2026-10-04] fdr.StockListing 을 먼저 부르던 '정상 경로'를 걷어냈다. 그 함수가 하는 일은 같은
+    CSV 를 받는 것인데, 날짜를 알아내려고 매번 data.krx.co.kr 에 타임아웃 없이 묻는다(모듈 독스트링).
+    오늘 파일이 있으면 첫 시도에서 받으므로 결과는 같다.
+
+    on: 기준일('YYYY-MM-DD' 또는 date). 주면 그 날짜부터 거슬러 찾는다 — 감사 유니버스를 여러
+      목록에 걸쳐 **같은 날짜로 고정**할 때 쓴다([[audit-universe-reproducibility]]).
     """
-    _lazy_import()
     key = str(kind).upper()
     sub = _FDR_CACHE_DIR.get(key)
     if lookback is None:
         lookback = LISTING_LOOKBACK_DAYS.get(key, _DEFAULT_LISTING_LOOKBACK)
-    #  직전 호출의 날짜가 남으면 '정상 경로로 받았다'가 옛 캐시 날짜로 둔갑한다.
+    #  직전 호출의 날짜가 남으면 실패한 호출이 옛 날짜를 들고 있게 된다.
     _LAST_LISTING_DATE.pop(key, None)
-    if on is None:
-        if _fdr is None:
-            return None
-        try:
-            df = _fdr.StockListing(kind)
-            if df is not None and len(df):
-                return df
-            logger.warning(f"[KRX] FDR {kind} 이 빈 목록을 돌려줬습니다 — 캐시 지연으로 봅니다.")
-        except Exception as e:      # noqa: BLE001 - 아래 지연 허용 경로로 넘긴다
-            logger.debug(f"[KRX] FDR {kind} 조회 실패({type(e).__name__}) → 캐시 지연 경로")
-
     if not sub:
         return None
     if on is None:
@@ -710,7 +781,8 @@ def fdr_listing(kind, lookback=None, on=None):
     for i in range(max(1, int(lookback))):
         d = (start - timedelta(days=i)).strftime("%Y-%m-%d")
         try:
-            df = pd.read_csv(f"{_FDR_CACHE_BASE}/{sub}/{d}.csv", index_col=0,
+            text = _http_get_text(f"{_FDR_CACHE_BASE}/{sub}/{d}.csv")
+            df = pd.read_csv(io.StringIO(text), index_col=0,
                              dtype={"Code": str, "Symbol": str, "Dept": str,
                                     "ChangeCode": str, "MarketId": str})
         except Exception:

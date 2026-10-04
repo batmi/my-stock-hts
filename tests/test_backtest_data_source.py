@@ -123,7 +123,7 @@ def test_overseas_backtest_never_uses_krx_source(toss_mode):
 def test_short_cached_lookback_is_not_reused_for_longer_request():
     """차트 경로(730일)가 먼저 캐시하면 백테스트(수년)가 잘린 시계열을 받는 문제 방지."""
     krx_daily.clear_cache()
-    krx_daily._import_done, krx_daily._pykrx, krx_daily._fdr = True, object(), object()
+    krx_daily._import_done, krx_daily._pykrx = True, object()
     try:
         norm = krx_daily._normalize(
             pd.DataFrame({'시가': [1], '고가': [2], '저가': [1], '종가': [2], '거래량': [1]},

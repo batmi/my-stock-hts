@@ -10,7 +10,7 @@
     진입 환경에 더 가깝다는 것이 가설이다.
 
 [데이터 한계 — 결론 해석 시 반드시 감안]
-  1) FinanceDataReader 개별종목은 3000행 상한이라 관측 구간이 2014년~ 로 짧다.
+  1) 개별종목 일봉의 원천(네이버, 종전 FDR 과 같음)이 약 3000봉 상한이라 관측 구간이 2014년~ 로 짧다.
   2) 종목 리스트는 '현재 상장사'라 상장폐지 생존편향이 있다. 폭락기에 사라진
      종목이 빠져 breadth가 실제보다 좋게 나온다 → breadth의 판별력을 **과소**
      추정한다(보수적). 그래도 유의미하면 실제로는 더 강하다는 뜻이다.
@@ -34,8 +34,7 @@ from tools.audit_market_axes import (  # noqa: E402
 
 def build_breadth(n_stocks, ma, start):
     """상위 시총 n개 종목의 '200일선 위 비율'(%) 일별 시계열."""
-    import FinanceDataReader as fdr
-    from tools.audit_common import listing
+    from tools.audit_common import listing, stock_daily
 
     lst = listing('KOSPI')
     lst = lst[~lst['Name'].str.contains('우$|우B$|스팩', regex=True, na=False)]
@@ -44,7 +43,7 @@ def build_breadth(n_stocks, ma, start):
     cols, ok = {}, 0
     for i, code in enumerate(codes, 1):
         try:
-            df = fdr.DataReader(code, start)
+            df = stock_daily(code, start)
             s = pd.to_numeric(df['Close'], errors='coerce').dropna()
             if len(s) > ma:
                 cols[code] = s
@@ -87,13 +86,13 @@ def main():
     ap.add_argument('--start', default='2014-01-01')
     args = ap.parse_args()
 
-    import FinanceDataReader as fdr
+    from tools.audit_market_axes import load_index
 
     print(f"시장 폭 산출: KOSPI 시총 상위 {args.n_stocks}종목의 {args.ma}일선 상회 비율")
     breadth = build_breadth(args.n_stocks, args.ma, args.start)
 
-    idx = fdr.DataReader('KS11', args.start)
-    close_s = pd.to_numeric(idx['Close'], errors='coerce').dropna()
+    _dates, _close = load_index('KS11', args.start)      # KRX Open API 저장소(종전 FDR 지수 캐시는 09-17 에서 멈춤)
+    close_s = pd.Series(_close, index=_dates)
 
     # 지수 축(국면·게이트)은 전체 이력으로 계산한 뒤 breadth 구간으로 맞춘다
     dates = close_s.index

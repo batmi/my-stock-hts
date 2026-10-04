@@ -18,7 +18,7 @@
                 → EMA120·OBV 등 장기 지표의 워밍업 부족까지 포함한 실제 괴리.
                   0이 아닌 것이 자연스럽지만, 크기를 알고 있어야 한다.
 
-데이터는 FinanceDataReader 일봉을 쓴다(KIS API 불필요). smart_money 는 양쪽 모두 False로
+데이터는 앱·백테스트와 같은 krx_daily.get_daily 일봉을 쓴다(KIS API 불필요). smart_money 는 양쪽 모두 False로
 고정해 네트워크 의존 신호를 제거하고 채점 로직만 비교한다.
 
 사용:
@@ -46,7 +46,7 @@ WARMUP = 260        # 대조 시작 인덱스(EMA120·52주 위치가 자리잡�
 
 
 def load_daily(code, lookback_days=4000):
-    """일봉 — 앱·백테스트와 같은 정본 경로(krx_daily.get_daily: Open API → FDR).
+    """일봉 — 앱·백테스트와 같은 정본 경로(krx_daily.get_daily: Open API → FDR 경로).
 
     [왜 · 2026-09-20] 종전엔 FDR 을 직접 읽어 앱이 버리는 0원 거래정지 봉이 그대로 들어왔고,
     그 봉이 조립 차이처럼 보였다(20190430 삼성전자). 정본 경로를 타면 데이터 정제까지 같다.

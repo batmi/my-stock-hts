@@ -104,8 +104,7 @@ def test_스냅샷이_있으면_원격을_두드리지_않는다(tmp_path, monke
 
     def _boom(*a, **k):
         raise AssertionError("스냅샷이 있는데 원격을 받았다 — 고정이 깨졌다")
-    monkeypatch.setitem(sys.modules, "FinanceDataReader",
-                        type("M", (), {"StockListing": staticmethod(_boom)}))
+    monkeypatch.setattr(AU, "_listing_tolerating_cache_lag", _boom)
 
     df = AU._listing("KRX")
     assert len(df) == 10
@@ -120,11 +119,11 @@ def test_갱신은_명시적으로만(tmp_path, monkeypatch):
                         lambda kind: (str(csv), str(tmp_path / "KRX.meta.json")))
     fetched = []
 
-    def _fetch(kind):
+    def _fetch(kind, lookback=None, on=None):
         fetched.append(kind)
         return _listing_df(n=20)
-    monkeypatch.setitem(sys.modules, "FinanceDataReader",
-                        type("M", (), {"StockListing": staticmethod(_fetch)}))
+    #  [2026-10-04] 원격은 캐시 저장소 직접 조회 하나다(fdr.StockListing 은 data.krx.co.kr 를 먼저 두드려 걷어냈다).
+    monkeypatch.setattr(AU, "_listing_tolerating_cache_lag", _fetch)
 
     monkeypatch.setenv("AUDIT_LISTING_REFRESH", "1")
     AU._LISTING_ANNOUNCED.clear()

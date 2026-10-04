@@ -130,10 +130,29 @@ def listing(kind):
     base = "KRX" if kind in ("KOSPI", "KOSDAQ") else kind
     df = krx_daily.fdr_listing(base)
     if df is None or df.empty:
-        raise RuntimeError(f"상장목록({kind})을 받지 못했다 — FDR 정상 경로·캐시 저장소 모두 실패")
+        raise RuntimeError(f"상장목록({kind})을 받지 못했다 — FDR 캐시 저장소 응답 없음")
     if kind in ("KOSPI", "KOSDAQ"):
         df = df[df["Market"].astype(str).str.upper() == kind].reset_index(drop=True)
     return df
+
+
+def stock_daily(code, start):
+    """국내 종목 일봉 — 종전 `fdr.DataReader(code, start)` 와 같은 값·같은 모양. 못 받으면 None.
+
+    [2026-10-04] FDR 패키지를 걷어냈다. 그 국내 일봉의 원천은 네이버 fchart(수정주가)이고, 운영 코드의
+    `krx_daily.naver_daily` 가 같은 원천을 필요한 봉 수만 타임아웃을 걸어 받는다(243봉 OHLCV 100% 일치).
+    반환: DatetimeIndex + Open/High/Low/Close/Volume 열.
+    """
+    import datetime as _dt
+    import pandas as pd
+    from modules import krx_daily
+    df = krx_daily.naver_daily(str(code), pd.Timestamp(start).strftime("%Y%m%d"),
+                               _dt.date.today().strftime("%Y%m%d"))
+    if df is None or df.empty:
+        return None
+    out = df.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"})
+    out.index = pd.to_datetime(out.pop("date"), format="%Y%m%d")
+    return out
 
 
 def seed_notice(n_seeds, flag="--seed", example=None, emit=print):
@@ -197,7 +216,7 @@ def seeded_targets(args, seed):
     """그 씨드의 (코드, 이름) 목록 = 규칙 통과 풀에서 뽑은 표본 + 상장폐지 종목.
 
     지연 임포트인 이유: rule_pool·dead_targets 를 담은 두 도구가 이 모듈을 import 한다
-    (여기서 맞import 하면 순환한다). 무거운 FinanceDataReader 도 부를 때만 들어온다.
+    (여기서 맞import 하면 순환한다).
     """
     from tools.audit_discover_fit import rule_pool
     from tools.audit_universe import dead_targets

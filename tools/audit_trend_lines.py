@@ -118,7 +118,8 @@ def main():
                     help="'최근 실제 방향'을 재는 봉 수")
     args = ap.parse_args()
 
-    import FinanceDataReader as fdr
+    from tools.audit_common import stock_daily
+    from tools.audit_market_axes import _fetch_index
     config.session.load_stock_config()
     codes = [(s["code"], s["name"])
              for s in config.session.stock_data.get("stocks_kr", [])][:args.stocks]
@@ -128,7 +129,8 @@ def main():
     frames = []
     for code, name in codes:
         try:
-            d = fdr.DataReader(code, start)
+            #  지수는 KRX Open API 저장소(종전 FDR 지수 캐시는 2026-09-17 에서 멈춤), 종목은 네이버 일봉(종전 FDR 원천)
+            d = _fetch_index(code, start) if code in ("KS11", "KQ11") else stock_daily(code, start)
             if d is None or len(d) < 150:
                 continue
             d = d.rename(columns=str.lower).reset_index()

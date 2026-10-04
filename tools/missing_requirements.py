@@ -12,7 +12,7 @@ import sys
 IMPORT_NAME = {
     "beautifulsoup4": "bs4", "google-genai": "google.genai", "python-dotenv": "dotenv",
     "tradingview-screener": "tradingview_screener", "tvdatafeed": "tvDatafeed",
-    "gnureadline": "gnureadline", "finance-datareader": "FinanceDataReader",
+    "gnureadline": "gnureadline",
 }
 
 

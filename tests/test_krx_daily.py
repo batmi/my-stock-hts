@@ -4,6 +4,7 @@
 국내 일봉은 pykrx(1순위)/FDR(폴백)로 받고, 당일 봉만 실시간 현재가로 채운다.
 모든 테스트는 네트워크를 타지 않도록 소스 함수를 목으로 대체한다.
 """
+import re
 import time
 from unittest.mock import MagicMock, patch
 
@@ -27,7 +28,7 @@ def _pykrx_frame(n=200, start='2025-01-02'):
 
 
 def _fdr_frame(n=200, start='2025-01-02'):
-    """FinanceDataReader.DataReader 형태(영문 컬럼 + DatetimeIndex)."""
+    """영문 컬럼 + DatetimeIndex 형태(종전 FDR DataReader 모양 — _normalize 가 받아야 한다)."""
     idx = pd.bdate_range(start, periods=n)
     return pd.DataFrame({
         'Open': [20000 + i for i in range(n)],
@@ -45,19 +46,18 @@ def clean_cache(monkeypatch):
     [2026-09-17] 조회 순서가 Open API → FDR → pykrx(스크래핑 허용 시에만)로 바뀌었다. 이 파일의
     캐시·쿨다운 테스트는 소스 자체가 아니라 get_daily 의 **기계장치**를 재므로, 종전 목
     (`_fetch_pykrx`)을 그대로 쓰기 위해 스크래핑 게이트를 열고 Open API 는 끈다.
-    (`_fdr` 슬롯이 object() 라 _fetch_fdr 는 AttributeError → 다음 소스로 넘어간다.)
+    FDR 경로(_fetch_fdr)는 네이버를 직접 부르는데 테스트는 네트워크가 막혀 있어 다음 소스로 넘어간다.
     """
     import config
     monkeypatch.setattr(config, "KRX_WEB_SCRAPING_ALLOWED", True, raising=False)
     monkeypatch.delenv("KRX_OPENAPI_KEY", raising=False)
-    saved = (krx_daily._import_done, krx_daily._pykrx, krx_daily._fdr)
+    saved = (krx_daily._import_done, krx_daily._pykrx)
     krx_daily._import_done = True
-    krx_daily._pykrx = object()     # is_available() True 유지 (_fetch_* 는 테스트가 patch)
-    krx_daily._fdr = object()
+    krx_daily._pykrx = object()     # _fetch_* 는 테스트가 patch
     krx_daily.clear_cache()
     yield
     krx_daily.clear_cache()
-    krx_daily._import_done, krx_daily._pykrx, krx_daily._fdr = saved
+    krx_daily._import_done, krx_daily._pykrx = saved
 
 
 # ---------------------------------------------------------
@@ -180,17 +180,35 @@ def test_pykrx_미설치면_None():
         assert krx_daily._fetch_pykrx('005930', '20250101', '20251231') is None
 
 
-def test_fdr_어댑터는_영문컬럼을_정규화한다():
-    with patch.object(krx_daily, '_fdr') as fdr:
-        fdr.DataReader.return_value = _fdr_frame()
+_NAVER_XML = ('<?xml version="1.0" encoding="EUC-KR" ?><protocol><chartdata symbol="005930" name="삼성전자">'
+              '<item data="20250102|20000|20100|19900|20050|2000" />'
+              '<item data="20250103|20001|20101|19901|20051|2001" />'
+              '<item data="20260105|30000|30100|29900|30050|3000" />'
+              '</chartdata></protocol>')
+
+
+def test_fdr_경로는_네이버를_필요한_봉수만큼_타임아웃을_걸어_받는다():
+    """[2026-10-04] FDR 라이브러리(count=6000·타임아웃 없음) 대신 같은 원천을 직접 받는다."""
+    asked = []
+    with patch.object(krx_daily, '_http_get_text', side_effect=lambda url: (asked.append(url), _NAVER_XML)[1]):
         df = krx_daily._fetch_fdr('005930', '20250101', '20251231')
-    assert df is not None and df['close'].iloc[0] == 20050
-    assert list(df.columns) == krx_daily._COLUMNS
+    assert list(df['date']) == ['20250102', '20250103']           # end 밖(2026)은 자른다
+    assert df['close'].iloc[0] == 20050 and list(df.columns) == krx_daily._COLUMNS
+    count = int(re.search(r'count=(\d+)', asked[0]).group(1))
+    assert count < 6000, "시작일까지의 봉 수만 받아야 한다"
 
 
-def test_fdr_미설치면_None():
-    with patch.object(krx_daily, '_fdr', None):
+def test_fdr_경로는_빈_응답이면_None():
+    with patch.object(krx_daily, '_http_get_text', return_value='<protocol></protocol>'):
         assert krx_daily._fetch_fdr('005930', '20250101', '20251231') is None
+
+
+def test_http_get은_타임아웃을_건다():
+    with patch('requests.get') as g:
+        g.return_value.status_code = 200
+        g.return_value.text = 'x'
+        krx_daily._http_get_text('https://example.invalid/')
+    assert g.call_args.kwargs.get('timeout') == krx_daily._HTTP_TIMEOUT
 
 
 # ---------------------------------------------------------
@@ -859,18 +877,14 @@ def _fdr_listing_frame():
 
 
 def test_FDR_상장목록_파서는_국내코드만_남긴다():
-    krx_daily._lazy_import()
-    with patch.object(krx_daily, '_fdr') as fdr:
-        fdr.StockListing.return_value = _fdr_listing_frame()
+    with patch.object(krx_daily, 'fdr_listing', return_value=_fdr_listing_frame()):
         out = krx_daily._listing_map_from_fdr()
     assert set(out) == {'005930'} and out['005930']['name'] == '삼성전자'
 
 
 def test_FDR_상장목록은_Code컬럼이_없으면_None():
     """컬럼 규격이 바뀌면 '빈 목록'이 아니라 '조회 실패'여야 한다 — 호출부가 검증을 건너뛴다."""
-    krx_daily._lazy_import()
-    with patch.object(krx_daily, '_fdr') as fdr:
-        fdr.StockListing.return_value = pd.DataFrame({'종목코드': ['005930']})
+    with patch.object(krx_daily, 'fdr_listing', return_value=pd.DataFrame({'종목코드': ['005930']})):
         assert krx_daily._listing_map_from_fdr() is None
 
 

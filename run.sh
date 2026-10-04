@@ -95,7 +95,6 @@ _import_name() {
         "tradingview-screener")  echo "tradingview_screener" ;;
         "tvdatafeed")            echo "tvDatafeed" ;;
         "gnureadline")           echo "gnureadline" ;;
-        "finance-datareader")    echo "FinanceDataReader" ;;
         *)                       echo "$1" ;;
     esac
 }

@@ -179,24 +179,17 @@ def _listing(kind, refresh=None, as_of=None):
         return pd.read_csv(f, dtype={"Code": str, "Symbol": str})
 
     from modules import krx_daily
-    try:
-        if as_of:
-            raise RuntimeError(f"기준일 고정({as_of}) — 최신 조회를 건너뛴다")
-        import FinanceDataReader as fdr
-        df = fdr.StockListing(kind)
-        if df is None or not len(df):
-            raise RuntimeError("빈 목록")
-    except Exception as e:
-        df = _listing_tolerating_cache_lag(kind, on=as_of)
-        if df is None:
-            if os.path.exists(f):
-                print(f"[목록] {kind} 원격 실패({type(e).__name__}) → 스냅샷 사용: {f}", flush=True)
-                return pd.read_csv(f, dtype={"Code": str, "Symbol": str})
-            raise
+    #  [2026-10-04] fdr.StockListing 을 먼저 부르지 않는다 — 같은 캐시 CSV 를 받으려고 매번 data.krx.co.kr
+    #   (약관 위반으로 IP 를 차단당한 도메인)에 타임아웃 없이 묻는다. krx_daily.fdr_listing 이 오늘부터
+    #   거슬러 직접 받고, 받은 파일의 날짜를 항상 알려 준다.
+    df = _listing_tolerating_cache_lag(kind, on=as_of)
+    if df is None:
+        if os.path.exists(f):
+            print(f"[목록] {kind} 원격 실패 → 스냅샷 사용: {f}", flush=True)
+            return pd.read_csv(f, dtype={"Code": str, "Symbol": str})
+        raise RuntimeError(f"{kind} 목록을 캐시 저장소에서 받지 못했다")
     df.to_csv(f, index=False, encoding="utf-8")
     import datetime as _dt
-    #  캐시 경로로 받았으면 그 파일의 날짜가 곧 데이터 날짜다. 정상 경로면 알 수 없다
-    #  (FDR 이 '오늘' 파일을 받으므로 오늘로 적는다).
     data_date = krx_daily.last_listing_date(kind) or _dt.datetime.now().strftime("%Y-%m-%d")
     with open(meta_f, "w", encoding="utf-8") as fh:
         json.dump({"kind": kind, "rows": int(len(df)), "data_date": data_date,

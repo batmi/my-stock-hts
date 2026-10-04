@@ -25,7 +25,6 @@
 """
 import argparse
 import os
-import time
 import sys
 
 import numpy as np
@@ -48,34 +47,47 @@ INDEX_CACHE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "index_cache")
 
 
-def _fetch_index(ticker, start, timeout=60):
-    """FDR 조회를 스레드로 감싸 **멈춤(hang)에 상한**을 둔다.
+#  감사 도구의 지수 표기 → krx_openapi.index_daily 표기
+_INDEX_MARKET = {"KS11": "KOSPI", "KQ11": "KOSDAQ"}
+#  한 번에 받을 Open API 호출 상한 — 최근 며칠 결손을 메우는 정도. 그보다 깊은 결손은 백필 도구로.
+_INDEX_MAX_CALLS = 60
 
-    2026-08-17: FDR의 KRX 지수 경로("KS11")가 빈 프레임을 돌려주거나 응답이 멈춰
-     감사 도구 두 개가 KeyError: 'Close'로 죽었다. 상류 장애는 통제할 수 없으므로
-     ① 시간 상한 ② '^' 접두어 폴백 ③ 로컬 캐시 세 겹으로 막는다.
+
+def _fetch_index(ticker, start):
+    """지수 일봉(KRX Open API 저장소) DataFrame[date(DatetimeIndex) → Close, Open, High, Low].
+
+    [2026-10-04] 종전엔 FDR(fdr.DataReader('KS11'))이었는데, 그 원천인 FinanceData GitHub 지수 캐시가
+     2026-09-17 에서 멈췄다(KRX 스크래핑 차단과 같은 날) — 그 뒤 감사는 지수 이력이 조용히 09-17 에서
+     잘렸고, 그날 종가도 확정치가 아니었다(6,724.34 vs 공식 6,715.41). Open API 는 같은 KRX 값이다
+     (겹치는 859일 중 858일 OHLC 일치, 나머지 하루가 위 09-17). 저장소에 구멍이 크면 백그라운드 적재를
+     띄우지 않고 None 이 된다 — load_index 가 백필 안내와 함께 멈춘다.
     """
-    import threading
-    box = {}
+    import datetime as _dt
+    from modules import krx_openapi as oa
+    market = _INDEX_MARKET.get(str(ticker).lstrip("^").upper())
+    if market is None:
+        raise ValueError(f"지원하지 않는 지수 표기: {ticker} (KS11·KQ11)")
+    if not oa.is_configured():
+        raise RuntimeError("KRX_OPENAPI_KEY 가 없다 — 감사 지수는 KRX Open API 저장소에서 읽는다")
+    start_ts = pd.Timestamp(start)
+    lookback = (_dt.date.today() - start_ts.date()).days + 1
+    df = oa.index_daily(market, lookback, max_calls=_INDEX_MAX_CALLS)
+    if df is None or df.empty:
+        raise RuntimeError(f"{ticker} 이력이 Open API 저장소에 다 차 있지 않다 — "
+                           f"python tools/krx_openapi_backfill.py --days {lookback} --only index")
+    out = pd.DataFrame({"Close": df["close"].astype(float).values, "Open": df["open"].astype(float).values,
+                        "High": df["high"].astype(float).values, "Low": df["low"].astype(float).values},
+                       index=pd.to_datetime(df["date"].astype(str), format="%Y%m%d"))
+    return out[out.index >= start_ts]
 
-    def work():
-        try:
-            import FinanceDataReader as fdr
-            box["df"] = fdr.DataReader(ticker, start)
-        except Exception as exc:      # noqa: BLE001 — 폴백 판단에만 쓴다
-            box["err"] = exc
 
-    t = threading.Thread(target=work, daemon=True)
-    t.start()
-    t.join(timeout)
-    if t.is_alive():
-        raise TimeoutError(f"{ticker} 조회가 {timeout}초를 넘겼다(상류 지연)")
-    if "err" in box:
-        raise box["err"]
-    df = box.get("df")
-    if df is None or len(df) == 0 or "Close" not in getattr(df, "columns", []):
-        raise ValueError(f"{ticker} 응답에 Close가 없다(빈 프레임)")
-    return df
+def _latest_index_dd():
+    """Open API 에 지금 실려 있어야 할 최신 기준일(YYYYMMDD). 판정 불가면 '' — 캐시를 그대로 쓴다."""
+    try:
+        from modules import krx_openapi as oa
+        return oa.latest_available_dd()
+    except Exception:       # noqa: BLE001
+        return ""
 
 
 def load_index(ticker, start, use_cache=True):
@@ -88,22 +100,15 @@ def load_index(ticker, start, use_cache=True):
     path = os.path.join(INDEX_CACHE_DIR, key)
     if use_cache and os.path.exists(path):
         c = pd.read_csv(path, index_col=0, parse_dates=True)["Close"].dropna()
-        if len(c) > 0:
+        #  [2026-10-04] 캐시 키가 시작일뿐이라, 고정 시작일('2010-01-01')을 쓰는 도구는 처음 만든 날의
+        #   파일을 영영 재사용했다(예: 08월에 만든 파일이 10월 감사에도 그대로). 최신 게시일까지 차 있을 때만 쓴다.
+        if len(c) > 0 and c.index[-1].strftime("%Y%m%d") >= _latest_index_dd():
             return c.index, c.values.astype(float)
 
-    df, last = None, None
-    for cand in (ticker, "^" + ticker.lstrip("^")):   # KRX 경로 → yfinance 경로 폴백
-        for attempt in range(2):
-            try:
-                df = _fetch_index(cand, start)
-                break
-            except Exception as exc:                  # noqa: BLE001
-                last = f"{cand}: {type(exc).__name__} {exc}"
-                time.sleep(1.5 * (attempt + 1))
-        if df is not None:
-            break
-    if df is None:
-        raise RuntimeError(f"지수 {ticker} 조회 실패 — {last}")
+    try:
+        df = _fetch_index(ticker, start)
+    except Exception as exc:                          # noqa: BLE001
+        raise RuntimeError(f"지수 {ticker} 조회 실패 — {type(exc).__name__} {exc}") from exc
 
     close = pd.to_numeric(df["Close"], errors="coerce").dropna()
     if len(close) == 0:

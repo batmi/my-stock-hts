@@ -545,3 +545,37 @@ def test_old_db_without_dept_column_refetches_base_info(store):
     oa.listing_map(now=NOW)
     again = [a for a, _ in store[n:]]
     assert set(again) == set(oa.BASE_INFO_APIS), "소속부가 빈 기본정보를 다시 받아야 한다"
+
+
+# ── 이음매 재기준: 오늘 권리락·분할 (2026-10-04) ───────────────────────
+def _tail_with_last(today, last_open, today_open):
+    return pd.DataFrame({"date": ["20260917", today], "open": [last_open, today_open],
+                         "high": [last_open + 1, today_open + 1], "low": [last_open - 1, today_open - 1],
+                         "close": [last_open, today_open], "volume": [9.0, 9.0]})
+
+
+def test_split_today_rebases_the_confirmed_history(store, monkeypatch):
+    """50:1 분할 당일 — 네이버는 어제 봉까지 새 기준, Open API 는 다음 날 08:00 까지 옛 기준이다."""
+    from modules import krx_daily
+    krx_daily.clear_cache()
+    today = datetime.now().strftime("%Y%m%d")
+    monkeypatch.setattr(oa, "latest_available_dd", lambda now=None: "20260917")
+    monkeypatch.setattr(krx_daily, "_fetch_fdr", lambda code, s, e: _tail_with_last(today, 116 / 50, 2.4))
+    df = krx_daily.get_daily("005930", lookback_days=4, use_cache=False)
+    assert df.attrs["seam_rebase"] == pytest.approx(1 / 50)
+    assert float(df["close"].iloc[-2]) == pytest.approx(117 / 50)       # 어제 종가가 새 기준
+    assert list(df["date"])[-1] == today
+    gap = float(df["open"].iloc[-1]) / float(df["close"].iloc[-2]) - 1
+    assert abs(gap) < 0.05, f"분할이 가짜 갭({gap:.0%})으로 남았다"
+
+
+def test_ordinary_day_is_not_rebased(store, monkeypatch):
+    from modules import krx_daily
+    krx_daily.clear_cache()
+    today = datetime.now().strftime("%Y%m%d")
+    monkeypatch.setattr(oa, "latest_available_dd", lambda now=None: "20260917")
+    #  같은 날 시가는 같다(네이버는 정수 반올림 — 0.01% 안)
+    monkeypatch.setattr(krx_daily, "_fetch_fdr", lambda code, s, e: _tail_with_last(today, 116.004, 118))
+    df = krx_daily.get_daily("005930", lookback_days=4, use_cache=False)
+    assert "seam_rebase" not in df.attrs
+    assert float(df["close"].iloc[-2]) == 117.0

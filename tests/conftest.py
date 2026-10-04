@@ -172,7 +172,10 @@ def block_side_effects_for_whole_session():
     _ETC_HOSTS = ("finance.naver.com", "stock.naver.com", "news.google.com", "krx.co.kr",
                   #  [차단 2026-09-17] 경제 캘린더 소스. 읽기 전용이지만 테스트가 실 서버에 닿으면
                   #   그날 실제 일정이 결과에 섞여 단정이 흔들린다(BOJ 추가 때 dedupe 테스트가 실제로 깨졌다).
-                  "boj.or.jp", "bok.or.kr", "suneung.re.kr", "federalreserve.gov", "stlouisfed.org")
+                  "boj.or.jp", "bok.or.kr", "suneung.re.kr", "federalreserve.gov", "stlouisfed.org",
+                  #  [차단 2026-10-04] FDR 상장목록 캐시(GitHub). 종전엔 pd.read_csv(url)=urllib 이라 아래
+                  #   urllib 차단에 걸렸는데, 타임아웃을 걸려고 requests 로 바꾸면서 비켜 가게 됐다.
+                  "raw.githubusercontent.com")
     # [차단 2026-09-03] 매매일지 웹서버. 여기로 나간 요청은 되돌릴 수 없다 — 테스트가 만든
     #  가짜 체결이 사람이 보는 매매일지에 실거래로 남는다(실제 사고). 호스트는 환경변수에서
     #  뽑아 설치마다 달라도 따라가고, 미설정이면 막을 대상 자체가 없다.
@@ -212,6 +215,9 @@ def block_side_effects_for_whole_session():
             #  '전송 완료'로 도장 찍어 큐에서 지우고, 진짜 체결이 영영 서버에 닿지 않는다.
             #  503 은 서버가 죽었을 때의 형태라 호출부가 재시도 경로를 그대로 탄다.
             return _BlockedResponse({"error": _BLOCKED_MSG}, status=503)
+        if "githubusercontent.com" in url:
+            # 캐시 파일이 없는 날의 형태(404) — fdr_listing 이 그날을 건너뛰고 '못 받음'으로 끝난다.
+            return _BlockedResponse({}, status=404)
         if any(h in url for h in _ETC_HOSTS):
             return _BlockedResponse({})
         return _BlockedResponse({"rt_cd": "1", "msg_cd": "TEST_BLOCKED",

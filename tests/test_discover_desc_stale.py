@@ -81,12 +81,11 @@ def test_frozen_listings_look_back_far_enough(monkeypatch):
     """업종·폐지 목록은 기본 10일보다 넓게 거슬러 찾는다 — 캐시 저장소가 09-17 에서 멈췄다."""
     tried = []
 
-    def fake_read_csv(url, **k):
+    def fake_get(url):
         tried.append(url)
-        raise OSError("404")
+        raise OSError("HTTP 404")
 
-    monkeypatch.setattr(krx_daily, "_lazy_import", lambda: None)
-    monkeypatch.setattr(krx_daily.pd, "read_csv", fake_read_csv)
+    monkeypatch.setattr(krx_daily, "_http_get_text", fake_get)
     assert krx_daily.fdr_listing("KRX-DESC", on="2026-10-03") is None
     assert len(tried) >= 60
     tried.clear()
