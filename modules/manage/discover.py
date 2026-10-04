@@ -72,7 +72,7 @@ def _print_rules(target, pool, exclude_holding):
     rules.add_row("방어주", "통신 · 전기 · 가스 · 음식료 · 종합소매",
                   "실거래 재현 검증으로 관심종목에서 제외된 종목군.\n"
                   "진입 신호 전방 20일 +0.02% (관심종목 +3.04%)")
-    rules.add_row("우선주·스팩·리츠", "종목명/코드 규칙으로 제외",
+    rules.add_row("우선주·스팩·리츠", "KRX 주식 종류(보통주만) · 종목명 규칙으로 제외",
                   "추세추종 대상이 아니고 유동성 성격이 다름")
     rules.add_row("관리·투자주의", "관리종목 · 투자주의환기종목",
                   "상장폐지 위험 · 거래 제약")
@@ -124,6 +124,40 @@ def _desc_staleness_note(desc_date, no_industry, today=None):
     return head + tail
 
 
+#  주식 종류(KRX 종목기본정보) 중 보통주만 남긴다. 코드 끝자리 규칙은 신형우선주·종류주권을
+#   표기 관례로 추정할 뿐이라, 이 칸이 있으면 이것이 정본이다.
+COMMON_STOCK_KIND = "보통주"
+
+
+def _listing_frame():
+    """(상장목록 DataFrame[Code, Name, Market, Marcap, Dept, Kind], 출처). 못 받으면 (None, 출처).
+
+    [2026-10-04] KRX Open API(종목기본정보 + 최신 일별매매 시총·소속부)가 1순위다. FDR 상장목록은
+     제3자 GitHub 캐시라 장 마감 전까지 404 였고(2026-09-08), 인증키가 없을 때만 폴백으로 쓴다.
+     Open API 는 기본정보가 최신 하루 스냅샷이라 이미 폐지된 종목이 시총 0 으로 남는다 — 걸러낸다.
+    """
+    import pandas as pd
+    from modules import krx_daily, krx_openapi
+    if krx_openapi.is_configured():
+        try:
+            raw = krx_openapi.listing_map()
+        except Exception as e:      # noqa: BLE001 - 목록 실패는 FDR 폴백으로
+            logger.warning(f"[discover] KRX Open API 상장목록 실패: {e} — FDR 로 대신한다")
+            raw = None
+        if raw:
+            df = pd.DataFrame([{"Code": c, "Name": v.get("name", ""), "Market": v.get("market", ""),
+                                "Marcap": v.get("marcap") or 0.0, "Dept": v.get("dept", ""),
+                                "Kind": v.get("kind", "")} for c, v in raw.items()])
+            return df[df["Marcap"] > 0], "KRX Open API"
+    df = krx_daily.fdr_listing("KRX")
+    if df is not None and "Market" in df.columns:
+        #  FDR 은 코스닥 글로벌 세그먼트(알테오젠·에코프로비엠 등 우량주 45종목, 2026-10-04 실측)를
+        #   'KOSDAQ GLOBAL' 로 표기한다. 종전엔 이 표기가 아래 KOSPI·KOSDAQ 필터에 걸려 코스닥 최상위
+        #   종목들이 후보에서 조용히 빠졌다. Open API 는 이들을 KOSDAQ 으로 준다 — 출처와 무관하게 맞춘다.
+        df = df.assign(Market=df["Market"].replace({"KOSDAQ GLOBAL": "KOSDAQ"}))
+    return df, "FDR"
+
+
 def _fetch_candidates(target, pool, exclude_holding, seed=None):
     """후보를 만들고, 단계별로 몇 개가 왜 걸러졌는지 함께 돌려준다.
 
@@ -143,15 +177,15 @@ def _fetch_candidates(target, pool, exclude_holding, seed=None):
     #   나고 이 메뉴가 통째로 죽었다(2026-09-08 실측: 오늘 404 · 어제 이전은 전부 200).
     #   krx_daily.fdr_listing 이 '올라와 있는 가장 최근 날짜'로 받아 준다. 시총 순위·업종은
     #   하루 사이 거의 변하지 않으므로 후보를 고르는 이 화면의 의미는 달라지지 않는다.
-    krx = krx_daily.fdr_listing("KRX")
+    krx, listing_src = _listing_frame()
     #  [Fix 2026-10-03] 업종 목록(KRX-DESC)은 캐시 저장소에서 2026-09-17 이후 갱신이 멈췄다(KRX 스크래핑
     #   차단 시점과 같음 — 회복을 기대하지 않는다). 기본 10일 창으로는 못 찾아 이 메뉴가 통째로 죽었다.
     #   거슬러 찾는 창은 krx_daily.LISTING_LOOKBACK_DAYS 가 정한다. 오래된 파일을 쓰는 대신 기준일과 업종을
     #   모르는 종목 수를 화면에 밝힌다(그 종목들엔 방어주·지주회사 규칙이 걸리지 않는다 — 조용히 통과시키지 않는다).
     desc = krx_daily.fdr_listing("KRX-DESC")
     desc_date = krx_daily.last_listing_date("KRX-DESC")
-    if krx is None:
-        raise RuntimeError("KRX 상장목록 조회 실패 (FDR 정상 경로·캐시 저장소 모두 응답 없음)")
+    if krx is None or krx.empty:
+        raise RuntimeError(f"KRX 상장목록 조회 실패 ({listing_src} 응답 없음)")
     if desc is None:
         raise RuntimeError(f"KRX 업종 목록 조회 실패 (최근 {krx_daily.LISTING_LOOKBACK_DAYS['KRX-DESC']}일 안에 캐시 파일 없음)")
     krx = krx[krx["Market"].isin(["KOSPI", "KOSDAQ"])].dropna(subset=["Marcap"])
@@ -173,14 +207,17 @@ def _fetch_candidates(target, pool, exclude_holding, seed=None):
     no_industry = 0
     # KOSDAQ 소속부(Dept)에 관리종목·투자주의환기·SPAC이 표기된다. KOSPI는 결측이라
     #  이 경로로는 안 걸리지만, KOSDAQ 쪽 위험 종목만으로도 실익이 크다.
-    dept = dict(zip(krx["Code"], krx.get("Dept", krx["Code"] * 0)))
+    dept = dict(zip(krx["Code"], krx["Dept"])) if "Dept" in krx.columns else {}
+    kind = dict(zip(krx["Code"], krx["Kind"])) if "Kind" in krx.columns else {}
     for r in rows:
         code, name = r["Code"], r["Name"]
         d_txt = str(dept.get(code) or "")
         if "관리종목" in d_txt or "투자주의환기" in d_txt:
             cut_admin += 1
             continue
-        if "스팩" in name or "리츠" in name or "SPAC" in d_txt or not code.endswith("0"):
+        k_txt = str(kind.get(code) or "")
+        not_common = (k_txt != COMMON_STOCK_KIND) if k_txt else not code.endswith("0")
+        if "스팩" in name or "리츠" in name or "SPAC" in d_txt or not_common:
             cut_type += 1
             continue
         industry = desc.loc[code, "Industry"] if code in desc.index else ""

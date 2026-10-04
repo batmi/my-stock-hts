@@ -218,6 +218,15 @@ def _connect():
     cols = {r[1] for r in conn.execute("PRAGMA table_info(stock_daily)")}
     if "chg" not in cols:
         conn.execute("ALTER TABLE stock_daily ADD COLUMN chg REAL")
+    # [2026-10-04] 소속부(SECT_TP_NM — 코스닥의 '관리종목(소속부없음)'·'투자주의환기종목'·'SPAC').
+    #  탐색 메뉴가 FDR 의 Dept 대신 이 칸으로 위험 종목을 거른다. 기존 파일엔 없으니 붙이고, 이미
+    #  받아 둔 기본정보는 이 칸이 빈 채라 '받음' 표시를 지워 다음 조회가 최신 하루를 다시 받게 한다
+    #  (기본정보는 최신 하루 스냅샷만 쓰므로 3콜).
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(isu_base)")}
+    if "sect" not in cols:
+        conn.execute("ALTER TABLE isu_base ADD COLUMN sect TEXT")
+        conn.execute("DELETE FROM fetched WHERE api_id IN (%s)" % ",".join("?" * len(BASE_INFO_APIS)),
+                     BASE_INFO_APIS)
     return conn
 
 
@@ -367,11 +376,12 @@ def _store(conn, api_id, bas_dd, rows):
              for r in rows if r.get("ISU_CD")])
     elif api_id in BASE_INFO_APIS:
         conn.executemany(
-            "INSERT OR REPLACE INTO isu_base VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO isu_base (code, isin, name, abbrv, market, secugrp, kind, list_dd, parval, "
+            "shares, bas_dd, sect) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             [(str(r.get("ISU_SRT_CD", "")).strip(), r.get("ISU_CD"), r.get("ISU_NM"), r.get("ISU_ABBRV"),
               str(r.get("MKT_TP_NM") or "").strip().upper(), r.get("SECUGRP_NM"),
               r.get("KIND_STKCERT_TP_NM"), r.get("LIST_DD"), r.get("PARVAL"), _num(r.get("LIST_SHRS")),
-              bas_dd)
+              bas_dd, str(r.get("SECT_TP_NM") or "").strip())
              for r in rows if r.get("ISU_SRT_CD")])
     conn.execute("INSERT OR REPLACE INTO fetched VALUES (?,?,?,?)", (api_id, bas_dd, len(rows), time.time()))
 
@@ -831,7 +841,8 @@ def gold_daily(lookback_days=400, max_calls=None, now=None):
 
 
 def listing_map(max_calls=None, now=None):
-    """{code: {'name','marcap','market','list_dd'}} — 종목기본정보 + 최신 일별매매의 시총. 실패 시 None.
+    """{code: {'name','marcap','market','list_dd','secugrp','kind','dept'}} — 종목기본정보 + 최신 일별매매의 시총.
+    실패 시 None. kind 는 주식 종류(보통주·구형우선주·신형우선주·종류주권), dept 는 소속부.
 
     기본정보는 스냅샷이라 최신 기준일 하루만 받는다(2콜). 시총은 그 날의 일별매매에서 온다.
     """
@@ -860,21 +871,22 @@ def listing_map(max_calls=None, now=None):
             return None
         end_dd = row[0]
     with _DB_LOCK, _connect() as conn:
-        base = conn.execute("SELECT code, abbrv, name, market, list_dd, secugrp, kind FROM isu_base").fetchall()
+        base = conn.execute("SELECT code, abbrv, name, market, list_dd, secugrp, kind, sect FROM isu_base").fetchall()
         daily = conn.execute("SELECT code, name, market, marcap FROM stock_daily WHERE bas_dd=?",
                              (end_dd,)).fetchall()
     if not base and not daily:
         return None
     caps = {code: marcap for code, _n, _m, marcap in daily}
     out = {}
-    for code, abbrv, name, market, list_dd, secugrp, kind in base:
+    for code, abbrv, name, market, list_dd, secugrp, kind, sect in base:
         out[code] = {"name": (abbrv or name or "").strip(), "marcap": float(caps.get(code) or 0.0),
                      "market": (market or "").upper(), "list_dd": list_dd or "",
-                     "secugrp": secugrp or "", "kind": kind or ""}
+                     "secugrp": secugrp or "", "kind": kind or "", "dept": sect or ""}
     # 종목기본정보는 주권만이다 — ETF/ETN 은 그 날 일별매매의 이름·시장으로 보탠다(종목명 검증용).
     for code, name, market, marcap in daily:
         out.setdefault(code, {"name": (name or "").strip(), "marcap": float(marcap or 0.0),
-                              "market": (market or "").upper(), "list_dd": "", "secugrp": market or "", "kind": ""})
+                              "market": (market or "").upper(), "list_dd": "", "secugrp": market or "", "kind": "",
+                              "dept": ""})
     return out
 
 

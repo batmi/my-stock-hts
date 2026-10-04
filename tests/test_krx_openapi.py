@@ -516,3 +516,32 @@ def test_inline_ensure_gives_up_after_the_wait_cap(tmp_path, monkeypatch):
     finally:
         release.set()
         th.join(2)
+
+
+# ── 소속부·주식 종류 (탐색 메뉴가 FDR 대신 쓴다 · 2026-10-04) ─────────────
+def test_listing_map_carries_dept_and_kind(store):
+    real = oa._call.side_effect
+
+    def with_sect(api_id, dd):
+        rows = real(api_id, dd)
+        if api_id in oa.BASE_INFO_APIS:
+            rows = [dict(r, SECT_TP_NM="관리종목(소속부없음)") for r in rows]
+        return rows
+
+    with patch.object(oa, "_call", side_effect=with_sect):
+        lm = oa.listing_map(now=NOW)
+    assert lm["005930"]["dept"] == "관리종목(소속부없음)"
+    assert lm["005930"]["kind"] == "보통주"
+    assert lm["0080G0"]["dept"] == ""                    # ETF 는 기본정보가 없어 빈 칸
+
+
+def test_old_db_without_dept_column_refetches_base_info(store):
+    import sqlite3
+    oa.listing_map(now=NOW)
+    path = config.KRX_OPENAPI_DB_PATH
+    with sqlite3.connect(path) as c:                      # 칸이 없던 옛 파일로 되돌린다
+        c.execute("ALTER TABLE isu_base DROP COLUMN sect")
+    n = len(store)
+    oa.listing_map(now=NOW)
+    again = [a for a, _ in store[n:]]
+    assert set(again) == set(oa.BASE_INFO_APIS), "소속부가 빈 기본정보를 다시 받아야 한다"

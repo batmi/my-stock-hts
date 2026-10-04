@@ -909,3 +909,11 @@ def test_단건_폴백이_문자열이_아니면_None():
 
 def test_해외코드는_네트워크_없이_빈문자열():
     assert krx_daily.get_ticker_name('AAPL') == ''
+
+
+def test_FDR_상장목록은_KOSDAQ_GLOBAL을_KOSDAQ으로_판정한다():
+    """[2026-10-04] FDR 의 'KOSDAQ GLOBAL'(코스닥 우량주 세그먼트)이 시장 판정에서 '모름'이 되면 안 된다."""
+    df = pd.DataFrame({'Code': ['196170'], 'Name': ['알테오젠'], 'Market': ['KOSDAQ GLOBAL'], 'Marcap': [1.0]})
+    with patch.object(krx_daily, 'fdr_listing', return_value=df):
+        out = krx_daily._listing_map_from_fdr()
+    assert out['196170']['market'] == 'KOSDAQ'

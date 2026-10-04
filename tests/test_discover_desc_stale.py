@@ -28,7 +28,15 @@ def _desc():
     ])
 
 
+def _no_openapi(monkeypatch):
+    """FDR 폴백 경로를 시험한다 — 셸에 인증키가 있어도 Open API 목록을 타지 않게."""
+    from modules import krx_openapi
+    monkeypatch.setattr(krx_openapi, "is_configured", lambda: False)
+
+
 def test_old_industry_file_is_used_and_disclosed(monkeypatch):
+    _no_openapi(monkeypatch)
+
     def fake_listing(kind, lookback=None, on=None):
         return _krx() if kind == "KRX" else _desc()
 
@@ -56,6 +64,7 @@ def test_staleness_note():
 
 
 def test_missing_industry_file_fails_loudly(monkeypatch):
+    _no_openapi(monkeypatch)
     monkeypatch.setattr(krx_daily, "fdr_listing",
                         lambda kind, lookback=None, on=None: _krx() if kind == "KRX" else None)
     monkeypatch.setattr(krx_daily, "last_listing_date", lambda kind: None)
@@ -83,3 +92,55 @@ def test_frozen_listings_look_back_far_enough(monkeypatch):
     tried.clear()
     krx_daily.fdr_listing("KRX", on="2026-10-03")
     assert len(tried) == 10                  # 매일 갱신되는 목록은 종전 창 그대로
+
+
+# ── 상장목록은 KRX Open API 가 1순위 (2026-10-04) ─────────────────────
+def _oa_listing():
+    return {
+        "000010": {"name": "가전자", "market": "KOSPI", "marcap": 9e12, "dept": "", "kind": "보통주"},
+        "000015": {"name": "가전자우", "market": "KOSPI", "marcap": 8.5e12, "dept": "", "kind": "구형우선주"},
+        "00001K": {"name": "가전자2우B", "market": "KOSPI", "marcap": 8.4e12, "dept": "", "kind": "신형우선주"},
+        "000040": {"name": "라관리", "market": "KOSDAQ", "marcap": 8e12, "dept": "관리종목(소속부없음)", "kind": "보통주"},
+        "0080G0": {"name": "마신규", "market": "KOSDAQ", "marcap": 7e12, "dept": "우량기업부", "kind": "보통주"},
+        "000050": {"name": "바폐지", "market": "KOSPI", "marcap": 0.0, "dept": "", "kind": "보통주"},
+    }
+
+
+def test_listing_comes_from_krx_openapi_not_fdr(monkeypatch):
+    from modules import krx_openapi
+    monkeypatch.setattr(krx_openapi, "is_configured", lambda: True)
+    monkeypatch.setattr(krx_openapi, "listing_map", lambda *a, **k: _oa_listing())
+    asked = []
+
+    def fake_fdr(kind, lookback=None, on=None):
+        asked.append(kind)
+        return _desc() if kind == "KRX-DESC" else None
+
+    monkeypatch.setattr(krx_daily, "fdr_listing", fake_fdr)
+    monkeypatch.setattr(krx_daily, "last_listing_date", lambda kind: None)
+    monkeypatch.setattr(config.session, "stock_data", {"stocks_kr": [], "etfs_kr": []}, raising=False)
+    monkeypatch.setattr(config.console, "print", lambda *a, **k: None)
+
+    cands, steps, _defs, n0, _n = discover._fetch_candidates(10, 500, True, seed=1)
+
+    assert asked == ["KRX-DESC"], "상장목록은 FDR 에 묻지 않는다(업종만 FDR)"
+    assert n0 == 5                                         # 시총 0(폐지 잔여 행)은 목록에서 빠진다
+    assert {c["code"] for c in cands} == {"000010", "0080G0"}
+    s = dict(steps)
+    assert s["관리종목·투자주의환기"] == 1
+    assert s["우선주·스팩·리츠"] == 2                       # 구형·신형 우선주 모두 '주식 종류'로 걸린다
+
+
+def test_fdr_fallback_keeps_kosdaq_global(monkeypatch):
+    """FDR 의 'KOSDAQ GLOBAL'(코스닥 우량주 세그먼트)이 KOSPI·KOSDAQ 필터에 걸려 빠지면 안 된다."""
+    _no_openapi(monkeypatch)
+    krx = _krx()
+    krx.loc[krx["Code"] == "000030", "Market"] = "KOSDAQ GLOBAL"
+    monkeypatch.setattr(krx_daily, "fdr_listing",
+                        lambda kind, lookback=None, on=None: krx if kind == "KRX" else _desc())
+    monkeypatch.setattr(krx_daily, "last_listing_date", lambda kind: None)
+    monkeypatch.setattr(config.session, "stock_data", {"stocks_kr": [], "etfs_kr": []}, raising=False)
+    monkeypatch.setattr(config.console, "print", lambda *a, **k: None)
+    cands, _s, _d, n0, _n = discover._fetch_candidates(10, 500, True, seed=1)
+    assert n0 == 3
+    assert next(c for c in cands if c["code"] == "000030")["exchange"] == "KOSDAQ"

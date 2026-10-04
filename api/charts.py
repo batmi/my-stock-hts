@@ -40,6 +40,15 @@ def get_stock_name_by_code(code, is_overseas):
         except Exception as e:
             logger.debug(f"마스터 종목명 조회 실패({code}): {e}")
         if not final_name:
+            # [2026-10-04] 마스터 다음은 KRX 상장목록(Open API 스냅샷, 6시간 메모리 캐시) — 마스터보다
+            #  하루 빠르게 신규 상장을 싣고 ETF/ETN 이름도 준다. 네이버는 그 목록에도 없을 때만 묻는다.
+            try:
+                from modules import krx_daily
+                entry = (krx_daily.get_listing_map() or {}).get(str(code).strip()) or {}
+                final_name = str(entry.get('name') or '').strip() or None
+            except Exception as e:
+                logger.debug(f"KRX 상장목록 종목명 조회 실패({code}): {e}")
+        if not final_name:
             # [2026-09-13] 종전 finance.naver.com/item/main.naver 는 stock.naver.com(SPA)로
             #  302 되고, 그 페이지의 og:title 은 종목명이 아니라 "Npay 증권"이다 — 그래서
             #  모든 국내 종목명이 실패했다. 같은 사이트의 JSON API 로 바꾼다. 0080G0 같은

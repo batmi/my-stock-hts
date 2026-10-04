@@ -462,7 +462,10 @@ def _listing_map_from_fdr():
         result[code] = {
             'name': str(getattr(row, 'Name', '') or '').strip() if has_name else '',
             'marcap': marcap,
-            'market': str(getattr(row, 'Market', '') or '').strip().upper() if has_market else '',
+            # FDR 은 코스닥 글로벌 세그먼트를 'KOSDAQ GLOBAL' 로 표기한다 — 시장 판정(get_market)이
+            #  모르는 값이라 알테오젠·에코프로비엠 같은 코스닥 우량주가 '판정 불가'가 됐다(2026-10-04).
+            'market': (str(getattr(row, 'Market', '') or '').strip().upper()
+                       .replace('KOSDAQ GLOBAL', 'KOSDAQ')) if has_market else '',
         }
     del df
     return result or None
@@ -473,7 +476,7 @@ def get_listing_map(use_cache=True):
 
     **KRX 공식(1순위) / FDR(폴백)**. FDR 도 원천은 data.krx.co.kr 이지만 비공식 래퍼 +
     GitHub CSV 캐시를 거치므로, 공식 경로가 열려 있으면 그쪽을 먼저 쓴다.
-    KRX 가 커버하지 않는 KONEX 는 FDR 로 메운다(있으면 보태고, 없으면 그대로 둔다).
+    pykrx 경로가 커버하지 않는 KONEX 는 FDR 로 메운다(Open API 는 KONEX 까지 준다).
 
     None은 '조회 실패'를 뜻한다 — 상장 종목이 없다는 뜻이 아니므로 호출부는
     이 경우 검증을 건너뛰어야 한다.
@@ -487,14 +490,16 @@ def get_listing_map(use_cache=True):
             if now - _LISTING_FAIL_TS[0] < _FAIL_COOLDOWN_SEC:
                 return None
 
-    result = _listing_map_from_openapi() or _listing_map_from_krx()
-    if result:
-        # KONEX 보충 — 실패해도 무해하다(공식 목록만으로도 KOSPI·KOSDAQ 전종목을 덮는다).
-        fallback = _listing_map_from_fdr()
-        for code, entry in (fallback or {}).items():
-            result.setdefault(code, entry)
-    else:
-        result = _listing_map_from_fdr()
+    # Open API 목록은 코넥스까지 덮는다(종목기본정보 3시장) — FDR 보충이 필요 없다(2026-10-04).
+    result = _listing_map_from_openapi()
+    if not result:
+        result = _listing_map_from_krx()
+        if result:
+            # KONEX 보충 — pykrx 경로는 KOSPI·KOSDAQ 만 준다. 실패해도 무해하다.
+            for code, entry in (_listing_map_from_fdr() or {}).items():
+                result.setdefault(code, entry)
+        else:
+            result = _listing_map_from_fdr()
 
     if not result:
         _LISTING_FAIL_TS[0] = now

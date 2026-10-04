@@ -426,7 +426,7 @@ Services to apply for (each is approved separately — an unapproved service ans
 |---|---|---|
 | KOSPI / KOSDAQ / KONEX **daily trading info** (stocks) | Domestic stock dailies (indicators, backtests, audits) | FDR (Naver) fallback |
 | ETF / ETN **daily trading info** (ETP) | ETF/ETN dailies (charts, validation) | FDR (Naver) fallback |
-| KOSPI / KOSDAQ / KONEX **issue base info** (stocks) | Listed-symbol master (market type, AI output validation) | FDR cached listing |
+| KOSPI / KOSDAQ / KONEX **issue base info** (stocks) | Listed-symbol master (market type, AI output validation, stock names); market cap, section (administrative issues) and share class (preferred) for watchlist discovery | FDR cached listing (without an API key) |
 | KOSPI / KOSDAQ series **daily index prices** (indices) | Settled bars for KOSPI, KOSDAQ, KOSPI200, KOSDAQ150 | Real-time sources only |
 | **Derivative index prices** (indices) | VKOSPI200 with OHLC | None (mode 2 KIS only) |
 | **Futures daily trading info** (derivatives) | KOSPI200 futures front month (day and night) | None (mode 2 KIS only) |
