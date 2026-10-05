@@ -66,7 +66,7 @@ _boot_log() {
 # 패키지 이름 → import 이름. 스캔과 설치 후 재확인이 같은 표를 써야 한다
 #  (두 벌로 두면 한쪽만 고쳐져 '설치했는데 여전히 없다'를 놓친다).
 # 설치 여부는 **import 를 실행하지 않고** 판정한다(importlib.util.find_spec).
-#  [왜 · 2026-09-17] pykrx 는 패키지 import 시점에 KRX 에 로그인하는데(KRX_ID/KRX_PW 가
+#  [왜 · 2026-09-17] pykrx(2026-10-05 제거)는 패키지 import 시점에 KRX 에 로그인하는데(KRX_ID/KRX_PW 가
 #   있으면 자동), KRX 가 에러 페이지(HTML)를 돌려주면 그 JSON 파싱 예외가 import 자체를
 #   깨뜨린다. 종전 `python -c "import pykrx"` 판정은 이것을 "설치되어 있지 않다"로 읽어
 #   pip 를 다시 돌리고(이미 만족), 그래도 import 가 안 되니 **기동을 중단**했다 — 앱 쪽

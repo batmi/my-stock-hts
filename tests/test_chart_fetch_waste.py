@@ -453,13 +453,13 @@ def test_krx_daily_chart_accepts_alnum_code():
     df = pd.DataFrame({'date': [f'2026{i:04d}' for i in range(1, 131)],
                        'open': [1.0] * 130, 'high': [1.0] * 130, 'low': [1.0] * 130,
                        'close': [1.0] * 130, 'volume': [1.0] * 130})
-    df.attrs['source'] = 'pykrx'
+    df.attrs['source'] = 'OPENAPI'
     with patch('modules.krx_daily.get_daily', return_value=df) as m, \
          patch.object(api, '_append_today_bar_from_price', side_effect=lambda d, c: d):
         out = api._krx_daily_chart("0080G0")
     m.assert_called_once_with("0080G0")
     assert out is not None
-    assert out.attrs['source'] == 'KRX/pykrx'
+    assert out.attrs['source'] == 'KRX/OPENAPI'
 
 
 def test_krx_daily_chart_rejects_overseas_code_with_warning():

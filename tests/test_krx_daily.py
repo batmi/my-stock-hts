@@ -1,30 +1,18 @@
-"""KRX 정규장 기준 일봉 소스(pykrx/FDR) 및 토스 일봉 경로 연결 검증.
+"""KRX 정규장 기준 일봉 소스(Open API/FDR) 및 토스 일봉 경로 연결 검증.
 
 토스 캔들은 SOR 통합값이라 NXT 장전·장후 체결이 OHLC에 섞인다(ADX 왜곡 최대 9.45 실측).
-국내 일봉은 pykrx(1순위)/FDR(폴백)로 받고, 당일 봉만 실시간 현재가로 채운다.
+국내 일봉은 Open API(1순위)/FDR 경로(네이버, 폴백)로 받고, 당일 봉만 실시간 현재가로 채운다.
 모든 테스트는 네트워크를 타지 않도록 소스 함수를 목으로 대체한다.
 """
 import re
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
 
 import config
 from modules import krx_daily
-
-
-def _pykrx_frame(n=200, start='2025-01-02'):
-    """pykrx.get_market_ohlcv 형태(한글 컬럼 + DatetimeIndex)."""
-    idx = pd.bdate_range(start, periods=n)
-    return pd.DataFrame({
-        '시가': [10000 + i for i in range(n)],
-        '고가': [10100 + i for i in range(n)],
-        '저가': [9900 + i for i in range(n)],
-        '종가': [10050 + i for i in range(n)],
-        '거래량': [1000 + i for i in range(n)],
-    }, index=idx)
 
 
 def _fdr_frame(n=200, start='2025-01-02'):
@@ -41,36 +29,20 @@ def _fdr_frame(n=200, start='2025-01-02'):
 
 @pytest.fixture(autouse=True)
 def clean_cache(monkeypatch):
-    """실제 import·네트워크를 타지 않도록 라이브러리 슬롯만 채우고 fetch는 목으로 대체한다.
+    """네트워크를 타지 않도록 Open API 는 끄고(키 없음) fetch 는 목으로 대체한다.
 
-    [2026-09-17] 조회 순서가 Open API → FDR → pykrx(스크래핑 허용 시에만)로 바뀌었다. 이 파일의
-    캐시·쿨다운 테스트는 소스 자체가 아니라 get_daily 의 **기계장치**를 재므로, 종전 목
-    (`_fetch_pykrx`)을 그대로 쓰기 위해 스크래핑 게이트를 열고 Open API 는 끈다.
-    FDR 경로(_fetch_fdr)는 네이버를 직접 부르는데 테스트는 네트워크가 막혀 있어 다음 소스로 넘어간다.
+    이 파일의 캐시·쿨다운 테스트는 소스 자체가 아니라 get_daily 의 **기계장치**를 재므로
+    Open API 를 끄고 FDR 경로(_fetch_fdr)를 목으로 쓴다.
     """
-    import config
-    monkeypatch.setattr(config, "KRX_WEB_SCRAPING_ALLOWED", True, raising=False)
     monkeypatch.delenv("KRX_OPENAPI_KEY", raising=False)
-    saved = (krx_daily._import_done, krx_daily._pykrx)
-    krx_daily._import_done = True
-    krx_daily._pykrx = object()     # _fetch_* 는 테스트가 patch
     krx_daily.clear_cache()
     yield
     krx_daily.clear_cache()
-    krx_daily._import_done, krx_daily._pykrx = saved
 
 
 # ---------------------------------------------------------
 # 정규화
 # ---------------------------------------------------------
-def test_normalize_pykrx_korean_columns():
-    df = krx_daily._normalize(_pykrx_frame(5), 'pykrx')
-    assert list(df.columns) == ['date', 'open', 'high', 'low', 'close', 'volume']
-    assert df['date'].iloc[0] == '20250102'          # KIS/토스 일봉과 동일한 YYYYMMDD 문자열
-    assert df['date'].is_monotonic_increasing
-    assert df['close'].iloc[0] == 10050
-
-
 def test_normalize_fdr_english_columns():
     df = krx_daily._normalize(_fdr_frame(5), 'FDR')
     assert list(df.columns) == ['date', 'open', 'high', 'low', 'close', 'volume']
@@ -79,9 +51,9 @@ def test_normalize_fdr_english_columns():
 
 def test_normalize_drops_zero_price_rows():
     """거래정지일의 0원 봉은 지표를 망가뜨리므로 제거한다."""
-    raw = _pykrx_frame(5)
+    raw = _fdr_frame(5)
     raw.iloc[2] = 0
-    df = krx_daily._normalize(raw, 'pykrx')
+    df = krx_daily._normalize(raw, 'FDR')
     assert len(df) == 4
     assert (df[['open', 'high', 'low', 'close']] > 0).all().all()
 
@@ -95,37 +67,17 @@ def test_normalize_missing_columns_returns_none():
 # ---------------------------------------------------------
 # 소스 선택 / 폴백
 # ---------------------------------------------------------
-def test_fdr_is_preferred_over_pykrx_scraping():
-    """[2026-09-17] pykrx(data.krx.co.kr 스크래핑)는 약관 위반으로 차단됐다 — 허용해도 맨 뒤다."""
-    with patch.object(krx_daily, '_fetch_pykrx', return_value=krx_daily._normalize(_pykrx_frame(), 'pykrx')) as pk, \
-         patch.object(krx_daily, '_fetch_fdr', return_value=krx_daily._normalize(_fdr_frame(), 'FDR')):
+def test_openapi_is_preferred_over_fdr():
+    oa = krx_daily._normalize(_fdr_frame(), 'OPENAPI')
+    with patch.object(krx_daily, '_fetch_openapi', return_value=oa), \
+         patch.object(krx_daily, '_fetch_fdr') as fdr:
         df = krx_daily.get_daily('005930')
-    assert df.attrs['source'] == 'FDR'
-    pk.assert_not_called()              # 앞 소스가 성공하면 스크래핑은 호출되지 않는다
+    assert df.attrs['source'] == 'OPENAPI'
+    fdr.assert_not_called()             # 앞 소스가 성공하면 폴백은 호출되지 않는다
 
 
-def test_pykrx_is_used_only_when_scraping_is_allowed(monkeypatch):
-    import config
-    monkeypatch.setattr(config, "KRX_WEB_SCRAPING_ALLOWED", False, raising=False)
-    with patch.object(krx_daily, '_fetch_pykrx', return_value=krx_daily._normalize(_pykrx_frame(), 'pykrx')) as pk, \
-         patch.object(krx_daily, '_fetch_fdr', side_effect=RuntimeError('naver down')):
-        assert krx_daily.get_daily('005930') is None
-    pk.assert_not_called()
-
-
-def test_investor_netbuy_is_gated_by_scraping_flag(monkeypatch):
-    """수급(투자자별 순매수)은 pykrx 스크래핑뿐이라 게이트가 꺼지면 KRX 를 두드리지 않고 None."""
-    import config
-    monkeypatch.setattr(config, "KRX_WEB_SCRAPING_ALLOWED", False, raising=False)
-    krx_daily._INVESTOR_CACHE.clear()
-    fake = MagicMock()
-    with patch.object(krx_daily, '_pykrx', fake), patch.object(krx_daily, '_import_done', True):
-        assert krx_daily.get_investor_netbuy('005930', '20260101', '20260131') is None
-    fake.get_market_trading_volume_by_date.assert_not_called()
-
-
-def test_falls_back_to_fdr_when_pykrx_raises():
-    with patch.object(krx_daily, '_fetch_pykrx', side_effect=RuntimeError('KRX 차단')), \
+def test_falls_back_to_fdr_when_openapi_raises():
+    with patch.object(krx_daily, '_fetch_openapi', side_effect=RuntimeError('KRX 장애')), \
          patch.object(krx_daily, '_fetch_fdr', return_value=krx_daily._normalize(_fdr_frame(), 'FDR')):
         df = krx_daily.get_daily('005930')
     assert df is not None
@@ -133,51 +85,16 @@ def test_falls_back_to_fdr_when_pykrx_raises():
     assert df['close'].iloc[0] == 20050
 
 
-def test_falls_back_to_fdr_when_pykrx_returns_empty():
-    with patch.object(krx_daily, '_fetch_pykrx', return_value=None), \
+def test_falls_back_to_fdr_when_openapi_returns_empty():
+    with patch.object(krx_daily, '_fetch_openapi', return_value=None), \
          patch.object(krx_daily, '_fetch_fdr', return_value=krx_daily._normalize(_fdr_frame(), 'FDR')):
         assert krx_daily.get_daily('005930').attrs['source'] == 'FDR'
 
 
 def test_both_sources_fail_returns_none():
-    with patch.object(krx_daily, '_fetch_pykrx', side_effect=RuntimeError), \
+    with patch.object(krx_daily, '_fetch_openapi', side_effect=RuntimeError), \
          patch.object(krx_daily, '_fetch_fdr', side_effect=RuntimeError):
         assert krx_daily.get_daily('005930') is None
-
-
-# ---------------------------------------------------------
-# 소스 **어댑터** — 위 폴백 테스트들은 _fetch_* 를 통째로 목으로 바꾼다.
-#  그래서 라이브러리를 실제로 부르는 두 함수(수정주가 인자·구버전 호환)는 한 번도
-#  실행되지 않았다(2026-08-25 커버리지 실측).
-# ---------------------------------------------------------
-def test_pykrx는_수정주가로_받는다():
-    """adjusted=True 를 놓치면 액면분할 구간에서 FDR 과 어긋나 EMA120·52주 밴드가 튄다."""
-    with patch.object(krx_daily, '_pykrx') as pykrx:
-        pykrx.get_market_ohlcv.return_value = _pykrx_frame()
-        df = krx_daily._fetch_pykrx('005930', '20250101', '20251231')
-    assert df is not None and df['close'].iloc[0] == 10050
-    assert pykrx.get_market_ohlcv.call_args.kwargs.get('adjusted') is True
-
-
-def test_구버전_pykrx는_adjusted_없이_재시도한다():
-    """adjusted 인자를 모르는 버전에서 TypeError 로 죽으면 국내 일봉이 통째로 폴백된다."""
-    calls = []
-
-    def _ohlcv(start, end, code, **kw):
-        calls.append(kw)
-        if 'adjusted' in kw:
-            raise TypeError("unexpected keyword argument 'adjusted'")
-        return _pykrx_frame()
-
-    with patch.object(krx_daily, '_pykrx') as pykrx:
-        pykrx.get_market_ohlcv.side_effect = _ohlcv
-        df = krx_daily._fetch_pykrx('005930', '20250101', '20251231')
-    assert df is not None and len(calls) == 2
-
-
-def test_pykrx_미설치면_None():
-    with patch.object(krx_daily, '_pykrx', None):
-        assert krx_daily._fetch_pykrx('005930', '20250101', '20251231') is None
 
 
 _NAVER_XML = ('<?xml version="1.0" encoding="EUC-KR" ?><protocol><chartdata symbol="005930" name="삼성전자">'
@@ -216,14 +133,14 @@ def test_http_get은_타임아웃을_건다():
 # ---------------------------------------------------------
 @pytest.mark.parametrize("code", ['ABC', 'AAPL', '00593', '0059300', '', None])
 def test_non_domestic_codes_rejected_without_network(code):
-    with patch.object(krx_daily, '_fetch_pykrx') as m:
+    with patch.object(krx_daily, '_fetch_fdr') as m:
         assert krx_daily.get_daily(code) is None
     m.assert_not_called()
 
 
 def test_cache_hit_skips_refetch():
-    normalized = krx_daily._normalize(_pykrx_frame(), 'pykrx')
-    with patch.object(krx_daily, '_fetch_pykrx', return_value=normalized) as m:
+    normalized = krx_daily._normalize(_fdr_frame(), 'FDR')
+    with patch.object(krx_daily, '_fetch_fdr', return_value=normalized) as m:
         krx_daily.get_daily('005930')
         krx_daily.get_daily('005930')
         krx_daily.get_daily('005930')
@@ -231,8 +148,8 @@ def test_cache_hit_skips_refetch():
 
 
 def test_cache_expires_after_ttl():
-    normalized = krx_daily._normalize(_pykrx_frame(), 'pykrx')
-    with patch.object(krx_daily, '_fetch_pykrx', return_value=normalized) as m:
+    normalized = krx_daily._normalize(_fdr_frame(), 'FDR')
+    with patch.object(krx_daily, '_fetch_fdr', return_value=normalized) as m:
         krx_daily.get_daily('005930')
         with krx_daily._CACHE_LOCK:      # 6시간 경과를 시뮬레이션
             krx_daily._CACHE['005930']['ts'] -= krx_daily._cache_ttl_sec() + 1
@@ -241,8 +158,8 @@ def test_cache_expires_after_ttl():
 
 
 def test_cache_invalidated_on_day_change():
-    normalized = krx_daily._normalize(_pykrx_frame(), 'pykrx')
-    with patch.object(krx_daily, '_fetch_pykrx', return_value=normalized) as m:
+    normalized = krx_daily._normalize(_fdr_frame(), 'FDR')
+    with patch.object(krx_daily, '_fetch_fdr', return_value=normalized) as m:
         krx_daily.get_daily('005930')
         with krx_daily._CACHE_LOCK:
             krx_daily._CACHE['005930']['day'] = '19990101'
@@ -251,7 +168,7 @@ def test_cache_invalidated_on_day_change():
 
 
 def _captured_span(mock):
-    """_fetch_pykrx(code, start, end) 호출에서 조회 창(달력일)을 계산한다."""
+    """_fetch_fdr(code, start, end) 호출에서 조회 창(달력일)을 계산한다."""
     from datetime import datetime as _dt
     _, s, e = mock.call_args[0]
     return (_dt.strptime(e, '%Y%m%d') - _dt.strptime(s, '%Y%m%d')).days
@@ -262,19 +179,19 @@ def test_chart_lookback_capped_to_250_bars_window():
 
     종전엔 CHART_LOOKBACK_DAYS(730일 ≈ 490봉)를 받아 절반을 버렸다.
     """
-    normalized = krx_daily._normalize(_pykrx_frame(), 'pykrx')
-    with patch.object(krx_daily, '_fetch_pykrx', return_value=normalized) as m:
+    normalized = krx_daily._normalize(_fdr_frame(), 'FDR')
+    with patch.object(krx_daily, '_fetch_fdr', return_value=normalized) as m:
         krx_daily.get_daily('005930')
     assert _captured_span(m) == krx_daily._CHART_FETCH_DAYS == 400
 
 
 def test_chart_lookback_respects_shorter_user_setting():
     """설정값이 상한보다 짧으면 사용자 의도를 그대로 따른다."""
-    normalized = krx_daily._normalize(_pykrx_frame(), 'pykrx')
+    normalized = krx_daily._normalize(_fdr_frame(), 'FDR')
     orig = config.INDICATOR_PARAMS.get("CHART_LOOKBACK_DAYS")
     try:
         config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"] = 300
-        with patch.object(krx_daily, '_fetch_pykrx', return_value=normalized) as m:
+        with patch.object(krx_daily, '_fetch_fdr', return_value=normalized) as m:
             krx_daily.get_daily('005930')
         assert _captured_span(m) == 300
     finally:
@@ -283,15 +200,15 @@ def test_chart_lookback_respects_shorter_user_setting():
 
 def test_backtest_lookback_not_capped():
     """백테스트는 lookback_days를 명시 전달하므로 250봉 상한에 걸리지 않는다."""
-    normalized = krx_daily._normalize(_pykrx_frame(), 'pykrx')
-    with patch.object(krx_daily, '_fetch_pykrx', return_value=normalized) as m:
+    normalized = krx_daily._normalize(_fdr_frame(), 'FDR')
+    with patch.object(krx_daily, '_fetch_fdr', return_value=normalized) as m:
         krx_daily.get_daily('005930', lookback_days=1130)   # 730일 백테스트 + 워밍업 400
     assert _captured_span(m) == 1130
 
 
 def test_use_cache_false_forces_refetch():
-    normalized = krx_daily._normalize(_pykrx_frame(), 'pykrx')
-    with patch.object(krx_daily, '_fetch_pykrx', return_value=normalized) as m:
+    normalized = krx_daily._normalize(_fdr_frame(), 'FDR')
+    with patch.object(krx_daily, '_fetch_fdr', return_value=normalized) as m:
         krx_daily.get_daily('005930')
         krx_daily.get_daily('005930', use_cache=False)
     assert m.call_count == 2
@@ -299,28 +216,27 @@ def test_use_cache_false_forces_refetch():
 
 def test_failure_cooldown_prevents_retry_storm():
     """조회 실패 후 쿨다운 동안은 재시도하지 않는다(매 시세 조회마다 외부 소스를 때리지 않도록)."""
-    with patch.object(krx_daily, '_fetch_pykrx', side_effect=RuntimeError), \
-         patch.object(krx_daily, '_fetch_fdr', side_effect=RuntimeError) as m:
+    with patch.object(krx_daily, '_fetch_fdr', side_effect=RuntimeError) as m:
         assert krx_daily.get_daily('005930') is None
         assert krx_daily.get_daily('005930') is None
         assert krx_daily.get_daily('005930') is None
     assert m.call_count == 1
 
-    with patch.object(krx_daily, '_fetch_pykrx', return_value=krx_daily._normalize(_pykrx_frame(), 'pykrx')):
+    with patch.object(krx_daily, '_fetch_fdr', return_value=krx_daily._normalize(_fdr_frame(), 'FDR')):
         krx_daily._FAIL['005930'] = time.time() - krx_daily._FAIL_COOLDOWN_SEC - 1
         assert krx_daily.get_daily('005930') is not None    # 쿨다운 만료 후에는 재시도
 
 
 def test_success_clears_previous_failure_mark():
     krx_daily._FAIL['005930'] = time.time() - krx_daily._FAIL_COOLDOWN_SEC - 1
-    with patch.object(krx_daily, '_fetch_pykrx', return_value=krx_daily._normalize(_pykrx_frame(), 'pykrx')):
+    with patch.object(krx_daily, '_fetch_fdr', return_value=krx_daily._normalize(_fdr_frame(), 'FDR')):
         krx_daily.get_daily('005930')
     assert '005930' not in krx_daily._FAIL
 
 
 def test_cache_is_copied_not_shared():
     """캐시본을 그대로 넘기면 호출부의 수정(오버레이 등)이 캐시를 오염시킨다."""
-    with patch.object(krx_daily, '_fetch_pykrx', return_value=krx_daily._normalize(_pykrx_frame(), 'pykrx')):
+    with patch.object(krx_daily, '_fetch_fdr', return_value=krx_daily._normalize(_fdr_frame(), 'FDR')):
         a = krx_daily.get_daily('005930')
         a.loc[a.index[-1], 'close'] = 1
         b = krx_daily.get_daily('005930')
@@ -333,20 +249,20 @@ def test_cache_is_copied_not_shared():
 def test_api_krx_chart_rejects_short_history():
     """EMA120이 안 나오는 짧은 시계열은 채택하지 않고 토스 캔들에 맡긴다."""
     import api
-    short = krx_daily._normalize(_pykrx_frame(50), 'pykrx')
+    short = krx_daily._normalize(_fdr_frame(50), 'FDR')
     with patch.object(krx_daily, 'get_daily', return_value=short):
         assert api._krx_daily_chart('005930') is None
 
 
 def test_api_krx_chart_returns_tail_250_with_source_tag():
     import api
-    long_df = krx_daily._normalize(_pykrx_frame(400), 'pykrx')
-    long_df.attrs['source'] = 'pykrx'
+    long_df = krx_daily._normalize(_fdr_frame(400), 'FDR')
+    long_df.attrs['source'] = 'FDR'
     with patch.object(krx_daily, 'get_daily', return_value=long_df), \
          patch.object(api, '_append_today_bar_from_price', side_effect=lambda df, code: df):
         out = api._krx_daily_chart('005930')
     assert len(out) == 250
-    assert out.attrs['source'] == 'KRX/pykrx'
+    assert out.attrs['source'] == 'KRX/FDR'
 
 
 def test_api_krx_chart_ignores_source_errors():
@@ -356,9 +272,9 @@ def test_api_krx_chart_ignores_source_errors():
 
 
 def test_today_bar_appended_when_missing():
-    """pykrx·FDR은 장중 당일 값을 주지 않는다 → 현재가로 당일 봉을 만들어 붙인다."""
+    """Open API·FDR은 장중 당일 값을 주지 않는다 → 현재가로 당일 봉을 만들어 붙인다."""
     import api
-    df = krx_daily._normalize(_pykrx_frame(10), 'pykrx')
+    df = krx_daily._normalize(_fdr_frame(10), 'FDR')
     price = {'rt_cd': '0', 'output': {'stck_prpr': '70000', 'stck_oprc': '69000',
                                       'stck_hgpr': '71000', 'stck_lwpr': '68000',
                                       'acml_vol': '12345'}}
@@ -374,7 +290,7 @@ def test_today_bar_appended_when_missing():
 
 def test_today_bar_not_duplicated_when_present():
     import api
-    df = krx_daily._normalize(_pykrx_frame(10), 'pykrx')
+    df = krx_daily._normalize(_fdr_frame(10), 'FDR')
     today = df['date'].iloc[-1]
     with patch.object(api, 'market_today', return_value=today), \
          patch.object(api, 'get_current_price_data') as m:
@@ -386,7 +302,7 @@ def test_today_bar_not_duplicated_when_present():
 def test_today_bar_skipped_after_all_markets_close():
     """모든 장 종료 후엔 현재가가 마지막 NXT 체결가로 굳어 있어 당일 봉으로 쓸 수 없다."""
     import api
-    df = krx_daily._normalize(_pykrx_frame(10), 'pykrx')
+    df = krx_daily._normalize(_fdr_frame(10), 'FDR')
     with patch.object(api, 'market_today', return_value='20991231'), \
          patch.object(api, 'chart_overlay_enabled', return_value=False), \
          patch.object(api, 'get_current_price_data') as m:
@@ -396,7 +312,7 @@ def test_today_bar_skipped_after_all_markets_close():
 
 def test_today_bar_skipped_when_price_unavailable():
     import api
-    df = krx_daily._normalize(_pykrx_frame(10), 'pykrx')
+    df = krx_daily._normalize(_fdr_frame(10), 'FDR')
     with patch.object(api, 'market_today', return_value='20991231'), \
          patch.object(api, 'chart_overlay_enabled', return_value=True), \
          patch.object(api, 'get_current_price_data', return_value={'rt_cd': '1'}):
@@ -406,7 +322,7 @@ def test_today_bar_skipped_when_price_unavailable():
 def test_today_bar_high_low_respect_current_price():
     """현재가가 API의 고가/저가 범위를 벗어나도 봉이 현재가를 포함하도록 넓힌다."""
     import api
-    df = krx_daily._normalize(_pykrx_frame(10), 'pykrx')
+    df = krx_daily._normalize(_fdr_frame(10), 'FDR')
     price = {'rt_cd': '0', 'output': {'stck_prpr': '80000', 'stck_oprc': '69000',
                                       'stck_hgpr': '71000', 'stck_lwpr': '68000'}}
     with patch.object(api, 'market_today', return_value='20991231'), \
@@ -438,7 +354,7 @@ def test_fallback_recorded_when_sources_fail():
 def test_fallback_recorded_when_history_too_short():
     """120봉 미만도 토스 캔들로 넘어가므로 경고 대상이다."""
     import api
-    short = krx_daily._normalize(_pykrx_frame(50), 'pykrx')
+    short = krx_daily._normalize(_fdr_frame(50), 'FDR')
     with patch.object(krx_daily, 'get_daily', return_value=short):
         assert api._krx_daily_chart('005930') is None
     assert '005930' in api.get_krx_fallback()
@@ -455,8 +371,8 @@ def test_fallback_recorded_on_exception():
 def test_fallback_cleared_on_recovery():
     """다음 조회에서 KRX 소스가 살아나면 경고 목록에서 빠진다."""
     import api
-    api.note_krx_fallback('005930', 'pykrx·FDR 모두 실패')
-    good = krx_daily._normalize(_pykrx_frame(200), 'pykrx')
+    api.note_krx_fallback('005930', 'Open API·FDR 모두 실패')
+    good = krx_daily._normalize(_fdr_frame(200), 'FDR')
     with patch.object(krx_daily, 'get_daily', return_value=good), \
          patch.object(api, '_append_today_bar_from_price', side_effect=lambda df, code: df):
         assert api._krx_daily_chart('005930') is not None
@@ -475,7 +391,7 @@ def test_warning_silent_when_no_fallback():
 def test_warning_lists_affected_symbols_with_names():
     import api
     from core import utils
-    api.note_krx_fallback('005930', 'pykrx·FDR 모두 실패')
+    api.note_krx_fallback('005930', 'Open API·FDR 모두 실패')
     with patch.object(config.console, 'print') as p:
         utils.print_krx_fallback_warning({'005930': '삼성전자'})
     out = ' '.join(str(c.args[0]) for c in p.call_args_list if c.args)
@@ -508,7 +424,7 @@ def test_warning_survives_api_error():
 # ---------------------------------------------------------
 def test_toss_daily_prefers_krx_for_domestic():
     import api
-    krx_df = krx_daily._normalize(_pykrx_frame(200), 'pykrx')
+    krx_df = krx_daily._normalize(_fdr_frame(200), 'FDR')
     with patch.object(api, '_krx_daily_chart', return_value=krx_df) as krx_mock, \
          patch.object(api, '_toss_chart_data') as toss_mock:
         out = api._toss_daily_chart_with_tv_fallback('005930', is_overseas=False)
@@ -519,7 +435,7 @@ def test_toss_daily_prefers_krx_for_domestic():
 
 def test_toss_daily_falls_back_to_toss_when_krx_fails():
     import api
-    toss_df = krx_daily._normalize(_pykrx_frame(200), 'pykrx')
+    toss_df = krx_daily._normalize(_fdr_frame(200), 'FDR')
     with patch.object(api, '_krx_daily_chart', return_value=None), \
          patch.object(api, '_toss_chart_data', return_value=toss_df) as toss_mock:
         out = api._toss_daily_chart_with_tv_fallback('005930', is_overseas=False)
@@ -539,9 +455,9 @@ def test_toss_cache_namespace_bumped_so_old_basis_is_not_reused():
         key = api._chart_cache_key('005930', False, False)
         assert key.startswith('T3_'), f"토스 네임스페이스가 되돌아갔다: {key}"
 
-        stale = krx_daily._normalize(_pykrx_frame(200), 'pykrx')
+        stale = krx_daily._normalize(_fdr_frame(200), 'FDR')
         stale.loc[stale.index[-1], 'close'] = 111111        # 구 기준(토스) 캐시를 흉내
-        fresh = krx_daily._normalize(_pykrx_frame(200), 'pykrx')
+        fresh = krx_daily._normalize(_fdr_frame(200), 'FDR')
         fresh.loc[fresh.index[-1], 'close'] = 222222        # 신 기준(KRX) 데이터
 
         with patch.object(api, '_CHART_CACHE', {'T2_005930_False_False': {
@@ -563,7 +479,7 @@ def test_toss_cache_namespace_bumped_so_old_basis_is_not_reused():
 def test_base_price_source_prefers_krx_lib_over_yfinance():
     """yfinance는 특정일 공식 종가와 어긋나므로(237일 중 2~4일, 최대 1.59%) 후순위여야 한다."""
     import api
-    df = krx_daily._normalize(_pykrx_frame(200), 'pykrx')
+    df = krx_daily._normalize(_fdr_frame(200), 'FDR')
     ref = df['date'].iloc[-1]
     with patch.object(krx_daily, 'get_daily', return_value=df), \
          patch.object(api, '_toss_krx_close_put') as put:
@@ -575,7 +491,7 @@ def test_base_price_source_prefers_krx_lib_over_yfinance():
 
 def test_base_price_source_returns_none_for_missing_date():
     import api
-    df = krx_daily._normalize(_pykrx_frame(200), 'pykrx')
+    df = krx_daily._normalize(_fdr_frame(200), 'FDR')
     with patch.object(krx_daily, 'get_daily', return_value=df):
         assert api._toss_krx_lib_close('005930', '19990101') is None
 
@@ -751,126 +667,42 @@ def test_name_map_never_raises_on_bad_input(bad):
 
 
 # ---------------------------------------------------------
-# 상장 목록 — KRX 공식(1순위) / FDR(폴백·KONEX 보충)
-#  2026-08-25: FDR도 원천은 data.krx.co.kr이지만 비공식 래퍼 + GitHub CSV 캐시를 거친다.
-#  공식 경로가 열려 있으면 그쪽을 먼저 쓰되, KRX가 커버하지 않는 KONEX는 FDR로 메운다.
+# 상장 목록 — KRX Open API(1순위) / FDR(폴백)
+#  FDR도 원천은 KRX지만 제3자 GitHub CSV 캐시를 거친다. 공식 경로가 열려 있으면 그쪽을 먼저 쓴다.
+#  Open API 종목기본정보는 KONEX 까지 덮어 보충이 필요 없다(2026-10-04).
 # ---------------------------------------------------------
 _KRX_LISTING = {'005930': {'name': '삼성전자', 'marcap': 1.5e15}}
 _FDR_LISTING = {'005930': {'name': '삼성전자(FDR)', 'marcap': 9.9e9},
                 '0070X0': {'name': '에스테크엠', 'marcap': 1.51e10}}      # KONEX
 
 
-def test_상장목록은_KRX가_1순위다():
-    with patch.object(krx_daily, '_listing_map_from_krx', return_value=dict(_KRX_LISTING)), \
-         patch.object(krx_daily, '_listing_map_from_fdr', return_value=dict(_FDR_LISTING)):
+def test_상장목록은_OpenAPI가_1순위다():
+    with patch.object(krx_daily, '_listing_map_from_openapi', return_value=dict(_KRX_LISTING)), \
+         patch.object(krx_daily, '_listing_map_from_fdr', return_value=dict(_FDR_LISTING)) as fdr:
         m = krx_daily.get_listing_map(use_cache=False)
-    assert m['005930']['name'] == '삼성전자'          # FDR 값이 덮어쓰지 않는다
+    assert m == _KRX_LISTING                          # FDR 값이 섞이지 않는다
+    fdr.assert_not_called()
 
 
-def test_KONEX는_FDR로_메운다():
-    """KRX 업종분류 화면은 KOSPI·KOSDAQ만 준다 — KONEX 109종목이 빠지면 오탐이 난다."""
-    with patch.object(krx_daily, '_listing_map_from_krx', return_value=dict(_KRX_LISTING)), \
-         patch.object(krx_daily, '_listing_map_from_fdr', return_value=dict(_FDR_LISTING)):
-        m = krx_daily.get_listing_map(use_cache=False)
-    assert '0070X0' in m and m['0070X0']['name'] == '에스테크엠'
-
-
-def test_KRX_실패시_FDR로_폴백한다():
-    with patch.object(krx_daily, '_listing_map_from_krx', return_value=None), \
+def test_OpenAPI_실패시_FDR로_폴백한다():
+    with patch.object(krx_daily, '_listing_map_from_openapi', return_value=None), \
          patch.object(krx_daily, '_listing_map_from_fdr', return_value=dict(_FDR_LISTING)):
         m = krx_daily.get_listing_map(use_cache=False)
     assert m['005930']['name'] == '삼성전자(FDR)'
 
 
-def test_KONEX_보충_실패는_무해하다():
-    """FDR이 죽어도 KOSPI·KOSDAQ 목록만으로 검증은 계속돼야 한다."""
-    with patch.object(krx_daily, '_listing_map_from_krx', return_value=dict(_KRX_LISTING)), \
-         patch.object(krx_daily, '_listing_map_from_fdr', return_value=None):
-        m = krx_daily.get_listing_map(use_cache=False)
-    assert m == _KRX_LISTING
-
-
 def test_둘다_실패하면_None이다():
     """'검증 불가'와 '없는 종목'을 구분해야 한다 — 호출부가 검증을 건너뛴다."""
     krx_daily._LISTING_FAIL_TS[0] = 0.0
-    with patch.object(krx_daily, '_listing_map_from_krx', return_value=None), \
+    with patch.object(krx_daily, '_listing_map_from_openapi', return_value=None), \
          patch.object(krx_daily, '_listing_map_from_fdr', return_value=None):
         assert krx_daily.get_listing_map(use_cache=False) is None
 
 
 # ---------------------------------------------------------
-# 상장 목록 **파서** — 위 테스트들은 두 소스를 목으로 갈아끼워 '고르는 규칙'만 봤다.
-#  정작 응답을 읽는 코드(29줄·17줄)는 한 번도 실행되지 않았다(2026-08-25 커버리지 실측).
+# 상장 목록 **파서** — 위 테스트들은 소스를 목으로 갈아끼워 '고르는 규칙'만 봤다.
 #  라이브러리가 컬럼 이름이나 인덱스를 바꾸면 조용히 None 이 되고 목록 검증이 통째로 꺼진다.
 # ---------------------------------------------------------
-def _sector_frame(rows):
-    """pykrx.get_market_sector_classifications 형태 — 종목코드가 **인덱스**다."""
-    return pd.DataFrame(
-        [{'종목명': n, '시가총액': m} for _c, n, m in rows],
-        index=[c for c, _n, _m in rows])
-
-
-def _krx_available(flag=True):
-    from modules import krx_data
-    return patch.object(krx_data, 'is_available', return_value=flag)
-
-
-def test_공식_상장목록은_시장당_한_콜로_이름과_시총을_읽는다():
-    frames = {'KOSPI': _sector_frame([('005930', '삼성전자', 1.5e15)]),
-              'KOSDAQ': _sector_frame([('247540', '에코프로비엠', 1.2e13)])}
-    with _krx_available(), patch('pykrx.stock.get_market_sector_classifications',
-                                 side_effect=lambda d, m: frames[m]) as call:
-        out = krx_daily._listing_map_from_krx()
-    assert out['005930'] == {'name': '삼성전자', 'marcap': 1.5e15, 'market': 'KOSPI'}
-    assert out['247540']['name'] == '에코프로비엠'
-    assert call.call_count == 2, "시장당 1콜이어야 한다(종목당 1콜이면 2,700콜이 된다)"
-
-
-def test_공식_상장목록은_휴장일이면_전날로_거슬러_간다():
-    """빈 프레임이 오면 응답이 있는 날까지 훑는다 — 휴장일에 목록이 통째로 비면 안 된다."""
-    calls = []
-
-    def _fake(day, market):
-        calls.append(day)
-        if len(calls) <= 2:                      # 첫날(두 시장)은 휴장
-            return pd.DataFrame()
-        return _sector_frame([('005930', '삼성전자', 1.5e15)])
-
-    with _krx_available(), patch('pykrx.stock.get_market_sector_classifications', _fake):
-        out = krx_daily._listing_map_from_krx()
-    assert out and '005930' in out
-    assert len(set(calls)) >= 2, "같은 날짜만 반복 조회했다"
-
-
-def test_공식_상장목록은_국내코드가_아닌_행을_버린다():
-    frame = _sector_frame([('005930', '삼성전자', 1.5e15), ('AAPL', '애플', 1.0)])
-    with _krx_available(), patch('pykrx.stock.get_market_sector_classifications',
-                                 return_value=frame):
-        out = krx_daily._listing_map_from_krx()
-    assert set(out) == {'005930'}
-
-
-def test_공식_상장목록은_시총이_망가져도_행을_살린다():
-    """시총은 정렬용 부가 정보다 — 파싱 실패로 종목명까지 잃으면 목록 검증이 오탐을 낸다."""
-    frame = _sector_frame([('005930', '삼성전자', '알수없음')])
-    with _krx_available(), patch('pykrx.stock.get_market_sector_classifications',
-                                 return_value=frame):
-        out = krx_daily._listing_map_from_krx()
-    #  같은 프레임을 두 시장에 다 물렸으므로 뒤에 오는 KOSDAQ 이 남는다(시장 태깅 확인용).
-    assert out['005930'] == {'name': '삼성전자', 'marcap': 0.0, 'market': 'KOSDAQ'}
-
-
-def test_공식_상장목록은_자격증명이_없으면_None():
-    with _krx_available(False):
-        assert krx_daily._listing_map_from_krx() is None
-
-
-def test_공식_상장목록은_예외를_None으로_삼킨다():
-    with _krx_available(), patch('pykrx.stock.get_market_sector_classifications',
-                                 side_effect=RuntimeError("KRX 500")):
-        assert krx_daily._listing_map_from_krx() is None
-
-
 def _fdr_listing_frame():
     return pd.DataFrame({'Code': ['005930', 'AAPL'], 'Name': ['삼성전자', '애플'],
                          'Marcap': [1.5e15, 1.0]})
@@ -906,18 +738,9 @@ def test_상장목록에_없는_코드는_빈문자열():
         assert krx_daily.get_ticker_name('999999') == ''
 
 
-def test_목록조회_불가하면_단건_폴백을_쓴다():
-    with patch.object(krx_daily, 'get_listing_map', return_value=None), \
-         patch.object(krx_daily, '_pykrx') as pykrx:
-        pykrx.get_market_ticker_name.return_value = '삼성전자'
-        assert krx_daily.get_ticker_name('005930') == '삼성전자'
-
-
-def test_단건_폴백이_문자열이_아니면_None():
-    """pykrx 는 없는 코드에 빈 DataFrame 을 준다 — 그걸 종목명으로 쓰면 오탐이 난다."""
-    with patch.object(krx_daily, 'get_listing_map', return_value=None), \
-         patch.object(krx_daily, '_pykrx') as pykrx:
-        pykrx.get_market_ticker_name.return_value = pd.DataFrame()
+def test_목록조회_불가하면_None():
+    """[2026-10-05] 단건 폴백(pykrx, data.krx.co.kr 스크래핑)은 제거했다 — '검증 불가'로 돌려준다."""
+    with patch.object(krx_daily, 'get_listing_map', return_value=None):
         assert krx_daily.get_ticker_name('005930') is None
 
 

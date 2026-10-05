@@ -29,8 +29,9 @@
    → 선견은 **실재하지만 값이 없다.** 채택 규칙 어느 쪽에도 안 걸리는 잡음이라 기본값을
    0(종전 동작)으로 유지했다 — 1로 굳히면 이전 감사 수치와의 연속성이 끊긴다.
 
-[주의] 이 축은 KRX_ID/KRX_PW 가 있어야 전 구간이 켜진다. 자격증명 없이 돌리면 두 팔이
- 거의 같아지는 것이 당연하다 — 준비 단계가 출처를 찍으니 반드시 확인할 것.
+[주의] 위 측정은 KRX_ID/KRX_PW(전 구간 KRX 수급)가 있던 기계에서 쟀다. 그 경로는 약관 위반으로
+ 2026-09-18 꺼졌고 2026-10-05 pykrx 와 함께 지워졌다 — 지금은 KIS 최근 30거래일뿐이라 다년 창에서는
+ 두 팔이 거의 같아지는 것이 당연하다. 재실행해도 위 수치는 재현되지 않는다.
 
 [실행] python3 tools/audit_smart_money_lag.py --trials 12 --sample 25 --seeds 20260816,7,101
 """
@@ -97,7 +98,7 @@ def diagnose(dfs_a, dfs_b, st_a, st_b):
     print(f"  매수 가능 여부가 뒤집힌 봉   : {buyable:,} ({pct(buyable):.2f}%)")
     if not flag:
         print("  → 플래그가 한 번도 안 뒤집혔다. 수급 축이 꺼진 채로 돌았다는 뜻이다"
-              " (KRX_ID/KRX_PW 확인). 아래 표는 의미가 없다.", flush=True)
+              " (KIS 수급은 최근 30거래일뿐이다). 아래 표는 의미가 없다.", flush=True)
     return flag
 
 
@@ -135,9 +136,8 @@ def main():
     src = backtest.smart_money_source_summary()
     print(f"[준비] lag=0 · {len(dfs0)}종목 · 거래일 {len(dates)} · 슬롯 {slots} · "
           f"수급 출처 {src}" + (f" · 제외 {failed}" if failed else ""), flush=True)
-    if not src.get("KRX"):
-        print("[경고] KRX 수급이 하나도 없다 — 이 축이 꺼진 채로 재고 있다"
-              " (KRX_ID/KRX_PW 확인).", flush=True)
+    print("[경고] 과거 수급은 KIS 최근 30거래일뿐이다 — 이 축은 그 밖에서 꺼진 채로 재고 있다"
+          " (전 구간 KRX 수급 경로는 2026-10-05 pykrx 와 함께 제거).", flush=True)
     dfs1, _mf1, dates1, _f1 = build(1, live, args.days)
     if dates1 != dates:
         print("[경고] 두 팔의 거래일이 다르다 — 짝비교가 성립하지 않는다.", flush=True)

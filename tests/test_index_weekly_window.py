@@ -5,9 +5,8 @@
 금현물 300거래일(_KRX_GOLD_PAGES x 60), 국채·OAS n_bars=300. 묶으면 60주, 즉 주봉이
 1년치밖에 안 나왔다(KIS 네이티브 주봉은 lookback_days=1100 ≈ 157주).
 
-한 가지 더: KRX 는 한 번에 2년까지만 준다 — 900일을 달라고 하면 오류가 아니라 **0행**을
-준다(실측: 금현물 720일 477행 / 900일 0행). 그래서 상한을 올리는 게 아니라 구간을 나눠
-받아야 한다.
+(종전 1절의 'KRX 2년 상한을 구간으로 넘는다' 검증은 data.krx.co.kr 웹 경로 전용이라 2026-10-05
+pykrx 와 함께 지웠다. Open API 는 날짜별 스냅샷 저장소라 기간 상한이 없다.)
 """
 import pandas as pd
 import pytest
@@ -25,55 +24,6 @@ def _daily(n, end="2026-09-04"):
         "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 1.0,
     })
     return df
-
-
-# ─────────────────────────────────────────────
-# 1. KRX 2년 상한을 구간으로 넘는다
-# ─────────────────────────────────────────────
-
-def test_two_years_or_less_is_still_a_single_request():
-    """일봉 경로의 호출 횟수가 늘면 안 된다 — 상한 이하는 종전 그대로 한 구간이다."""
-    assert len(krx_data._range_windows(400)) == 1
-    assert len(krx_data._range_windows(krx_data._MAX_RANGE_DAYS)) == 1
-
-
-def test_three_years_is_split_into_windows_under_the_server_limit():
-    wins = krx_data._range_windows(1100)
-    assert len(wins) >= 2
-    for start, end in wins:
-        span = (pd.Timestamp(end) - pd.Timestamp(start)).days
-        assert span <= krx_data._MAX_RANGE_DAYS, f"{start}~{end} = {span}일 — 서버가 0행을 준다"
-
-
-def test_windows_cover_the_whole_span_without_a_hole():
-    wins = krx_data._range_windows(1100)
-    oldest = min(s for s, _ in wins)
-    newest = max(e for _, e in wins)
-    assert (pd.Timestamp(newest) - pd.Timestamp(oldest)).days >= 1090
-    # 최신순으로 이어지며 경계가 벌어지지 않는다(하루 겹치게 물려 둔다)
-    ordered = sorted(wins)
-    for (s1, e1), (s2, e2) in zip(ordered, ordered[1:]):
-        assert pd.Timestamp(s2) <= pd.Timestamp(e1), f"{e1} 과 {s2} 사이가 비었다"
-
-
-def test_gold_pages_until_a_window_comes_back_empty(monkeypatch):
-    """더 과거가 없으면(상장 이전) 받은 만큼 쓰고 멈춘다 — 헛된 요청을 반복하지 않는다."""
-    calls = []
-
-    def _post(bld, **kw):
-        calls.append((kw["strtDd"], kw["endDd"]))
-        if len(calls) > 2:
-            return []
-        return [{"TRD_DD": f"2026/0{len(calls)}/01", "TDD_OPNPRC": "1", "TDD_HGPRC": "2",
-                 "TDD_LWPRC": "1", "TDD_CLSPRC": "1.5", "ACC_TRDVOL": "10"}]
-
-    import config
-    monkeypatch.setattr(config, "KRX_WEB_SCRAPING_ALLOWED", True, raising=False)   # 웹 경로의 페이징을 잰다
-    monkeypatch.delenv("KRX_OPENAPI_KEY", raising=False)
-    monkeypatch.setattr(krx_data, "is_available", lambda: True)
-    monkeypatch.setattr(krx_data, "_post", _post)
-    krx_data.get_gold_daily(2000, use_cache=False)
-    assert len(calls) == 3, "빈 구간을 만나고도 계속 요청했다"
 
 
 # ─────────────────────────────────────────────

@@ -418,7 +418,7 @@ Sign up for free at [openapi.krx.co.kr](https://openapi.krx.co.kr) → apply for
 export KRX_OPENAPI_KEY="your_key"
 ```
 
-> The former `KRX_ID`/`KRX_PW` (data.krx.co.kr web login) are **no longer needed.** That path (pykrx scraping) violates KRX terms §10-2 (no automated collection) and got the IP blocked (2026-09-17); it is off by default (`config.KRX_WEB_SCRAPING_ALLOWED`). You can remove both variables from `.htsrc`.
+> The former `KRX_ID`/`KRX_PW` (data.krx.co.kr web login) are **no longer used — remove them from `.htsrc`.** That path (pykrx scraping) violates KRX terms §10-2 (no automated collection) and got the IP blocked (2026-09-17); it was removed from the code together with the pykrx package on 2026-10-05. If installed, you can remove it with `pip uninstall pykrx`.
 
 Services to apply for (each is approved separately — an unapproved service answers 401 and falls back):
 

@@ -395,28 +395,23 @@ def warn_if_unmodeled(where="백테스트"):
 def announce_smart_money_source(where="백테스트"):
     """수급(스마트머니) 축을 **어느 소스로** 굴렸는지 알린다.
 
-    [왜] 이 축은 KRX 웹 스크래핑 게이트(KRX_WEB_SCRAPING_ALLOWED, 2026-09-18부터 기본 OFF —
-     Open API 에는 투자자별 순매수가 없다)로 켜지고 꺼진다 — 켜져 있으면 전 구간(KRX), 아니면
-     최근 30거래일만(KIS), 다 실패하면 전 구간 False. 자격증명이 다른 두 기계의 감사는 서로
-     다른 전략을 잰 것인데, 결과에 그 상태가 남지 않아 비교할 때 확인할 방법이 없었다.
+    [왜] 이 축의 과거 수급은 KIS 최근 30거래일뿐이다 — 그 밖은 False, 다 실패하면 전 구간
+     False. 2026-09-18 이전에는 KRX_ID/KRX_PW 가 있는 기계만 전 구간(KRX 웹 스크래핑)이었고,
+     그 경로는 2026-10-05 pykrx 와 함께 지웠다(Open API 에는 투자자별 순매수가 없다).
      실측 크기는 작지만(축 on/off = 수익 67.51%→67.86%) '몰라서 못 맞추는 것'과
-     '알고 감안하는 것'은 다르다.
+     '알고 감안하는 것'은 다르다 — 이 축이 반쯤 빠진 채로 돈다는 것을 실행마다 남긴다.
     """
     dist = backtest.smart_money_source_summary()
     if not dist:
         return dist
     parts = " · ".join(f"{k} {v}종목" for k, v in sorted(dist.items()))
-    msg = f"[{where}] 수급(스마트머니) 출처: {parts}"
-    if dist.get("KRX"):
-        _note_provenance(msg)
-    else:
-        # KRX가 하나도 없다 = 이 축이 사실상 빠진 채로 도는 중이다. 눈에 띄어야 한다.
-        msg += " — KRX 웹 스크래핑이 꺼져 있으면(기본) 이 축은 최근 구간 밖에서 꺼진 것으로 계산된다."
-        logger.warning(msg)
-        try:
-            config.console.print(f"[dim yellow]※ {msg}[/dim yellow]")
-        except Exception:
-            print(msg)
+    msg = (f"[{where}] 수급(스마트머니) 출처: {parts} — KIS 수급은 최근 30거래일뿐이라 "
+           f"이 축은 그 밖에서 꺼진 것으로 계산된다.")
+    logger.warning(msg)
+    try:
+        config.console.print(f"[dim yellow]※ {msg}[/dim yellow]")
+    except Exception:
+        print(msg)
     return dist
 
 

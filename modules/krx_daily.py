@@ -1,9 +1,15 @@
 """국내 일봉을 'KRX 정규장 기준'으로 조회한다.
 
 [출처 순서 · 2026-09-18] KRX Open API(확정분, data/krx_openapi.db 스냅샷) 1순위 → FDR 경로(네이버 일봉)
- 폴백 → pykrx 는 KRX_WEB_SCRAPING_ALLOWED 가 켜졌을 때만 맨 뒤(get_daily 의 sources). Open API 의
- 종가는 정규장 15:30 종가고, 아직 안 실린 오늘·직전 영업일 봉만 FDR 경로로 덧댄다(_fetch_openapi).
- 아래 실측·수치는 pykrx/FDR 시절(2026-07)의 것이라 순서 서술만 낡았을 뿐 결론은 같다.
+ 폴백. Open API 의 종가는 정규장 15:30 종가고, 아직 안 실린 오늘·직전 영업일 봉만 FDR 경로로
+ 덧댄다(_fetch_openapi). 아래 실측·수치는 pykrx/FDR 시절(2026-07)의 것이라 순서 서술만 낡았을 뿐
+ 결론은 같다.
+
+[pykrx 제거 · 2026-10-05] 마지막 폴백이던 pykrx(data.krx.co.kr 화면 스크래핑)를 걷어냈다. 약관
+ 위반으로 IP 를 차단당한 뒤 KRX_WEB_SCRAPING_ALLOWED(기본 OFF) 뒤에 있었지만, is_available 이
+ 게이트와 무관하게 패키지를 import 했고 pykrx 는 **import 만으로** 환경변수 KRX_ID/KRX_PW 계정으로
+ 그 사이트에 로그인했다. 종목명 단건 폴백(get_ticker_name)·과거 수급(get_investor_netbuy)·공식
+ 상장목록(_listing_map_from_krx)도 같은 원천이라 함께 뺐다.
 
 [FDR 라이브러리를 부르지 않는다 · 2026-10-04] 'FDR' 표기는 그대로지만 FinanceDataReader 는 더 이상
  import 하지 않고, 그것이 받던 **같은 원천**을 직접 받는다(_fetch_fdr = 네이버 fchart, fdr_listing =
@@ -29,13 +35,13 @@
 토스 분봉을 09:00~15:30으로 잘라 재구성하면 O/H/L이 KRX와 정확히 일치하지만(실측 확인),
 720일치는 종목당 1,360페이지라 35종목 1회 갱신에 2.6시간(레이트리밋 5rps)이 걸리고
 매매 경로와 차트 그룹 리밋을 공유해 시세 조회를 굶긴다. DB 영속화를 쓰지 않는 정책이므로
-외부 KRX 소스를 쓴다 — 50종목 720일 전량이 pykrx 2.6초 / FDR 5.0초다.
+외부 KRX 소스를 쓴다 — 50종목 720일 전량이 pykrx 2.6초 / FDR 5.0초였다(2026-07 실측).
 
 [정확도] pykrx(KRX 공식) 기준 FDR은 O/H/L/C 240/240 완전일치.
          yfinance는 O/H/L은 맞지만 종가가 종목당 2~4일 어긋나 지표용으로 부적합 → 미사용.
 
 [역할 분담] 과거 일봉은 여기서(6시간 캐시), 당일 봉은 토스 실시간 현재가가 덮어쓴다
-            (api._get_cached_chart의 오버레이). pykrx·FDR은 장중 당일 값을 주지 않는다.
+            (api._get_cached_chart의 오버레이). Open API·FDR은 장중 당일 값을 주지 않는다.
 
 ※ 토스 API가 KRX 기준 OHLC를 지원하면 이 모듈을 걷어내고 토스 경로로 되돌린다.
 """
@@ -44,7 +50,6 @@ import logging
 import re
 import threading
 import time
-from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -66,53 +71,6 @@ _COLUMNS = ['date', 'open', 'high', 'low', 'close', 'volume']
 # 화면·지표 경로의 기본 조회 창(달력일). 250거래일 = 실측 373달력일이라 여유를 둔 값이다.
 # (api._krx_daily_chart가 tail(250)으로 자르고, KIS 경로도 250봉에서 페이징을 멈춘다)
 _CHART_FETCH_DAYS = 400
-
-# pykrx는 import 시 KRX 로그인 시도 로그를 stderr로 흘린다(선택적 로그인이라 조회에는 무관).
-# 라즈베리파이 로그 오염을 막기 위해 import 구간만 억제한다.
-_pykrx = None
-_import_done = False
-_import_lock = threading.RLock()
-
-
-def _lazy_import():
-    """pykrx 를 최초 1회만 로드한다(없으면 None으로 남는다). FDR 은 적재하지 않는다(모듈 독스트링)."""
-    global _pykrx, _import_done
-    if _import_done:
-        return
-    with _import_lock:
-        if _import_done:
-            return
-        buf = io.StringIO()
-        try:
-            with redirect_stderr(buf), redirect_stdout(buf):
-                try:
-                    from pykrx import stock as _s
-                    _pykrx = _s
-                except Exception as e:      # noqa: BLE001 - 미설치/로드 실패 모두 폴백 대상
-                    logger.debug(f"[KRX] pykrx 로드 실패: {e}")
-        finally:
-            _import_done = True
-        noise = buf.getvalue().strip()
-        if noise:
-            logger.debug(f"[KRX] 라이브러리 로드 메시지(억제됨): {noise[:200]}")
-        # [중요] redirect 는 이 **일회성 import** 에서만 쓴다. 조회 경로에서 쓰면 전역
-        #  sys.stdout 을 초 단위로 잡아 rich 화면 출력이 통째로 사라진다(2026-08-25 장애).
-        #  이후의 로그인 배너는 모듈 print 교체로 지운다.
-        try:
-            from modules import krx_data
-            krx_data.silence_pykrx_banner()
-        except Exception:       # noqa: BLE001 - 배너 억제 실패는 조회에 영향이 없다
-            pass
-
-
-def is_available():
-    """일봉을 받을 길이 있는가. Open API 저장소와 FDR 경로(네이버 직접 조회)는 라이브러리가 필요 없다.
-
-    pykrx 적재(스크래핑 허용 시 맨 뒤 소스)를 여기서 겸해 왔으므로 그 호출은 남긴다.
-    """
-    _lazy_import()
-    return True
-
 
 # FDR 경로가 직접 받는 원천(모듈 독스트링 [FDR 라이브러리를 부르지 않는다]).
 #  (연결, 읽기) 초 — 네이버 일봉 응답은 실측 0.04~0.09초, GitHub CSV 는 1초 안쪽이다.
@@ -141,14 +99,11 @@ def _normalize(df, source):
         return None
 
     df = df.copy()
-    rename = {'시가': 'open', '고가': 'high', '저가': 'low', '종가': 'close', '거래량': 'volume',
-              'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume': 'volume'}
-    df = df.rename(columns=rename)
     df.columns = [str(c).lower() for c in df.columns]
 
     if 'date' not in df.columns:
         df = df.reset_index()
-        df = df.rename(columns={c: 'date' for c in df.columns if str(c).lower() in ('index', 'date', '날짜')})
+        df = df.rename(columns={c: 'date' for c in df.columns if str(c).lower() in ('index', 'date')})
     if 'date' not in df.columns:
         logger.debug(f"[KRX] {source} 날짜 컬럼 없음: {list(df.columns)[:6]}")
         return None
@@ -175,22 +130,6 @@ def _normalize(df, source):
 
     df = df[_COLUMNS].drop_duplicates(subset=['date'], keep='last')
     return df.sort_values('date').reset_index(drop=True)
-
-
-def _fetch_pykrx(code, start, end):
-    """pykrx(KRX 공식). adjusted=True로 수정주가 기준을 FDR과 통일한다.
-
-    기준을 맞추지 않으면 조회 구간에 액면분할·유상증자가 있을 때 두 소스가 어긋나
-    폴백 전환 시점에 EMA120·52주 밴드가 튄다.
-    """
-    if _pykrx is None:
-        return None
-    try:
-        df = _pykrx.get_market_ohlcv(start, end, code, adjusted=True)
-    except TypeError:
-        # 구버전 pykrx는 adjusted 인자를 받지 않는다.
-        df = _pykrx.get_market_ohlcv(start, end, code)
-    return _normalize(df, 'pykrx')
 
 
 def _fetch_fdr(code, start, end):
@@ -319,8 +258,6 @@ def get_daily(code, lookback_days=None, use_cache=True):
     code = str(code or '').strip()
     if not is_domestic_code(code):
         return None
-    if not is_available():
-        return None
 
     if lookback_days is None:
         # 화면·지표 경로는 250봉만 쓴다(_krx_daily_chart가 tail(250)) — KIS 경로도 250봉에서
@@ -360,12 +297,8 @@ def get_daily(code, lookback_days=None, use_cache=True):
     s, e = start.strftime('%Y%m%d'), end.strftime('%Y%m%d')
 
     df = None
-    # [2026-09-17] 순서: Open API(공식·확정분, 오늘 봉은 FDR 로 덧댐) → FDR(네이버) → pykrx.
-    #  pykrx 는 data.krx.co.kr 화면 스크래핑이라 약관 위반으로 IP 가 차단됐다(config
-    #  KRX_WEB_SCRAPING_ALLOWED 주석). 기본 꺼져 있고, 켜도 맨 뒤다.
+    # 순서: Open API(공식·확정분, 오늘 봉은 FDR 로 덧댐) → FDR(네이버). 모듈 독스트링 참조.
     sources = [('OPENAPI', lambda c, s_, e_: _fetch_openapi(c, lookback_days)), ('FDR', _fetch_fdr)]
-    if getattr(config, 'KRX_WEB_SCRAPING_ALLOWED', False):
-        sources.append(('pykrx', _fetch_pykrx))
     for name, fetch in sources:
         try:
             df = fetch(code, s, e)
@@ -377,9 +310,7 @@ def get_daily(code, lookback_days=None, use_cache=True):
             break
 
     if df is None or df.empty:
-        logger.warning(f"[KRX] 일봉 조회 실패({code}) — Open API·FDR"
-                       f"{'·pykrx' if getattr(config, 'KRX_WEB_SCRAPING_ALLOWED', False) else ''} 모두 실패, "
-                       f"토스 캔들로 폴백")
+        logger.warning(f"[KRX] 일봉 조회 실패({code}) — Open API·FDR 모두 실패, 토스 캔들로 폴백")
         with _CACHE_LOCK:
             _FAIL[code] = now
         return None
@@ -433,66 +364,13 @@ def clear_cache():
 #  - 용도: AI가 출력한 '종목명(6자리코드)' 표기의 존재/일치 검증(할루시네이션 차단).
 #    LLM은 종목코드를 지어내거나 이름-코드를 뒤바꾸는 실패 모드가 흔하고,
 #    프롬프트 지시만으로는 막히지 않으므로 출력 후 대조가 유일한 방어선이다.
-#  - FDR StockListing('KRX') 1회 호출로 전 종목(약 2,900행)을 받는다(실측 0.3초/2.4MB).
+#  - KRX Open API 종목기본정보(1순위) → FDR 상장목록 CSV(폴백). 전 종목(약 2,900행)을 한 번에 받고
 #    DataFrame은 즉시 버리고 {코드: (이름, 시총)} dict만 남겨 라즈베리파이 메모리를 아낀다.
-#  - 폴백은 pykrx 단건 조회(이름만, 시총 없음). 둘 다 실패하면 None을 반환해
-#    호출부가 '검증 불가'로 처리하도록 한다(없는 종목으로 오판하면 안 된다).
+#  - 둘 다 실패하면 None을 반환해 호출부가 '검증 불가'로 처리하도록 한다(없는 종목으로 오판하면 안 된다).
 # ─────────────────────────────────────────────────────────────────────────────
 _LISTING = {'map': None, 'ts': 0.0}
 _LISTING_LOCK = threading.RLock()
 _LISTING_FAIL_TS = [0.0]
-
-
-def _listing_map_from_krx():
-    """KRX 공식 상장 목록 {코드: {'name','marcap'}}. 자격증명 없음·실패 시 None.
-
-    업종분류 화면이 **시장당 1콜**에 종목명과 시가총액을 함께 준다. 전종목 시총 조회
-    (get_market_cap_by_ticker)는 이름을 주지 않고, 이름은 종목당 1콜이라 2,700콜이 된다.
-
-    ※ 이 화면은 KOSPI·KOSDAQ만 지원한다 — KONEX 109종목은 여기 없어 호출부가 FDR로 메운다
-      (실측 2026-08-25: FDR 2,874 ⊃ KRX 2,765, 차이는 전부 KONEX. 겹치는 2,765종목에서
-       이름·시총 불일치 0).
-    """
-    try:
-        from modules import krx_data
-        if not krx_data.is_available():
-            return None
-    except Exception:       # noqa: BLE001
-        return None
-
-    result = {}
-    try:
-        # [중요] sys.stdout 을 건드리지 않는다 — 전역이라 워커 스레드가 잡으면 화면 출력이
-        #  통째로 사라진다(krx_data.silence_pykrx_banner 주석 참조). pykrx 배너는 그쪽이 맡는다.
-        from pykrx import stock
-        day = datetime.now()
-        frames = []
-        # 휴장일에는 빈 프레임이 오므로 응답이 있는 날까지 거슬러 훑는다.
-        for _ in range(10):
-            d = day.strftime('%Y%m%d')
-            frames = [stock.get_market_sector_classifications(d, m)
-                      for m in ('KOSPI', 'KOSDAQ')]
-            if any(f is not None and not f.empty for f in frames):
-                break
-            day -= timedelta(days=1)
-        for market_name, frame in zip(('KOSPI', 'KOSDAQ'), frames):
-            if frame is None or frame.empty:
-                continue
-            for code, row in frame.iterrows():
-                code = str(code).strip()
-                if not is_domestic_code(code):
-                    continue
-                try:
-                    marcap = float(row.get('시가총액') or 0)
-                except (TypeError, ValueError):
-                    marcap = 0.0
-                result[code] = {'name': str(row.get('종목명') or '').strip(),
-                                'marcap': marcap,
-                                'market': market_name}
-    except Exception as e:      # noqa: BLE001 - 어떤 실패든 FDR 폴백으로 넘긴다
-        logger.debug(f"[KRX] 공식 상장목록 조회 실패: {e}")
-        return None
-    return result or None
 
 
 def _listing_map_from_openapi():
@@ -555,9 +433,8 @@ def _listing_map_from_fdr():
 def get_listing_map(use_cache=True):
     """{'005930': {'name': '삼성전자', 'marcap': 1458646512696000}, ...} 또는 None.
 
-    **KRX 공식(1순위) / FDR(폴백)**. FDR 도 원천은 data.krx.co.kr 이지만 비공식 래퍼 +
-    GitHub CSV 캐시를 거치므로, 공식 경로가 열려 있으면 그쪽을 먼저 쓴다.
-    pykrx 경로가 커버하지 않는 KONEX 는 FDR 로 메운다(Open API 는 KONEX 까지 준다).
+    **KRX Open API(1순위) / FDR(폴백)**. FDR 도 원천은 KRX 지만 제3자 GitHub CSV 캐시를
+    거치므로, 공식 경로가 열려 있으면 그쪽을 먼저 쓴다.
 
     None은 '조회 실패'를 뜻한다 — 상장 종목이 없다는 뜻이 아니므로 호출부는
     이 경우 검증을 건너뛰어야 한다.
@@ -572,15 +449,7 @@ def get_listing_map(use_cache=True):
                 return None
 
     # Open API 목록은 코넥스까지 덮는다(종목기본정보 3시장) — FDR 보충이 필요 없다(2026-10-04).
-    result = _listing_map_from_openapi()
-    if not result:
-        result = _listing_map_from_krx()
-        if result:
-            # KONEX 보충 — pykrx 경로는 KOSPI·KOSDAQ 만 준다. 실패해도 무해하다.
-            for code, entry in (_listing_map_from_fdr() or {}).items():
-                result.setdefault(code, entry)
-        else:
-            result = _listing_map_from_fdr()
+    result = _listing_map_from_openapi() or _listing_map_from_fdr()
 
     if not result:
         _LISTING_FAIL_TS[0] = now
@@ -617,99 +486,10 @@ def get_ticker_name(code):
         return ''
 
     listing = get_listing_map()
-    if listing is not None:
-        entry = listing.get(code)
-        return entry['name'] if entry else ''
-
-    # 폴백: pykrx 단건. 없는 코드면 문자열이 아닌 값(빈 DataFrame 등)을 돌려준다.
-    _lazy_import()
-    if _pykrx is None:
+    if listing is None:
         return None
-    try:
-        raw = _pykrx.get_market_ticker_name(code)
-    except Exception as e:      # noqa: BLE001
-        logger.debug(f"[KRX] 종목명 조회 실패({code}): {e}")
-        return None
-    if isinstance(raw, str) and raw.strip():
-        return raw.strip()
-    # 단건 폴백은 '없는 코드'와 '조회 실패'를 구분하지 못하므로 보수적으로 검증 불가 처리.
-    return None
-
-
-# ---------------------------------------------------------------------------
-# 과거 수급(투자자별 순매수 수량)
-# ---------------------------------------------------------------------------
-# [왜 여기 있나 · 2026-08-24]
-#  스마트머니 시그널은 외국인·기관의 일별 순매수로 판정하는데, KIS 수급 TR
-#  (FHKST01010900)에는 **기간 파라미터가 없고 최근 30거래일만** 돌려준다. 그래서 다년
-#  백테스트에서는 창 밖 구간이 통째로 '수급 없음'으로 단정돼 이 축이 사실상 빠져 있었다.
-#  KRX는 같은 값을 기간으로 준다 — 겹치는 30일에서 외국인·기관 **30/30 완전일치**를 확인했다
-#  (원천이 KRX이고 KIS가 중계하는 것이니 당연한 결과다).
-#
-# [자격증명] data.krx.co.kr 회원 계정이 필요하다(KRX_ID / KRX_PW 환경변수). API 키가 아니라
-#  웹 로그인이며, 없으면 pykrx가 조용히 빈 DataFrame을 준다 → 여기서 None을 돌려주고
-#  호출부는 기존 KIS 30일 경로로 폴백한다. 즉 자격증명이 없어도 동작은 종전과 같다.
-# [게이트 · 2026-09-18] 이 호출은 화면용 엔드포인트 스크래핑이라 KRX_WEB_SCRAPING_ALLOWED
-#  가 꺼져 있으면(기본) 아예 부르지 않는다 — 감사 배치가 이 계열을 두드린 것이 IP 차단의
-#  원인이었다. Open API 에는 투자자별 순매수 서비스가 없어 대체 소스도 없다 → None(KIS 30일).
-_INVESTOR_CACHE = {}              # {(code, start, end): df | None}
-_INVESTOR_CACHE_LOCK = threading.RLock()
-_INVESTOR_CACHE_MAX = 200
-
-# KRX 컬럼 → 기존 KIS 필드 의미. 기관합계/외국인합계가 각각 orgn_ntby_qty/frgn_ntby_qty다.
-_INVESTOR_COLUMNS = {'기관합계': 'o_net', '외국인합계': 'f_net'}
-
-
-def get_investor_netbuy(code, start, end):
-    """[start, end] 구간의 일별 순매수 **수량**. DataFrame[date, f_net, o_net] 또는 None.
-
-    date는 일봉과 같은 'YYYYMMDD' 문자열이라 병합에 그대로 쓸 수 있다.
-    조회 불가(자격증명 없음·미설치·오류)면 None — 호출부가 폴백할 수 있게 빈 프레임과 구분한다.
-
-    거래대금이 아니라 수량을 쓴다. 기존 판정이 순매수 '수량'의 부호를 보므로 의미를 맞춘다
-    (대금으로 바꾸면 같은 날 부호가 뒤집히는 경우가 생긴다).
-    """
-    code = str(code or '').strip()
-    if not is_domestic_code(code):
-        return None
-
-    key = (code, str(start), str(end))
-    with _INVESTOR_CACHE_LOCK:
-        if key in _INVESTOR_CACHE:
-            return _INVESTOR_CACHE[key]
-
-    if not getattr(config, 'KRX_WEB_SCRAPING_ALLOWED', False):
-        return None
-    _lazy_import()
-    if _pykrx is None:
-        return None
-
-    df = None
-    try:
-        # 로그인 배너(계정 ID 포함)는 krx_data.silence_pykrx_banner 가 지운다.
-        #  여기서 redirect_stdout 을 쓰면 전역 stdout 을 초 단위로 잡아 화면이 멎는다.
-        raw = _pykrx.get_market_trading_volume_by_date(start, end, code, detail=False)
-        if raw is not None and not raw.empty and set(_INVESTOR_COLUMNS) <= set(raw.columns):
-            out = raw.reset_index()
-            date_col = out.columns[0]           # '날짜'
-            out['date'] = pd.to_datetime(out[date_col]).dt.strftime('%Y%m%d')
-            out = out.rename(columns=_INVESTOR_COLUMNS)[['date', 'f_net', 'o_net']]
-            for c in ('f_net', 'o_net'):
-                out[c] = pd.to_numeric(out[c], errors='coerce').fillna(0)
-            df = out
-        else:
-            # 자격증명이 없으면 pykrx가 로그인 실패를 찍고 빈 프레임을 준다.
-            logger.debug(f"[KRX] 수급 조회 결과 없음({code} {start}~{end}) "
-                         f"— 스크래핑 OFF·KRX_ID/KRX_PW 미설정이면 정상이다")
-    except Exception as e:      # noqa: BLE001
-        logger.debug(f"[KRX] 수급 조회 실패({code} {start}~{end}): {e}")
-        df = None
-
-    with _INVESTOR_CACHE_LOCK:
-        if len(_INVESTOR_CACHE) >= _INVESTOR_CACHE_MAX:
-            _INVESTOR_CACHE.clear()
-        _INVESTOR_CACHE[key] = df
-    return df
+    entry = listing.get(code)
+    return entry['name'] if entry else ''
 
 
 # ---------------------------------------------------------------------------

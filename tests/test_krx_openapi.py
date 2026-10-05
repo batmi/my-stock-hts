@@ -258,21 +258,6 @@ def test_krx_daily_prefers_openapi_and_tops_up_today_from_fdr(store, monkeypatch
     assert list(df["date"])[-2:] == ["20260917", today]
 
 
-def test_pykrx_scraping_is_off_by_default(monkeypatch):
-    from modules import krx_daily, krx_data
-    assert config.KRX_WEB_SCRAPING_ALLOWED is False
-    monkeypatch.setenv("KRX_ID", "x")
-    monkeypatch.setenv("KRX_PW", "y")
-    assert krx_data.is_available() is False
-    calls = []
-    monkeypatch.setattr(krx_daily, "_fetch_pykrx", lambda *a: calls.append(a))
-    monkeypatch.setattr(krx_daily, "_fetch_openapi", lambda *a: None)
-    monkeypatch.setattr(krx_daily, "_fetch_fdr", lambda *a: None)
-    krx_daily.clear_cache()
-    krx_daily.get_daily("005930", lookback_days=4, use_cache=False)
-    assert calls == [], "스크래핑이 꺼져 있는데 pykrx 를 불렀다"
-
-
 def test_a_blank_body_is_retried_but_a_401_is_not(tmp_path, monkeypatch):
     """백필 5,350콜째의 빈 본문('') 한 번이 배치를 멈추면 안 된다 — 일시 오류만 짧게 재시도."""
     import requests

@@ -120,7 +120,7 @@ def is_available():
 
     조회 함수(stock_daily 등)는 이걸로 막지 않는다. 429 로 자정까지 쿨다운이 걸린 날에도
     이미 받아 둔 확정분은 그대로 읽어야 한다(_ensure_or_none 이 꼬리만 잘라 준다) —
-    안 그러면 한도 한 번에 지수·선물·금이 하루 종일 사라진다(스크래핑 폴백은 기본 OFF).
+    안 그러면 한도 한 번에 지수·선물·금이 하루 종일 사라진다(웹 스크래핑 폴백은 2026-10-05 제거).
     """
     return is_configured() and time.time() >= _DISABLED_UNTIL[0]
 
@@ -646,7 +646,7 @@ def _finish(rows, source):
     if out.empty:
         return None
     for col in ("open", "high", "low"):
-        # 빈 값(None) = 그 지수엔 시·고·저가 없다 → 종가로 평탄화(krx_data._finish 와 같다).
+        # 빈 값(None) = 그 지수엔 시·고·저가 없다 → 종가로 평탄화.
         out[col] = pd.to_numeric(out[col], errors="coerce").fillna(out["close"].astype(float))
     # 0 원 = 거래정지일(실측: 삼성전자 2018-04-30~05-03 분할 정지, 시·고·저·거래량 0 에 종가만).
     #  0 원 봉은 True Range 를 터뜨리므로 버린다 — krx_daily._normalize 와 같은 기준.

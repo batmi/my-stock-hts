@@ -4,8 +4,9 @@
 [왜 필요한가 · 2026-08-25]
  2026-08-25 부터 국내 지수 일봉의 뼈대가 KRX 확정 봉으로 바뀌었다(analysis._merge_index_history).
  종가는 FDR 과 399/399 일치를 확인했지만, 시장 필터는 SMA80 의 ±1% **밴드**라 소수점 차이가
- 경계에서 판정을 뒤집을 수 있다. 그리고 이 원천은 KRX_ID/KRX_PW 유무로 켜지고 꺼진다 —
- 즉 **자격증명이 없는 프로세스와 있는 프로세스가 서로 다른 게이트를 볼 수 있다.**
+ 경계에서 판정을 뒤집을 수 있다. 그리고 이 원천은 인증키(2026-09-18 부터 KRX_OPENAPI_KEY, 그 전엔
+ KRX_ID/KRX_PW) 유무로 켜지고 꺼진다 — 즉 **키가 없는 프로세스와 있는 프로세스가 서로 다른 게이트를
+ 볼 수 있다.**
 
  한 가지가 더 있다. 실매매 게이트(trader._update_market_indices_status)는
  analysis.get_domestic_index_data 를 쓰고, 백테스트 게이트(backtest.prepare_market_filter)는
@@ -13,8 +14,8 @@
  백테스트로 정한 다이얼이 실매매에 옮겨가려면 두 게이트가 같은 날을 차단해야 한다.
 
  그래서 세 팔을 같은 자로 잰다:
-   ① KRX 켜짐   — 자격증명이 있는 프로세스가 보는 값(현재 운영 목표 상태)
-   ② KRX 꺼짐   — 자격증명 없는 프로세스가 보는 값(종전 경로)
+   ① KRX 켜짐   — 인증키가 있는 프로세스가 보는 값(현재 운영 목표 상태)
+   ② KRX 꺼짐   — 인증키 없는 프로세스가 보는 값(종전 경로)
    ③ yfinance   — 백테스트가 보는 값
 
 [실행]  python3 tools/check_index_source_swap.py [--days 800]
@@ -63,11 +64,15 @@ def _closes(df):
 
 
 def _fetch_live(name, krx_on):
-    """실매매가 보는 지수 일봉. krx_on=False 면 자격증명이 없는 프로세스를 흉내 낸다."""
+    """실매매가 보는 지수 일봉. krx_on=False 면 인증키가 없는 프로세스를 흉내 낸다.
+
+    [Fix 2026-10-05] 종전엔 krx_data.is_available 만 막았는데, 2026-09-18 부터 Open API 조회가 그
+     검사보다 먼저 돌아 ② 팔도 KRX 값을 받았다(두 팔이 같은 값을 쟀다). Open API 입구를 막는다.
+    """
     krx_data.clear_cache()      # 팔마다 원천을 새로 타야 한다(force_refresh 가 지수 캐시를 우회한다)
     if krx_on:
         return analysis.get_domestic_index_data(name, force_refresh=True)
-    with patch.object(krx_data, "is_available", return_value=False):
+    with patch.object(krx_data, "_openapi", return_value=None):
         return analysis.get_domestic_index_data(name, force_refresh=True)
 
 
@@ -131,8 +136,8 @@ def main():
     console.print(f"\n[bold cyan]지수 원천 교체 영향 측정[/bold cyan]  (SMA{ma} · 밴드 {band:g}%)")
     console.print(f"[dim]{krx_msg}[/dim]")
     if not krx_ok:
-        console.print("[yellow]※ KRX 자격증명이 이 프로세스에 없어 ①(KRX 켜짐) 팔을 만들 수 없습니다.[/yellow]")
-        console.print("[dim]  ~/.htsrc 에 KRX_ID·KRX_PW 를 넣은 뒤 **새 셸에서** 다시 실행하세요.[/dim]")
+        console.print("[yellow]※ KRX Open API 인증키가 이 프로세스에 없어 ①(KRX 켜짐) 팔을 만들 수 없습니다.[/yellow]")
+        console.print("[dim]  ~/.htsrc 에 KRX_OPENAPI_KEY 를 넣은 뒤 **새 셸에서** 다시 실행하세요.[/dim]")
         console.print("[dim]  (②·③ 대조만 진행합니다 — 실매매 게이트와 백테스트 게이트의 차이는 이것만으로도 드러납니다.)[/dim]")
 
     rows = []

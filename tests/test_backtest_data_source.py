@@ -1,6 +1,6 @@
 """백테스트 데이터 소스 정합성 + 손절 부재 시 매수 가드.
 
-- 국내 백테스트는 모드와 무관하게 KRX 공식(pykrx/FDR)을 1순위로 쓴다.
+- 국내 백테스트는 모드와 무관하게 KRX 공식(Open API/FDR)을 1순위로 쓴다.
   실매매·화면 지표(토스=KRX 공식, KIS 일봉=KRX 정규장 기준)와 같은 기준이라
   검증한 전략과 실행하는 전략이 다른 데이터 위에 서지 않고, 모드를 바꿔도 결과가 같다.
   폴백: yfinance → 차트 API(250봉 상한 → 절단 경고)
@@ -123,12 +123,11 @@ def test_overseas_backtest_never_uses_krx_source(toss_mode):
 def test_short_cached_lookback_is_not_reused_for_longer_request():
     """차트 경로(730일)가 먼저 캐시하면 백테스트(수년)가 잘린 시계열을 받는 문제 방지."""
     krx_daily.clear_cache()
-    krx_daily._import_done, krx_daily._pykrx = True, object()
     try:
         norm = krx_daily._normalize(
-            pd.DataFrame({'시가': [1], '고가': [2], '저가': [1], '종가': [2], '거래량': [1]},
-                         index=pd.to_datetime(['2026-07-24'])), 'pykrx')
-        # [2026-09-17] 순서가 Open API → FDR → pykrx(게이트)라 목은 FDR 자리에 둔다
+            pd.DataFrame({'open': [1], 'high': [2], 'low': [1], 'close': [2], 'volume': [1]},
+                         index=pd.to_datetime(['2026-07-24'])), 'FDR')
+        # 순서가 Open API → FDR 이라 목은 FDR 자리에 둔다
         with patch.object(krx_daily, '_fetch_openapi', return_value=None), \
              patch.object(krx_daily, '_fetch_fdr', return_value=norm) as m:
             krx_daily.get_daily('005930', lookback_days=730)     # 차트 경로

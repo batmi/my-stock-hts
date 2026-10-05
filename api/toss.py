@@ -944,7 +944,7 @@ def _krx_daily_chart(code):
         return None
 
     if df is None or df.empty:
-        note_krx_fallback(code, "pykrx·FDR 모두 실패")
+        note_krx_fallback(code, "Open API·FDR 모두 실패")
         return None
     if len(df) < 120:
         logger.debug(f"[API] KRX 일봉({code}) {len(df)}봉으로 부족 → 토스 캔들 사용")

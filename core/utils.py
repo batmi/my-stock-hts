@@ -1006,7 +1006,7 @@ def print_krx_fallback_warning(name_map=None):
 
     reasons = sorted(set(fallback.values()))
     config.console.print(
-        f"[bold yellow]⚠️  KRX 공식 일봉(pykrx/FDR) 조회 실패 — 아래 {len(items)}종목은 "
+        f"[bold yellow]⚠️  KRX 공식 일봉(Open API/FDR) 조회 실패 — 아래 {len(items)}종목은 "
         f"토스 캔들(NXT 장전·장후 포함)로 계산했습니다.[/bold yellow]")
     config.console.print(f"[yellow]   대상: {shown}[/yellow]")
     config.console.print(f"[yellow]   사유: {', '.join(reasons)}[/yellow]")

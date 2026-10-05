@@ -132,7 +132,7 @@ def calculate_daily_status(row, prev_row, thresholds=None):
 #  종가 비교라 그 며칠이 거래를 바꾼다. 폴백은 종목당 WARNING 한 줄로 남지만 감사 CLI 는
 #  로그를 콘솔에 띄우지 않아, **표만 보면 어느 종목이 다른 데이터로 돌았는지 알 수 없다.**
 #  두 감사를 비교하기 전에 양쪽이 같은 소스였는지부터 확인할 수 있어야 한다.
-_DAILY_SOURCE = {}                # {code: 'KRX/pykrx' | 'yfinance' | '차트API' | None}
+_DAILY_SOURCE = {}                # {code: 'KRX/OPENAPI' | 'KRX/FDR' | 'yfinance' | '차트API' | None}
 
 
 def reset_daily_source():
@@ -140,7 +140,7 @@ def reset_daily_source():
 
 
 def daily_source_summary():
-    """{'KRX/pykrx': n, 'yfinance': n, ...} — 준비된 종목의 일봉 출처 분포."""
+    """{'KRX/OPENAPI': n, 'yfinance': n, ...} — 준비된 종목의 일봉 출처 분포."""
     out = {}
     for src in _DAILY_SOURCE.values():
         key = src or "실패"
@@ -158,7 +158,7 @@ def get_backtest_data(code, is_overseas, days):
      ③ yfinance는 O/H/L은 일치하나 종가가 237거래일 중 2~4일 어긋나(최대 1.59%,
         불일치 날짜가 종목 간 동일해 데이터 품질 문제) 손절·익절 트리거 판정을 바꿀 수 있다.
      ④ KIS 분석 경로(_fetch_domestic_daily)는 250봉 상한이라 장기 백테스트에 애초에 못 쓴다.
-     순서: ① pykrx/FDR(국내) → ② yfinance → ③ 차트 API(모드별, 250봉 상한 → 절단 경고)
+     순서: ① Open API/FDR(국내) → ② yfinance → ③ 차트 API(모드별, 250봉 상한 → 절단 경고)
     """
     warmup_days = days + 400        # 지표 계산용 여유(52주 윈도우 충족 위해 약 1년 워밍업)
 
@@ -249,25 +249,15 @@ def _warn_if_truncated(df, code, days):
 def _investor_netbuy_frame(df, code):
     """일봉 구간을 덮는 일별 순매수 프레임 [date, f_net, o_net] 과 그 출처를 돌려준다.
 
-    (프레임, 'KRX'|'KIS') / 구하지 못하면 (None, None).
+    (프레임, 'KIS') / 구하지 못하면 (None, None).
 
-    [왜 두 소스인가 · 2026-08-24]
-    KIS 수급 TR(FHKST01010900)에는 **기간 파라미터가 없고 최근 30거래일만** 온다. 다년
-    백테스트에서는 그 창 밖이 통째로 '수급 없음'으로 단정돼(아래 fillna(0)) 스마트머니 축이
-    사실상 빠져 있었다 — 없는 데이터를 '모름'이 아니라 '아니다'로 기록한 셈이다.
-    KRX(pykrx)는 같은 값을 기간으로 준다. 겹치는 30일에서 외국인·기관 **30/30 완전일치**를
-    확인했으므로(원천이 KRX다) 드롭인 교체이며, 자격증명(KRX_ID/KRX_PW)이 없거나 조회가
-    실패하면 종전 KIS 경로로 조용히 되돌아간다.
+    [한계 · 2026-08-24] KIS 수급 TR(FHKST01010900)에는 **기간 파라미터가 없고 최근 30거래일만**
+    온다. 다년 백테스트에서는 그 창 밖이 통째로 '수급 없음'으로 단정돼(아래 fillna(0)) 스마트머니
+    축이 사실상 빠진다 — 없는 데이터를 '모름'이 아니라 '아니다'로 기록하는 셈이다.
+    [2026-10-05] 기간 조회를 주던 KRX 경로(pykrx 로그인 스크래핑, KRX_ID/KRX_PW)는 약관 위반으로
+    차단돼 2026-09-18 부터 꺼져 있었고 pykrx 제거와 함께 지웠다. Open API 에는 투자자별 순매수
+    서비스가 없어 대체 원천이 없다 — 지금은 모든 기계에서 KIS 30일이다.
     """
-    from modules import krx_daily   # 지연 import (일봉 경로와 같은 규약)
-
-    dates = df['date'].astype(str)
-    start, end = dates.min(), dates.max()
-
-    krx = krx_daily.get_investor_netbuy(code, start, end)
-    if krx is not None and not krx.empty:
-        return krx, 'KRX'
-
     inv_list = api.get_investor_trend(code)
     if not inv_list:
         return None, None
@@ -284,13 +274,12 @@ def _investor_netbuy_frame(df, code):
     return inv_df, 'KIS'
 
 
-# [감사 재현성] 이 축은 **환경변수 유무로 켜지고 꺼진다** — KRX_ID/KRX_PW 가 있으면 전 구간
-#  (KRX), 없으면 최근 30거래일만(KIS), 조회가 다 실패하면 전 구간 False 다. 즉 자격증명이
-#  다른 두 기계에서 돌린 감사는 **서로 다른 전략을 잰 것**이다. 그런데 결과 어디에도 그
-#  상태가 남지 않아 비교할 때 확인할 방법이 없었다. 종목별 출처를 여기 쌓고
+# [감사 재현성] 이 축은 조회 성패로 갈린다 — 최근 30거래일만(KIS), 조회가 실패하면 전 구간
+#  False 다. 2026-09-18 이전에는 KRX_ID/KRX_PW 가 있는 기계만 전 구간(KRX)이었으므로, 그때의
+#  감사 수치는 기계마다 **서로 다른 전략을 잰 것**일 수 있다. 종목별 출처를 여기 쌓고
 #  portfolio_backtest.prepare_universe 가 한 줄로 알린다(같은 문에서 부르는
 #  warn_if_unmodeled 와 같은 취지 — '조용히 갈라지는 자리'를 소리 나게 한다).
-_SMART_MONEY_SOURCE = {}          # {code: 'KRX' | 'KIS' | None(못 구함)}
+_SMART_MONEY_SOURCE = {}          # {code: 'KIS' | None(못 구함)}
 
 # [선견] 수급을 며칠 늦춰 볼 것인가(거래일). 0 = 종전 동작 = D일 판정에 **D일 확정 수급**을
 #  쓴다. 그런데 실매매가 D일 장중에 보는 값은 '천천히 갱신되는 **잠정치**'이고
@@ -308,7 +297,7 @@ def reset_smart_money_source():
 
 
 def smart_money_source_summary():
-    """{'KRX': n, 'KIS': n, '없음': n} — 준비된 종목의 수급 출처 분포."""
+    """{'KIS': n, '없음': n} — 준비된 종목의 수급 출처 분포."""
     out = {}
     for src in _SMART_MONEY_SOURCE.values():
         key = src or "없음"
@@ -338,8 +327,8 @@ def _append_smart_money_signal(df, code, is_overseas, lag=None):
             if covered < 95.0:
                 config.console.print(
                     f"[dim yellow]※ 안내: 수급 데이터가 최근 구간({covered:.0f}%)만 있습니다 — "
-                    f"KRX Open API 에는 투자자별 순매수가 없고 웹 스크래핑은 차단돼 기본 OFF 입니다. "
-                    f"그 전까지 '스마트머니'는 나머지 구간에서 꺼진 것으로 계산됩니다.[/dim yellow]")
+                    f"KIS 는 최근 30거래일만 주고 KRX Open API 에는 투자자별 순매수가 없습니다. "
+                    f"'스마트머니'는 나머지 구간에서 꺼진 것으로 계산됩니다.[/dim yellow]")
         
         merged = pd.merge(df, inv_df, on='date', how='left')
         merged['f_net'] = merged['f_net'].fillna(0)
@@ -2029,7 +2018,7 @@ def run_backtest():
         #  표본 부족이 결과를 가장 크게 왜곡한다. >50% 대박은 실측 34거래당 1건이라
         #  종목당 거래 수가 적으면 대박 1건의 유무로 결론이 뒤집힌다.
         #  실측(30종목): 365일 5.9건/종목 → 730일 11.3건 → 1095일 16.2건.
-        #  과거 데이터는 pykrx/FDR(KRX 공식)이 담당해 3년치도 절단 없이 커버되고
+        #  과거 데이터는 Open API/FDR(KRX 공식)이 담당해 3년치도 절단 없이 커버되고
         #  (30종목 5.2s→5.5s, 메모리 +2MB) 라즈베리파이 부담도 없다.
         #  4년으로 더 늘리지 않는 이유: 청산·스코어링·리스크 로직이 최근 국면을 보고
         #  튜닝된 것이라 2022년까지 소급하면 검증의 의미가 옅어진다.

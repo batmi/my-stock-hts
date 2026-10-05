@@ -1,6 +1,6 @@
 """감사가 **어느 일봉 위에서** 돌았는지 표에 남는가.
 
-[배경] 국내 일봉은 KRX 공식(pykrx/FDR)이 1순위이고, 실패하면 종목 단위로 조용히
+[배경] 국내 일봉은 KRX 공식(Open API/FDR)이 1순위이고, 실패하면 종목 단위로 조용히
 yfinance 로 넘어간다. yfinance 종가는 237거래일 중 2~4일이 KRX 와 어긋나며(최대 1.59%),
 손절·익절 판정이 종가 비교라 그 며칠이 거래를 바꾼다. 감사를 병렬로 돌리면 KRX
 레이트리밋에 걸려 폴백이 무더기로 나는데([[audit-parallel-data-integrity]]),
@@ -29,16 +29,16 @@ def _seed(sources):
 
 
 def test_an_all_krx_run_is_summarised_quietly(caplog):
-    _seed(["KRX/pykrx"] * 5)
+    _seed(["KRX/OPENAPI"] * 5)
     with caplog.at_level("INFO", logger=pb.logger.name):
         dist = pb.announce_daily_source()
-    assert dist == {"KRX/pykrx": 5}
+    assert dist == {"KRX/OPENAPI": 5}
     assert not [r for r in caplog.records if r.levelname == "WARNING"]
 
 
 def test_a_single_fallback_is_made_loud(caplog):
     """한 종목만 넘어가도 그 실행은 '섞인 데이터' 위에 있다."""
-    _seed(["KRX/pykrx"] * 9 + ["yfinance"])
+    _seed(["KRX/OPENAPI"] * 9 + ["yfinance"])
     with caplog.at_level("WARNING", logger=pb.logger.name):
         pb.announce_daily_source()
     warns = [r.message for r in caplog.records if r.levelname == "WARNING"]
@@ -55,9 +55,9 @@ def test_the_chart_api_fallback_counts_too():
 
 def test_failures_are_counted_not_dropped():
     """받지 못한 종목이 분포에서 사라지면 '전부 KRX' 처럼 보인다."""
-    backtest._DAILY_SOURCE["000000"] = "KRX/pykrx"
+    backtest._DAILY_SOURCE["000000"] = "KRX/OPENAPI"
     backtest._DAILY_SOURCE["000001"] = None
-    assert pb.announce_daily_source() == {"KRX/pykrx": 1, "실패": 1}
+    assert pb.announce_daily_source() == {"KRX/OPENAPI": 1, "실패": 1}
 
 
 def test_nothing_is_said_when_nothing_was_prepared():
@@ -164,9 +164,9 @@ def spoken(monkeypatch):
 
 
 def test_a_clean_daily_run_still_records_its_source(spoken):
-    _seed(["KRX/pykrx"] * 5)
+    _seed(["KRX/OPENAPI"] * 5)
     pb.announce_daily_source()
-    assert any("일봉 출처" in m and "KRX/pykrx 5종목" in m for m in spoken), \
+    assert any("일봉 출처" in m and "KRX/OPENAPI 5종목" in m for m in spoken), \
         f"정상 실행에 출처가 남지 않는다 — 나중에 비교할 수 없다: {spoken}"
 
 
@@ -183,7 +183,7 @@ def test_a_clean_smart_money_run_still_records_its_source(spoken):
 
 def test_the_degraded_path_is_still_louder_than_the_clean_one(spoken, caplog):
     """정상도 남기게 했다고 해서 문제가 묻히면 안 된다 — 경고는 그대로 WARNING 이다."""
-    _seed(["KRX/pykrx"] * 9 + ["yfinance"])
+    _seed(["KRX/OPENAPI"] * 9 + ["yfinance"])
     with caplog.at_level("WARNING", logger=pb.logger.name):
         pb.announce_daily_source()
     assert [r for r in caplog.records if r.levelname == "WARNING"], \

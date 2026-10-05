@@ -417,7 +417,7 @@ export TV_PASSWORD="tv_password"
 export KRX_OPENAPI_KEY="발급받은_인증키"
 ```
 
-> 종전의 `KRX_ID`/`KRX_PW`(data.krx.co.kr 웹 로그인 계정)는 **더 이상 필요 없습니다.** 그 경로(pykrx 스크래핑)는 KRX 약관 제10조 제2호(자동화 수단 수집 금지) 위반으로 IP 차단을 받았고(2026-09-17), 기본 꺼져 있습니다(`config.KRX_WEB_SCRAPING_ALLOWED`). `.htsrc`에서 두 변수를 지워도 됩니다.
+> 종전의 `KRX_ID`/`KRX_PW`(data.krx.co.kr 웹 로그인 계정)는 **더 이상 쓰지 않습니다 — `.htsrc`에서 지우세요.** 그 경로(pykrx 스크래핑)는 KRX 약관 제10조 제2호(자동화 수단 수집 금지) 위반으로 IP 차단을 받았고(2026-09-17), 2026-10-05에 pykrx 패키지와 함께 코드에서 제거했습니다. 설치돼 있다면 `pip uninstall pykrx`로 지워도 됩니다.
 
 이용신청이 필요한 서비스(서비스별로 승인이 따로 납니다 — 미승인 서비스는 401로 폴백):
 

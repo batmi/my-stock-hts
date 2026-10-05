@@ -1487,11 +1487,10 @@ class GlobalSettings(BaseModel):
     #    False**였다. KIS 수급 TR(FHKST01010900)에 기간 파라미터가 없어 최근 30거래일만
     #    오고(실측: 005930 → 30행), 창 밖은 left merge + fillna(0)으로 '모름'이 아니라
     #    '수급 없음'으로 단정됐기 때문이다.
-    #    → **지금은 메워졌다.** KRX_ID/KRX_PW(data.krx.co.kr 계정)를 설정하면
-    #      modules/krx_daily.get_investor_netbuy 가 전 구간 수급을 준다
-    #      (겹치는 30일에서 KIS와 외국인·기관 30/30 완전일치 확인). 자격증명이 없으면
-    #      종전 KIS 30일 경로로 폴백하므로, **감사 환경마다 이 축이 켜지고 꺼진다.**
-    #      감사 수치를 비교할 때는 양쪽이 같은 상태였는지 먼저 확인할 것.
+    #    → 2026-08-24~09-17 에는 KRX_ID/KRX_PW(data.krx.co.kr 계정)가 있는 기계에서만
+    #      전 구간 수급이 메워졌다(KRX 웹 스크래핑, KIS와 30/30 완전일치). 그 경로는 약관
+    #      위반으로 09-18 꺼졌고 10-05 pykrx 와 함께 지웠다 — **지금은 다시 KIS 30일뿐**이다.
+    #      그 기간의 감사 수치를 비교할 때는 양쪽이 같은 상태였는지 먼저 확인할 것.
     #    OBV 항목은 `if obv_trend or smart_money`로 OR 결합이라(analysis.py) 스마트머니가
     #    켜지는 날에는 OBV 기간 변경이 이 항목 점수를 못 바꾼다. 실측(20종목·1,095일):
     #    스마트머니 True 56.7% 중 37.4%p는 OBV가 이미 켜져 있어 **무동작**이고, 점수가
@@ -3515,10 +3514,9 @@ KRX_OPENAPI_CALL_INTERVAL_SEC = 0.2        # 호출 간격(초). 일 한도 10,0
 #   한 번의 백그라운드 적재가 쓸 수 있는 호출 수 — 일 한도 10,000 은 맥북·파이가 같은 키면 합산된다.
 KRX_OPENAPI_BACKGROUND_FILL = True
 KRX_OPENAPI_BACKGROUND_MAX_CALLS = 3000
-#  data.krx.co.kr 웹 화면 스크래핑(pykrx 지수/수급/업종·krx_data 로그인 경로)을 허용할지.
-#   기본 False — 약관 제10조 제2호 위반이며 재탐지 시 다시 차단된다. True 로 켜도 KRX_ID/KRX_PW 가
-#   있어야만 동작한다. 켜야 할 이유가 생기면 그 이유를 여기 적을 것.
-KRX_WEB_SCRAPING_ALLOWED = False
+#  [2026-10-05] data.krx.co.kr 웹 화면 스크래핑 경로(pykrx·krx_data 로그인)와 그 게이트
+#   KRX_WEB_SCRAPING_ALLOWED 는 pykrx 패키지와 함께 지웠다 — 게이트가 꺼져 있어도 pykrx 는 import
+#   만으로 KRX_ID/KRX_PW 계정으로 로그인했다. 약관 제10조 제2호 위반 경로이므로 되살리지 않는다.
 
 # [특수 세션일 · 2026-09-20] KRX 가 정규장 시각을 옮기는 날. 값은 (개장 지연 분, 마감 지연 분).
 #  · 수능일: 전 세션이 1시간 밀린다(정규장 10:00~16:30, NXT 프리 09:00~10:00, 휴게·애프터도 함께).

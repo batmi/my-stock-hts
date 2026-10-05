@@ -203,9 +203,7 @@ def test_memory_cache_kept_before_close(monkeypatch, trading_day):
 # 4. 토스 모드(KRX 일봉 캐시)도 같은 기준으로 만료
 # ---------------------------------------------------------
 def test_krx_daily_cache_expires_at_close(monkeypatch):
-    """krx_daily(pykrx/FDR) 캐시도 마감 전 저장분은 마감 후 재조회한다."""
-    import time as _time
-    monkeypatch.setattr(krx_daily, 'is_available', lambda: True)
+    """krx_daily(Open API/FDR) 캐시도 마감 전 저장분은 마감 후 재조회한다."""
     monkeypatch.setattr(krx_daily, '_session_settled_ts', lambda: _at(15, 40).timestamp())
     df = pd.DataFrame({'date': [PREV_DAY], 'open': [1.0], 'high': [1.0],
                        'low': [1.0], 'close': [1.0], 'volume': [1.0]})

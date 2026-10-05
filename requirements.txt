@@ -49,15 +49,13 @@ websockets>=12.0
 cryptography>=41.0
 # yfinance: 해외 시세·기준가 폴백, 배당/실적 캘린더.
 yfinance>=0.2.40
-# pykrx: 국내 일봉을 'KRX 정규장 기준'으로 조회하던 소스.
-#  토스 캔들은 NXT 장전·장후 체결이 섞여 ATR 이 6~15% 부풀고 ADX 가 최대 9.45 어긋난다.
-#  [2026-09-18] 정본은 KRX Open API(KRX_OPENAPI_KEY, modules/krx_openapi.py)다. pykrx 는 KRX 웹
-#  스크래핑 차단으로 KRX_WEB_SCRAPING_ALLOWED(기본 OFF) 뒤의 마지막 폴백으로만 남았다 — import 는
-#  시도하므로 설치는 유지한다.
-#  [2026-10-04] finance-datareader 제거 — 폴백·오늘 봉 덧대기('FDR' 경로)와 감사 도구는 같은 원천
-#  (네이버 일봉·FinanceData GitHub 목록 캐시)을 직접 받고, 감사 지수는 Open API 저장소에서 읽는다
-#  (modules/krx_daily.py 독스트링). 라이브러리는 타임아웃이 없고 data.krx.co.kr 를 먼저 두드렸다.
-pykrx>=1.0.45
+# [국내 일봉·지수·금현물] 서드파티 라이브러리 없이 받는다. 정본은 KRX Open API(KRX_OPENAPI_KEY,
+#  modules/krx_openapi.py — requests 로 직접 호출)이고, 폴백은 네이버 일봉·FinanceData GitHub 목록
+#  캐시를 직접 받는다(modules/krx_daily.py 독스트링).
+#  [2026-10-04] finance-datareader 제거 — 타임아웃이 없고 data.krx.co.kr 를 먼저 두드렸다.
+#  [2026-10-05] pykrx 제거 — data.krx.co.kr 웹 스크래핑(약관 위반으로 IP 차단)이고, 게이트가 꺼져
+#   있어도 **import 만으로** 환경변수 KRX_ID/KRX_PW 계정으로 그 사이트에 로그인했다.
+#   설치돼 있던 기계는 `pip uninstall pykrx` 로 지워도 된다(남아 있어도 이제 import 하지 않는다).
 # beautifulsoup4: 테마·뉴스 HTML 파싱(modules/theme_analysis.py).
 beautifulsoup4>=4.11
 # tradingview-screener: 해외 종목 스크리닝·시세 보강.
@@ -99,7 +97,7 @@ gnureadline>=8.0; sys_platform == "darwin"
 #  이 조합으로 되돌려 재현하면 된다.
 #   rich 15.0.0 · pandas 2.3.3 · numpy 2.4.6 · yfinance 1.4.1 · requests 2.34.2
 #   urllib3 2.7.0 · beautifulsoup4 4.15.0 · matplotlib 3.11.0 · openpyxl 3.1.5
-#   python-dotenv 1.2.2 · pydantic 2.13.4 · holidays 0.103 · pykrx 1.2.8
+#   python-dotenv 1.2.2 · pydantic 2.13.4 · holidays 0.103
 #   tradingview-screener 3.2.0 · tvdatafeed 2.1.0
 #   google-genai 2.19.0 · websockets 16.0 · cryptography 49.0.0
 #   gnureadline 8.3.3

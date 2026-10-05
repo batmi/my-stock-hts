@@ -139,77 +139,48 @@ def test_append_smart_money_signal_vectorized(mock_api):
     assert res_df.loc[res_df['date'] == '20231005', 'smart_money'].iloc[0] == True
 
 # ==========================================================
-# 3. 과거 수급 소스 (KRX 우선 · KIS 폴백) — 2026-08-24
+# 3. 과거 수급 소스 (KIS 30거래일) — 2026-08-24 / 2026-10-05
 # ==========================================================
 # KIS 수급 TR 에는 기간 파라미터가 없고 최근 30거래일만 온다. 다년 백테스트에서는 창 밖이
-# 통째로 '수급 없음'으로 굳어(merge 후 fillna(0)) 스마트머니 축이 사실상 빠져 있었다.
-# KRX(pykrx)는 같은 값을 기간으로 주므로 그쪽을 먼저 쓰고, 자격증명이 없으면 종전대로 KIS 로
-# 되돌아간다. 아래 테스트는 그 우선순위와 폴백, 그리고 컬럼 대응을 고정한다.
+# 통째로 '수급 없음'으로 굳는다(merge 후 fillna(0)). 기간 조회를 주던 KRX 경로(pykrx 로그인
+# 스크래핑)는 약관 위반으로 꺼졌다가 2026-10-05 제거됐다 — Open API 에는 대체 서비스가 없다.
+# 아래 테스트는 KIS 컬럼 대응과, 창이 구간을 못 덮을 때 조용히 굳지 않는다는 것을 고정한다.
 
 def _bars(dates):
     return pd.DataFrame({"date": list(dates), "close": 70000.0})
 
 
-def test_investor_frame_prefers_krx():
-    """KRX 가 구간을 주면 그걸 쓴다 (KIS 는 부르지도 않는다)."""
-    krx = pd.DataFrame({"date": ["20240102", "20240103"],
-                        "f_net": [100, -200], "o_net": [300, -400]})
-    with patch('modules.krx_daily.get_investor_netbuy', return_value=krx) as mk, \
-         patch('api.get_investor_trend') as mkis:
-        frame, source = backtest._investor_netbuy_frame(_bars(["20240102", "20240103"]), "005930")
-
-    assert source == "KRX"
-    assert list(frame["f_net"]) == [100, -200]
-    mk.assert_called_once()
-    mkis.assert_not_called()          # 폴백 경로를 건드리지 않는다
+def _kis(dates, f, o):
+    return [{'stck_bsop_date': d, 'frgn_ntby_qty': str(a), 'orgn_ntby_qty': str(b)}
+            for d, a, b in zip(dates, f, o)]
 
 
-def test_investor_frame_falls_back_to_kis_without_krx():
-    """KRX 가 None(자격증명 없음 등)이면 기존 KIS 경로로 되돌아간다."""
-    kis = [{'stck_bsop_date': '20240102', 'frgn_ntby_qty': '11', 'orgn_ntby_qty': '22'}]
-    with patch('modules.krx_daily.get_investor_netbuy', return_value=None), \
-         patch('api.get_investor_trend', return_value=kis):
+def test_investor_frame_reads_kis():
+    kis = _kis(["20240102"], [11], [22])
+    with patch('api.get_investor_trend', return_value=kis):
         frame, source = backtest._investor_netbuy_frame(_bars(["20240102"]), "005930")
 
     assert source == "KIS"
     assert list(frame["f_net"]) == [11] and list(frame["o_net"]) == [22]
 
 
-def test_investor_frame_none_when_both_sources_empty():
-    """둘 다 없으면 None — 호출부가 '수급 없음' 안내를 띄울 수 있어야 한다."""
-    with patch('modules.krx_daily.get_investor_netbuy', return_value=None), \
-         patch('api.get_investor_trend', return_value=[]):
+def test_investor_frame_none_when_kis_empty():
+    """없으면 None — 호출부가 '수급 없음' 안내를 띄울 수 있어야 한다."""
+    with patch('api.get_investor_trend', return_value=[]):
         frame, source = backtest._investor_netbuy_frame(_bars(["20240102"]), "005930")
     assert frame is None and source is None
 
 
-def test_krx_source_covers_dates_outside_the_kis_window():
-    """핵심 회귀: KIS 창(최근 30일) 밖 과거 구간에서도 시그널이 켜진다.
-
-    종전에는 이 구간이 전부 smart_money=False 였다 — 없는 데이터가 '아니다'로 기록됐다.
-    """
-    dates = ["20240102", "20240103", "20240104"]
-    # 외국인·기관 동반 순매수(c1) → 당일과 다음날 모두 True 가 되는 조건
-    krx = pd.DataFrame({"date": dates, "f_net": [500, 600, 700], "o_net": [500, 600, 700]})
-    with patch('modules.krx_daily.get_investor_netbuy', return_value=krx), \
-         patch('api.get_investor_trend', return_value=[]) as mkis:
-        out = backtest._append_smart_money_signal(_bars(dates), "005930", is_overseas=False)
-
-    assert out["smart_money"].all(), "KRX 구간인데 시그널이 꺼져 있다"
-    mkis.assert_not_called()
-
-
-def test_kis_fallback_warns_when_coverage_is_partial(capsys):
-    """KIS 폴백이 구간을 못 덮으면 그 사실을 알린다 (조용히 False 로 굳지 않게)."""
+def test_kis_warns_when_coverage_is_partial(capsys):
+    """KIS 창이 구간을 못 덮으면 그 사실을 알린다 (조용히 False 로 굳지 않게)."""
     dates = [f"2024010{i}" for i in range(2, 6)] + ["20240108"]
-    kis = [{'stck_bsop_date': '20240108', 'frgn_ntby_qty': '1', 'orgn_ntby_qty': '1'}]
-    with patch('modules.krx_daily.get_investor_netbuy', return_value=None), \
-         patch('api.get_investor_trend', return_value=kis), \
+    kis = _kis(["20240108"], [1], [1])
+    with patch('api.get_investor_trend', return_value=kis), \
          patch.object(config.console, "print") as mock_print:
         backtest._append_smart_money_signal(_bars(dates), "005930", is_overseas=False)
 
     printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list if c.args)
-    assert "스크래핑" in printed and "수급 데이터가 최근 구간" in printed
+    assert "30거래일" in printed and "수급 데이터가 최근 구간" in printed
 
 
 # ==========================================================
@@ -234,9 +205,8 @@ def _reset_lag():
 
 
 def _sm(dates, f, o, **kw):
-    krx = pd.DataFrame({"date": list(dates), "f_net": list(f), "o_net": list(o)})
-    with patch('modules.krx_daily.get_investor_netbuy', return_value=krx), \
-         patch('api.get_investor_trend', return_value=[]):
+    with patch('api.get_investor_trend', return_value=_kis(dates, f, o)), \
+         patch.object(config.console, "print"):
         return backtest._append_smart_money_signal(_bars(dates), "005930",
                                                    is_overseas=False, **kw)
 
@@ -266,28 +236,25 @@ def test_the_module_default_drives_the_lag_too():
 
 
 # ==========================================================
-# 5. 감사 재현성 — 이 축은 환경변수 유무로 켜지고 꺼진다 (2026-09-01)
+# 5. 감사 재현성 — 이 축의 출처를 실행마다 남긴다 (2026-09-01)
 # ==========================================================
-# KRX_ID/KRX_PW 가 있으면 전 구간(KRX), 없으면 최근 30거래일만(KIS), 다 실패하면 전 구간
-# False. 자격증명이 다른 두 기계의 감사는 서로 다른 전략을 잰 것인데, 결과 어디에도 그
-# 상태가 남지 않았다. prepare_universe 가 한 줄로 알린다(warn_if_unmodeled 와 같은 문).
+# 2026-09-18 이전엔 KRX_ID/KRX_PW 가 있는 기계만 전 구간(KRX)이었다 — 자격증명이 다른 두 기계의
+# 감사는 서로 다른 전략을 잰 것인데 결과에 그 상태가 남지 않았다. 지금은 KIS 30일뿐이라 이 축은
+# 다년 창에서 반쯤 빠진 채로 돈다. prepare_universe 가 그 사실을 한 줄로 알린다.
 
 def test_the_source_of_every_stock_is_recorded():
     backtest.reset_smart_money_source()
-    krx = pd.DataFrame({"date": ["20240102"], "f_net": [1], "o_net": [1]})
-    with patch('modules.krx_daily.get_investor_netbuy', return_value=krx), \
-         patch('api.get_investor_trend', return_value=[]):
+    with patch('api.get_investor_trend', return_value=_kis(["20240102"], [1], [1])):
         backtest._append_smart_money_signal(_bars(["20240102"]), "005930", is_overseas=False)
-    with patch('modules.krx_daily.get_investor_netbuy', return_value=None), \
-         patch('api.get_investor_trend', return_value=[]), \
+    with patch('api.get_investor_trend', return_value=[]), \
          patch.object(config.console, "print"):
         backtest._append_smart_money_signal(_bars(["20240102"]), "000660", is_overseas=False)
 
-    assert backtest.smart_money_source_summary() == {"KRX": 1, "없음": 1}
+    assert backtest.smart_money_source_summary() == {"KIS": 1, "없음": 1}
 
 
-def test_a_run_without_krx_says_so_loudly():
-    """KRX 가 한 종목도 없으면 = 축이 사실상 빠진 채로 도는 중이다. 눈에 띄어야 한다."""
+def test_every_run_says_the_axis_is_partial():
+    """KIS 30일뿐이다 = 축이 다년 창에서 반쯤 빠진 채로 돈다. 실행마다 눈에 띄어야 한다."""
     from modules import portfolio_backtest as pb
 
     backtest.reset_smart_money_source()
@@ -297,34 +264,8 @@ def test_a_run_without_krx_says_so_loudly():
 
     assert dist == {"KIS": 1, "없음": 1}
     printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list if c.args)
-    assert "스크래핑" in printed
-
-
-def test_a_run_with_krx_records_itself_without_nagging():
-    """정상 경로는 **조르지 않되 기록은 남긴다.**
-
-    [정정 2026-09-08] 종전 이 검사는 정상 상태에서 `console.print` 가 아예 불리지 않을
-    것을 요구했다("콘솔을 어지럽히지 않는다"). 그런데 감사 도구는 stdout/stderr 만 로그로
-    받으므로, 그 침묵이 **감사 로그에 출처가 한 줄도 남지 않는다**는 뜻이 됐다. 이 장치를
-    만든 이유가 '자격증명이 다른 두 기계의 감사는 서로 다른 전략을 잰 것인데 결과에 그
-    상태가 남지 않는다' 였으니, 정상만 지워 버리면 목적이 반만 이뤄진다 — 문제 있는
-    실행만 표시해서는 두 실행을 **비교**할 수 없다.
-
-    'nag' 의 뜻은 유지한다: 정상 경로는 WARNING 을 내지 않고 dim 한 줄만 남긴다.
-    실행당 한 줄은 warn_if_unmodeled 가 이미 매번 찍는 수준과 같다.
-    → [[audit-tools-kis-credentials]]
-    """
-    from modules import portfolio_backtest as pb
-
-    backtest.reset_smart_money_source()
-    backtest._SMART_MONEY_SOURCE.update({"005930": "KRX"})
-    with patch.object(config.console, "print") as mock_print:
-        dist = pb.announce_smart_money_source()
-
-    assert dist == {"KRX": 1}
-    printed = " ".join(str(c.args[0]) for c in mock_print.call_args_list if c.args)
-    assert "KRX 1종목" in printed, f"정상 실행이 로그에 남지 않는다: {printed!r}"
-    assert "KRX_ID" not in printed, "정상인데 자격증명을 조르면 안 된다"
+    assert "KIS 1종목" in printed and "30거래일" in printed
+    assert "KRX_ID" not in printed, "없어진 자격증명을 조르면 안 된다"
 
 
 # ==========================================================

@@ -210,8 +210,8 @@ def _pit_date(days):
     """
     import datetime as _dt
     d = (_dt.date.today() - _dt.timedelta(days=int(days))).strftime("%Y%m%d")
-    # [2026-09-20] Open API 저장소의 거래일(행이 있는 날)로 당긴다 — pykrx(로그인 스크래핑)는
-    #  기본 OFF 다. 저장소에 그 구간이 없으면 원래 날짜로 간다.
+    # [2026-09-20] Open API 저장소의 거래일(행이 있는 날)로 당긴다. 저장소에 그 구간이 없으면
+    #  원래 날짜로 간다(종전 pykrx 폴백은 2026-10-05 패키지와 함께 제거).
     try:
         from modules import krx_openapi as oa
         with oa._DB_LOCK, oa._connect() as conn:
@@ -221,11 +221,7 @@ def _pit_date(days):
             return row[0]
     except Exception:       # noqa: BLE001
         pass
-    try:
-        from pykrx import stock
-        return stock.get_nearest_business_day_in_a_week(d)
-    except Exception:       # noqa: BLE001 - pykrx 없거나 조회 실패면 원래 날짜로 간다
-        return d
+    return d
 
 
 def _pit_marcap(date):
@@ -236,8 +232,9 @@ def _pit_marcap(date):
     (실측: 2016-01-04 시총 2위는 **한국전력**이었고, 오늘 목록으로는 재현되지 않는다).
     이 함수는 그날 실제 순위를 준다 — 폐지된 종목도 그 시점엔 살아 있었으므로 자연히 섞인다.
 
-    [자격증명] pykrx 의 시총 조회는 data.krx.co.kr 로그인(KRX_ID/KRX_PW)이 있어야 열린다.
-    없으면 빈 프레임이 오므로 None 을 돌려주고, 호출부가 기존 모드로 안내한 뒤 멈춘다.
+    [원천] KRX Open API 날짜별 스냅샷 하나다. 그날이 저장소에 없으면 None 을 돌려주고 호출부가
+    안내한 뒤 멈춘다 — tools/krx_openapi_backfill.py 로 그 구간을 먼저 채울 것.
+    (종전 pykrx 폴백은 data.krx.co.kr 로그인(KRX_ID/KRX_PW) 스크래핑이라 2026-10-05 제거했다.)
 
     [고정] `_listing` 과 같은 규약으로 **디스크 스냅샷**에 박는다. 과거 시총은 불변이라
     갱신할 이유가 없고, 매 실행마다 KRX 를 두드리면 레이트리밋에 걸린다.
@@ -260,30 +257,9 @@ def _pit_marcap(date):
             f, index=False, encoding="utf-8")
         print(f"[PIT] {date} 시총 스냅샷 생성(Open API) — {len(snap):,}종목 (KOSPI+KOSDAQ)", flush=True)
         return {c: v["marcap"] for c, v in snap.items()}
-
-    try:
-        from pykrx import stock
-    except Exception as e:      # noqa: BLE001
-        print(f"[PIT] pykrx 로드 실패: {e}", flush=True)
-        return None
-
-    frames = []
-    for market in ("KOSPI", "KOSDAQ"):
-        try:
-            cap = stock.get_market_cap(date, market=market)
-        except Exception as e:  # noqa: BLE001
-            print(f"[PIT] {market} 시총 조회 실패({date}): {type(e).__name__}: {e}", flush=True)
-            return None
-        if cap is None or cap.empty:
-            return None
-        frames.append(cap[["시가총액"]])
-
-    out = pd.concat(frames)
-    out = out[out["시가총액"] > 0]
-    pd.DataFrame({"ticker": out.index.astype(str), "marcap": out["시가총액"].values}).to_csv(
-        f, index=False, encoding="utf-8")
-    print(f"[PIT] {date} 시총 스냅샷 생성 — {len(out):,}종목 (KOSPI+KOSDAQ)", flush=True)
-    return dict(zip(out.index.astype(str), out["시가총액"]))
+    print(f"[PIT] {date} Open API 스냅샷이 저장소에 없다 — tools/krx_openapi_backfill.py 로 채운 뒤 "
+          f"다시 실행하세요", flush=True)
+    return None
 
 
 _PIT_SNAPSHOTS = {}
@@ -391,7 +367,7 @@ def extend_targets(exclude, limit, mode="marcap", pool=500, seed=20260816, pit_d
       방식(해시)이 같고 **시총을 언제 재느냐만 다르다** — 그래서 둘을 나란히 돌리면
       look-ahead 의 크기가 그대로 드러난다. 그 시점에 살아 있던 종목을 쓰므로 나중에
       폐지된 종목도 자연히 섞인다(축 B 의 생존 편향과 겹치는 부분이 있다).
-      KRX_ID/KRX_PW 가 없으면 시총 조회가 막혀 있어 쓸 수 없다.
+      그 날짜의 KRX Open API 스냅샷이 저장소에 있어야 쓸 수 있다.
     """
     if mode == "pit":
         if not pit_date:
@@ -576,7 +552,7 @@ def main():
     ap.add_argument("--extend-mode", default="marcap", choices=["marcap", "random", "pit"],
                     help="확장 종목 선정: marcap=현재 시총 상위(생존 편향 최대) / "
                          "random=현재 상위 pool 내 무작위 / "
-                         "pit=**그 시점** 상위 pool 내 무작위(look-ahead 제거, KRX_ID 필요). "
+                         "pit=**그 시점** 상위 pool 내 무작위(look-ahead 제거, Open API 저장소 필요). "
                          "random 과 pit 을 나란히 돌리면 look-ahead 의 크기가 드러난다")
     ap.add_argument("--extend-pool", type=int, default=500)
     ap.add_argument("--extend", type=int, default=0,
