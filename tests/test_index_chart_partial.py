@@ -86,18 +86,35 @@ def test_선물_차트도_반쪽_표식을_붙이고_output2_None_에_죽지_않
 def test_토스_모드_yfinance_지수_현재가는_전일값을_모르면_0으로_답한다():
     """모르는 전일 종가에 현재가를 넣으면 등락률 0% 가 만들어지고, 오버레이의 수정주가 검증이
     지수가 1.5% 이상 움직인 날마다 캐시를 파기·재조회한다. 토스 경로와 같은 '0 = 모름' 규약."""
+    from brokers import toss_api
     config.session.is_toss = True
     try:
-        with patch.object(api, 'get_yf_fast_info', return_value={'last_price': 850.0,
-                                                                  'regular_market_previous_close': None}):
-            res = api.get_domestic_index_price('2001')     # 코스피200: 토스 심볼 없음 → yfinance
-        assert res['rt_cd'] == '0'
-        assert res['output']['bstp_nmix_prpr'] == '850.0'
-        assert res['output']['bstp_nmix_prdy_clpr'] == '0'
-        with patch.object(api, 'get_yf_fast_info', return_value={'last_price': 850.0,
-                                                                  'regular_market_previous_close': 840.0}):
-            res = api.get_domestic_index_price('2001')
-        assert res['output']['bstp_nmix_prdy_clpr'] == '840.0'
+        with patch.object(api, '_get_micro_cache', return_value=None):
+            # 코스피: 토스 시장지표가 실패하면 yfinance(^KS11)로 내려간다
+            with patch.object(toss_api, 'get_market_indicator_price', side_effect=RuntimeError("토스 장애")), \
+                 patch.object(api, 'get_yf_fast_info', return_value={'last_price': 2500.0,
+                                                                      'regular_market_previous_close': None}):
+                res = api.get_domestic_index_price('0001')
+            assert res['rt_cd'] == '0'
+            assert res['output']['bstp_nmix_prpr'] == '2500.0'
+            assert res['output']['bstp_nmix_prdy_clpr'] == '0'
+            with patch.object(toss_api, 'get_market_indicator_price', side_effect=RuntimeError("토스 장애")), \
+                 patch.object(api, 'get_yf_fast_info', return_value={'last_price': 2500.0,
+                                                                      'regular_market_previous_close': 2480.0}):
+                res = api.get_domestic_index_price('0001')
+            assert res['output']['bstp_nmix_prdy_clpr'] == '2480.0'
+    finally:
+        config.session.is_toss = False
+
+
+def test_토스_모드_코스피200_현재가는_야후에_헛호출하지_않는다():
+    """[2026-10-05] ^KS200·^KQ150 은 야후에 없다 — 부르지 않고 바로 '모름'으로 답한다."""
+    config.session.is_toss = True
+    try:
+        with patch.object(api, 'get_yf_fast_info') as fi:
+            assert api.get_domestic_index_price('2001')['rt_cd'] == '9999'
+            assert api.get_domestic_index_price('2203')['rt_cd'] == '9999'
+        fi.assert_not_called()
     finally:
         config.session.is_toss = False
 

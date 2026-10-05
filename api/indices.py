@@ -25,12 +25,15 @@ def _api():
     import api
     return api
 
-# KIS 지수 코드 → yfinance 티커 (토스 모드 폴백용)
-_INDEX_KIS_TO_YF = {"0001": "^KS11", "1001": "^KQ11", "2001": "^KS200", "2203": "^KQ150"}
+# KIS 지수 코드 → yfinance 티커 (토스 모드 **현재가** 폴백용)
+#  [2026-10-05] 코스피200(^KS200)·코스닥150(^KQ150)은 야후에 티커가 없어 부를 때마다 헛호출 후
+#   실패했다 — 뺐다. 코스피·코스닥은 남긴다: 토스 시장지표는 전일 종가를 주지 않아 서킷브레이커
+#   감지(market_halt)가 등락률을 내려면 yfinance 의 전일 종가가 필요하다.
+_INDEX_KIS_TO_YF = {"0001": "^KS11", "1001": "^KQ11"}
 
 # KIS 지수 코드 → 토스 시장지표 심볼 (토스 API 1.2.4 /market-indicators).
 #  KRX 공식 지수를 그대로 주므로 토스 모드의 1순위 소스다. 코스피200(2001)·코스닥150(2203)은
-#  토스 심볼 카탈로그에 없어(400 unsupported-symbol) 종전 폴백(tvDatafeed→yfinance)을 그대로 쓴다.
+#  토스 심볼 카탈로그에 없어(400 unsupported-symbol) tvDatafeed 가 맡는다(analysis._fetch_domestic_index_data).
 _INDEX_KIS_TO_TOSS = {"0001": "KOSPI", "1001": "KOSDAQ"}
 
 
@@ -82,23 +85,18 @@ def _toss_index_chart_data(symbol, target=260):
 
 
 def get_domestic_index_chart(code):
-    """업종/지수 기간별 시세(일봉) 조회 (KIS API / 토스 모드는 시장지표 API·yfinance)"""
-    # [추가] 토스: KIS 미사용. 코스피·코스닥은 토스 시장지표(1.2.4), 그 외는 yfinance 티커 매핑.
+    """업종/지수 기간별 시세(일봉) 조회 (KIS API / 토스 모드는 시장지표 API)"""
+    # [추가] 토스: KIS 미사용. 코스피·코스닥은 토스 시장지표(1.2.4). 그 외는 빈 프레임 — 코스피200·
+    #  코스닥150은 호출부(analysis._fetch_domestic_index_data)가 tvDatafeed 로 받는다.
+    #  [2026-10-05] 종전의 yfinance 분기는 ^KS200·^KQ150 만 닿았는데 둘 다 야후에 없고, 토스 모드에서
+    #   이 함수를 그 코드로 부르는 곳도 없어 실행될 일이 없었다.
     if config.session.is_toss:
         toss_symbol = _INDEX_KIS_TO_TOSS.get(str(code))
         if toss_symbol:
             # KIS 경로와 동일하게 캐시+당일봉 실시간 오버레이를 태운다(오버레이는 토스 지수 현재가 사용).
             return _api()._get_cached_chart(code, is_overseas=False, is_index=True,
                                      fetch_func=lambda: _toss_index_chart_data(toss_symbol))
-        yf_ticker = _INDEX_KIS_TO_YF.get(str(code))
-        if not yf_ticker:
-            return pd.DataFrame()
-        try:
-            df = _api().get_chart_data(yf_ticker, is_overseas=True)
-            return df if df is not None else pd.DataFrame()
-        except Exception as e:
-            logger.debug(f"[Toss] 지수 차트 yfinance 조회 실패({code}): {e}")
-            return pd.DataFrame()
+        return pd.DataFrame()
 
     def fetch_func():
         # 지수/업종 차트 조회 URL 및 TR_ID (실전/모의 동일)

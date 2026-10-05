@@ -5,7 +5,7 @@
 
     get_domestic_index_data("KOSPI200")     ← market_type별 single-flight 락을 잡는다
       → _fetch_index_via_tvdatafeed
-        → _merge_index_volume_from_yfinance  (OBV용 거래량 보강)
+        → _merge_index_volume_from_yfinance  (OBV용 거래량 보강, 2026-10-05 제거)
           → api.get_chart_data("^KS200")
             → _index_source_chart_data       ← 지수 '단일 소스' 규칙(2026-07)
               → get_domestic_index_data("KOSPI200")   ← 같은 락을 같은 스레드가 다시!
@@ -14,7 +14,8 @@ threading.Lock은 재진입이 안 되므로 여기서 **영구 교착**한다. 
 나중에 들어온 단일 소스 규칙이 그 사이에 변을 놓으면서 고리가 닫혔다. 화면에는 '조회 중'
 으로만 보여 원인을 짚기 어려웠다(실측: 300초 넘게 반환 없음 → 수정 후 2.1초).
 
-[무엇을 고정하나] ① 거래량 보강은 지수 소스 체인을 타지 않는다(야후 원본만 받는다).
+[무엇을 고정하나] ① tvDatafeed 지수 조회는 바깥(차트 경로·yfinance)을 부르지 않는다 — 고리의
+   변이었던 거래량 보강은 KRX 확정 봉이 이력 거래량을 주면서 2026-10-05 지웠다.
 ② 그럼에도 순환이 다시 생기면 교착이 아니라 경고 + 캐시값으로 빠진다.
 """
 import threading
@@ -23,7 +24,6 @@ import pandas as pd
 import pytest
 
 import api
-import config
 from modules import analysis
 
 
@@ -34,37 +34,31 @@ def clean_index_state():
     analysis._INDEX_FETCH_INPROGRESS.__dict__.pop("types", None)
 
 
-def _tv_frame():
-    """tvDatafeed 결과 모양 — 지수라 거래량이 0이다(그래서 보강이 필요하다)."""
-    return pd.DataFrame({
-        'date': pd.to_datetime(["2026-08-17", "2026-08-18", "2026-08-19"]),
-        'open': [400.0, 401.0, 402.0], 'high': [403.0] * 3, 'low': [399.0] * 3,
-        'close': [401.0, 402.0, 403.0], 'volume': [0.0, 0.0, 0.0],
-    })
+class _FakeTv:
+    """tvDatafeed 대역 — 지수라 거래량이 0이다."""
+    def get_hist(self, **_k):
+        return pd.DataFrame({
+            'open': [400.0, 401.0, 402.0], 'high': [403.0] * 3, 'low': [399.0] * 3,
+            'close': [401.0, 402.0, 403.0], 'volume': [0.0, 0.0, 0.0],
+        }, index=pd.DatetimeIndex(pd.to_datetime(["2026-08-17", "2026-08-18", "2026-08-19"]),
+                                  name='datetime'))
 
 
-def test_거래량_보강은_지수_소스_체인을_타지_않는다(monkeypatch):
-    """[핵심] 보강이 api.get_chart_data를 부르면 ^KS200이 지수 소스로 되돌려져 고리가 닫힌다."""
+def test_tvdatafeed_지수_조회는_바깥_경로를_부르지_않는다(monkeypatch):
+    """[핵심] 지수 조회 안에서 api.get_chart_data·yfinance 를 부르면 ^KS200 이 지수 소스로
+    되돌려져 고리가 닫힌다. 거래량은 0 그대로 두고(이력 거래량은 KRX 확정 봉 몫) 아무것도 부르지 않는다."""
     def _forbidden(*a, **k):
-        raise AssertionError("거래량 보강이 get_chart_data를 불렀다 — 순환이 되살아났다")
+        raise AssertionError("지수 조회가 바깥 경로를 불렀다 — 순환의 변이 되살아났다")
 
-    raw = pd.DataFrame({'Volume': [111.0, 222.0, 333.0]},
-                       index=pd.to_datetime(["2026-08-17", "2026-08-18", "2026-08-19"]))
     monkeypatch.setattr(api, "get_chart_data", _forbidden)
-    monkeypatch.setattr(api, "fetch_yfinance_data", lambda *a, **k: raw)
+    monkeypatch.setattr(api, "fetch_yfinance_data", _forbidden)
+    monkeypatch.setattr(analysis, "_get_tvdatafeed", lambda: _FakeTv())
 
-    out = analysis._merge_index_volume_from_yfinance(_tv_frame(), "^KS200")
+    out = analysis._fetch_index_via_tvdatafeed("KOSPI200")
 
-    assert list(out['volume']) == [111.0, 222.0, 333.0], "야후 거래량이 병합되지 않았다"
-    # 가격은 tvDatafeed 값 그대로여야 한다 — 보강은 volume만 건드린다.
+    assert out is not None and out.attrs['source'] == 'TVDATAFEED'
+    assert list(out['volume']) == [0.0, 0.0, 0.0]
     assert list(out['close']) == [401.0, 402.0, 403.0]
-
-
-def test_야후_조회가_실패해도_원본을_돌려준다(monkeypatch):
-    monkeypatch.setattr(api, "fetch_yfinance_data",
-                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("야후 장애")))
-    out = analysis._merge_index_volume_from_yfinance(_tv_frame(), "^KS200")
-    assert list(out['volume']) == [0.0, 0.0, 0.0], "실패 시 원본(거래량 0)이 유지돼야 한다"
 
 
 def test_순환_호출은_교착이_아니라_캐시로_빠진다(monkeypatch):

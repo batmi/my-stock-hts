@@ -77,7 +77,7 @@ _TVDATAFEED_LOGGED_IN = False
 _TVDATAFEED_INIT_LOCK = threading.Lock()
 # market_type -> (TradingView 심볼, 거래소)
 #  코스피/코스닥은 yfinance(^KS11/^KQ11)가 최신 거래일 종가를 NaN으로 주는 일이 잦아(fast_info도
-#  None) 지수·등락률이 '-'로 표시된다 → tvDatafeed를 1순위로 쓰고 실패 시 yfinance로 폴백한다.
+#  None) 지수·등락률이 '-'로 표시된다 → tvDatafeed를 쓴다(yfinance 폴백은 2026-10-05 제거).
 # 토스 시장지표(/api/v1/market-indicators, API 1.2.4)로 조회 가능한 지수.
 #  코스피200·코스닥150은 토스 심볼 카탈로그에 없어 tvDatafeed가 1순위로 남는다.
 _TOSS_INDEX_MARKET_TYPES = ("KOSPI", "KOSDAQ")
@@ -386,79 +386,16 @@ def _fetch_index_via_tvdatafeed(market_type, n_bars=260):
                 out[col] = 0.0
         out = out[['date', 'open', 'high', 'low', 'close', 'volume']].copy()
         out = out.sort_values('date', ascending=True).reset_index(drop=True)
-        # [추가] tvDatafeed는 지수 거래량을 0으로 준다 → OBV 계산 불가('-'). yfinance 거래량을
-        #  날짜 매칭으로 채워 OBV를 살린다(코스피/코스닥/코스피200; ^KQ150은 실측 없음 → 0 유지).
-        out = _merge_index_volume_from_yfinance(out, _INDEX_YF_TICKERS.get(market_type))
+        # tvDatafeed는 지수 거래량을 0으로 준다. 이력 거래량은 KRX 확정 봉(_merge_index_history)이
+        #  준다 — [2026-10-05] 종전의 yfinance 거래량 보강은 지웠다. KRX 이력이 들어온 뒤로 그 값이
+        #  남는 곳은 KRX 에 아직 없는 마지막 날 한 줄뿐이었고, 거기에 원천이 다른 장중 거래량이 OBV
+        #  끝에 섞였다(그리고 tvDatafeed 조회마다 yfinance 1년치를 받았다).
         out.attrs['source'] = 'TVDATAFEED'
         return out
     except Exception as e:
         logger.debug(f"[TVDATAFEED] {market_type} 스키마 변환 실패: {e}")
         return None
 
-
-# market_type -> yfinance 티커 (거래량 보강·최후 폴백 공용)
-_INDEX_YF_TICKERS = {
-    "KOSPI": "^KS11",
-    "KOSDAQ": "^KQ11",
-    "KOSPI200": "^KS200",
-    "KOSDAQ150": "^KQ150",
-}
-
-
-def _merge_index_volume_from_yfinance(df, yf_ticker):
-    """tvDatafeed 지수 df(거래량=0)에 yfinance 일봉 거래량을 '날짜 매칭'으로 채운다(OBV 계산용).
-
-    가격(OHLC/close)은 tvDatafeed 값을 그대로 유지하고 volume만 교체한다. yfinance 조회 실패·
-    빈 응답(^KQ150 등)·매칭 실패 시 원본(volume=0)을 그대로 반환한다. 실 호출은 tvDatafeed
-    캐시 미스 시점에만 일어난다(get_domestic_index_data TTL 캐시가 빈도를 낮춤).
-    """
-    if not yf_ticker or df is None or df.empty or 'date' not in df.columns:
-        return df
-    # [교착 수정 2026-08-19] 종전에는 api.get_chart_data(yf_ticker)를 불렀다. 그런데 지수
-    #  '단일 소스' 규칙(2026-07)이 들어오면서 ^KS200·^KQ150은 그 안에서 다시 지수 소스
-    #  체인으로 되돌려진다 → get_domestic_index_data → _fetch_index_via_tvdatafeed →
-    #  여기 → get_chart_data … 사이클이 생겼고, get_domestic_index_data의 market_type별
-    #  single-flight 락을 **같은 스레드가 다시 잡으며 영구 교착**했다(토스 모드에서
-    #  코스피200·코스닥150이 조회 중 멈춤 — 2026-08-19 신고).
-    #  거래량 보강에 필요한 것은 야후 원본 거래량뿐이므로 소스 체인을 타지 않고 직접 받는다.
-    try:
-        raw = api.fetch_yfinance_data(yf_ticker, period="1y")
-    except Exception as e:
-        logger.debug(f"[TVDATAFEED] 거래량 보강 yfinance 조회 실패({yf_ticker}): {e}")
-        return df
-    if raw is None or getattr(raw, 'empty', True):
-        return df
-
-    vol_map = {}
-    try:
-        cols = raw.columns
-        if hasattr(cols, 'nlevels') and cols.nlevels > 1:
-            # 단일 티커라도 group_by에 따라 MultiIndex가 올 수 있다.
-            raw = raw.xs(yf_ticker, axis=1, level=-1) if yf_ticker in cols.get_level_values(-1) \
-                else raw.droplevel(-1, axis=1)
-        if 'Volume' not in raw.columns:
-            return df
-        for idx, v in raw['Volume'].items():
-            try:
-                v = float(v)
-            except (TypeError, ValueError):
-                continue
-            if v == v and v > 0:  # NaN 제외 & 양수만
-                key = idx.strftime('%Y%m%d') if hasattr(idx, 'strftime') else str(idx).replace('-', '')[:8]
-                vol_map[key] = v
-    except Exception as e:
-        logger.debug(f"[TVDATAFEED] 거래량 보강 파싱 실패({yf_ticker}): {e}")
-        return df
-    if not vol_map:
-        return df
-
-    def _vol_for(dt):
-        key = dt.strftime('%Y%m%d') if hasattr(dt, 'strftime') else str(dt).replace('-', '')[:8]
-        return vol_map.get(key, 0.0)
-
-    out = df.copy()
-    out['volume'] = out['date'].map(_vol_for)
-    return out
 
 # [추가] 미국채 현물 금리(TVC:US02Y/US05Y/US10Y/US30Y) 캐시 — 현물 금리는 장외(아시아장)에도
 #  거의 24시간 갱신되어 선물 프록시 추정 없이 실제 호가를 표시할 수 있다. 2년물은 야후에
@@ -2727,12 +2664,9 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                     else: market_str = cached_ex
                 elif is_index:
                     try:
-                        import yfinance as yf
-                        config.silence_yfinance_numpy_warning()  # import 뒤에 걸어야 억제 유효
-                        tk = yf.Ticker(code)
-                        ex = getattr(tk.fast_info, 'exchange', None)
-                        if not ex:
-                            ex = tk.info.get('exchange')
+                        ex = api.yf_ticker_call(
+                            code, lambda tk: getattr(tk.fast_info, 'exchange', None)
+                            or tk.info.get('exchange'))
                         if ex:
                             ex_str = str(ex).upper()
                             ex_map = {

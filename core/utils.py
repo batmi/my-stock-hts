@@ -98,6 +98,17 @@ EXCHANGE_RATE_MAX = 5000.0
 _FX_FALLBACK_LOG_INTERVAL = 600.0
 _fx_fallback_last_log = 0.0
 
+# [마지막 성공 환율 · 2026-10-05] 두 원천이 모두 실패하면 고정 기본값보다 **최근에 실제로 받은 환율**이
+#  훨씬 정확하다(원/달러는 하루 1% 안팎 움직인다). 다만 기한 없이 쓰면 그것도 낡은 값이므로 이 시간
+#  안에서만 쓰고, 넘으면 종전대로 기본값 + 경고다. 프로세스 메모리에만 둔다(재기동 직후 장애는 드물다).
+FX_LAST_GOOD_MAX_AGE_SEC = 24 * 3600
+_fx_last_good = {"rate": None, "ts": 0.0}
+
+
+def _remember_fx(rate):
+    _fx_last_good["rate"], _fx_last_good["ts"] = rate, time.time()
+    return rate
+
 
 def _plausible_fx(value):
     """환율로 쓸 수 있는 값인가. 못 쓰면 None.
@@ -138,7 +149,7 @@ def get_exchange_rate():
             if rate is not None:
                 if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
                     config.console.print(f"[dim magenta][TRACE] RES (TradingView) | Rate: {rate:.2f}[/dim magenta]")
-                return rate
+                return _remember_fx(rate)
             logger.warning(f"[환율] TradingView 응답이 환율로 쓸 수 없는 값입니다: "
                            f"{tv_data.get('close')!r} — 다음 경로로 넘어갑니다")
     except Exception:
@@ -146,8 +157,8 @@ def get_exchange_rate():
 
     try:
         # 2. yfinance Fallback
-        ticker = yf.Ticker("KRW=X")
-        raw = getattr(ticker.fast_info, 'last_price', None)
+        import api      # 지연 임포트 — core 는 상위 계층을 import 시점에 끌어오지 않는다
+        raw = api.yf_ticker_call("KRW=X", lambda t: getattr(t.fast_info, 'last_price', None))
         if raw:
             rate = _plausible_fx(raw)
             if rate is not None:
@@ -155,13 +166,21 @@ def get_exchange_rate():
                     config.console.print(f"[dim magenta][TRACE] RES (yfinance) | Rate: {rate:.2f}[/dim magenta]")
                 elif config.SCREEN_DEBUG_LEVEL == "DEBUG":
                     config.console.print(f"[dim magenta][DEBUG] RES (yfinance) | Rate: {rate} | Raw: {raw}[/dim magenta]")
-                return rate
+                return _remember_fx(rate)
             logger.warning(f"[환율] yfinance 응답이 환율로 쓸 수 없는 값입니다: {raw!r}")
     except Exception as e:
         if config.SCREEN_DEBUG_LEVEL in ["TRACE", "DEBUG"]:
             config.console.print(f"[dim red][TRACE] RES (yfinance) | Error: {e}[/dim red]")
 
     now = time.time()
+    last_rate, last_ts = _fx_last_good["rate"], _fx_last_good["ts"]
+    if last_rate is not None and now - last_ts <= FX_LAST_GOOD_MAX_AGE_SEC:
+        if now - _fx_fallback_last_log > _FX_FALLBACK_LOG_INTERVAL:
+            _fx_fallback_last_log = now
+            logger.warning(f"[환율] 원/달러 환율 조회 실패 — {int((now - last_ts) // 60)}분 전에 받은 "
+                           f"{last_rate:,.2f}원으로 해외 자산을 환산합니다(기한 "
+                           f"{FX_LAST_GOOD_MAX_AGE_SEC // 3600}시간).")
+        return last_rate
     if now - _fx_fallback_last_log > _FX_FALLBACK_LOG_INTERVAL:
         _fx_fallback_last_log = now
         logger.warning(

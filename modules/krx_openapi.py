@@ -686,6 +686,29 @@ def stock_daily(code, lookback_days, max_calls=None, now=None):
     return df
 
 
+def stock_close(code, bas_dd):
+    """저장소에 실린 그날의 종가(정규장 15:30 단일가, 원주가). 없으면 None. **네트워크를 타지 않는다.**
+
+    토스 등락률 기준가(api.toss._toss_base_price)용이다 — 기준가는 '전일 정규장 종가'인데, 일봉을
+     통째로 받으면 저장소 확정분과 네이버 덧대기 봉(애프터 최종가)이 한 프레임에 섞여 행 단위로
+     구분되지 않는다. 그날 한 칸을 저장소에서 직접 읽으면 출처가 확실하다.
+    """
+    if not is_configured() or not code or not bas_dd:
+        return None
+    try:
+        with _DB_LOCK, _connect() as conn:
+            row = conn.execute("SELECT close FROM stock_daily WHERE code=? AND bas_dd=?",
+                               (str(code).strip(), str(bas_dd))).fetchone()
+    except Exception as e:      # noqa: BLE001 - 저장소 문제는 '모름'
+        logger.debug(f"[KRX-OA] 종가 조회 실패({code} {bas_dd}): {e}")
+        return None
+    try:
+        close = float(row[0]) if row and row[0] is not None else 0.0
+    except (TypeError, ValueError):
+        return None
+    return close if close > 0 else None
+
+
 def last_data_dd(api_ids, start_dd, end_dd):
     """[start, end] 안에서 저장소에 **행이 실제로 실린** 마지막 날. 하나도 없으면 None.
 

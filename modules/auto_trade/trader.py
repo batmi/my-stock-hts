@@ -7543,7 +7543,7 @@ class AutoTrader:
             digits = "".join(ch for ch in str(det.get('asof') or "") if ch.isdigit())[:8]
             if len(digits) == 8:
                 tail += f" {digits[4:6]}/{digits[6:8]}"
-            src = {"TVDATAFEED": "TV", "YFINANCE": "YF"}.get(det.get('source'), det.get('source'))
+            src = {"TVDATAFEED": "TV"}.get(det.get('source'), det.get('source'))
             if src:
                 tail += f" {src}"
             #  소수 한 자리로 맞춘다 — 같은 메시지 안의 차단선·해제선(indicators 사유)과 같은 자릿수여야

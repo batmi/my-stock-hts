@@ -28,17 +28,21 @@ def _desc():
     ])
 
 
-def _no_openapi(monkeypatch):
-    """FDR 폴백 경로를 시험한다 — 셸에 인증키가 있어도 Open API 목록을 타지 않게."""
+def _openapi_listing(monkeypatch, frame=None):
+    """상장목록은 Open API 하나다(2026-10-05 FDR 폴백 제거) — 그 자리를 frame 으로 채운다."""
     from modules import krx_openapi
-    monkeypatch.setattr(krx_openapi, "is_configured", lambda: False)
+    frame = _krx() if frame is None else frame
+    monkeypatch.setattr(krx_openapi, "is_configured", lambda: True)
+    monkeypatch.setattr(krx_openapi, "listing_map", lambda *a, **k: {
+        r["Code"]: {"name": r["Name"], "market": r["Market"], "marcap": r["Marcap"],
+                    "dept": r["Dept"], "kind": "보통주"} for _, r in frame.iterrows()})
 
 
 def test_old_industry_file_is_used_and_disclosed(monkeypatch):
-    _no_openapi(monkeypatch)
+    _openapi_listing(monkeypatch)
 
     def fake_listing(kind, lookback=None, on=None):
-        return _krx() if kind == "KRX" else _desc()
+        return _desc() if kind == "KRX-DESC" else None
 
     monkeypatch.setattr(krx_daily, "fdr_listing", fake_listing)
     monkeypatch.setattr(krx_daily, "last_listing_date",
@@ -64,9 +68,8 @@ def test_staleness_note():
 
 
 def test_missing_industry_file_fails_loudly(monkeypatch):
-    _no_openapi(monkeypatch)
-    monkeypatch.setattr(krx_daily, "fdr_listing",
-                        lambda kind, lookback=None, on=None: _krx() if kind == "KRX" else None)
+    _openapi_listing(monkeypatch)
+    monkeypatch.setattr(krx_daily, "fdr_listing", lambda kind, lookback=None, on=None: None)
     monkeypatch.setattr(krx_daily, "last_listing_date", lambda kind: None)
     monkeypatch.setattr(config.session, "stock_data", {"stocks_kr": [], "etfs_kr": []}, raising=False)
     try:
@@ -130,16 +133,19 @@ def test_listing_comes_from_krx_openapi_not_fdr(monkeypatch):
     assert s["우선주·스팩·리츠"] == 2                       # 구형·신형 우선주 모두 '주식 종류'로 걸린다
 
 
-def test_fdr_fallback_keeps_kosdaq_global(monkeypatch):
-    """FDR 의 'KOSDAQ GLOBAL'(코스닥 우량주 세그먼트)이 KOSPI·KOSDAQ 필터에 걸려 빠지면 안 된다."""
-    _no_openapi(monkeypatch)
-    krx = _krx()
-    krx.loc[krx["Code"] == "000030", "Market"] = "KOSDAQ GLOBAL"
+def test_listing_does_not_fall_back_to_frozen_fdr(monkeypatch):
+    """[2026-10-05] 인증키가 없으면 FDR(09-17 에서 멈춘 캐시) 시총 순위로 후보를 고르지 않는다 — 실패로 알린다."""
+    from modules import krx_openapi
+    monkeypatch.setattr(krx_openapi, "is_configured", lambda: False)
+    asked = []
     monkeypatch.setattr(krx_daily, "fdr_listing",
-                        lambda kind, lookback=None, on=None: krx if kind == "KRX" else _desc())
+                        lambda kind, lookback=None, on=None: asked.append(kind) or _desc())
     monkeypatch.setattr(krx_daily, "last_listing_date", lambda kind: None)
     monkeypatch.setattr(config.session, "stock_data", {"stocks_kr": [], "etfs_kr": []}, raising=False)
-    monkeypatch.setattr(config.console, "print", lambda *a, **k: None)
-    cands, _s, _d, n0, _n = discover._fetch_candidates(10, 500, True, seed=1)
-    assert n0 == 3
-    assert next(c for c in cands if c["code"] == "000030")["exchange"] == "KOSDAQ"
+    try:
+        discover._fetch_candidates(10, 500, True)
+    except RuntimeError as e:
+        assert "KRX_OPENAPI_KEY" in str(e)
+    else:
+        raise AssertionError("상장목록이 없는데 후보를 만들었다")
+    assert "KRX" not in asked, "상장목록을 FDR 에 물었다"

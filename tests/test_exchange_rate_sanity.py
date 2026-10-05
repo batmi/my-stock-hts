@@ -41,6 +41,7 @@ def no_tv(monkeypatch):
 
     monkeypatch.setattr(builtins, '__import__', _blocked)
     monkeypatch.setattr(utils, '_fx_fallback_last_log', 0.0, raising=False)
+    monkeypatch.setattr(utils, '_fx_last_good', {"rate": None, "ts": 0.0})
     yield
 
 
@@ -82,3 +83,29 @@ def test_폴백_로그는_반복해서_도배하지_않는다(no_tv, monkeypatch
             utils.get_exchange_rate()
     fx_logs = [r for r in caplog.records if "환율" in r.message and "기본값" in r.message]
     assert len(fx_logs) == 1, f"폴백 로그가 {len(fx_logs)}번 찍혔다 — 묶이지 않았다"
+
+
+def test_실패하면_기한_안의_마지막_성공_환율을_쓴다(no_tv, monkeypatch, caplog):
+    """[2026-10-05] 고정 기본값보다 몇 분 전에 실제로 받은 환율이 훨씬 정확하다."""
+    monkeypatch.setattr(utils.yf, 'Ticker', lambda sym: _Ticker(1388.5))
+    assert utils.get_exchange_rate() == 1388.5
+
+    def _boom(sym):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(utils.yf, 'Ticker', _boom)
+    with caplog.at_level(logging.WARNING, logger=utils.logger.name):
+        assert utils.get_exchange_rate() == 1388.5
+    assert any("전에 받은" in r.message for r in caplog.records), "마지막 성공값 사용을 알려야 한다"
+
+
+def test_기한이_지난_성공_환율은_쓰지_않는다(no_tv, monkeypatch):
+    import time as _t
+    monkeypatch.setattr(utils, '_fx_last_good',
+                        {"rate": 1388.5, "ts": _t.time() - utils.FX_LAST_GOOD_MAX_AGE_SEC - 1})
+
+    def _boom(sym):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(utils.yf, 'Ticker', _boom)
+    assert utils.get_exchange_rate() == config.DEFAULT_EXCHANGE_RATE

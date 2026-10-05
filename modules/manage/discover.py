@@ -132,30 +132,28 @@ COMMON_STOCK_KIND = "보통주"
 def _listing_frame():
     """(상장목록 DataFrame[Code, Name, Market, Marcap, Dept, Kind], 출처). 못 받으면 (None, 출처).
 
-    [2026-10-04] KRX Open API(종목기본정보 + 최신 일별매매 시총·소속부)가 1순위다. FDR 상장목록은
-     제3자 GitHub 캐시라 장 마감 전까지 404 였고(2026-09-08), 인증키가 없을 때만 폴백으로 쓴다.
-     Open API 는 기본정보가 최신 하루 스냅샷이라 이미 폐지된 종목이 시총 0 으로 남는다 — 걸러낸다.
+    KRX Open API(종목기본정보 + 최신 일별매매 시총·소속부) 하나다. 기본정보가 최신 하루 스냅샷이라
+     이미 폐지된 종목이 시총 0 으로 남는다 — 걸러낸다.
+    [FDR 폴백 제거 · 2026-10-05] 종전엔 인증키가 없거나 Open API 가 실패하면 FDR 상장목록(제3자
+     GitHub 캐시)으로 대신했다. 그 저장소는 2026-09-17 이후 갱신이 멈춰, 폴백이 곧 '몇 주 전 시총
+     순위로 고른 후보'였다 — 조회 실패로 알린다(krx_daily.get_listing_map 과 같은 기준).
+     업종·폐지 목록(KRX-DESC)은 대체 원천이 없어 계속 fdr_listing 을 쓴다.
     """
     import pandas as pd
-    from modules import krx_daily, krx_openapi
-    if krx_openapi.is_configured():
-        try:
-            raw = krx_openapi.listing_map()
-        except Exception as e:      # noqa: BLE001 - 목록 실패는 FDR 폴백으로
-            logger.warning(f"[discover] KRX Open API 상장목록 실패: {e} — FDR 로 대신한다")
-            raw = None
-        if raw:
-            df = pd.DataFrame([{"Code": c, "Name": v.get("name", ""), "Market": v.get("market", ""),
-                                "Marcap": v.get("marcap") or 0.0, "Dept": v.get("dept", ""),
-                                "Kind": v.get("kind", "")} for c, v in raw.items()])
-            return df[df["Marcap"] > 0], "KRX Open API"
-    df = krx_daily.fdr_listing("KRX")
-    if df is not None and "Market" in df.columns:
-        #  FDR 은 코스닥 글로벌 세그먼트(알테오젠·에코프로비엠 등 우량주 45종목, 2026-10-04 실측)를
-        #   'KOSDAQ GLOBAL' 로 표기한다. 종전엔 이 표기가 아래 KOSPI·KOSDAQ 필터에 걸려 코스닥 최상위
-        #   종목들이 후보에서 조용히 빠졌다. Open API 는 이들을 KOSDAQ 으로 준다 — 출처와 무관하게 맞춘다.
-        df = df.assign(Market=df["Market"].replace({"KOSDAQ GLOBAL": "KOSDAQ"}))
-    return df, "FDR"
+    from modules import krx_openapi
+    if not krx_openapi.is_configured():
+        return None, "KRX Open API(KRX_OPENAPI_KEY 미설정)"
+    try:
+        raw = krx_openapi.listing_map()
+    except Exception as e:      # noqa: BLE001 - 목록 실패는 '조회 실패'로 알린다
+        logger.warning(f"[discover] KRX Open API 상장목록 실패: {e}")
+        return None, "KRX Open API"
+    if not raw:
+        return None, "KRX Open API"
+    df = pd.DataFrame([{"Code": c, "Name": v.get("name", ""), "Market": v.get("market", ""),
+                        "Marcap": v.get("marcap") or 0.0, "Dept": v.get("dept", ""),
+                        "Kind": v.get("kind", "")} for c, v in raw.items()])
+    return df[df["Marcap"] > 0], "KRX Open API"
 
 
 def _fetch_candidates(target, pool, exclude_holding, seed=None):

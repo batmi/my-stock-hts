@@ -267,8 +267,10 @@ def _toss_krx_close_unpack(v):
 #   단일가다(옛 분봉 캡처 'cap' 은 NXT 혼입으로 주식엔 부정확했던 것과 다르다).
 #  'yf' 는 특정일에 공식 종가와 다른 값을 준 적이 있으나(237거래일 중 2~4일, 최대 1.59%) 9/14 이후로는
 #   매일 애프터 변동폭만큼 어긋나는 'krx' 보다 낫다.
-_TOSS_CLOSE_VERIFIED_SOURCES = ("krx", "yf", "brk")
-_TOSS_CLOSE_SOURCE_RANK = {"brk": 3, "krx": 2, "yf": 1, "cap": 0}
+#  'oa' = KRX Open API 저장소의 그날 종가(정규장 단일가, krx_openapi.stock_close) — 2026-10-05.
+#   일봉 프레임이 아니라 그날 한 칸을 저장소에서 직접 읽으므로 애프터 최종가가 섞일 수 없다.
+_TOSS_CLOSE_VERIFIED_SOURCES = ("oa", "krx", "yf", "brk")
+_TOSS_CLOSE_SOURCE_RANK = {"oa": 3, "brk": 3, "krx": 2, "yf": 1, "cap": 0}
 _KRX_AFTER_MARKET_START = "20260914"     # 이날부터 포털 일봉 종가 = 애프터 최종가
 _TOSS_CLOSE_KEEP_DAYS = 300               # 종목당 저장 일수(일봉 250봉 + 여유)
 
@@ -513,6 +515,20 @@ _toss_yf_base_lock = threading.Lock()
 _TOSS_YF_BASE_RETRY_SEC = 1800   # 실패 후 재시도 쿨다운(초)
 
 
+def _toss_openapi_close(code, ref_date):
+    """KRX Open API 저장소의 ref_date 종가(정규장 단일가). 있으면 검증값('oa')으로 저장한다."""
+    try:
+        from modules import krx_openapi
+        close = krx_openapi.stock_close(code, ref_date)
+    except Exception as e:      # noqa: BLE001 - 실패 시 다음 출처로 넘어간다
+        logger.debug(f"[Toss] Open API 기준가 조회 실패({code} {ref_date}): {e}")
+        return None
+    if not close:
+        return None
+    _toss_krx_close_put(code, ref_date, close, source="oa")
+    return close
+
+
 def _toss_krx_lib_close(code, ref_date):
     """pykrx/FDR 일봉에서 ref_date(YYYYMMDD)의 KRX 정규장 종가를 얻는다. 없으면 None.
 
@@ -598,6 +614,7 @@ def _toss_base_price(code, chart_df=None):
     우선순위(위에서 값이 나오면 즉시 반환, 아래는 실행 안 함):
       1) 랭킹 basePrice — 거래대금/거래량 상위(대형주)의 전일 KRX 정규장 종가(라이브, HTS 일치)
       2) 저장된 값 중 '검증된' 것 — KRX 공식/yfinance로 확인된 값, 또는 ETF의 분봉 캡처값
+      3-0) KRX Open API 저장소의 그날 종가 — 정규장 단일가(날짜 무관, 2026-10-05). 확보 즉시 저장
       3) KRX 공식 일봉 종가(Open API/FDR) — 애프터마켓 도입(2026-09-14) **이전** 날짜만. 확보 즉시
          검증값으로 저장돼 다음부터 2)에서 끝난다
       3-1) yfinance 일봉 종가 — 정규장 종가(특정일 공식 종가와 어긋나는 사례가 있으나 검증 출처)
@@ -635,6 +652,12 @@ def _toss_base_price(code, chart_df=None):
         trusted = _toss_krx_close_get(code, ref_date, trusted_only=True)
         if trusted:
             return trusted
+
+        # 3-0) [2026-10-05] KRX Open API 저장소의 그날 종가 — 정규장 단일가가 확실한 출처라 날짜와
+        #    무관하게 먼저 본다. 게시 전(전일분은 다음 날 아침 실린다)이면 None 이고 아래로 간다.
+        oa_close = _toss_openapi_close(code, ref_date)
+        if oa_close:
+            return oa_close
 
         # 3) [2026-09-15] 애프터마켓 이후 날짜는 yfinance 를 pykrx 보다 앞세운다 — 포털(pykrx) 종가는
         #    애프터 최종가라 매일 어긋나고, yfinance 는 정규장 종가를 줬다(9/14 실측 249,000).

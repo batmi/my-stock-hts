@@ -922,7 +922,7 @@ def show_help():
             #  어떤 데이터로 판정했는지(마지막 봉 일자·출처)까지 적는다 — 묵은 지수로 막혀 있을 수 있다.
             _digits = "".join(ch for ch in str(_det.get("asof") or "") if ch.isdigit())[:8]
             _tail = f" [dim]{_digits[4:6]}/{_digits[6:8]}[/dim]" if len(_digits) == 8 else ""
-            _src = {"TVDATAFEED": "TV", "YFINANCE": "YF"}.get(_det.get("source"), _det.get("source"))
+            _src = {"TVDATAFEED": "TV"}.get(_det.get("source"), _det.get("source"))
             if _src:
                 _tail += f" [dim]{_src}[/dim]"
             _days = (f"{_det['streak']}봉째" if _det.get("ready") else "-")

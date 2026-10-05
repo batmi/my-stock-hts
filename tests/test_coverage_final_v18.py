@@ -107,7 +107,9 @@ def test_get_exchange_rate_fallback(mock_ticker):
     
     with patch('config.SCREEN_DEBUG_LEVEL', 'DEBUG'), patch('config.console.print'):
         rate2 = utils.get_exchange_rate()
-        assert rate2 == config.DEFAULT_EXCHANGE_RATE
+        assert rate2 == 1350.5          # [2026-10-05] 기한 안의 마지막 성공 환율
+        with patch.dict(utils._fx_last_good, {"rate": None, "ts": 0.0}):
+            assert utils.get_exchange_rate() == config.DEFAULT_EXCHANGE_RATE
 
 @patch('core.utils.sqlite3.connect', side_effect=Exception("DB Error"))
 def test_utils_memo_db_errors(mock_connect):

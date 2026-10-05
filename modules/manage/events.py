@@ -79,7 +79,7 @@ def _kr_yf_dividends(code):
     try:
         for sfx in (".KS", ".KQ"):
             try:
-                div = yf.Ticker(code + sfx).dividends
+                div = api.yf_ticker_call(code + sfx, lambda t: t.dividends)
             except Exception:
                 div = None
             if div is not None and len(div) > 0:
@@ -285,22 +285,30 @@ def _collect_us(code, name):
         return None
     events = []
     try:
-        tk = yf.Ticker(code)
-        cal = {}
-        try:
-            cal = tk.calendar or {}
-        except Exception:
-            cal = {}
+        #  속성 접근(calendar·info)이 곧 네트워크다 — 공용 락 안에서 한 번에 읽는다(8스레드 동시 호출).
+        def _read(tk):
+            try:
+                cal = tk.calendar or {}
+            except Exception:
+                cal = {}
+            info = None
+            _c = cal if isinstance(cal, dict) else {}
+            if (_parse_us_date(_c.get("Ex-Dividend Date")) is None
+                    or _parse_us_date(_c.get("Earnings Date")) is None):
+                try:
+                    info = tk.info or {}
+                except Exception:
+                    info = {}
+            return cal, info
+
+        cal, info = api.yf_ticker_call(code, _read)
 
         ex_div = _parse_us_date(cal.get("Ex-Dividend Date") if isinstance(cal, dict) else None)
         earnings = _parse_us_date(cal.get("Earnings Date") if isinstance(cal, dict) else None)
 
         # calendar가 비면 info로 폴백
         if ex_div is None or earnings is None:
-            try:
-                info = tk.info or {}
-            except Exception:
-                info = {}
+            info = info or {}
             if ex_div is None:
                 ex_div = _parse_us_date(info.get("exDividendDate"))
             if earnings is None:

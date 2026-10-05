@@ -67,6 +67,20 @@ def clear_yfinance_cache():
     if _is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL == "DEBUG" and deleted_count > 0:
         config.console.print(f"[dim cyan][DEBUG] 캐시 파일 {deleted_count}개 삭제 완료[/dim cyan]")
 
+def yf_ticker_call(symbol, fn):
+    """yf.Ticker(symbol) 을 만들어 fn(ticker) 를 **전역 락 안에서** 돌려준다.
+
+    [단일 진입점 · 2026-10-05] fast_info·info·dividends·calendar 같은 속성 접근이 곧 네트워크 +
+     타임존 캐시(SQLite) 쓰기다. 종전엔 배당 캘린더(8스레드)·환율·종목명·거래소 표기 다섯 곳이
+     yf.Ticker 를 직접 불러 _YF_LOCK 을 우회했다 — 이 모듈이 막으려던 'database is locked' 경합이
+     그 자리에서 그대로 열려 있었다. 속성 접근을 fn 안에 모아 락이 네트워크 구간을 덮게 한다.
+     fn 안에서 다시 yfinance 진입점(이 함수·fetch_yfinance_data·get_yf_fast_info)을 부르면
+     락이 재진입되지 않아 교착한다 — 속성만 읽을 것.
+    """
+    with _YF_LOCK:
+        return fn(yf.Ticker(symbol))
+
+
 def fetch_yfinance_data(tickers, period=None, start=None, end=None, interval="1d", group_by='column', _retried=False, threads=False):
     """yfinance 데이터 조회 통합 함수.
 

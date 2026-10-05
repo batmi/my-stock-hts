@@ -1472,28 +1472,21 @@ def test_index_chart_toss_uses_market_indicator_for_kospi():
 
 
 @pytest.mark.real_index_chart
-def test_index_chart_toss_kospi200_still_uses_yfinance():
-    """토스 모드: 코스피200은 토스 심볼 카탈로그에 없어 종전 yfinance 경로를 유지한다."""
+def test_index_chart_toss_kospi200_returns_empty_without_outbound_calls():
+    """토스 모드: 코스피200은 토스 심볼 카탈로그에 없다 — 이 함수는 빈 프레임을 주고, 이력은
+    호출부(analysis)가 tvDatafeed 로 받는다. [2026-10-05] 종전 yfinance(^KS200) 분기는 야후에 그
+    티커가 없어 실행될 일이 없던 죽은 경로라 지웠다."""
     import api
-    import pandas as pd
-    captured = {}
-
-    def fake_chart(code, is_overseas=False, period_type='daily'):
-        captured["ticker"] = code
-        captured["is_overseas"] = is_overseas
-        return pd.DataFrame({"date": ["20260101"], "close": [2500.0]})
-
     config.session.is_toss = True
     try:
-        with patch("api.get_chart_data", side_effect=fake_chart), \
+        with patch("api.get_chart_data") as mock_chart, \
              patch("brokers.toss_api.get_market_indicator_candles") as mock_ind, \
              patch("api.call_api") as mock_call:
             df = api.get_domestic_index_chart("2001")  # KOSPI200
     finally:
         config.session.is_toss = False
-    assert captured["ticker"] == "^KS200"
-    assert captured["is_overseas"] is True
-    assert not df.empty
+    assert df.empty
+    mock_chart.assert_not_called()
     mock_ind.assert_not_called()   # 토스 시장지표 미지원 심볼
     mock_call.assert_not_called()  # KIS 미호출
 
@@ -2050,41 +2043,6 @@ def test_kospi_falls_back_to_tvdatafeed_in_toss():
             mock_yf2.assert_not_called()
     finally:
         config.session.is_toss = False
-
-
-def test_merge_index_volume_from_yfinance_fills_volume():
-    """tvDatafeed 지수(volume=0)에 yfinance 거래량을 날짜 매칭으로 채운다(가격은 유지)."""
-    import modules.analysis as analysis
-    import pandas as pd
-    tv = pd.DataFrame({
-        'date': pd.to_datetime(['2026-07-13', '2026-07-14', '2026-07-15']),
-        'open': [7000.0] * 3, 'high': [7000.0] * 3, 'low': [7000.0] * 3,
-        'close': [7000.0, 7100.0, 7200.0], 'volume': [0, 0, 0],
-    })
-    # [2026-08-19] 보강은 api.get_chart_data가 아니라 **야후 원본**을 직접 받는다.
-    #  전자를 쓰면 ^KS200·^KQ150이 지수 소스 체인으로 되돌려져 조회가 자기 자신을 다시
-    #  부르고 영구 교착한다(tests/test_index_source_recursion.py).
-    raw = pd.DataFrame({'Volume': [100, 200, 300]},
-                       index=pd.to_datetime(['2026-07-13', '2026-07-14', '2026-07-15']))
-    with patch("api.fetch_yfinance_data", return_value=raw) as mock_yf:
-        out = analysis._merge_index_volume_from_yfinance(tv, "^KS11")
-    assert list(out['volume']) == [100.0, 200.0, 300.0]   # 거래량 채워짐
-    assert list(out['close']) == [7000.0, 7100.0, 7200.0]  # 가격은 tvDatafeed 유지
-    assert mock_yf.call_args.args[0] == "^KS11"
-
-
-def test_merge_index_volume_noop_when_yfinance_empty():
-    """yfinance가 빈 응답(^KQ150 등)이면 거래량 0을 그대로 둔다."""
-    import modules.analysis as analysis
-    import pandas as pd
-    tv = pd.DataFrame({
-        'date': pd.to_datetime(['2026-07-14', '2026-07-15']),
-        'open': [1.0] * 2, 'high': [1.0] * 2, 'low': [1.0] * 2,
-        'close': [1.0, 2.0], 'volume': [0, 0],
-    })
-    with patch("api.fetch_yfinance_data", return_value=pd.DataFrame()):
-        out = analysis._merge_index_volume_from_yfinance(tv, "^KQ150")
-    assert list(out['volume']) == [0, 0]
 
 
 def test_kis_mode_index_fallback_chain_kis_then_tvdatafeed():

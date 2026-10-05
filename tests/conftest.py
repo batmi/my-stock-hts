@@ -540,6 +540,9 @@ def isolate_test_files(tmp_path, monkeypatch):
     #  (실측 2026-08-23: 전체 스위트 실행 후 감시자가 'dead' 를 보고했다.)
     monkeypatch.setattr("modules.heartbeat.HEARTBEAT_PATH", str(tmp_path / "heartbeat.json"))
     monkeypatch.setattr("modules.heartbeat.ALERT_STATE_PATH", str(tmp_path / "heartbeat_alert.json"))
+    # [2026-10-05] 마지막 성공 환율(core.utils._fx_last_good)은 프로세스 전역이다 — 앞 테스트가 받은
+    #  환율이 뒤 테스트의 '조회 실패 → 기본값' 검증을 덮지 않게 테스트마다 비운다.
+    monkeypatch.setattr("core.utils._fx_last_good", {"rate": None, "ts": 0.0})
 
     # [추가] 테스트 중 생성되는 파일(차트, 엑셀, 로그) 격리
     test_chart_dir = tmp_path / "chart"

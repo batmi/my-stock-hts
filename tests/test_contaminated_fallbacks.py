@@ -130,3 +130,36 @@ def test_old_stale_index_is_not_served(monkeypatch, caplog):
         out = _locked_fetch("20260925", monkeypatch)
     assert out is None, "며칠 묵은 지수로 국면·시장 필터를 돌리면 안 된다"
     assert any("쓰지 않는다" in r.getMessage() for r in caplog.records)
+
+
+# ---------------------------------------------------------------- C7 기준가 = Open API 그날 종가
+
+def test_openapi_stock_close_reads_one_cell(monkeypatch):
+    from modules import krx_openapi
+    monkeypatch.setenv("KRX_OPENAPI_KEY", "K")
+    with krx_openapi._DB_LOCK, krx_openapi._connect() as conn:
+        conn.execute("INSERT OR REPLACE INTO stock_daily (bas_dd, code, close) VALUES (?,?,?)",
+                     ("20260930", "005930", 249000.0))
+    assert krx_openapi.stock_close("005930", "20260930") == 249000.0
+    assert krx_openapi.stock_close("005930", "20261001") is None        # 게시 전·휴장
+    monkeypatch.delenv("KRX_OPENAPI_KEY")
+    assert krx_openapi.stock_close("005930", "20260930") is None        # 키 없으면 저장소도 안 본다
+
+
+def test_base_price_prefers_openapi_close_even_after_after_market(monkeypatch):
+    """9/14 이후 날짜도 Open API 종가는 정규장 단일가라 검증값이다 — yfinance 보다 먼저, 'oa' 로 저장."""
+    from modules import krx_openapi
+    saved = api._toss_krx_close_store          # 저장 파일은 conftest 가 JSON_DIR 을 임시 폴더로 돌린다
+    api._toss_krx_close_store = {}
+    api._toss_rank_base_map = {}
+    chart = pd.DataFrame({"date": ["20260929", "20260930"], "close": [250000.0, 248500.0]})
+    try:
+        with patch.object(api, "_toss_ranking_base", return_value=None), \
+             patch.object(krx_openapi, "stock_close", return_value=249000.0), \
+             patch.object(api, "_toss_yf_krx_close") as yf:
+            base = api._toss_base_price("005930", chart_df=chart)
+        assert base == 249000.0
+        yf.assert_not_called()
+        assert api._toss_krx_source_trusted_for("oa", "20260930") is True
+    finally:
+        api._toss_krx_close_store = saved

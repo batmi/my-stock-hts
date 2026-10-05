@@ -66,7 +66,7 @@ def get_stock_name_by_code(code, is_overseas):
                 with open(os.devnull, 'w') as fnull:
                     old_stderr = sys.stderr; sys.stderr = fnull
                     try:
-                        ticker = yf.Ticker(code); info = ticker.info
+                        info = _api().yf_ticker_call(code, lambda t: t.info)
                         if info: final_name = info.get('longName') or info.get('shortName')
                     except Exception as e:
                         logger.debug(f"yf.Ticker info fetch error: {e}")
