@@ -54,6 +54,23 @@ _AUX_EPOCH = 0
 _AUX_EPOCH_LOCK = threading.Lock()
 
 
+def _rate_suffix(output):
+    """체결 알림의 ' (🔺 +1.23%)' 꼬리. 등락률을 모르면 빈 문자열(현재가만 남긴다).
+
+    [2026-10-05] 토스 어댑터는 믿을 만한 기준가가 없으면 등락률 필드를 비운다 — 종전엔 그때
+     KeyError 로 현재가 줄까지 통째로 빠졌다.
+    """
+    raw = (output or {}).get('prdy_ctrt')
+    if raw in (None, ''):
+        return ""
+    try:
+        rate = float(raw)
+    except (TypeError, ValueError):
+        return ""
+    icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
+    return f" ({icon} {rate:+.2f}%)"
+
+
 def _bump_aux_epoch():
     """살아 있는 보조 스레드를 전부 퇴역시킨다. 새 세대 번호를 돌려준다."""
     global _AUX_EPOCH
@@ -927,9 +944,7 @@ class ConclusionMonitor:
                                                     cur_info = f"\n현재가: ${curr:,.2f} ({icon} {rate:+.2f}%)"
                                                 else:
                                                     curr = float(cp_data['output']['stck_prpr'])
-                                                    rate = float(cp_data['output']['prdy_ctrt'])
-                                                    icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
-                                                    cur_info = f"\n현재가: {int(curr):,}원 ({icon} {rate:+.2f}%)"
+                                                    cur_info = f"\n현재가: {int(curr):,}원{_rate_suffix(cp_data['output'])}"
                                         except Exception: pass
                                     
                                         # [추가] 개별 룰 조회
@@ -1378,9 +1393,7 @@ class ConclusionMonitor:
                         cp_data = api.get_current_price_data(code, is_overseas=False)
                         if cp_data.get('rt_cd') == '0':
                             curr = float(cp_data['output']['stck_prpr'])
-                            rate = float(cp_data['output']['prdy_ctrt'])
-                            icon = "🔺" if rate > 0 else ("🔻" if rate < 0 else "➖")
-                            cur_info = f"\n현재가: {int(curr):,}원 ({icon} {rate:+.2f}%)"
+                            cur_info = f"\n현재가: {int(curr):,}원{_rate_suffix(cp_data['output'])}"
                     except Exception: pass
 
                     # 전략 지표 (스냅샷 활용)

@@ -598,15 +598,17 @@ def _toss_base_price(code, chart_df=None):
     우선순위(위에서 값이 나오면 즉시 반환, 아래는 실행 안 함):
       1) 랭킹 basePrice — 거래대금/거래량 상위(대형주)의 전일 KRX 정규장 종가(라이브, HTS 일치)
       2) 저장된 값 중 '검증된' 것 — KRX 공식/yfinance로 확인된 값, 또는 ETF의 분봉 캡처값
-      3) KRX 공식 일봉 종가(pykrx/FDR) — 확보 즉시 검증값으로 저장돼 다음부터 2)에서 끝난다
-      3-1) yfinance 일봉 종가 — 3)이 모두 실패했을 때의 폴백(특정일 공식 종가와 어긋나는 사례 있음)
-      4) 저장된 분봉 캡처값(주식) — NXT 혼입으로 부정확하나 NXT 종가보다는 가깝다
-      5) 폴백: 전일 NXT(대체거래소) 종가 = 일봉 직전 거래일 캔들 종가
+      3) KRX 공식 일봉 종가(Open API/FDR) — 애프터마켓 도입(2026-09-14) **이전** 날짜만. 확보 즉시
+         검증값으로 저장돼 다음부터 2)에서 끝난다
+      3-1) yfinance 일봉 종가 — 정규장 종가(특정일 공식 종가와 어긋나는 사례가 있으나 검증 출처)
+      그래도 없으면 **None** — 호출부는 등락률 필드를 비운다.
 
+    [근사 폴백 제거 · 2026-10-05] 종전엔 위가 모두 실패하면 ① 9/14 이후 날짜의 포털 종가(=애프터
+     최종가, 이 모듈 스스로 '검증값 아님'으로 분류) ② 주식 분봉 캡처값(NXT 혼입, 실측 주식 0/10 정확)
+     ③ 전일 NXT 종가 순으로 메웠다. 셋 다 KRX 기준가가 아니라 HTS 와 다른 등락률을 '맞는 값처럼'
+     보여 줬다 — 모르면 비우는 것이 낫다.
     주식의 분봉 캡처값을 2)에서 쓰지 않는 이유는 _toss_capture_krx_close 주석 참조 —
-    NXT가 정규장 시간대에 병행 체결돼 토스 분봉 종가가 KRX 단일가와 어긋난다. 캡처값을
-    믿으면 3)이 영원히 호출되지 않아 오차가 고정된다(2026-07-22 실측 6종목).
-    4)·5)는 KRX 기준 HTS 등락률과 소폭 다를 수 있다(기동 시 안내).
+    NXT가 정규장 시간대에 병행 체결돼 토스 분봉 종가가 KRX 단일가와 어긋난다(2026-07-22 실측 6종목).
     TOSS는 전일 KRX 종가 필드를 직접 주지 않는다.
 
     ref_date(전일 종가의 거래일)는 일봉 '날짜'만으로 결정한다:
@@ -641,9 +643,6 @@ def _toss_base_price(code, chart_df=None):
             yf_close = _toss_yf_krx_close(code, ref_date)
             if yf_close:
                 return yf_close
-            krx_close = _toss_krx_lib_close(code, ref_date)       # 근사 폴백(애프터 포함, 검증값 아님)
-            if krx_close:
-                return krx_close
         else:
             krx_close = _toss_krx_lib_close(code, ref_date)
             if krx_close:
@@ -652,15 +651,8 @@ def _toss_base_price(code, chart_df=None):
             if yf_close:
                 return yf_close
 
-        # 4) 저장된 분봉 캡처값 (주식: NXT 혼입으로 부정확) — 위 소스 실패 시 근사 폴백
-        stored = _toss_krx_close_get(code, ref_date)
-        if stored:
-            return stored
-
-        # 5) 폴백: 전일 NXT 종가 (일봉 직전 캔들 종가)
-        row = df.iloc[-1] if last_date < today else df.iloc[-2]
-        base = _toss_float(row['close'])
-        return base if base > 0 else None
+        logger.debug(f"[Toss] {code} 검증된 기준가 없음({ref_date}) — 등락률을 비운다")
+        return None
     except Exception as e:
         logger.debug(f"[Toss] 기준가 산출 실패({code}): {e}")
         return None
@@ -1352,8 +1344,8 @@ def _toss_current_price_data(code, is_overseas):
         'stck_prpr': str(_toss_int(price)),
         'last': str(_toss_float(price)),
     }
-    # [추가] 국내: 기준가 대비 전일대비/등락률 필드를 채운다. 기준가=저장된 KRX 정규장 마감가
-    # (있으면 HTS 일치), 없으면 전일 NXT 종가로 폴백. 마감 후엔 오늘 KRX 마감가를 1회 캡처해 저장.
+    # [추가] 국내: 기준가 대비 전일대비/등락률 필드를 채운다. 기준가=검증된 KRX 정규장 종가
+    # (HTS 일치). 없으면 필드를 비운다(_toss_base_price). 마감 후엔 오늘 KRX 마감가를 1회 캡처해 저장.
     if not is_overseas:
         p = _toss_float(price)
         _toss_capture_break_close(code, p)   # 휴게(15:30~16:00) lastPrice = KRX 종가 단일가 → 'brk' 저장

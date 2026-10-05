@@ -600,51 +600,41 @@ def get_us_treasury_spot_data(symbol, n_bars=300):
         return cached
 
 # ==========================================================
-# [추가] KRX 금현물 (금 99.99_1Kg, 원/g) — 네이버 원자재 시세
+# [추가] KRX 금현물 (금 99.99_1Kg, 원/g) — KRX Open API 확정 봉 + 네이버 장중 현재가
 # ==========================================================
-#  국제 금(COMEX GC=F, USD/온스)과 달리 KRX 금시장 시세는 KIS·토스·yfinance·pykrx 어디에도
-#  없다(ETF 411060은 ETF 주가라 대용 불가). KRX 정보데이터시스템 JSON은 세션 쿠키를 심어도
-#  LOGOUT을 돌려준다 → 네이버 원자재 API가 유일한 실시간 소스다(delayTime=0, 거래소 KRX).
+#  국제 금(COMEX GC=F, USD/온스)과 달리 KRX 금시장 시세는 KIS·토스·yfinance 어디에도 없다
+#  (ETF 411060은 ETF 주가라 대용 불가). 이력은 KRX Open API(krx_data.get_gold_daily)가, 장중
+#  현재가는 네이버 원자재 API(delayTime=0, 거래소 KRX)가 준다 — Open API 는 마감 후 확정 봉뿐이다.
 #
-#  [캐시를 둘로 나누는 이유] 현재가는 장중 계속 바뀌지만 과거 종가는 불변이다. 한 덩어리로
-#  묶으면 60초마다 5페이지(300거래일)를 다시 받게 된다 → 현재가만 짧은 TTL로 갱신하고
-#  시계열은 6시간(날짜가 바뀌면 즉시) 캐시한다. 정상 구간의 반복 조회는 1콜이면 끝난다.
-#
-#  [종가만 있는 시계열] 네이버 일별 시세는 종가만 유효하고 시·고·저는 0으로 내려온다 →
-#  모든 봉을 종가로 평탄화한 OHLC로 만든다. EMA·RSI·CCI·MACD·ADX·SAR은 종가 기준으로
-#  정상 산출되며(고·저 대신 종가 차분이 True Range가 된다), 거래량 이력이 없어 OBV만
-#  '-'로 남는다(지수 화면이 vol_sum==0을 이미 그렇게 처리한다).
+#  [네이버 시계열 폴백 제거 · 2026-10-05] 종전엔 Open API 가 실패하면 네이버 일별 시세로 이력을
+#   대신했다. 그 시계열은 **종가만** 유효하고 시·고·저가 0이라 모든 봉을 종가로 평탄화했다 —
+#   True Range 가 종가 차분이 되어 ATR·ADX 가 왜곡되고 OBV 는 불가였다. 2026-08-25 에 바로 그
+#   품질 문제로 밀려난 원천이므로, 이력이 없으면 왜곡된 값 대신 '조회 실패'로 둔다.
 _KRX_GOLD_URL = "https://api.stock.naver.com/marketindex/metals"
 _KRX_GOLD_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
                   '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Referer': 'https://m.stock.naver.com/',
 }
-_KRX_GOLD_PAGE_SIZE = 60        # 네이버 상한 (초과하면 400)
-_KRX_GOLD_PAGES = 5             # 60 x 5 = 300거래일 — EMA120·52주(250봉)를 덮는다
 _KRX_GOLD_TIMEOUT = 5
 _KRX_GOLD_QUOTE_TTL_SEC = 60    # 다른 지수의 fast_info 캐시(60초)와 같은 신선도
-_KRX_GOLD_HIST_TTL_SEC = 21600  # 6시간 (과거 종가는 불변, 날짜가 바뀌면 아래에서 별도 무효화)
-_KRX_GOLD_NEG_TTL_SEC = 180     # 실패 음성 캐시 — 네이버 장애 시 매 렌더 재시도로 UI가 멈추는 것 방지
-_KRX_GOLD_CACHE = {}            # symbol -> {"hist","hist_time","hist_day","quote","quote_time","fail"}
+_KRX_GOLD_NEG_TTL_SEC = 180     # 현재가 실패 음성 캐시 — 네이버 장애 시 매 렌더 재시도로 UI가 멈추는 것 방지
+_KRX_GOLD_CACHE = {}            # symbol -> {"quote","quote_time","quote_fail"}
 _KRX_GOLD_LOCK = threading.RLock()
+_KRX_GOLD_WARN_TS = [0.0]       # 확정 봉 실패 경고의 마지막 시각(로그 묶음)
 
 
 def reset_krx_gold_failures():
-    """KRX 금 음성 캐시를 해제한다(사용자가 지수 화면에서 명시적으로 재시도할 때)."""
+    """KRX 금 현재가 음성 캐시를 해제한다(사용자가 지수 화면에서 명시적으로 재시도할 때)."""
     with _KRX_GOLD_LOCK:
         for ent in _KRX_GOLD_CACHE.values():
-            ent["fail"] = None
+            ent["quote_fail"] = None
 
 
 def _krx_gold_entry(symbol):
     with _KRX_GOLD_LOCK:
         return _KRX_GOLD_CACHE.setdefault(symbol, {
-            "hist": None, "hist_time": None, "hist_day": None,
-            "quote": None, "quote_time": None, "fail": None,
-            # quote_fail: KRX 경로에서 현재가만 실패했을 때의 음성 캐시.
-            #  시계열 실패(fail)와 분리해야 현재가 장애가 시계열 재시도를 막지 않는다.
-            "quote_fail": None,
+            "quote": None, "quote_time": None, "quote_fail": None,
         })
 
 
@@ -655,27 +645,6 @@ def _krx_gold_num(text):
     except (TypeError, ValueError):
         return None
     return val if val > 0 else None
-
-
-def _fetch_krx_gold_history(symbol):
-    """일별 종가 시계열 [(date, close)] — 최근 것부터 페이지 단위로 받아 온다."""
-    rows = []
-    for page in range(1, _KRX_GOLD_PAGES + 1):
-        res = requests.get(f"{_KRX_GOLD_URL}/{symbol}/prices",
-                           params={'page': page, 'pageSize': _KRX_GOLD_PAGE_SIZE},
-                           headers=_KRX_GOLD_HEADERS, timeout=_KRX_GOLD_TIMEOUT)
-        page_rows = res.json()
-        if not isinstance(page_rows, list) or not page_rows:
-            break
-        for row in page_rows:
-            close = _krx_gold_num(row.get('closePrice'))
-            traded_at = row.get('localTradedAt')
-            if close is None or not traded_at:
-                continue
-            rows.append((pd.to_datetime(str(traded_at)[:10]), close))
-        if len(page_rows) < _KRX_GOLD_PAGE_SIZE:
-            break   # 마지막 페이지 — 더 받아도 빈 응답이다
-    return rows
 
 
 def _fetch_krx_gold_quote(symbol):
@@ -691,27 +660,22 @@ def _fetch_krx_gold_quote(symbol):
     return {'date': day, 'close': current}
 
 
-# KRX 공식 금현물 조회 창(달력일). 네이버 경로(_KRX_GOLD_PAGES × 60 = 300거래일)와 같은
-#  분량을 목표로 여유 있게 잡는다 — EMA120·52주(250봉)를 덮어야 한다.
+# KRX 공식 금현물 조회 창(달력일) — EMA120·52주(250봉)를 덮어야 한다.
 _KRX_GOLD_OFFICIAL_DAYS = 400
 
 
 def _krx_gold_official():
-    """KRX 공식 금현물 일봉(확정 봉). 자격증명 없음·실패 시 None → 네이버로 폴백한다."""
+    """KRX 공식 금현물 일봉(확정 봉). 키 없음·실패 시 None."""
     try:
         from modules import krx_data
         return krx_data.get_gold_daily(_KRX_GOLD_OFFICIAL_DAYS)
-    except Exception as e:      # noqa: BLE001 - 어떤 실패든 네이버 폴백으로 넘긴다
+    except Exception as e:      # noqa: BLE001 - 어떤 실패든 '조회 실패'로 둔다
         logger.debug(f"[KRX] 금현물 공식 조회 실패: {e}")
         return None
 
 
 def _krx_gold_quote_cached(symbol, ent, now):
-    """네이버 현재가(60초 캐시). KRX 경로 전용 — 실패는 quote_fail로 따로 묶는다.
-
-    시계열 실패(ent['fail'])와 섞지 않는다. 섞으면 현재가 한 번 실패가 시계열 재시도까지
-    막아 버린다(실제로 그렇게 짰다가 음성 캐시 테스트가 잡아냈다).
-    """
+    """네이버 현재가(60초 캐시). 실패는 quote_fail 로 묶어 장애 중 재요청을 막는다."""
     quote = ent.get("quote")
     if quote and ent.get("quote_time") and \
             (now - ent["quote_time"]).total_seconds() < _KRX_GOLD_QUOTE_TTL_SEC:
@@ -741,7 +705,7 @@ def _overlay_gold_quote(df, quote):
     if df is None or df.empty:
         return df
     out = df.copy()
-    # 네이버 경로와 날짜 타입을 맞춘다(그쪽은 Timestamp를 쓴다) — 호출부가 둘을 구분하지 않는다.
+    # 날짜는 Timestamp 로 맞춘다(지수 화면의 다른 소스와 같은 타입).
     out['date'] = pd.to_datetime(out['date'], format='%Y%m%d', errors='coerce')
     out = out.dropna(subset=['date'])
     if not quote or quote.get('date') is None or not quote.get('close'):
@@ -765,96 +729,22 @@ def _overlay_gold_quote(df, quote):
 
 
 def get_krx_gold_data(symbol=None):
-    """KRX 금현물(원/g) 일봉 — **KRX 공식(1순위) / 네이버(폴백)**.
+    """KRX 금현물(원/g) 일봉 — KRX Open API 확정 봉에 네이버 장중 현재가를 덮는다.
 
-    반환 스키마는 다른 지수 전용 소스와 동일: ['date','open','high','low','close','volume'].
-
-    [왜 KRX가 1순위인가] 네이버 일별 시세는 **종가만** 유효하고 시·고·저가 0으로 내려와
-     모든 봉을 종가로 평탄화해야 했다 — True Range 가 종가 차분이 되어 ATR·ADX 가 왜곡되고,
-     거래량 이력이 없어 OBV 는 '-' 로 남았다. data.krx.co.kr 로그인이 생기면서 실제 OHLC 와
-     거래량을 받게 됐다(네이버 종가와 겹치는 60일 불일치 0으로 드롭인 확인).
-     2026-09-18부터는 KRX Open API(krx_data.get_gold_daily)가 정본이고, 없으면 네이버로 폴백한다.
-
-    KRX는 마감 후 확정 봉만 주므로 **장중 현재가는 네이버 현재가로 덮는다**(60초 캐시).
-    attrs['source'] 는 'KRX' 또는 'NAVER'. 실패 시 None(성공 캐시가 있으면 그것을 돌려준다).
+    반환 스키마는 다른 지수 전용 소스와 동일: ['date','open','high','low','close','volume'],
+    attrs['source']='KRX'. 확정 봉을 못 받으면 None(현재가 한 점으로는 지표·등락률을 만들 수 없다).
     """
     symbol = symbol or config.KRX_GOLD_SYMBOL
-    now = datetime.now()
-    ent = _krx_gold_entry(symbol)
-    today = now.strftime("%Y%m%d")
-
     official = _krx_gold_official()
-    if official is not None and not official.empty:
-        # KRX가 확정 봉을 줬다 — 장중 현재가만 네이버에서 덧댄다(네이버 장애는 무해하다).
-        return _overlay_gold_quote(official, _krx_gold_quote_cached(symbol, ent, now))
-
-    # ── 여기부터는 네이버 폴백 (KRX 미설정·조회 실패) — 종전 로직 그대로 ─────────────
-    hist = ent["hist"]
-    hist_fresh = (hist and ent["hist_time"] and ent["hist_day"] == today
-                  and (now - ent["hist_time"]).total_seconds() < _KRX_GOLD_HIST_TTL_SEC)
-    quote = ent["quote"]
-    quote_fresh = (quote and ent["quote_time"]
-                   and (now - ent["quote_time"]).total_seconds() < _KRX_GOLD_QUOTE_TTL_SEC)
-    if hist_fresh and quote_fresh:
-        return _krx_gold_frame(hist, quote)
-
-    if ent["fail"] and (now - ent["fail"]).total_seconds() < _KRX_GOLD_NEG_TTL_SEC:
-        # 음성 캐시 구간엔 만료된 성공 캐시라도 재사용한다(없으면 None)
-        return _krx_gold_frame(hist, quote) if hist else None
-
-    if not hist_fresh:
-        try:
-            fetched = _fetch_krx_gold_history(symbol)
-            if fetched:
-                hist = fetched
-                with _KRX_GOLD_LOCK:
-                    ent["hist"], ent["hist_time"], ent["hist_day"] = fetched, now, today
-        except Exception as e:
-            logger.debug(f"[NAVER] KRX 금 시계열 조회 실패: {e}")
-
-    if not quote_fresh:
-        try:
-            fetched_q = _fetch_krx_gold_quote(symbol)
-            if fetched_q:
-                quote = fetched_q
-                with _KRX_GOLD_LOCK:
-                    ent["quote"], ent["quote_time"] = fetched_q, now
-        except Exception as e:
-            logger.debug(f"[NAVER] KRX 금 현재가 조회 실패: {e}")
-
-    if not hist:
-        # 시계열이 없으면 지표도 등락률도 만들 수 없다 → 실패로 처리한다.
-        #  (현재가만 살아 있어도 한 점으로는 표를 채울 수 없다)
-        logger.warning("[NAVER] KRX 금 데이터 없음 — 시계열 조회 실패")
-        with _KRX_GOLD_LOCK:
-            ent["fail"] = now
+    if official is None or official.empty:
+        #  지수 화면은 주기 갱신이라 매번 찍으면 로그가 쌓인다 — 10분에 한 번(환율 폴백 경고와 같은 묶음).
+        if time.time() - _KRX_GOLD_WARN_TS[0] > 600:
+            _KRX_GOLD_WARN_TS[0] = time.time()
+            logger.warning("[KRX] 금현물 확정 봉 없음 — KRX_OPENAPI_KEY·저장소 결손을 확인하세요")
         return None
-    with _KRX_GOLD_LOCK:
-        ent["fail"] = None
-    return _krx_gold_frame(hist, quote)
-
-
-def _krx_gold_frame(hist, quote):
-    """[(date, close)] + 현재가 → 지수 소스 공통 스키마 DataFrame(오름차순).
-
-    현재가는 장중 갱신되므로 같은 날짜 봉이 있으면 덮어쓰고, 없으면(장중 첫 체결이 아직
-    시계열에 반영되기 전) 새 봉으로 덧붙인다.
-    """
-    if not hist:
-        return None
-    rows = dict(hist)                    # 같은 날짜가 중복 페이지로 들어와도 하나로 접힌다
-    if quote and quote.get('date') is not None and quote.get('close'):
-        rows[quote['date']] = quote['close']
-
-    out = pd.DataFrame({'date': list(rows.keys()), 'close': list(rows.values())})
-    out = out.sort_values('date', ascending=True).reset_index(drop=True)
-    # 시·고·저는 네이버가 주지 않는다(0으로 내려온다) → 종가로 평탄화한다.
-    for col in ['open', 'high', 'low']:
-        out[col] = out['close']
-    out['volume'] = 0.0
-    out = out[['date', 'open', 'high', 'low', 'close', 'volume']].copy()
-    out.attrs['source'] = 'NAVER'
-    return out
+    now = datetime.now()
+    # 네이버 장애는 무해하다 — 현재가 없이 확정 봉만으로 표를 채운다.
+    return _overlay_gold_quote(official, _krx_gold_quote_cached(symbol, _krx_gold_entry(symbol), now))
 
 
 # [추가] 해외 종목 tvDatafeed 조회 실패(빈 응답) 음성 캐시. 익명 웹소켓은 간헐 실패가 잦고
@@ -1507,19 +1397,6 @@ def _trigger_async_refresh(market_type):
         logger.warning(f"[MARKET_INDEX] {market_type} 재검증 스레드 기동 실패: {e}")
         _release()
 
-#  최후 폴백 경고를 (지수, 거래일)당 한 번만 내기 위한 표시.
-_INDEX_LAST_RESORT_WARNED = set()
-
-
-def _warn_index_last_resort(market_type, ticker):
-    key = (market_type, _current_market_day())
-    if key in _INDEX_LAST_RESORT_WARNED:
-        return
-    _INDEX_LAST_RESORT_WARNED.add(key)
-    logger.warning(f"[MARKET_INDEX] {market_type} 지수를 최후 폴백(yfinance {ticker})으로 받았습니다 — "
-                   f"시장 필터·국면 판정이 이 값으로 돕니다. 최신 종가 결측 여부를 확인하세요.")
-
-
 def index_source(df):
     """지수 DataFrame이 어디서 왔는지('KRX+TVDATAFEED' 등). 모르면 None.
 
@@ -1535,13 +1412,18 @@ def _fetch_domestic_index_data(market_type):
     """국내 지수 데이터를 실제 조회한다(캐시 미적용).
 
     폴백 체인(각 단계는 '데이터 없음/부족(< ma_period)'일 때만 다음으로 내려간다):
-      - 모드 1/2(KIS): KIS API → tvDatafeed → yfinance
-      - 모드 3(토스):  토스 시장지표(코스피·코스닥) → tvDatafeed → yfinance   (KIS 미사용)
+      - 모드 1/2(KIS): KIS API → tvDatafeed
+      - 모드 3(토스):  토스 시장지표(코스피·코스닥) → tvDatafeed   (KIS 미사용)
     토스 시장지표(/api/v1/market-indicators, API 1.2.4)는 KRX 공식 지수를 인증된 채널로 주므로
     익명 tvDatafeed(간헐 빈 응답)보다 안정적이다. 다만 코스피200·코스닥150은 심볼 카탈로그에
     없어 토스로 조회할 수 없다 → 그 둘은 종전대로 tvDatafeed가 1순위다.
     tvDatafeed는 4종 지수(코스피·코스닥·코스피200·코스닥150) 모두 지원하며 KRX 정확·당일 종가를
-    준다. yfinance(^KS11/^KQ11 등)는 최신 거래일 종가를 NaN으로 주는 일이 잦아 최후 폴백으로 둔다.
+    준다.
+
+    [yfinance 최후 폴백 제거 · 2026-10-05] 종전 3단계는 yfinance(^KS11/^KQ11)였다. 최신 거래일 종가를
+     NaN 으로 주는 일이 잦아 하필 판단이 필요한 날 어긋나는 값이고, 실측(맥북 09-05~10-04·파이
+     ~09-12) 발동 0건이었다. 둘 다 실패하면 지수는 없음으로 끝나고 시장 필터는 fail-closed 로
+     신규 매수를 막는다 — 오염된 지수로 판정하는 것보다 낫다.
     """
     # [추가] 코스피200 선물 (주간 K200FUT_F / 야간 K200FUT_CM): KIS 전용, 폴백 없음.
     #  세션별 market_type을 분리해 TTL 캐시가 주간/야간 데이터를 섞지 않게 한다.
@@ -1567,17 +1449,13 @@ def _fetch_domestic_index_data(market_type):
             return None
 
     kis_code = "0001"
-    yf_ticker = "^KS11"
 
     if market_type == "KOSDAQ":
         kis_code = "1001"
-        yf_ticker = "^KQ11"
     elif market_type == "KOSPI200":
         kis_code = "2001"
-        yf_ticker = "^KS200"
     elif market_type == "KOSDAQ150":
         kis_code = "2203"
-        yf_ticker = "^KQ150"
     elif market_type == "VKOSPI":
         # V코스피200(코스피200 변동성지수): KIS 업종코드 0503 전용.
         #  yfinance/tvDatafeed 미제공이고, KRX 공식은 **마감 후 확정 봉만** 주므로 장중에는
@@ -1587,7 +1465,6 @@ def _fetch_domestic_index_data(market_type):
         if config.session.is_toss:
             return None
         kis_code = "0503"
-        yf_ticker = None
 
     # 지수 데이터는 국면 판단(이중 EMA의 느린 기간)과 시장 필터링(SMA, MARKET_FILTER_MA)이 함께
     #  사용하므로 두 기간 중 큰 값을 '충분성' 기준으로 삼는다(부족하면 다음 소스로 폴백).
@@ -1653,27 +1530,10 @@ def _fetch_domestic_index_data(market_type):
         if tv_df is not None and not tv_df.empty:
             df = tv_df  # attrs['source']='TVDATAFEED' (fetch 함수가 설정)
 
-    # 3) yfinance (최후 폴백) — ^KS200, ^KQ150은 야후 미제공이므로 무한 루프 방지를 위해 제외
-    #    (VKOSPI는 yfinance 미제공 → yf_ticker=None이면 건너뜀)
-    if _insufficient(df) and yf_ticker and yf_ticker not in ['^KS200', '^KQ150']:
-        logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} → yfinance({yf_ticker}) 폴백 시도")
-        try:
-            yf_df = api.get_chart_data(yf_ticker, is_overseas=True)
-            if yf_df is not None and not yf_df.empty:
-                yf_df.attrs['source'] = 'YFINANCE'
-                df = yf_df
-                #  [Fix 2026-09-04] 최후 폴백은 조용히 지나가면 안 된다. 이 지수로 시장
-                #   필터(이평 이탈 → 신규 매수 중단)와 국면 판정이 돈다. yfinance 는 최신
-                #   거래일 종가를 NaN 으로 주는 일이 잦아 하필 판단이 필요한 날 어긋난다.
-                #   거래일마다 지수당 한 번만 남긴다(캐시 TTL 5분마다 울리면 소음이 된다).
-                _warn_index_last_resort(market_type, yf_ticker)
-        except Exception as e:
-            logger.debug(f"[MARKET_INDEX_DEBUG] {market_type} yfinance 폴백 실패: {e}")
-
     return _merge_index_history(krx_hist, df)
 
 def get_domestic_index_data(market_type, force_refresh=False):
-    """국내 지수 데이터 조회 (KIS API -> yfinance Fallback, 공유 캐시 적용)"""
+    """국내 지수 데이터 조회 (토스/KIS → tvDatafeed, KRX 확정 봉 병합, 공유 캐시 적용)"""
     # 테스트 환경: 캐시/스탬피드 방어 없이 매번 직접 조회(모킹 데이터 고착 방지)
     if not _index_cache_enabled():
         return _fetch_domestic_index_data(market_type)
@@ -1722,12 +1582,50 @@ def _fetch_index_locked(market_type, force_refresh):
     df = _fetch_domestic_index_data(market_type)
     _store_index_cache(market_type, df)
 
-    # 조회 실패(빈 결과) 시 직전 정상 데이터(stale)로 폴백
+    # 조회 실패(빈 결과) 시 직전 정상 데이터(stale)로 폴백 — 단 기한 안에서만
     if (df is None or df.empty) and stale_df is not None and not stale_df.empty:
+        lag = _index_lag_trading_days(stale_df)
+        if lag is None or lag > _INDEX_STALE_MAX_LAG:
+            #  [기한 · 2026-10-05] 종전엔 날짜가 지난 데이터를 기한 없이 계속 내줬다. 시장 필터는
+            #   확정 봉 기준이라 하루 이틀 묵은 값의 판정 오염은 작지만, 그 이상은 국면·필터가 며칠
+            #   전 시장을 보고 도는 셈이다 — 모르는 것으로 두고 fail-closed(신규 매수 보류)에 맡긴다.
+            logger.warning(f"[MARKET_INDEX] {market_type} 지수 재조회 실패 — 직전 데이터가 "
+                           f"{'날짜 불명' if lag is None else f'{lag}거래일 전'}이라 쓰지 않는다"
+                           f"(기한 {_INDEX_STALE_MAX_LAG}거래일)")
+            return df
         # 날짜가 지난 데이터를 계속 서빙하는 상황은 조용히 넘기면 안 된다(등락률 고착·국면 오판).
-        logger.warning(f"[MARKET_INDEX] {market_type} 지수 재조회 실패 — 직전(과거) 데이터로 폴백")
+        logger.warning(f"[MARKET_INDEX] {market_type} 지수 재조회 실패 — 직전(과거) 데이터로 폴백"
+                       f"({lag}거래일 전)")
         return stale_df
     return df
+
+
+# 지수 조회가 실패했을 때 직전 데이터를 대신 내줄 수 있는 최대 묵음(거래일).
+_INDEX_STALE_MAX_LAG = 2
+
+
+def _index_lag_trading_days(df):
+    """df 의 마지막 봉 다음 날부터 시장 기준일까지 낀 거래일 수. 판정 불가면 None.
+
+    오늘 봉까지 있으면 0, 어제(직전 거래일)까지면 1. 휴장일은 api.is_holiday_on 으로 뺀다.
+    """
+    try:
+        last = pd.to_datetime(str(df['date'].iloc[-1]).replace('-', '')[:8], format='%Y%m%d')
+        today = pd.to_datetime(_current_market_day(), format='%Y%m%d')
+    except Exception:       # noqa: BLE001 - 날짜를 못 읽으면 '모름'
+        return None
+    if last >= today:
+        return 0
+    lag, day = 0, last + pd.Timedelta(days=1)
+    while day <= today and lag <= _INDEX_STALE_MAX_LAG:
+        try:
+            closed = api.is_holiday_on(day.strftime('%Y%m%d'))
+        except Exception:   # noqa: BLE001 - 달력을 모르면 평일만 센다(보수적으로 더 많이 센다)
+            closed = day.weekday() >= 5
+        if not closed:
+            lag += 1
+        day += pd.Timedelta(days=1)
+    return lag
 
 # 국면 문자열 -> 점수 보정 설정 키. 국면 상태를 추가할 때 이 표만 갱신하면 된다.
 REGIME_SCORE_ADJ_KEYS = {
@@ -5322,6 +5220,7 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
 
         if curr_data and curr_data.get('rt_cd') == '0':
             out = curr_data['output']
+            rate_unknown = False
             if is_overseas:
                 curr = float(out.get('last', 0) or 0)
                 rate = float(out.get('rate', 0) or 0)
@@ -5344,6 +5243,9 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                     diff = curr - base_price
                     rate = (diff / base_price) * 100
                 else:
+                    #  [2026-10-05] 토스 어댑터는 믿을 만한 기준가가 없으면 등락률 필드를 비운다
+                    #   (NXT 종가·분봉 캡처로 메우지 않는다). 그때 0% 로 그리면 '보합'으로 읽힌다.
+                    rate_unknown = out.get('prdy_ctrt') in (None, '')
                     try: rate = api.safe_float(out.get('prdy_ctrt'), default=0.0)
                     except Exception: rate = 0.0
                     try: diff = api.safe_int(out.get('prdy_vrss'))
@@ -5361,11 +5263,13 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                 diff_str = f"{diff:+}"
 
             rate_color = "[red]" if rate > 0 else ("[blue]" if rate < 0 else "[white]")
+            if rate_unknown:
+                rate_color, diff_str = "[dim]", "-"
             #  [정렬] 등락폭·등락률·강도를 구분자로 나눠 담는다. 표에 넣기 직전에
             #   utils.align_cell_parts 가 값마다 폭을 맞춰 세로로 읽히게 한다 —
             #   셀 전체를 우측 정렬하면 오른쪽 끝만 맞고 안쪽 값들은 어긋난다.
             rate_str = (f"{rate_color}{diff_str}[/]{utils.CELL_PART_SEP}"
-                        f"{rate_color}({rate:+.2f}%)[/]{utils.CELL_PART_SEP}"
+                        f"{rate_color}{'(-)' if rate_unknown else f'({rate:+.2f}%)'}[/]{utils.CELL_PART_SEP}"
                         f"{strength_display.strip()}")
 
             # 전일 RSI — calculate_indicators가 계산한 값 재사용 (중복 계산 제거·SSOT)

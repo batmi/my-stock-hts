@@ -164,14 +164,14 @@ def _fetch_and_set_token(token_type, force_refresh=False):
     if token_type == "REAL":
         app_key = config.session.real_app_key
         app_secret = config.session.real_app_secret
-        url = f"{config.REAL_URL}/oauth2/tokenP"
+        url = f"{config.REAL_URL}{constants.API_URLS['TOKEN']}"
     elif token_type == "AUTO":
         if config.session.auto_app_key and config.session.real_app_key and \
            config.session.auto_app_key == config.session.real_app_key:
             return _fetch_and_set_token("REAL", force_refresh)
         app_key = config.session.auto_app_key
         app_secret = config.session.auto_app_secret
-        url = f"{config.REAL_URL}/oauth2/tokenP"
+        url = f"{config.REAL_URL}{constants.API_URLS['TOKEN']}"
     else:
         logger.error(f"잘못된 토큰 유형: {token_type}")
         return None

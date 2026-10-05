@@ -1,13 +1,11 @@
 """KRX 금현물(금 99.99_1Kg, 원/g) 지수 회귀 테스트.
 
-[왜 묻는가] KRX 금시장 시세는 KIS·토스·yfinance·pykrx 어디에도 없어 네이버 원자재
-API 전용 경로를 새로 뚫었다. 이 경로는 다른 지수와 두 가지가 다르다.
-  1) 야후에 티커가 없다(^KRXGOLD는 자리표시자) → yfinance로 새어 나가면 그룹 전체
-     다운로드가 404를 물고 온다. 폴백도 없으므로 실패는 '네이버' 실패로 안내해야 한다.
-  2) 네이버 일별 시세는 종가만 준다(시·고·저가 0) → 종가로 평탄화한 봉을 만들지 않으면
-     지표가 0가로 계산돼 통째로 망가진다.
-캐시(현재가 60초 / 시계열 6시간)와 음성 캐시도 함께 검증한다 — 지수 화면은 반복(@)
-조회가 기본이라 캐시가 풀리면 매 렌더마다 5페이지를 다시 받는다.
+[왜 묻는가] KRX 금시장 시세는 KIS·토스·yfinance 어디에도 없어 전용 경로를 쓴다.
+  · 이력 = KRX Open API 확정 봉(krx_data.get_gold_daily), 장중 현재가 = 네이버 원자재 API.
+  · 야후에 티커가 없다(^KRXGOLD는 자리표시자) → yfinance로 새어 나가면 그룹 전체
+    다운로드가 404를 물고 온다. 폴백이 없으므로 실패는 그대로 실패로 알린다.
+  · [2026-10-05] 네이버 일별 시세(종가만·시고저 0) 폴백은 제거됐다 — 확정 봉이 없으면 None.
+현재가 캐시(60초)와 음성 캐시(180초)도 함께 검증한다 — 지수 화면은 반복(@) 조회가 기본이다.
 """
 import os
 import sys
@@ -27,173 +25,81 @@ from modules import analysis, market
 GOLD = market.KRX_GOLD_INDEX
 
 
-class _Resp:
-    def __init__(self, payload):
-        self._payload = payload
-
-    def json(self):
-        return self._payload
-
-
-def _prices_payload(page, page_size, total_pages=1, base=200000.0):
-    """네이버 일별 시세 응답 — 최근 날짜부터 내려오며 시·고·저는 0으로 온다.
-
-    마지막 페이지는 실제 응답과 같이 상한(60)보다 짧게 준다(페이징 종료 조건).
-    """
-    if page > total_pages:
-        return []
-    rows = []
-    start = (page - 1) * page_size
-    count = page_size if page < total_pages else page_size // 2
-    for i in range(count):
-        idx = start + i
-        day = pd.Timestamp("2026-08-21") - pd.Timedelta(days=idx)
-        rows.append({
-            'localTradedAt': f"{day.strftime('%Y-%m-%d')}T00:00:00+09:00",
-            'closePrice': f"{base - idx * 100:,.0f}",
-            'openPrice': '0', 'highPrice': '0', 'lowPrice': '0',
-        })
-    return rows
-
-
-def _quote_payload(close="203,410", traded_at="2026-08-21T15:19:58+09:00"):
-    return {'closePrice': close, 'localTradedAt': traded_at, 'unit': '원/g'}
-
-
-def _fake_get(quote=None, total_pages=5, page_size=None, prices=None):
-    """analysis.requests.get 대역 — 호출 URL로 시계열/현재가를 구분한다."""
-    size = page_size or analysis._KRX_GOLD_PAGE_SIZE
-
-    def _get(url, params=None, headers=None, timeout=None):
-        if url.endswith('/prices'):
-            if prices is not None:
-                return _Resp(prices)
-            return _Resp(_prices_payload((params or {}).get('page', 1), size, total_pages))
-        return _Resp(_quote_payload() if quote is None else quote)
-
-    return _get
-
-
 @pytest.fixture(autouse=True)
 def _clear_gold_cache():
-    # 아래 대부분은 **네이버 폴백 경로**를 검증한다 → 1순위(KRX 공식)를 여기서 막아 경로를
-    #  고정한다. KRX 경로 자체는 아래 'KRX 공식' 절에서 _krx_gold_official을 직접 목으로
-    #  잡아 검증한다(그 patch 가 이 fixture 의 것을 덮어쓴다).
-    #
-    #  [왜 목인가 · 2026-09-23] 종전에는 KRX_ID/KRX_PW 를 비워 경로를 고정했다. 그런데
-    #   웹계정 스크래핑이 폐기되고 정본이 KRX Open API(날짜별 스냅샷 SQLite)로 바뀌면서
-    #   그 환경변수는 아무것도 가르지 않게 됐다 — 자격증명 없이도 디스크 스냅샷으로 1순위가
-    #   성공해, 네이버를 겨눈 여섯 건이 source='KRX' 를 받고 무너졌다. 경로를 가르는 것은
-    #   이제 환경변수가 아니라 이 함수의 성공 여부이므로 그 자리를 직접 막는다.
     analysis._KRX_GOLD_CACHE.clear()
-    with patch.object(analysis, '_krx_gold_official', return_value=None):
-        yield
+    yield
     analysis._KRX_GOLD_CACHE.clear()
 
 
-# ---------------------------------------------------------------- 소스(네이버) 조회
+def _official_frame():
+    """krx_data.get_gold_daily 가 주는 모양 — date는 'YYYYMMDD' 문자열이다."""
+    return pd.DataFrame([
+        {"date": "20260820", "open": 201420.0, "high": 202060.0, "low": 200850.0,
+         "close": 201620.0, "volume": 262774.0},
+        {"date": "20260821", "open": 202390.0, "high": 203410.0, "low": 201170.0,
+         "close": 203410.0, "volume": 216327.0},
+    ])
 
-def test_시계열은_종가로_평탄화된_OHLC로_돌아온다():
-    with patch.object(analysis.requests, 'get', side_effect=_fake_get()):
+
+# ---------------------------------------------------------------- 소스 조회
+
+def test_확정봉이_없으면_None이고_네이버_시계열로_대신하지_않는다():
+    """종가만 주는 네이버 시계열로 평탄화한 봉을 만들면 ATR·ADX 가 왜곡된다 — 실패로 둔다."""
+    with patch.object(analysis, '_krx_gold_official', return_value=None), \
+         patch.object(analysis.requests, 'get') as http:
+        assert analysis.get_krx_gold_data() is None
+    http.assert_not_called()                     # 현재가 한 점도 받지 않는다(쓸 데가 없다)
+
+
+def test_KRX_확정봉은_실제_OHLC와_거래량이다():
+    with patch.object(analysis, '_krx_gold_official', return_value=_official_frame()), \
+         patch.object(analysis, '_fetch_krx_gold_quote', return_value=None):
         df = analysis.get_krx_gold_data()
-
     assert list(df.columns) == ['date', 'open', 'high', 'low', 'close', 'volume']
-    assert df.attrs['source'] == 'NAVER'
-    # 시·고·저가 0으로 남으면 지표가 통째로 망가진다 → 종가와 같아야 한다
-    for col in ('open', 'high', 'low'):
-        assert (df[col] == df['close']).all()
-    # 거래량 이력은 제공되지 않는다(OBV는 화면에서 '-'로 죽는다)
-    assert (df['volume'] == 0).all()
+    assert df.attrs['source'] == 'KRX'
+    assert (df['high'] > df['low']).all()          # 평탄화가 아니다
+    assert (df['volume'] > 0).all()                # OBV가 산다
     assert df['date'].is_monotonic_increasing
-    assert len(df) == analysis._KRX_GOLD_PAGE_SIZE * 4 + analysis._KRX_GOLD_PAGE_SIZE // 2
 
 
-def test_현재가가_마지막_봉을_덮어쓴다():
-    """장중 현재가는 그날 종가 자리에 들어가야 한다(같은 날짜 봉이 둘로 갈라지면 안 된다)."""
-    with patch.object(analysis.requests, 'get',
-                      side_effect=_fake_get(quote=_quote_payload(close="210,000"))):
-        df = analysis.get_krx_gold_data()
-
-    assert float(df['close'].iloc[-1]) == 210000.0
-    assert df['date'].iloc[-1] == pd.Timestamp("2026-08-21")
-    assert df['date'].duplicated().sum() == 0
-
-
-def test_현재가만_실패해도_시계열로_표시한다():
-    """부분 실패는 화면을 비우지 않는다 — 마지막 종가로라도 행을 채운다."""
-    def _get(url, params=None, headers=None, timeout=None):
-        if url.endswith('/prices'):
-            return _Resp(_prices_payload((params or {}).get('page', 1),
-                                         analysis._KRX_GOLD_PAGE_SIZE, 5))
-        raise RuntimeError("네이버 현재가 장애")
-
-    with patch.object(analysis.requests, 'get', side_effect=_get):
-        df = analysis.get_krx_gold_data()
-
-    assert df is not None and not df.empty
-    assert float(df['close'].iloc[-1]) == 200000.0
-
-
-def test_마지막_페이지에서_페이징을_멈춘다():
-    calls = []
-
-    def _get(url, params=None, headers=None, timeout=None):
-        calls.append(url)
-        if url.endswith('/prices'):
-            return _Resp(_prices_payload((params or {}).get('page', 1),
-                                         analysis._KRX_GOLD_PAGE_SIZE, total_pages=2))
-        return _Resp(_quote_payload())
-
-    with patch.object(analysis.requests, 'get', side_effect=_get):
-        df = analysis.get_krx_gold_data()
-
-    # 2페이지째가 상한(60)보다 짧아지는 순간 멈춘다 → 3페이지 이상 요청하지 않는다
-    assert sum(1 for u in calls if u.endswith('/prices')) == 2
-    assert len(df) == analysis._KRX_GOLD_PAGE_SIZE + analysis._KRX_GOLD_PAGE_SIZE // 2
-
-
-def test_시계열_캐시는_반복조회에서_재요청하지_않는다():
+def test_현재가_TTL_안에서는_다시_받지_않는다():
     """지수 화면은 반복(@) 조회가 기본 — 60초 안의 재조회는 HTTP가 나가면 안 된다."""
-    with patch.object(analysis.requests, 'get', side_effect=_fake_get()) as m:
+    quote = {'date': pd.to_datetime('2026-08-21'), 'close': 203500.0}
+    with patch.object(analysis, '_krx_gold_official', return_value=_official_frame()), \
+         patch.object(analysis, '_fetch_krx_gold_quote', return_value=quote) as q:
         analysis.get_krx_gold_data()
-        first = m.call_count
         analysis.get_krx_gold_data()
-        assert m.call_count == first
-
-
-def test_현재가_TTL이_지나면_현재가만_다시_받는다():
-    with patch.object(analysis.requests, 'get', side_effect=_fake_get()) as m:
-        analysis.get_krx_gold_data()
-        first = m.call_count
+        assert q.call_count == 1
 
         ent = analysis._KRX_GOLD_CACHE[config.KRX_GOLD_SYMBOL]
         ent["quote_time"] = datetime.now() - pd.Timedelta(
             seconds=analysis._KRX_GOLD_QUOTE_TTL_SEC + 1).to_pytimedelta()
         analysis.get_krx_gold_data()
-
-    # 시계열(5페이지)은 그대로 두고 현재가 1콜만 더 나간다
-    assert m.call_count == first + 1
+        assert q.call_count == 2
 
 
-def test_시계열_실패는_음성캐시로_재시도를_묶는다():
-    def _boom(url, params=None, headers=None, timeout=None):
-        raise RuntimeError("네이버 장애")
-
-    with patch.object(analysis.requests, 'get', side_effect=_boom) as m:
-        assert analysis.get_krx_gold_data() is None
-        blocked = m.call_count
-        assert analysis.get_krx_gold_data() is None
-        assert m.call_count == blocked          # 음성 캐시 구간엔 재요청하지 않는다
-
+def test_현재가_장애_재시도는_사용자가_풀_수_있다():
+    with patch.object(analysis, '_krx_gold_official', return_value=_official_frame()), \
+         patch.object(analysis, '_fetch_krx_gold_quote', side_effect=RuntimeError('네이버 장애')) as q:
+        analysis.get_krx_gold_data()
+        blocked = q.call_count
+        analysis.get_krx_gold_data()
+        assert q.call_count == blocked          # 음성 캐시 구간엔 재요청하지 않는다
         analysis.reset_krx_gold_failures()      # 사용자가 '재시도(y)'를 고른 상황
-        assert analysis.get_krx_gold_data() is None
-        assert m.call_count > blocked
+        analysis.get_krx_gold_data()
+        assert q.call_count > blocked
 
 
-def test_차단된_응답도_예외없이_실패로_흐른다():
-    """빈 dict/list(테스트 격리·네이버 스펙 변경)를 파서가 예외로 만들면 안 된다."""
-    with patch.object(analysis.requests, 'get', side_effect=_fake_get(quote={}, prices={})):
-        assert analysis.get_krx_gold_data() is None
+def test_차단된_현재가_응답도_예외없이_흐른다():
+    """빈 dict(테스트 격리·네이버 스펙 변경)를 파서가 예외로 만들면 안 된다."""
+    class _Resp:
+        def json(self):
+            return {}
+    with patch.object(analysis, '_krx_gold_official', return_value=_official_frame()), \
+         patch.object(analysis.requests, 'get', return_value=_Resp()):
+        df = analysis.get_krx_gold_data()
+    assert df is not None and len(df) == 2
 
 
 # ---------------------------------------------------------------- 지수 화면(메뉴 1)
@@ -203,7 +109,7 @@ def _gold_df(periods=300, base=200000.0):
     close = [base + i * 50 for i in range(periods)]
     out = pd.DataFrame({'date': dates, 'open': close, 'high': close,
                         'low': close, 'close': close, 'volume': [0.0] * periods})
-    out.attrs['source'] = 'NAVER'
+    out.attrs['source'] = 'KRX'
     return out
 
 
@@ -230,12 +136,12 @@ def test_지수_행은_정수로_표시되고_OBV는_죽는다():
     assert "-" not in res['row_data'][10]      # RSI
 
 
-def test_네이버_실패는_야후로_새지_않고_네이버_실패로_알린다():
+def test_금현물_실패는_야후로_새지_않고_실패로_알린다():
     with patch.object(analysis, 'get_krx_gold_data', return_value=None), \
          patch.object(api, 'get_yf_fast_info') as fast_info:
         res = market._process_index_worker(GOLD, "^KRXGOLD", pd.DataFrame(), pd.DataFrame())
 
-    assert res == {'status': 'failed', 'name': GOLD, 'src': '네이버'}
+    assert res == {'status': 'failed', 'name': GOLD, 'src': 'KRX'}
     fast_info.assert_not_called()
 
 
@@ -372,41 +278,7 @@ def test_포지션분석은_시장구분_조회를_건너뛴다():
     assert res.get("^KRXGOLD", {}).get('action')
 
 
-# ---------------------------------------------------------------- KRX 공식(1순위)
-#  2026-08-25: data.krx.co.kr 로그인이 생기면서 금현물도 실제 OHLC·거래량을 받게 됐다.
-#  네이버는 폴백으로 남는다(위 절이 그 경로를 계속 지킨다).
-
-def _official_frame():
-    """krx_data.get_gold_daily 가 주는 모양 — date는 'YYYYMMDD' 문자열이다."""
-    return pd.DataFrame([
-        {"date": "20260820", "open": 201420.0, "high": 202060.0, "low": 200850.0,
-         "close": 201620.0, "volume": 262774.0},
-        {"date": "20260821", "open": 202390.0, "high": 203410.0, "low": 201170.0,
-         "close": 203410.0, "volume": 216327.0},
-    ])
-
-
-def test_KRX가_1순위이고_네이버_시계열을_부르지_않는다():
-    """네이버 한계(종가만·거래량 0)를 피하는 것이 이 경로의 존재 이유다."""
-    with patch.object(analysis, '_krx_gold_official', return_value=_official_frame()), \
-         patch.object(analysis, '_fetch_krx_gold_history') as hist, \
-         patch.object(analysis, '_fetch_krx_gold_quote', return_value=None):
-        df = analysis.get_krx_gold_data()
-    hist.assert_not_called()
-    assert df.attrs['source'] == 'KRX'
-    assert (df['high'] > df['low']).all()          # 평탄화가 아니다
-    assert (df['volume'] > 0).all()                # OBV가 산다
-
-
-def test_KRX_실패시_네이버로_폴백한다():
-    with patch.object(analysis, '_krx_gold_official', return_value=None), \
-         patch.object(analysis, '_fetch_krx_gold_history',
-                      return_value=[(pd.to_datetime('2026-08-21'), 203410.0)]), \
-         patch.object(analysis, '_fetch_krx_gold_quote', return_value=None):
-        df = analysis.get_krx_gold_data()
-    assert df.attrs['source'] == 'NAVER'
-    assert len(df) == 1
-
+# ---------------------------------------------------------------- 확정 봉 + 장중 현재가
 
 def test_장중_현재가는_확정봉_위에_덧대진다():
     """KRX는 마감 후 확정 봉만 준다 — 오늘 봉이 없으면 현재가로 새 봉을 만든다."""
@@ -439,8 +311,8 @@ def test_현재가_장애는_확정봉_표시를_막지_않는다():
     assert df.attrs['source'] == 'KRX'
 
 
-def test_현재가_장애는_음성캐시로_묶이고_시계열과_섞이지_않는다():
-    """현재가 실패가 시계열(fail) 마커를 건드리면 시계열 재시도까지 막힌다."""
+def test_현재가_장애는_음성캐시로_묶인다():
+    """현재가 장애 중 매 렌더마다 네이버를 다시 두드리지 않는다."""
     with patch.object(analysis, '_krx_gold_official', return_value=_official_frame()), \
          patch.object(analysis, '_fetch_krx_gold_quote',
                       side_effect=RuntimeError('네이버 장애')) as q:
@@ -450,4 +322,3 @@ def test_현재가_장애는_음성캐시로_묶이고_시계열과_섞이지_�
         assert q.call_count == first            # 장애 구간엔 재요청하지 않는다
     ent = analysis._krx_gold_entry(config.KRX_GOLD_SYMBOL)
     assert ent['quote_fail'] is not None
-    assert ent['fail'] is None                  # 시계열 음성 캐시는 건드리지 않았다

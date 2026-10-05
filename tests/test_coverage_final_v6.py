@@ -43,19 +43,14 @@ def test_adjust_to_tick_comprehensive():
     assert utils.adjust_to_tick(150.1234, True) == 150.12
 
 # --- api.py coverage ---
-@patch('api.session.get')
-def test_get_stock_name_domestic_parsing(mock_get):
-    """국내 종목명 — 마스터가 모르면 네이버 JSON API(stockName). [2026-09-24] 옛 og:title mock 은
-    실제 KIS 마스터 다운로드 덕에 통과하고 있었다(conftest 가 이제 막는다)."""
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_get.return_value = mock_resp
-    with patch("modules.analysis.get_stock_name_from_master", return_value=None):
-        mock_resp.json.return_value = {"stockName": "삼성전자"}
+def test_get_stock_name_domestic_parsing():
+    """국내 종목명 — 마스터가 모르면 KRX 상장목록. 이름 공백은 다듬고, 모르면 코드 그대로.
+    (네이버 3순위는 2026-10-05 제거)"""
+    listing = {"005930": {"name": "삼성전자"}, "000660": {"name": " SK하이닉스 "}}
+    with patch("modules.analysis.get_stock_name_from_master", return_value=None), \
+         patch("modules.krx_daily.get_listing_map", return_value=listing):
         assert api.get_stock_name_by_code("005930", False) == "삼성전자"
-        mock_resp.json.return_value = {"stockName": " SK하이닉스 "}
         assert api.get_stock_name_by_code("000660", False) == "SK하이닉스"
-        mock_resp.json.return_value = {}
         assert api.get_stock_name_by_code("999999", False) == "999999"   # 모르면 코드 그대로
 
 @patch.dict('sys.modules', {'tradingview_screener': None})

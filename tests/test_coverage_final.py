@@ -43,18 +43,17 @@ def test_manage_unfilled_orders(mock_revise, mock_get):
 @patch('modules.analysis._fetch_index_via_tvdatafeed', return_value=None)
 @patch('modules.analysis.api.get_domestic_index_chart')
 def test_get_market_regime_fallback(mock_get_index, mock_tv):
-    """시장 국면 판단 Fallback 테스트 (KIS 실패 → tvDatafeed 실패 → yfinance)."""
+    """시장 국면: KIS 실패 → tvDatafeed 실패여도 판정이 죽지 않는다.
+    yfinance 최후 폴백은 2026-10-05 제거 — 지수를 모르면 오염된 값 대신 판정 보류 쪽으로 간다."""
     # KIS API 실패 시뮬레이션
     mock_get_index.return_value = pd.DataFrame()
-    # tvDatafeed도 실패(1차 폴백 무력화) → 최후 yfinance 폴백을 결정적으로 검증(라이브 호출 제거)
+    # tvDatafeed도 실패(1차 폴백 무력화)
 
-    # yfinance 데이터 모킹
     with patch('modules.analysis.api.get_chart_data') as mock_yf:
         mock_yf.return_value = pd.DataFrame({'close': [100]*60})
         regime, adj = analysis.get_market_regime("KOSPI")
-        # Fallback이 동작하여 결과가 반환되어야 함
         assert regime in ["Bull", "PendUp", "PendDown", "Bear", "Sideways"]
-        mock_yf.assert_called()
+        mock_yf.assert_not_called()
 
 @patch('modules.market.api.fetch_yfinance_data')
 def test_show_market_indices_data_handling(mock_fetch):

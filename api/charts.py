@@ -41,28 +41,15 @@ def get_stock_name_by_code(code, is_overseas):
             logger.debug(f"마스터 종목명 조회 실패({code}): {e}")
         if not final_name:
             # [2026-10-04] 마스터 다음은 KRX 상장목록(Open API 스냅샷, 6시간 메모리 캐시) — 마스터보다
-            #  하루 빠르게 신규 상장을 싣고 ETF/ETN 이름도 준다. 네이버는 그 목록에도 없을 때만 묻는다.
+            #  하루 빠르게 신규 상장을 싣고 ETF/ETN 이름도 준다.
+            #  [2026-10-05] 그 뒤의 네이버(m.stock.naver.com/api/stock/{code}/basic) 3순위는 지웠다 —
+            #   두 원천이 함께 모르는 코드만 거기까지 갔고, 그때는 아래에서 코드를 그대로 이름으로 쓴다.
             try:
                 from modules import krx_daily
                 entry = (krx_daily.get_listing_map() or {}).get(str(code).strip()) or {}
                 final_name = str(entry.get('name') or '').strip() or None
             except Exception as e:
                 logger.debug(f"KRX 상장목록 종목명 조회 실패({code}): {e}")
-        if not final_name:
-            # [2026-09-13] 종전 finance.naver.com/item/main.naver 는 stock.naver.com(SPA)로
-            #  302 되고, 그 페이지의 og:title 은 종목명이 아니라 "Npay 증권"이다 — 그래서
-            #  모든 국내 종목명이 실패했다. 같은 사이트의 JSON API 로 바꾼다. 0080G0 같은
-            #  문자 포함 코드도 답한다.
-            url = f"https://m.stock.naver.com/api/stock/{code}/basic"
-            try:
-                headers = {'User-Agent': 'Mozilla/5.0'}
-                r = _api().session.get(url, headers=headers, timeout=3)
-                if r.status_code == 200:
-                    nm = (r.json() or {}).get('stockName')
-                    if nm and str(nm).strip():
-                        final_name = str(nm).strip()
-            except Exception as e:
-                logger.debug(f"Naver stock name fetch error({code}): {e}")
     else:
         # 1. TradingView Screener 우선 조회 (속도 개선)
         try:

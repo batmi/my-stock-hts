@@ -3,23 +3,16 @@ from unittest.mock import patch, MagicMock
 import api
 import config
 
-@patch('api.session.get')
-def test_get_stock_name_by_code_domestic(mock_get):
-    """국내 종목명 — 마스터가 모르면 네이버 JSON API(stockName)로 받는다.
+def test_get_stock_name_by_code_domestic():
+    """국내 종목명 — 마스터가 모르면 KRX 상장목록(Open API 스냅샷)에서 받는다.
 
-    [2026-09-24] 종전 mock 은 09-13 에 폐기된 HTML og:title 형식이었는데도 통과했다 — 테스트가
-    urllib 로 **실제 KIS 마스터를 내려받아** 거기서 이름을 얻고 있었기 때문이다(conftest 가 이제 막는다).
-    마스터를 명시적으로 '모름'으로 두고 현재 경로를 검증한다.
+    [2026-09-24] 마스터를 명시적으로 '모름'으로 둔다 — 그러지 않으면 테스트가 실제 KIS 마스터를
+    내려받으려 한다(conftest 가 막는다). [2026-10-05] 네이버 3순위는 제거됐다.
     """
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = {"stockName": "삼성전자"}
-    mock_get.return_value = mock_resp
-
-    with patch("modules.analysis.get_stock_name_from_master", return_value=None):
+    with patch("modules.analysis.get_stock_name_from_master", return_value=None), \
+         patch("modules.krx_daily.get_listing_map", return_value={"005930": {"name": "삼성전자"}}):
         name = api.get_stock_name_by_code("005930", False)
     assert name == "삼성전자"
-    assert "m.stock.naver.com/api/stock/005930/basic" in mock_get.call_args.args[0]
 
 @patch('api.yf.Ticker')
 def test_get_stock_name_by_code_overseas(mock_ticker):

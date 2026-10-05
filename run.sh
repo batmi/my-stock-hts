@@ -89,7 +89,6 @@ PYEOF
 
 _import_name() {
     case "$1" in
-        "beautifulsoup4")        echo "bs4" ;;
         "google-genai")          echo "google.genai" ;;
         "python-dotenv")         echo "dotenv" ;;
         "tradingview-screener")  echo "tradingview_screener" ;;

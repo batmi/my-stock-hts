@@ -450,25 +450,25 @@ def test_toss_ranking_base_builds_map_and_caches():
         api._toss_rank_base_day = None
 
 
-def test_toss_base_price_falls_back_to_prev_nxt_candle():
-    """[최종 폴백] 저장분·yfinance가 모두 없으면 전일 NXT 종가(일봉 직전 캔들)로 계산한다(역산 없음)."""
+def test_toss_base_price_is_none_instead_of_prev_nxt_candle():
+    """[2026-10-05] 저장분·KRX·yfinance가 모두 없으면 None — 전일 NXT 종가로 메우지 않는다(역산도 없음)."""
     import api
     _reset_krx_store({})  # 저장분 없음
-    _inject_daily_chart("TSTA", PAST_CHART)  # 마지막 캔들 20260713 < 오늘 → 그 종가
+    _inject_daily_chart("TSTA", PAST_CHART)  # 마지막 캔들 20260713 < 오늘 → NXT 종가 285000
     try:
         with patch("brokers.toss_api.get_price_limit") as m_pl, \
              patch.object(api, "_toss_krx_lib_close", return_value=None), \
              patch.object(api, "_toss_yf_krx_close", return_value=None):  # 3순위(KRX·yfinance) 미스
-            assert api._toss_base_price("TSTA") == 285000.0  # NXT 캔들 종가
+            assert api._toss_base_price("TSTA") is None
             m_pl.assert_not_called()  # 역산 없음
     finally:
         _pop_daily_chart("TSTA")
 
 
 def test_toss_base_price_uses_stored_krx_close_first():
-    """[우선순위 1] ref_date에 저장된 KRX 정규장 마감가가 있으면 NXT 폴백보다 그 값을 쓴다(HTS 일치)."""
+    """[우선순위 1] ref_date에 저장된 **검증된** KRX 정규장 마감가가 있으면 그 값을 쓴다(HTS 일치)."""
     import api
-    _reset_krx_store({"TSTB": {"20260713": 284000.0}})  # 캡처된 KRX 마감가
+    _reset_krx_store({"TSTB": {"20260713": {"c": 284000.0, "s": "brk"}}})  # 휴게 캡처 = KRX 종가 단일가
     _inject_daily_chart("TSTB", PAST_CHART)  # ref_date=20260713, NXT 캔들=285000
     try:
         assert api._toss_base_price("TSTB") == 284000.0  # 저장분 우선(285000 NXT 아님)
@@ -477,17 +477,20 @@ def test_toss_base_price_uses_stored_krx_close_first():
 
 
 def test_toss_base_price_ref_date_is_prev_when_today_candle_exists():
-    """일봉 마지막 캔들이 '오늘'이면(마감 후 오늘 봉 형성) 직전 캔들 종가가 전일 기준가다(폴백)."""
+    """일봉 마지막 캔들이 '오늘'이면(마감 후 오늘 봉 형성) 직전 캔들 날짜가 기준가 날짜다."""
     import api
     from datetime import datetime as _dt
     _reset_krx_store({})
     today = _dt.now().strftime('%Y%m%d')
     _inject_daily_chart("TSTC", [{'date': '20260713', 'close': 285000.0},
                                  {'date': today, 'close': 262500.0}])
+    asked = []
     try:
-        with patch.object(api, "_toss_krx_lib_close", return_value=None), \
-             patch.object(api, "_toss_yf_krx_close", return_value=None):  # 3순위 미스 → NXT 폴백
-            assert api._toss_base_price("TSTC") == 285000.0  # 오늘 봉(262500)이 아니라 직전(285000)
+        with patch.object(api, "_toss_krx_lib_close",
+                          side_effect=lambda c, d: asked.append(d) or 285000.0), \
+             patch.object(api, "_toss_yf_krx_close", return_value=None):
+            assert api._toss_base_price("TSTC") == 285000.0
+        assert asked == ['20260713'], "오늘 봉이 아니라 직전 거래일의 종가를 물어야 한다"
     finally:
         _pop_daily_chart("TSTC")
 
@@ -834,16 +837,16 @@ def test_chart_data_adapter_intraday_date_is_timestamp():
 def test_current_price_data_adapter():
     import api
     config.session.is_toss = True
-    _reset_krx_store({})  # 저장된 KRX 마감가 없음 → NXT 폴백 경로
-    # 전일 NXT 종가(=일봉 직전 캔들 종가) 71600 → 등락률 기준가
+    _reset_krx_store({})  # 저장된 KRX 마감가 없음
+    # 검증된 전일 KRX 종가 71600 → 등락률 기준가
     _inject_daily_chart("005930", [{'date': '20260710', 'close': 71000.0},
                                    {'date': '20260713', 'close': 71600.0}])
     try:
         with patch("brokers.toss_api.get_price",
                    return_value={"symbol": "005930", "lastPrice": "72000", "currency": "KRW"}), \
              patch.object(api, "_toss_capture_krx_close"), \
-             patch.object(api, "_toss_krx_lib_close", return_value=None), \
-             patch.object(api, "_toss_yf_krx_close", return_value=None):  # 캡처·KRX·yfinance 격리
+             patch.object(api, "_toss_krx_lib_close", return_value=71600.0), \
+             patch.object(api, "_toss_yf_krx_close", return_value=None):  # 캡처·yfinance 격리
             res = api.get_current_price_data("005930", False)
             price = api.get_current_price("005930", False)
     finally:
@@ -852,7 +855,7 @@ def test_current_price_data_adapter():
     assert res['rt_cd'] == '0'
     assert res['output']['stck_prpr'] == '72000'
     assert price == 72000
-    # [추가] 국내는 전일 NXT 종가(=일봉 직전 캔들 종가) 기준으로 KIS 호환 전일대비 필드를 채운다
+    # [추가] 국내는 검증된 전일 KRX 종가 기준으로 KIS 호환 전일대비 필드를 채운다
     assert res['output']['stck_sdpr'] == '71600'
     assert res['output']['prdy_vrss'] == '400'
     assert res['output']['prdy_ctrt'] == '0.56'
@@ -2010,8 +2013,8 @@ def test_kospi_kosdaq_use_toss_market_indicator_first():
         config.session.is_toss = False
 
 
-def test_kospi_falls_back_to_tvdatafeed_then_yfinance_in_toss():
-    """토스 모드 폴백 체인: 시장지표 실패 → tvDatafeed → yfinance(^KS11)."""
+def test_kospi_falls_back_to_tvdatafeed_in_toss():
+    """토스 모드 폴백 체인: 시장지표 실패 → tvDatafeed. yfinance 최후 폴백은 2026-10-05 제거."""
     import modules.analysis as analysis
     import pandas as pd
     config.session.is_toss = True
@@ -2037,14 +2040,14 @@ def test_kospi_falls_back_to_tvdatafeed_then_yfinance_in_toss():
             mock_tv.assert_called_once()
             mock_yf.assert_not_called()
 
-        # (b) 시장지표·tvDatafeed 모두 실패 → yfinance(^KS11) 폴백
+        # (b) 시장지표·tvDatafeed 모두 실패 → yfinance 로 내려가지 않는다(오염 값보다 실패)
         with patch("api.get_domestic_index_chart", return_value=pd.DataFrame()), \
              patch("modules.analysis._fetch_index_via_tvdatafeed", return_value=None) as mock_tv2, \
              patch("api.get_chart_data", return_value=yf_df) as mock_yf2:
             df2 = analysis.get_domestic_index_data("KOSPI", force_refresh=True)
-            assert df2 is not None and df2.attrs.get('source') == 'YFINANCE'
+            assert df2 is None or df2.attrs.get('source') != 'YFINANCE'
             mock_tv2.assert_called_once()
-            assert mock_yf2.call_args.args[0] == "^KS11"
+            mock_yf2.assert_not_called()
     finally:
         config.session.is_toss = False
 
@@ -2084,8 +2087,8 @@ def test_merge_index_volume_noop_when_yfinance_empty():
     assert list(out['volume']) == [0, 0]
 
 
-def test_kis_mode_index_fallback_chain_kis_then_tvdatafeed_then_yfinance():
-    """모드 1/2(KIS): KIS 실패 시 1차 tvDatafeed, 그 실패 시 2차 yfinance 순으로 폴백."""
+def test_kis_mode_index_fallback_chain_kis_then_tvdatafeed():
+    """모드 1/2(KIS): KIS 실패 시 tvDatafeed. 둘 다 실패해도 yfinance 로 내려가지 않는다(2026-10-05)."""
     import modules.analysis as analysis
     import pandas as pd
     config.session.is_toss = False  # KIS 모드
@@ -2113,13 +2116,13 @@ def test_kis_mode_index_fallback_chain_kis_then_tvdatafeed_then_yfinance():
             mock_tv.assert_called_once()  # 1차 폴백 tvDatafeed
             mock_yf.assert_not_called()   # tvDatafeed 성공 → yfinance 미호출
 
-        # (b) KIS 실패 → tvDatafeed 실패 → yfinance 폴백
+        # (b) KIS 실패 → tvDatafeed 실패 → yfinance 로 내려가지 않는다
         with patch("modules.analysis._fetch_index_via_tvdatafeed", return_value=None) as mock_tv2, \
              patch("api.get_chart_data", return_value=yf_df) as mock_yf2:
             df2 = analysis.get_domestic_index_data("KOSPI", force_refresh=True)
-            assert df2 is not None and df2.attrs.get('source') == 'YFINANCE'
+            assert df2 is None or df2.attrs.get('source') != 'YFINANCE'
             mock_tv2.assert_called_once()
-            assert mock_yf2.call_args.args[0] == "^KS11"
+            mock_yf2.assert_not_called()
 
 
 def test_format_order_no_toss_last_10():
@@ -2296,16 +2299,18 @@ def test_toss_base_price_trusts_etf_capture():
         _pop_daily_chart("TSTE")
 
 
-def test_toss_base_price_falls_back_to_capture_before_nxt():
-    """yfinance가 실패하면 캡처값을 쓰고, NXT 종가까지 내려가지 않는다."""
+def test_toss_base_price_ignores_stock_capture_and_nxt():
+    """[2026-10-05] yfinance가 실패해도 주식 분봉 캡처값(NXT 혼입)·NXT 종가로 메우지 않는다."""
     import api
-    _reset_krx_store({"TSTF": {"20260713": 283000.0}})
+    _reset_krx_store({"TSTF": {"20260713": 283000.0}})   # 구형식 = 'cap'(주식 캡처)
     _inject_daily_chart("TSTF", PAST_CHART)   # NXT 캔들 = 285000
     api._toss_yf_base_miss.clear()
     try:
         with patch.object(api, "is_domestic_etf_etn", return_value=False), \
+             patch.object(api, "_toss_krx_only", return_value=False), \
+             patch.object(api, "_toss_krx_lib_close", return_value=None), \
              patch.object(api, "fetch_yfinance_data", return_value=None):
-            assert api._toss_base_price("TSTF") == 283000.0   # NXT 285000이 아님
+            assert api._toss_base_price("TSTF") is None
     finally:
         _pop_daily_chart("TSTF")
         api._toss_yf_base_miss.clear()

@@ -1,8 +1,8 @@
 """종목명·상장목록이 KRX Open API 를 먼저 쓰는가 (2026-10-04).
 
-· 종목명: KIS 마스터 → KRX 상장목록(Open API 스냅샷) → 네이버. 마스터에 없는 신규 상장·ETF 가
-  네트워크(네이버) 없이 이름을 얻는다.
-· 상장목록: Open API 가 코넥스까지 주므로 FDR 보충을 부르지 않는다.
+· 종목명: KIS 마스터 → KRX 상장목록(Open API 스냅샷). 마스터에 없는 신규 상장·ETF 도 이름을
+  얻는다. 둘 다 모르면 코드 그대로(네이버 3순위는 2026-10-05 제거).
+· 상장목록: Open API 하나(코넥스까지 준다). FDR CSV 폴백은 2026-10-05 제거.
 """
 from unittest.mock import MagicMock, patch
 
@@ -20,21 +20,20 @@ def test_name_from_krx_listing_before_naver():
     session.get.assert_not_called()
 
 
-def test_name_falls_back_to_naver_when_not_listed():
-    resp = MagicMock(status_code=200)
-    resp.json.return_value = {"stockName": "네이버이름"}
+def test_unknown_code_returns_code_without_network():
+    """마스터·상장목록이 모두 모르면 코드 그대로 — 네이버를 더는 묻지 않는다."""
+    session = MagicMock()
     with patch("modules.analysis.get_stock_name_from_master", return_value=None), \
          patch.object(krx_daily, "get_listing_map", return_value={}), \
          patch("api.charts._api") as api_mod:
-        api_mod.return_value.session.get.return_value = resp
+        api_mod.return_value.session = session
         from api import charts
-        assert charts.get_stock_name_by_code("999990", False) == "네이버이름"
+        assert charts.get_stock_name_by_code("999990", False) == "999990"
+    session.get.assert_not_called()
 
 
-def test_openapi_listing_skips_fdr_supplement():
+def test_listing_comes_from_openapi():
     oa = {"005930": {"name": "삼성전자", "marcap": 1.0, "market": "KOSPI"}}
-    with patch.object(krx_daily, "_listing_map_from_openapi", return_value=dict(oa)), \
-         patch.object(krx_daily, "_listing_map_from_fdr") as fdr:
+    with patch.object(krx_daily, "_listing_map_from_openapi", return_value=dict(oa)):
         out = krx_daily.get_listing_map(use_cache=False)
-    fdr.assert_not_called()
     assert out == oa

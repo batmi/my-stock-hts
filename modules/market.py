@@ -718,11 +718,11 @@ def _process_index_worker(name, ticker, df_daily, df_intraday):
                     use_fast_info = True
                     is_spot_source = True
             except Exception as e:
-                logger.debug(f"KRX 금(네이버) 조회 실패: {e}")
+                logger.debug(f"KRX 금현물 조회 실패: {e}")
             # 야후는 KRX 금현물을 제공하지 않는다(^KRXGOLD는 자리표시자) → 폴백 없이 실패 표시.
             #  국채 현물이 같은 이유로 early return 하는 것과 같다.
             if not got_gold:
-                return {'status': 'failed', 'name': name, 'src': '네이버'}
+                return {'status': 'failed', 'name': name, 'src': 'KRX'}
 
         if not is_domestic_index and not is_spot_source:
             try:

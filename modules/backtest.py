@@ -158,7 +158,11 @@ def get_backtest_data(code, is_overseas, days):
      ③ yfinance는 O/H/L은 일치하나 종가가 237거래일 중 2~4일 어긋나(최대 1.59%,
         불일치 날짜가 종목 간 동일해 데이터 품질 문제) 손절·익절 트리거 판정을 바꿀 수 있다.
      ④ KIS 분석 경로(_fetch_domestic_daily)는 250봉 상한이라 장기 백테스트에 애초에 못 쓴다.
-     순서: ① Open API/FDR(국내) → ② yfinance → ③ 차트 API(모드별, 250봉 상한 → 절단 경고)
+     순서: 국내 = Open API/FDR **하나**, 해외 = yfinance → 차트 API(모드별, 250봉 상한 → 절단 경고)
+
+    [국내 폴백 제거 · 2026-10-05] 국내가 KRX 공식 일봉을 못 받으면 종전엔 yfinance(③의 종가 오차)
+     → 차트 API(250봉에서 잘린 시계열)로 내려갔다. 오염된 시계열로 검증하느니 그 종목을 빼는 것이
+     낫다 — None 을 돌려주고 일봉 출처 요약(announce_daily_source)에 '실패'로 남긴다.
     """
     warmup_days = days + 400        # 지표 계산용 여유(52주 윈도우 충족 위해 약 1년 워밍업)
 
@@ -176,21 +180,16 @@ def get_backtest_data(code, is_overseas, days):
                 return krx_df
         except Exception as e:
             logger.debug(f"[Backtest] KRX 일봉 조회 실패({code}): {e}")
-        logger.warning(f"[Backtest] {code} KRX 공식 일봉 실패 → yfinance로 폴백합니다")
+        logger.warning(f"[Backtest] {code} KRX 공식 일봉 실패 — 이 종목은 백테스트에서 제외합니다")
+        _DAILY_SOURCE[str(code)] = None
+        return None
 
-    # 2. yfinance 폴백 (해외 종목의 1순위이기도 하다)
+    # 2. yfinance (해외 1순위)
     try:
         start_dt = datetime.now() - timedelta(days=warmup_days)
         start_str = start_dt.strftime("%Y-%m-%d")
         
-        tickers = []
-        if is_overseas:
-            tickers.append(code)
-        else:
-            tickers.append(f"{code}.KS") # 코스피
-            tickers.append(f"{code}.KQ") # 코스닥
-            
-        for t in tickers:
+        for t in [code]:
             if config.SCREEN_DEBUG_LEVEL == "TRACE":
                 config.console.print(f"[dim cyan][TRACE] REQ (yfinance) | Ticker: {t} | Start: {start_str}[/dim cyan]")
             
@@ -212,7 +211,7 @@ def get_backtest_data(code, is_overseas, days):
     except Exception as e:
         pass
 
-    # 3. 차트 API (최종 폴백). 분석용 경로라 250봉(약 1년) 상한이 걸려 있다.
+    # 3. 차트 API (해외 최종 폴백). 분석용 경로라 250봉(약 1년) 상한이 걸려 있다.
     #    요청 기간보다 짧으면 백테스트가 조용히 잘린 채 도는 것이므로 반드시 알린다.
     df = api.get_chart_data(code, is_overseas)
     _DAILY_SOURCE[str(code)] = "차트API" if df is not None and not df.empty else None

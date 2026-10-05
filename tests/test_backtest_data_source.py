@@ -67,21 +67,25 @@ def test_toss_backtest_requests_warmup_period(toss_mode):
     assert krx.call_args.kwargs['lookback_days'] == 1400
 
 
-def test_backtest_falls_back_to_yfinance_when_krx_fails(toss_mode):
-    """KRX 실패 시 yfinance로 폴백한다."""
+def test_krx_failure_excludes_the_stock_instead_of_falling_back(toss_mode):
+    """[2026-10-05] KRX 실패 시 yfinance(종가 오차)·차트 API(250봉 절단)로 내려가지 않는다 —
+    오염된 시계열로 검증하느니 그 종목을 빼고 출처 요약에 '실패'로 남긴다."""
     yf_df = _daily().set_index('date')
     with patch.object(krx_daily, 'get_daily', return_value=None), \
-         patch.object(backtest.api, 'fetch_yfinance_data', return_value=yf_df) as yf:
-        backtest.get_backtest_data('005930', False, 1000)
-    yf.assert_called()
+         patch.object(backtest.api, 'fetch_yfinance_data', return_value=yf_df) as yf, \
+         patch.object(backtest.api, 'get_chart_data') as chart:
+        out = backtest.get_backtest_data('005930', False, 1000)
+    assert out is None
+    yf.assert_not_called()
+    chart.assert_not_called()
+    assert backtest._DAILY_SOURCE.get('005930') is None
 
 
 def test_backtest_survives_krx_exception(toss_mode):
-    yf_df = _daily().set_index('date')
     with patch.object(krx_daily, 'get_daily', side_effect=RuntimeError('boom')), \
-         patch.object(backtest.api, 'fetch_yfinance_data', return_value=yf_df) as yf:
-        backtest.get_backtest_data('005930', False, 1000)
-    yf.assert_called()
+         patch.object(backtest.api, 'fetch_yfinance_data') as yf:
+        assert backtest.get_backtest_data('005930', False, 1000) is None
+    yf.assert_not_called()
 
 
 # ---------------------------------------------------------
@@ -211,22 +215,20 @@ def test_atr_stop_satisfies_the_guard(trader):
 def test_warns_when_fallback_data_is_truncated(toss_mode):
     """차트 API는 250봉 상한이라 다년 요청이 조용히 1년으로 잘린다 → 반드시 알린다."""
     short = _daily(250)
-    with patch.object(krx_daily, 'get_daily', return_value=None), \
-         patch.object(backtest.api, 'fetch_yfinance_data', return_value=pd.DataFrame()), \
+    with patch.object(backtest.api, 'fetch_yfinance_data', return_value=pd.DataFrame()), \
          patch.object(backtest.api, 'get_chart_data', return_value=short), \
          patch.object(config.console, 'print') as p:
-        backtest.get_backtest_data('005930', False, 2000)
+        backtest.get_backtest_data('AAPL', True, 2000)       # 차트 API 폴백은 이제 해외만 탄다
     out = ' '.join(str(c.args[0]) for c in p.call_args_list if c.args)
     assert '250봉 상한' in out and 'yellow' in out
 
 
 def test_no_warning_when_coverage_is_sufficient(toss_mode):
     full = _daily(300)          # 약 430일치(영업일 300)
-    with patch.object(krx_daily, 'get_daily', return_value=None), \
-         patch.object(backtest.api, 'fetch_yfinance_data', return_value=pd.DataFrame()), \
+    with patch.object(backtest.api, 'fetch_yfinance_data', return_value=pd.DataFrame()), \
          patch.object(backtest.api, 'get_chart_data', return_value=full), \
          patch.object(config.console, 'print') as p:
-        backtest.get_backtest_data('005930', False, 100)
+        backtest.get_backtest_data('AAPL', True, 100)
     assert not [c for c in p.call_args_list if c.args and '250봉' in str(c.args[0])]
 
 

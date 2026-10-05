@@ -667,62 +667,23 @@ def test_name_map_never_raises_on_bad_input(bad):
 
 
 # ---------------------------------------------------------
-# 상장 목록 — KRX Open API(1순위) / FDR(폴백)
-#  FDR도 원천은 KRX지만 제3자 GitHub CSV 캐시를 거친다. 공식 경로가 열려 있으면 그쪽을 먼저 쓴다.
-#  Open API 종목기본정보는 KONEX 까지 덮어 보충이 필요 없다(2026-10-04).
+# 상장 목록 — KRX Open API 종목기본정보 하나(KONEX 까지 덮는다)
 # ---------------------------------------------------------
 _KRX_LISTING = {'005930': {'name': '삼성전자', 'marcap': 1.5e15}}
-_FDR_LISTING = {'005930': {'name': '삼성전자(FDR)', 'marcap': 9.9e9},
-                '0070X0': {'name': '에스테크엠', 'marcap': 1.51e10}}      # KONEX
 
 
-def test_상장목록은_OpenAPI가_1순위다():
-    with patch.object(krx_daily, '_listing_map_from_openapi', return_value=dict(_KRX_LISTING)), \
-         patch.object(krx_daily, '_listing_map_from_fdr', return_value=dict(_FDR_LISTING)) as fdr:
+def test_상장목록은_OpenAPI에서_온다():
+    with patch.object(krx_daily, '_listing_map_from_openapi', return_value=dict(_KRX_LISTING)):
         m = krx_daily.get_listing_map(use_cache=False)
-    assert m == _KRX_LISTING                          # FDR 값이 섞이지 않는다
-    fdr.assert_not_called()
+    assert m == _KRX_LISTING
 
 
-def test_OpenAPI_실패시_FDR로_폴백한다():
-    with patch.object(krx_daily, '_listing_map_from_openapi', return_value=None), \
-         patch.object(krx_daily, '_listing_map_from_fdr', return_value=dict(_FDR_LISTING)):
-        m = krx_daily.get_listing_map(use_cache=False)
-    assert m['005930']['name'] == '삼성전자(FDR)'
-
-
-def test_둘다_실패하면_None이다():
-    """'검증 불가'와 '없는 종목'을 구분해야 한다 — 호출부가 검증을 건너뛴다."""
+def test_OpenAPI_실패하면_None이다():
+    """'검증 불가'와 '없는 종목'을 구분해야 한다 — 호출부가 검증을 건너뛴다.
+    (FDR CSV 폴백은 2026-10-05 제거 — 저장소 갱신이 09-17 에 멈췄다)"""
     krx_daily._LISTING_FAIL_TS[0] = 0.0
-    with patch.object(krx_daily, '_listing_map_from_openapi', return_value=None), \
-         patch.object(krx_daily, '_listing_map_from_fdr', return_value=None):
+    with patch.object(krx_daily, '_listing_map_from_openapi', return_value=None):
         assert krx_daily.get_listing_map(use_cache=False) is None
-
-
-# ---------------------------------------------------------
-# 상장 목록 **파서** — 위 테스트들은 소스를 목으로 갈아끼워 '고르는 규칙'만 봤다.
-#  라이브러리가 컬럼 이름이나 인덱스를 바꾸면 조용히 None 이 되고 목록 검증이 통째로 꺼진다.
-# ---------------------------------------------------------
-def _fdr_listing_frame():
-    return pd.DataFrame({'Code': ['005930', 'AAPL'], 'Name': ['삼성전자', '애플'],
-                         'Marcap': [1.5e15, 1.0]})
-
-
-def test_FDR_상장목록_파서는_국내코드만_남긴다():
-    with patch.object(krx_daily, 'fdr_listing', return_value=_fdr_listing_frame()):
-        out = krx_daily._listing_map_from_fdr()
-    assert set(out) == {'005930'} and out['005930']['name'] == '삼성전자'
-
-
-def test_FDR_상장목록은_Code컬럼이_없으면_None():
-    """컬럼 규격이 바뀌면 '빈 목록'이 아니라 '조회 실패'여야 한다 — 호출부가 검증을 건너뛴다."""
-    with patch.object(krx_daily, 'fdr_listing', return_value=pd.DataFrame({'종목코드': ['005930']})):
-        assert krx_daily._listing_map_from_fdr() is None
-
-
-def test_FDR_상장목록은_예외를_None으로_삼킨다():
-    with patch.object(krx_daily, 'fdr_listing', side_effect=RuntimeError("network")):
-        assert krx_daily._listing_map_from_fdr() is None
 
 
 # ---------------------------------------------------------
@@ -746,11 +707,3 @@ def test_목록조회_불가하면_None():
 
 def test_해외코드는_네트워크_없이_빈문자열():
     assert krx_daily.get_ticker_name('AAPL') == ''
-
-
-def test_FDR_상장목록은_KOSDAQ_GLOBAL을_KOSDAQ으로_판정한다():
-    """[2026-10-04] FDR 의 'KOSDAQ GLOBAL'(코스닥 우량주 세그먼트)이 시장 판정에서 '모름'이 되면 안 된다."""
-    df = pd.DataFrame({'Code': ['196170'], 'Name': ['알테오젠'], 'Market': ['KOSDAQ GLOBAL'], 'Marcap': [1.0]})
-    with patch.object(krx_daily, 'fdr_listing', return_value=df):
-        out = krx_daily._listing_map_from_fdr()
-    assert out['196170']['market'] == 'KOSDAQ'

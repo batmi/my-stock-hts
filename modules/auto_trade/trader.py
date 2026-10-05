@@ -136,16 +136,22 @@ def candidate_priority_key(c):
             -(c.get('w52_pos') or 0.0), -(c.get('vol_strength') or 0.0))
 
 
-def index_source_note(stat):
-    """지수 상태에 붙일 출처 꼬리표. 최후 폴백일 때만 표시한다.
+def contaminated_chart_reason(code):
+    """이 종목의 지표가 **NXT 가 섞인 토스 캔들**로 계산됐으면 그 사유, 아니면 None.
 
-    지수는 KRX 확정 봉 위에 KIS·토스·tvDatafeed·yfinance 중 하나를 얹어 만든다
-    (analysis._fetch_domestic_index_data). 평상시 출처까지 화면에 늘어놓으면 읽는 데
-    방해가 되지만, **최후 폴백(yfinance)** 은 다르다 — 최신 거래일 종가를 결측으로 주는
-    일이 잦아 시장 필터가 어긋났을 때 가장 먼저 의심할 자리다. 그때만 밝힌다.
+    [진입만 막는다 · 2026-10-05] 토스 모드에서 KRX 공식 일봉(Open API·네이버)을 못 받으면
+     api.toss 가 토스 캔들로 대신하고 그 종목을 get_krx_fallback() 에 올린다. 그 일봉은 NXT
+     장전·장후 체결이 섞여 ATR 이 6~15% 부풀고 ADX 가 최대 9.45 어긋난다 — ATR 은 손절폭 →
+     수량 → 포트폴리오 리스크로 전파된다. 그래서 **신규 매수·피라미딩은 하지 않는다.**
+     청산 경로는 막지 않는다: 보유 중인 종목의 손절·트레일링이 장애 때문에 멈추는 것이
+     오염된 ATR 로 계산하는 것보다 위험하다.
     """
-    src = (stat or {}).get('source') or "" if isinstance(stat, dict) else ""
-    return " [dim](yfinance 폴백)[/]" if "YFINANCE" in str(src).upper() else ""
+    if not getattr(config.session, 'is_toss', False):
+        return None
+    try:
+        return api.get_krx_fallback().get(str(code))
+    except Exception:       # noqa: BLE001 - 조회 실패가 매수를 여는 쪽으로 가지 않게 한다
+        return "폴백 상태 확인 실패"
 
 
 class AutoTrader:
@@ -2576,7 +2582,7 @@ class AutoTrader:
                 current = stat.get('current', 0)
                 trend_icon = "(상승)" if is_healthy else "(하락)"
                 color = "red" if is_healthy else "blue"
-                return f"[{color}]{current:,.0f} {trend_icon}[/]{index_source_note(stat)}"
+                return f"[{color}]{current:,.0f} {trend_icon}[/]"
             
             table.add_row("지수 추세", f"KOSPI: {get_stat_msg(kospi_stat)} / KOSDAQ: {get_stat_msg(kosdaq_stat)}")
             
@@ -6049,6 +6055,13 @@ class AutoTrader:
             if getattr(self, 'buy_halted', False):
                 return
 
+            # [오염 일봉 증액 금지] 신규 매수와 같은 가드([[seed-spend-guard-parity]]).
+            _contam = contaminated_chart_reason(code)
+            if _contam:
+                self.log(f"피라미딩 보류: {name} - KRX 공식 일봉 미확보({_contam}), "
+                         f"토스 캔들(NXT 포함) 지표로는 증액하지 않습니다.")
+                return
+
             # [안전장치] 미체결 주문 현황을 모르면 증액도 보류한다 — 신규 매수와 같은 이유다
             #  (_check_buy_conditions의 pending_restore_ok 게이트). 재기동 직후 복구 조회가
             #  실패하면 is_pending 맵이 비어 있어 '미체결 없음'과 '모름'이 구분되지 않는다.
@@ -7102,6 +7115,13 @@ class AutoTrader:
                 self.log(f"매수 보류: {cand.get('name', '')}({cand.get('code', '')}) - "
                          f"실시간 현재가 조회 실패. 직전 확정 종가로는 주문가·손절폭·수량이 "
                          f"함께 어긋나므로 진입하지 않습니다(다음 주기 재평가).")
+                continue
+
+            # [오염 일봉 진입 금지] 토스 캔들(NXT 혼입)로 계산된 지표로는 사지 않는다.
+            _contam = contaminated_chart_reason(cand.get('code', ''))
+            if _contam:
+                self.log(f"매수 보류: {cand.get('name', '')}({cand.get('code', '')}) - KRX 공식 일봉 "
+                         f"미확보({_contam}), 토스 캔들(NXT 포함) 지표로는 진입하지 않습니다.")
                 continue
 
             # [수정] 최소 주문 가능 금액 하향 조정

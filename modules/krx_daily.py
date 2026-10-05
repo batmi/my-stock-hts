@@ -364,9 +364,9 @@ def clear_cache():
 #  - 용도: AI가 출력한 '종목명(6자리코드)' 표기의 존재/일치 검증(할루시네이션 차단).
 #    LLM은 종목코드를 지어내거나 이름-코드를 뒤바꾸는 실패 모드가 흔하고,
 #    프롬프트 지시만으로는 막히지 않으므로 출력 후 대조가 유일한 방어선이다.
-#  - KRX Open API 종목기본정보(1순위) → FDR 상장목록 CSV(폴백). 전 종목(약 2,900행)을 한 번에 받고
-#    DataFrame은 즉시 버리고 {코드: (이름, 시총)} dict만 남겨 라즈베리파이 메모리를 아낀다.
-#  - 둘 다 실패하면 None을 반환해 호출부가 '검증 불가'로 처리하도록 한다(없는 종목으로 오판하면 안 된다).
+#  - KRX Open API 종목기본정보로 전 종목(약 2,900행)을 한 번에 받고 {코드: (이름, 시총, 시장)} dict만
+#    남겨 라즈베리파이 메모리를 아낀다.
+#  - 실패하면 None을 반환해 호출부가 '검증 불가'로 처리하도록 한다(없는 종목으로 오판하면 안 된다).
 # ─────────────────────────────────────────────────────────────────────────────
 _LISTING = {'map': None, 'ts': 0.0}
 _LISTING_LOCK = threading.RLock()
@@ -390,51 +390,16 @@ def _listing_map_from_openapi():
             for code, v in raw.items() if is_domestic_code(code)} or None
 
 
-def _listing_map_from_fdr():
-    """FDR 상장 목록(캐시 저장소 CSV) {코드: {'name','marcap'}}. 실패 시 None.
-
-    [2026-09-17] fdr.StockListing 직접 호출 대신 fdr_listing(캐시 저장소의 최근 날짜로 견딤)을 쓴다 —
-     data.krx.co.kr 목록 엔드포인트가 죽어 있는 동안(09-08 404 · 09-17 차단) 여기서 None 이 나면
-     시장 판정(get_market)이 통째로 '모름'이 된다.
-    """
-    try:
-        df = fdr_listing('KRX')
-    except Exception as e:      # noqa: BLE001 - 네트워크/파싱 실패 모두 '검증 불가'
-        logger.debug(f"[KRX] 상장목록 조회 실패: {e}")
-        return None
-
-    if df is None or getattr(df, 'empty', True) or 'Code' not in df.columns:
-        return None
-
-    result = {}
-    has_marcap = 'Marcap' in df.columns
-    has_name = 'Name' in df.columns
-    has_market = 'Market' in df.columns
-    for row in df.itertuples(index=False):
-        code = str(getattr(row, 'Code', '') or '').strip()
-        if not is_domestic_code(code):
-            continue
-        try:
-            marcap = float(getattr(row, 'Marcap', 0) or 0) if has_marcap else 0.0
-        except (TypeError, ValueError):
-            marcap = 0.0
-        result[code] = {
-            'name': str(getattr(row, 'Name', '') or '').strip() if has_name else '',
-            'marcap': marcap,
-            # FDR 은 코스닥 글로벌 세그먼트를 'KOSDAQ GLOBAL' 로 표기한다 — 시장 판정(get_market)이
-            #  모르는 값이라 알테오젠·에코프로비엠 같은 코스닥 우량주가 '판정 불가'가 됐다(2026-10-04).
-            'market': (str(getattr(row, 'Market', '') or '').strip().upper()
-                       .replace('KOSDAQ GLOBAL', 'KOSDAQ')) if has_market else '',
-        }
-    del df
-    return result or None
-
-
 def get_listing_map(use_cache=True):
     """{'005930': {'name': '삼성전자', 'marcap': 1458646512696000}, ...} 또는 None.
 
-    **KRX Open API(1순위) / FDR(폴백)**. FDR 도 원천은 KRX 지만 제3자 GitHub CSV 캐시를
-    거치므로, 공식 경로가 열려 있으면 그쪽을 먼저 쓴다.
+    **KRX Open API 종목기본정보 하나**(코넥스까지 덮는다).
+
+    [FDR 폴백 제거 · 2026-10-05] 종전엔 Open API 가 실패하면 FDR 상장목록 CSV(제3자 GitHub 캐시)로
+     대신했다. 그 저장소는 2026-09-17 이후 갱신이 멈춰 폴백으로서도 날마다 낡아 가고, 'KOSDAQ GLOBAL'
+     표기 같은 어휘 차이를 따로 맞춰야 했다. 시장 판정(analysis.get_market_type)은 KIS 마스터가
+     1순위라 이 목록이 없어도 이어진다. (탐색 메뉴의 업종·폐지 목록은 대체 원천이 없어 fdr_listing 을
+     계속 쓴다 — manage/discover.py)
 
     None은 '조회 실패'를 뜻한다 — 상장 종목이 없다는 뜻이 아니므로 호출부는
     이 경우 검증을 건너뛰어야 한다.
@@ -448,8 +413,7 @@ def get_listing_map(use_cache=True):
             if now - _LISTING_FAIL_TS[0] < _FAIL_COOLDOWN_SEC:
                 return None
 
-    # Open API 목록은 코넥스까지 덮는다(종목기본정보 3시장) — FDR 보충이 필요 없다(2026-10-04).
-    result = _listing_map_from_openapi() or _listing_map_from_fdr()
+    result = _listing_map_from_openapi()
 
     if not result:
         _LISTING_FAIL_TS[0] = now

@@ -56,8 +56,9 @@ yfinance>=0.2.40
 #  [2026-10-05] pykrx 제거 — data.krx.co.kr 웹 스크래핑(약관 위반으로 IP 차단)이고, 게이트가 꺼져
 #   있어도 **import 만으로** 환경변수 KRX_ID/KRX_PW 계정으로 그 사이트에 로그인했다.
 #   설치돼 있던 기계는 `pip uninstall pykrx` 로 지워도 된다(남아 있어도 이제 import 하지 않는다).
-# beautifulsoup4: 테마·뉴스 HTML 파싱(modules/theme_analysis.py).
-beautifulsoup4>=4.11
+#  [2026-10-05] beautifulsoup4 제거 — 앱 코드 어디서도 import 하지 않았다(테마·뉴스는 네이버 JSON 과
+#   구글 뉴스 RSS 를 ElementTree 로 읽는다). 유일한 사용처였던 tools/check_kospi200.py(미참조·네이버
+#   HTML 스크래핑)도 함께 지웠다.
 # tradingview-screener: 해외 종목 스크리닝·시세 보강.
 tradingview-screener>=2.5
 # tvdatafeed: 토스 모드 국내지수(코스피200·코스닥150)와 60분봉, 미국채 4개 테너.
@@ -96,7 +97,7 @@ gnureadline>=8.0; sys_platform == "darwin"
 #  하한만 걸어 두었으므로 설치 결과가 이보다 높을 수 있다. 문제가 생기면
 #  이 조합으로 되돌려 재현하면 된다.
 #   rich 15.0.0 · pandas 2.3.3 · numpy 2.4.6 · yfinance 1.4.1 · requests 2.34.2
-#   urllib3 2.7.0 · beautifulsoup4 4.15.0 · matplotlib 3.11.0 · openpyxl 3.1.5
+#   urllib3 2.7.0 · matplotlib 3.11.0 · openpyxl 3.1.5
 #   python-dotenv 1.2.2 · pydantic 2.13.4 · holidays 0.103
 #   tradingview-screener 3.2.0 · tvdatafeed 2.1.0
 #   google-genai 2.19.0 · websockets 16.0 · cryptography 49.0.0
