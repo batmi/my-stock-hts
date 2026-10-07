@@ -1,15 +1,13 @@
-"""관심 종목 탐색(7-4)이 오래된 업종 목록(KRX-DESC)으로도 동작하고, 그 사실을 밝히는가.
+"""관심 종목 탐색(7-4) — 상장목록은 KRX Open API, 업종은 DART(modules/industry.py).
 
-[왜 · 2026-10-03] 캐시 저장소의 업종 파일이 2026-09-17 에서 멈춰, 기본 10일 창으로는 못 찾아
-'KRX 상장목록·업종 조회 실패' 로 메뉴가 통째로 죽었다. 업종 분류는 거의 안 바뀌므로 오래된 파일을
-쓰되, 업종을 모르는 종목이 방어주·지주회사 규칙을 조용히 통과하지 않게 표시한다.
+[왜 · 2026-10-07] 업종 원천이던 KIND 상장법인목록(FDR 캐시 KRX-DESC)이 2026-09-17 에서 멈췄다.
+ 업종을 모르는 종목이 방어주·지주회사 규칙을 조용히 통과하지 않게 '업종 미상'과 그 수를 밝히고,
+ 하나도 모르면 메뉴를 실패로 알린다.
 """
-from datetime import date
-
 import pandas as pd
 
 import config
-from modules import krx_daily
+from modules import industry, krx_daily
 from modules.manage import discover
 
 
@@ -18,13 +16,6 @@ def _krx():
         {"Code": "000010", "Name": "가전자", "Market": "KOSPI", "Marcap": 9e12, "Dept": ""},
         {"Code": "000020", "Name": "나통신", "Market": "KOSPI", "Marcap": 8e12, "Dept": ""},
         {"Code": "000030", "Name": "다신규", "Market": "KOSDAQ", "Marcap": 7e12, "Dept": ""},
-    ])
-
-
-def _desc():
-    return pd.DataFrame([
-        {"Code": "000010", "Industry": "반도체 제조업", "Products": "메모리"},
-        {"Code": "000020", "Industry": "전기 통신업", "Products": "통신"},
     ])
 
 
@@ -38,50 +29,71 @@ def _openapi_listing(monkeypatch, frame=None):
                     "dept": r["Dept"], "kind": "보통주"} for _, r in frame.iterrows()})
 
 
-def test_old_industry_file_is_used_and_disclosed(monkeypatch):
-    _openapi_listing(monkeypatch)
+def _industry(monkeypatch, known, why=None):
+    asked = []
 
-    def fake_listing(kind, lookback=None, on=None):
-        return _desc() if kind == "KRX-DESC" else None
+    def fake(codes, progress=None, today=None):
+        asked.append(list(codes))
+        return {c: known[c] for c in codes if c in known}, why
 
-    monkeypatch.setattr(krx_daily, "fdr_listing", fake_listing)
-    monkeypatch.setattr(krx_daily, "last_listing_date",
-                        lambda kind: "2026-09-17" if kind == "KRX-DESC" else None)
+    monkeypatch.setattr(industry, "lookup", fake)
+    return asked
+
+
+def _quiet(monkeypatch):
     monkeypatch.setattr(config.session, "stock_data", {"stocks_kr": [], "etfs_kr": []}, raising=False)
     printed = []
     monkeypatch.setattr(config.console, "print", lambda *a, **k: printed.append(" ".join(map(str, a))))
+    return printed
+
+
+def test_dart_industry_drives_rules_and_unknown_is_disclosed(monkeypatch):
+    _openapi_listing(monkeypatch)
+    _industry(monkeypatch, {"000010": "264", "000020": "61220"}, why="1건 조회 실패")
+    printed = _quiet(monkeypatch)
 
     cands, steps, defs, n0, n_kept = discover._fetch_candidates(10, 500, True, seed=1)
 
     assert n0 == 3
     assert {c["code"] for c in cands} == {"000010", "000030"}      # 통신은 방어주로 제외
-    assert next(c for c in cands if c["code"] == "000030")["industry"] == "업종 미상"
-    assert any("업종 미상" in p and "2026-09-17" in p for p in printed), printed
+    by = {c["code"]: c for c in cands}
+    assert by["000010"]["industry"] == "통신 및 방송 장비 제조업"
+    assert by["000030"]["industry"] == "업종 미상"
+    assert defs == [("나통신", "통신")]
+    assert any("업종 미상" in p and "1종목" in p and "1건 조회 실패" in p for p in printed), printed
 
 
-def test_staleness_note():
-    today = date(2026, 10, 3)
-    assert discover._desc_staleness_note("2026-10-01", 0, today) is None
-    assert discover._desc_staleness_note(None, 0, today) is None              # 정상 경로(날짜 모름·최신)
-    assert "16일 전" in discover._desc_staleness_note("2026-09-17", 0, today)
-    assert "3종목" in discover._desc_staleness_note("2026-10-01", 3, today)
-
-
-def test_missing_industry_file_fails_loudly(monkeypatch):
+def test_known_empty_industry_is_also_unknown_to_rules(monkeypatch):
+    """DART 가 업종 칸을 비운 종목('')도 규칙이 판단할 수 없다 — '업종 미상'으로 밝힌다."""
     _openapi_listing(monkeypatch)
-    monkeypatch.setattr(krx_daily, "fdr_listing", lambda kind, lookback=None, on=None: None)
-    monkeypatch.setattr(krx_daily, "last_listing_date", lambda kind: None)
-    monkeypatch.setattr(config.session, "stock_data", {"stocks_kr": [], "etfs_kr": []}, raising=False)
+    _industry(monkeypatch, {"000010": "264", "000020": "", "000030": "261"})
+    printed = _quiet(monkeypatch)
+    cands, *_ = discover._fetch_candidates(10, 500, True, seed=1)
+    assert {c["code"]: c["industry"] for c in cands}["000020"] == "업종 미상"
+    assert any("1종목" in p for p in printed)
+
+
+def test_no_industry_at_all_fails_loudly(monkeypatch):
+    _openapi_listing(monkeypatch)
+    _industry(monkeypatch, {}, why="DART 호출 중단 중(연결이 3번 연달아 끊김)")
+    _quiet(monkeypatch)
     try:
         discover._fetch_candidates(10, 500, True)
     except RuntimeError as e:
-        assert "업종 목록" in str(e)
+        assert "DART 업종 조회 실패" in str(e) and "연달아" in str(e)
     else:
-        raise AssertionError("업종 목록이 없으면 조용히 빈 규칙으로 진행하면 안 된다")
+        raise AssertionError("업종을 하나도 모르면 조용히 빈 규칙으로 진행하면 안 된다")
+
+
+def test_industry_note():
+    assert discover._industry_note(0, None) is None
+    assert discover._industry_note(0, "중단") is None
+    assert "3종목" in discover._industry_note(3, None)
+    assert "다시 실행하면" in discover._industry_note(3, "중단")
 
 
 def test_frozen_listings_look_back_far_enough(monkeypatch):
-    """업종·폐지 목록은 기본 10일보다 넓게 거슬러 찾는다 — 캐시 저장소가 09-17 에서 멈췄다."""
+    """(krx_daily) 업종·폐지 목록은 기본 10일보다 넓게 거슬러 찾는다 — 감사 도구가 아직 쓴다."""
     tried = []
 
     def fake_get(url):
@@ -96,7 +108,7 @@ def test_frozen_listings_look_back_far_enough(monkeypatch):
     assert len(tried) == 10                  # 매일 갱신되는 목록은 종전 창 그대로
 
 
-# ── 상장목록은 KRX Open API 가 1순위 (2026-10-04) ─────────────────────
+# ── 상장목록은 KRX Open API (2026-10-04) ───────────────────────────────────────────
 def _oa_listing():
     return {
         "000010": {"name": "가전자", "market": "KOSPI", "marcap": 9e12, "dept": "", "kind": "보통주"},
@@ -108,26 +120,20 @@ def _oa_listing():
     }
 
 
-def test_listing_comes_from_krx_openapi_not_fdr(monkeypatch):
+def test_listing_from_openapi_and_industry_only_for_survivors(monkeypatch):
     from modules import krx_openapi
     monkeypatch.setattr(krx_openapi, "is_configured", lambda: True)
     monkeypatch.setattr(krx_openapi, "listing_map", lambda *a, **k: _oa_listing())
-    asked = []
-
-    def fake_fdr(kind, lookback=None, on=None):
-        asked.append(kind)
-        return _desc() if kind == "KRX-DESC" else None
-
-    monkeypatch.setattr(krx_daily, "fdr_listing", fake_fdr)
-    monkeypatch.setattr(krx_daily, "last_listing_date", lambda kind: None)
-    monkeypatch.setattr(config.session, "stock_data", {"stocks_kr": [], "etfs_kr": []}, raising=False)
-    monkeypatch.setattr(config.console, "print", lambda *a, **k: None)
+    asked = _industry(monkeypatch, {"000010": "264", "0080G0": "261"})
+    monkeypatch.setattr(krx_daily, "fdr_listing",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("FDR 에 묻지 않는다")))
+    _quiet(monkeypatch)
 
     cands, steps, _defs, n0, _n = discover._fetch_candidates(10, 500, True, seed=1)
 
-    assert asked == ["KRX-DESC"], "상장목록은 FDR 에 묻지 않는다(업종만 FDR)"
     assert n0 == 5                                         # 시총 0(폐지 잔여 행)은 목록에서 빠진다
     assert {c["code"] for c in cands} == {"000010", "0080G0"}
+    assert asked == [["000010", "0080G0"]]                 # DART 는 앞 규칙을 통과한 종목만 묻는다
     s = dict(steps)
     assert s["관리종목·투자주의환기"] == 1
     assert s["우선주·스팩·리츠"] == 2                       # 구형·신형 우선주 모두 '주식 종류'로 걸린다
@@ -137,15 +143,12 @@ def test_listing_does_not_fall_back_to_frozen_fdr(monkeypatch):
     """[2026-10-05] 인증키가 없으면 FDR(09-17 에서 멈춘 캐시) 시총 순위로 후보를 고르지 않는다 — 실패로 알린다."""
     from modules import krx_openapi
     monkeypatch.setattr(krx_openapi, "is_configured", lambda: False)
-    asked = []
-    monkeypatch.setattr(krx_daily, "fdr_listing",
-                        lambda kind, lookback=None, on=None: asked.append(kind) or _desc())
-    monkeypatch.setattr(krx_daily, "last_listing_date", lambda kind: None)
-    monkeypatch.setattr(config.session, "stock_data", {"stocks_kr": [], "etfs_kr": []}, raising=False)
+    asked = _industry(monkeypatch, {})
+    _quiet(monkeypatch)
     try:
         discover._fetch_candidates(10, 500, True)
     except RuntimeError as e:
         assert "KRX_OPENAPI_KEY" in str(e)
     else:
         raise AssertionError("상장목록이 없는데 후보를 만들었다")
-    assert "KRX" not in asked, "상장목록을 FDR 에 물었다"
+    assert asked == []

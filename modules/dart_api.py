@@ -51,6 +51,84 @@ class DartQueryError(Exception):
     """
 
 
+class DartBlockedError(DartQueryError):
+    """DART 호출을 **보내지 않고** 막았다 — 접속 차단 의심·한도 초과로 차단기가 열려 있다.
+
+    한 종목씩 도는 호출부는 이 예외를 보면 남은 종목도 같은 결과이므로 바로 멈추면 된다.
+    """
+
+
+# ── DART 호출 관문: 속도 제한 + 차단기 ─────────────────────────────────────────────
+#  [왜 · 2026-10-07] 업종 조사에서 company.json 을 상장사 2,600곳에 4스레드로 쉬지 않고 불렀더니
+#   몇 분 만에 opendart.fss.or.kr 가 이 IP 의 TCP 연결 자체를 끊었다(ConnectionReset, 웹 dart.fss.or.kr
+#   은 정상). 일일 한도(20,000건, 응답 020)와 별개로 **순간 빈도**로 IP 를 막는다. 막힌 동안 같은
+#   공유기 뒤의 모든 DART 기능(6-5~6-8, 텔레그램 공시 알림)이 함께 죽었다.
+#   그래서 DART 로 나가는 HTTP 는 전부 _dart_get 하나를 지난다:
+#    · 프로세스 전체(모든 스레드 합산)에서 호출 사이 최소 간격 DART_MIN_INTERVAL_SEC 를 지킨다.
+#    · 연결이 연달아 끊기면(차단 신호) DART_BLOCK_COOLDOWN_SEC 동안 아예 보내지 않는다 — 막힌 상태에서
+#      두드리면 차단이 길어질 수 있다. 020(한도 초과)은 자정까지 보내지 않는다.
+DART_MIN_INTERVAL_SEC = 0.25          # 분당 최대 240건 — 차단을 부른 속도(4스레드 무간격)의 수 분의 1
+DART_BLOCK_AFTER_CONN_ERRORS = 3      # 연결 오류가 이만큼 연달아 나면 차단으로 본다
+DART_BLOCK_COOLDOWN_SEC = 30 * 60
+
+_dart_gate_lock = threading.Lock()
+_dart_next_slot = 0.0                 # 다음 호출이 나가도 되는 time.monotonic()
+_dart_conn_errors = 0                 # 연속 연결 오류 수
+_dart_blocked_until = 0.0             # time.time() — 이 시각 전에는 보내지 않는다
+_dart_blocked_reason = ""
+
+
+def dart_blocked_reason():
+    """차단기가 열려 있으면 사유 문자열, 아니면 None."""
+    with _dart_gate_lock:
+        if time.time() < _dart_blocked_until:
+            left = int((_dart_blocked_until - time.time()) // 60) + 1
+            return f"{_dart_blocked_reason} — 약 {left}분 뒤 다시 시도"
+        return None
+
+
+def _open_breaker(until, reason):
+    """(잠금 보유 상태에서) 차단기를 연다."""
+    global _dart_blocked_until, _dart_blocked_reason
+    _dart_blocked_until, _dart_blocked_reason = until, reason
+    logger.warning(f"[DART] 호출 중단: {reason} (재개 {datetime.fromtimestamp(until):%m-%d %H:%M})")
+
+
+def _next_midnight_ts():
+    now = datetime.now()
+    return (now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)).timestamp()
+
+
+def _dart_get(path, params, timeout):
+    """DART 로 나가는 유일한 HTTP 자리. 간격을 지키고, 차단기가 열려 있으면 보내지 않는다."""
+    global _dart_next_slot, _dart_conn_errors
+    reason = dart_blocked_reason()
+    if reason:
+        raise DartBlockedError(f"DART 호출 중단 중({reason})")
+    with _dart_gate_lock:                      # 자리만 예약하고 잠금 밖에서 기다린다
+        now = time.monotonic()
+        slot = max(now, _dart_next_slot)
+        _dart_next_slot = slot + DART_MIN_INTERVAL_SEC
+    if slot > now:
+        time.sleep(slot - now)
+        reason = dart_blocked_reason()      # 기다리는 사이 차단기가 열렸으면 줄 선 호출도 보내지 않는다
+        if reason:
+            raise DartBlockedError(f"DART 호출 중단 중({reason})")
+    try:
+        res = requests.get(f"{DART_BASE_URL}/{path}", params=params, timeout=timeout)
+    except requests.exceptions.ConnectionError:
+        with _dart_gate_lock:
+            _dart_conn_errors += 1
+            if _dart_conn_errors >= DART_BLOCK_AFTER_CONN_ERRORS:
+                _dart_conn_errors = 0
+                _open_breaker(time.time() + DART_BLOCK_COOLDOWN_SEC,
+                              f"연결이 {DART_BLOCK_AFTER_CONN_ERRORS}번 연달아 끊김(IP 차단 의심)")
+        raise
+    with _dart_gate_lock:
+        _dart_conn_errors = 0
+    return res
+
+
 def call_dart(endpoint, params, timeout=10):
     """OpenDART OpenAPI 공통 호출 래퍼.
 
@@ -58,14 +136,17 @@ def call_dart(endpoint, params, timeout=10):
     실패(한도초과·오류·네트워크·JSON 파손)는 DartQueryError 를 던진다 — 호출부가
     '없음'과 구분할 수 있어야 하기 때문이다(DartQueryError 주석 참조).
     API 키 미설정도 조회를 못 한 것이므로 None 이 아니라 예외다.
+    차단기가 열려 있으면 보내지 않고 DartBlockedError(DartQueryError 의 하위)를 던진다.
     """
     if not config.DART_API_KEY:
         raise DartQueryError("DART API 키가 설정되지 않았습니다(환경변수 DART_API_KEY)")
     try:
         p = dict(params)
         p["crtfc_key"] = config.DART_API_KEY
-        res = requests.get(f"{DART_BASE_URL}/{endpoint}", params=p, timeout=timeout)
+        res = _dart_get(endpoint, p, timeout)
         data = res.json()
+    except DartBlockedError:
+        raise
     except Exception as e:
         logger.error(f"[DART] {endpoint} 호출 오류: {e}")
         raise DartQueryError(f"{endpoint}: {e}") from e
@@ -74,6 +155,9 @@ def call_dart(endpoint, params, timeout=10):
         return data.get("list", data)
     if status == "013":  # 조회된 데이터 없음 (정상 케이스)
         return None
+    if status == "020":  # 요청 제한 초과 — 오늘은 더 보내 봐야 같은 답이다
+        with _dart_gate_lock:
+            _open_breaker(_next_midnight_ts(), "DART 요청 한도 초과(020)")
     logger.warning(f"[DART] {endpoint} 응답 코드 {status}: {data.get('message')}")
     raise DartQueryError(f"{endpoint}: 응답 코드 {status} ({data.get('message')})")
 
@@ -126,8 +210,7 @@ def _load_dart_corp_map_locked(force_refresh):
     try:
         import zipfile, io
         import xml.etree.ElementTree as ET
-        res = requests.get(f"{DART_BASE_URL}/corpCode.xml",
-                           params={"crtfc_key": config.DART_API_KEY}, timeout=20)
+        res = _dart_get("corpCode.xml", {"crtfc_key": config.DART_API_KEY}, timeout=20)
 
         # [메모리 최적화] 전체 XML(수십 MB)을 트리로 올리지 않고 스트리밍 파싱(iterparse)으로
         # <list> 요소를 하나씩 처리 후 즉시 비워(clear) 메모리 피크를 최소화한다. (저사양 보호)
@@ -597,9 +680,8 @@ def get_dart_document_text(rcept_no):
         import io
         import re
         import zipfile
-        res = requests.get(f"{DART_BASE_URL}/document.xml",
-                           params={"crtfc_key": config.DART_API_KEY, "rcept_no": rcept_no},
-                           timeout=15)
+        res = _dart_get("document.xml", {"crtfc_key": config.DART_API_KEY, "rcept_no": rcept_no},
+                        timeout=15)
         if not res.content.startswith(b"PK"):  # ZIP이 아니면 오류 JSON
             return None
         with zipfile.ZipFile(io.BytesIO(res.content)) as zf:

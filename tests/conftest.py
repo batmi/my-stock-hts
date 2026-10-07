@@ -367,6 +367,18 @@ def no_order_reconcile_wait(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def dart_gate_fresh(monkeypatch):
+    """[2026-10-07] DART 호출 관문(dart_api._dart_get)의 간격·차단기는 프로세스 전역 상태다.
+    테스트마다 0초 간격·닫힌 차단기로 시작한다 — 연결 오류를 흉내 낸 테스트가 연 차단기가
+    다음 테스트의 DART 호출을 막거나, 대역 호출마다 0.25초씩 자지 않게."""
+    from modules import dart_api
+    monkeypatch.setattr(dart_api, "DART_MIN_INTERVAL_SEC", 0.0)
+    monkeypatch.setattr(dart_api, "_dart_next_slot", 0.0)
+    monkeypatch.setattr(dart_api, "_dart_conn_errors", 0)
+    monkeypatch.setattr(dart_api, "_dart_blocked_until", 0.0)
+
+
+@pytest.fixture(autouse=True)
 def krx_break_window_closed(request, monkeypatch):
     """[벽시계 격리 · 2026-09-20] 15:30~16:00 KRX 휴게에는 trading.send_order 가 "그래도 주문을
     보내시겠습니까?" 프롬프트를 하나 더 띄운다(2026-09-14 애프터마켓 도입). 그 시간에 스위트를

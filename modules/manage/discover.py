@@ -29,7 +29,8 @@ from core import utils
 
 logger = logging.getLogger(__name__)
 
-# 업종(KRX 표준산업분류) 문자열로 방어주를 가린다. tools/audit_defensive_sector.py 가
+# 업종(표준산업분류 11차 소분류 이름) 문자열로 방어주를 가린다. 2026-10-07부터 업종은 DART 코드를
+#  같은 이름으로 바꿔 쓴다(modules/industry.py · ksic11.py). tools/audit_defensive_sector.py 가
 #  확정한 13종목이 전부 아래 키워드에 걸리고, 대조군(경기민감 13종목)은 하나도 안 걸린다.
 #  ※ 제약·바이오는 한국에서 성장주로 거래되므로 방어주에 넣지 않는다(감사와 동일 기준).
 DEFENSIVE_KEYWORDS = [
@@ -102,26 +103,15 @@ def _spread_pick(rows, target, rng):
     return [rng.choice(b) for b in buckets if b]
 
 
-#  업종 기준일이 이만큼 오래되면 화면에 밝힌다(상장목록은 하루 사이 거의 안 변한다 — 며칠은 조르지 않는다).
-DESC_STALE_NOTICE_DAYS = 7
-
-
-def _desc_staleness_note(desc_date, no_industry, today=None):
-    """업종 목록이 오래됐거나 업종을 모르는 후보가 있으면 한 줄 안내, 아니면 None."""
-    from datetime import date, datetime
-    age = None
-    if desc_date:
-        try:
-            age = ((today or date.today()) - datetime.strptime(str(desc_date)[:10], "%Y-%m-%d").date()).days
-        except ValueError:
-            age = None
-    if not no_industry and (age is None or age < DESC_STALE_NOTICE_DAYS):
+def _industry_note(no_industry, fail_reason):
+    """업종을 모르는 후보가 있으면 한 줄 안내, 아니면 None."""
+    if not no_industry:
         return None
-    head = (f"업종 정보는 {desc_date} 기준입니다({age}일 전, 원본 갱신 중단)" if age is not None
-            and age >= DESC_STALE_NOTICE_DAYS else "업종 정보에 없는 종목이 있습니다")
-    tail = (f" — 업종을 모르는 {no_industry}종목(그 뒤 상장 등)은 방어주·지주회사 규칙이 적용되지 않아 "
-            f"'업종 미상'으로 표시합니다" if no_industry else "")
-    return head + tail
+    note = (f"업종을 모르는 {no_industry}종목은 방어주·지주회사 규칙이 적용되지 않아 "
+            f"'업종 미상'으로 표시합니다")
+    if fail_reason:
+        note += f" (DART 업종 조회: {fail_reason} — 다시 실행하면 이어서 받습니다)"
+    return note
 
 
 #  주식 종류(KRX 종목기본정보) 중 보통주만 남긴다. 코드 끝자리 규칙은 신형우선주·종류주권을
@@ -137,7 +127,7 @@ def _listing_frame():
     [FDR 폴백 제거 · 2026-10-05] 종전엔 인증키가 없거나 Open API 가 실패하면 FDR 상장목록(제3자
      GitHub 캐시)으로 대신했다. 그 저장소는 2026-09-17 이후 갱신이 멈춰, 폴백이 곧 '몇 주 전 시총
      순위로 고른 후보'였다 — 조회 실패로 알린다(krx_daily.get_listing_map 과 같은 기준).
-     업종·폐지 목록(KRX-DESC)은 대체 원천이 없어 계속 fdr_listing 을 쓴다.
+     업종은 DART 기업개황이다(modules/industry.py · 2026-10-07).
     """
     import pandas as pd
     from modules import krx_openapi
@@ -156,39 +146,25 @@ def _listing_frame():
     return df[df["Marcap"] > 0], "KRX Open API"
 
 
-def _fetch_candidates(target, pool, exclude_holding, seed=None):
+def _fetch_candidates(target, pool, exclude_holding, seed=None, on_industry_progress=None):
     """후보를 만들고, 단계별로 몇 개가 왜 걸러졌는지 함께 돌려준다.
 
     seed=None이면 실행할 때마다 다른 후보가 나온다. 규칙을 통과한 종목이 수백 개인데
     한 번에 보여주는 것은 수십 개뿐이라, 씨드를 고정하면 나머지를 영영 못 본다.
     돌려서 마음에 드는 조합이 나올 때까지 다시 실행할 수 있어야 한다.
+    on_industry_progress(done, total): DART 업종 조회 진행(처음 한 번은 수백 건이라 몇 분 걸린다).
     """
-    from modules import krx_daily
+    from modules import industry as industry_src
 
     have = set()
     for key in ("stocks_kr", "etfs_kr"):
         have |= {s["code"] for s in config.session.stock_data.get(key, [])}
 
-    #  [Fix 2026-09-08] 종전에는 fdr.StockListing 을 직접 불렀다. 그런데 그 함수는 KRX 가
-    #   아니라 **제3자 GitHub 캐시**에서 '오늘 날짜' CSV 를 받는데, 그 파일은 장 마감 뒤에야
-    #   올라온다 — KRX 가 오늘을 영업일이라고 답한 순간부터 그때까지 **매 거래일** 404 가
-    #   나고 이 메뉴가 통째로 죽었다(2026-09-08 실측: 오늘 404 · 어제 이전은 전부 200).
-    #   krx_daily.fdr_listing 이 '올라와 있는 가장 최근 날짜'로 받아 준다. 시총 순위·업종은
-    #   하루 사이 거의 변하지 않으므로 후보를 고르는 이 화면의 의미는 달라지지 않는다.
     krx, listing_src = _listing_frame()
-    #  [Fix 2026-10-03] 업종 목록(KRX-DESC)은 캐시 저장소에서 2026-09-17 이후 갱신이 멈췄다(KRX 스크래핑
-    #   차단 시점과 같음 — 회복을 기대하지 않는다). 기본 10일 창으로는 못 찾아 이 메뉴가 통째로 죽었다.
-    #   거슬러 찾는 창은 krx_daily.LISTING_LOOKBACK_DAYS 가 정한다. 오래된 파일을 쓰는 대신 기준일과 업종을
-    #   모르는 종목 수를 화면에 밝힌다(그 종목들엔 방어주·지주회사 규칙이 걸리지 않는다 — 조용히 통과시키지 않는다).
-    desc = krx_daily.fdr_listing("KRX-DESC")
-    desc_date = krx_daily.last_listing_date("KRX-DESC")
     if krx is None or krx.empty:
         raise RuntimeError(f"KRX 상장목록 조회 실패 ({listing_src} 응답 없음)")
-    if desc is None:
-        raise RuntimeError(f"KRX 업종 목록 조회 실패 (최근 {krx_daily.LISTING_LOOKBACK_DAYS['KRX-DESC']}일 안에 캐시 파일 없음)")
     krx = krx[krx["Market"].isin(["KOSPI", "KOSDAQ"])].dropna(subset=["Marcap"])
     krx = krx.sort_values("Marcap", ascending=False).head(pool)
-    desc = desc.set_index("Code")
 
     steps = []
     n0 = len(krx)
@@ -201,8 +177,7 @@ def _fetch_candidates(target, pool, exclude_holding, seed=None):
         rows.append(r)
     steps.append(("이미 보유 중인 관심종목", cut_dup))
 
-    kept, cut_type, cut_def, cut_hold, cut_admin, defs = [], 0, 0, 0, 0, []
-    no_industry = 0
+    typed, cut_type, cut_admin = [], 0, 0
     # KOSDAQ 소속부(Dept)에 관리종목·투자주의환기·SPAC이 표기된다. KOSPI는 결측이라
     #  이 경로로는 안 걸리지만, KOSDAQ 쪽 위험 종목만으로도 실익이 크다.
     dept = dict(zip(krx["Code"], krx["Dept"])) if "Dept" in krx.columns else {}
@@ -218,32 +193,40 @@ def _fetch_candidates(target, pool, exclude_holding, seed=None):
         if "스팩" in name or "리츠" in name or "SPAC" in d_txt or not_common:
             cut_type += 1
             continue
-        industry = desc.loc[code, "Industry"] if code in desc.index else ""
-        if hasattr(industry, "iloc"):
-            industry = industry.iloc[0]
+        typed.append(r)
+
+    #  [2026-10-07] 업종은 DART 기업개황의 표준산업분류 코드다(modules/industry.py). 종전 원천인 KIND
+    #   상장법인목록(FDR 캐시 KRX-DESC)은 2026-09-17 에서 갱신이 멈췄다. 규칙을 통과해 남은 종목만 묻고,
+    #   캐시에 없는 것만 DART 로 나간다. 업종을 모르는 종목은 방어주·지주회사 규칙이 걸리지 않으므로
+    #   조용히 통과시키지 않고 '업종 미상'과 그 수를 밝힌다. 하나도 모르면 메뉴를 실패로 알린다.
+    codes = [r["Code"] for r in typed]
+    ksic, ind_fail = industry_src.lookup(codes, progress=on_industry_progress)
+    if codes and not any(ksic.get(c) for c in codes):
+        raise RuntimeError(f"DART 업종 조회 실패 ({ind_fail or '업종 정보 없음'})")
+
+    kept, cut_def, cut_hold, defs, no_industry = [], 0, 0, [], 0
+    for r in typed:
+        code, name = r["Code"], r["Name"]
+        industry = industry_src.name(ksic.get(code))
         is_def, label = _defensive_label(industry)
         if is_def:
             cut_def += 1
             defs.append((name, label))
             continue
-        if exclude_holding and any(k in str(industry) for k in HOLDING_KEYWORDS):
+        if exclude_holding and any(k in str(industry or "") for k in HOLDING_KEYWORDS):
             cut_hold += 1
             continue
-        products = desc.loc[code, "Products"] if code in desc.index else ""
-        if hasattr(products, "iloc"):
-            products = products.iloc[0]
-        if code not in desc.index:
+        if not industry:
             no_industry += 1
         kept.append({"code": code, "name": name,
                      "exchange": r["Market"], "marcap": float(r["Marcap"]),
-                     "industry": str(industry or "-") if code in desc.index else "업종 미상",
-                     "products": str(products or "-")})
+                     "industry": industry or "업종 미상"})
     steps.append(("관리종목·투자주의환기", cut_admin))
     steps.append(("우선주·스팩·리츠", cut_type))
     steps.append(("방어주", cut_def))
     if exclude_holding:
         steps.append(("지주회사·기타 금융업", cut_hold))
-    note = _desc_staleness_note(desc_date, no_industry)
+    note = _industry_note(no_industry, ind_fail)
     if note:
         logger.warning(note)
         config.console.print(f"[yellow]※ {note}[/yellow]")
@@ -514,8 +497,14 @@ def discover_candidates():
             console=console,
             transient=True
         ) as progress:
-            progress.add_task("[cyan]종목 목록·업종 조회 중...[/cyan]", total=None)
-            cands, steps, defs, n0, n_kept = _fetch_candidates(target, pool, excl_hold)
+            task = progress.add_task("[cyan]종목 목록·업종 조회 중...[/cyan]", total=None)
+
+            def _ind_progress(done, total):
+                progress.update(task, total=total, completed=done,
+                                description=f"[cyan]업종 조회 중 (DART {done}/{total} · 처음 한 번만 오래 걸립니다)[/cyan]")
+
+            cands, steps, defs, n0, n_kept = _fetch_candidates(target, pool, excl_hold,
+                                                               on_industry_progress=_ind_progress)
     except Exception as e:
         console.print(f"\n[bold red]종목 목록 조회 실패: {type(e).__name__} — {e}[/bold red]")
         return False
