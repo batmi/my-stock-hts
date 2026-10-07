@@ -151,7 +151,9 @@ def _toss_krx_only(code):
 #  분봉에서 정규장 구간만 잘라내려면 시작·종료 시각이 필요하다. 09:00~15:30 하드코딩은
 #  임시 지연·단축 개장(수능일 등)에 어긋나므로 캘린더 값을 쓰고, 조회 실패 시에만 기본값을 쓴다.
 #  integrated.regularMarket은 KRX∪NXT 합집합이지만 두 거래소의 정규장 시간이 같아
-#  (NXT의 프리 08:00~09:00 / 애프터 15:30~20:00은 별도 필드) 경계값으로 그대로 쓸 수 있다.
+#  (프리 08:00~09:00 · 애프터는 별도 필드) 경계값으로 그대로 쓸 수 있다.
+#  [1.2.21] afterMarket 이 'NXT 애프터'에서 'KRX·NXT 애프터의 합집합'으로 바뀌었다 — 여기서는
+#   regularMarket 만 읽으므로 영향 없음. 휴장 판정(api/market_calendar)도 integrated 의 null 여부만 본다.
 _TOSS_KRX_SESSION_DEFAULT = ((9, 0), (15, 30))
 _toss_kr_cal_map = {}       # {'YYYYMMDD': ((h,m),(h,m))}
 _toss_kr_cal_day = None     # 캘린더를 받아온 달력일(YYYYMMDD)
@@ -407,7 +409,7 @@ def _before_krx_regular_open():
 
 
 def _toss_capture_krx_close(code):
-    """마감 후, 오늘 정규장 분봉의 마지막(15:30) 종가를 하루 1회 저장한다.
+    """마감 후, 오늘 정규장 분봉의 마지막 봉(종가 단일가가 실린 봉) 종가를 하루 1회 저장한다.
 
     ETF/ETN은 이 값이 곧 KRX 마감가다. 그러나 **주식은 KRX 마감가가 아니다** —
     NXT(넥스트레이드)가 정규장 시간대에도 KRX와 병행 체결되고 토스 분봉은 두 거래소를
@@ -415,6 +417,10 @@ def _toss_capture_krx_close(code):
     실측(2026-07-16, KIS 일봉 대조): ETF 15/15 정확, 주식은 52종목 중 26종목이 불일치
     (중앙값 0.45%, 최대 1.89%). 시간 필터로는 고칠 수 없어 'cap' 태그로 저장하고,
     주식 기준가로는 _toss_yf_krx_close(일봉=KRX 기준) 값을 우선한다.
+    [2026-10-07] 위 주식 불일치의 실제 원인은 NXT 혼입이 아니라 봉 경계였을 가능성이 크다 — 토스 분봉
+     timestamp 는 봉 종료 시각이라 NXT 종목의 종가 단일가는 15:31 봉에 실리는데, 종전 필터가 그 봉을
+     잘라 15:30 봉(단일가 직전 가격)을 종가로 읽었다(_toss_chart_data 분봉 필터 주석, 005930 1일 실측).
+     필터를 고쳤지만 실측이 하루치라 'cap' 신뢰 정책은 그대로 둔다.
 
     이미 오늘분이 저장돼 있으면(store 적중) 재조회하지 않아 마감 직후 1회 버스트로 끝난다.
     """
@@ -427,7 +433,7 @@ def _toss_capture_krx_close(code):
         df = _toss_chart_data(code, period_type='intraday', is_overseas=False)
         if df is None or len(df) == 0:
             return
-        close = _toss_float(df.iloc[-1]['close'])  # 정규장 필터 → 마지막 봉 = 15:30
+        close = _toss_float(df.iloc[-1]['close'])  # 정규장 필터 → 마지막 봉 = 종가 단일가 봉(15:30 또는 15:31)
         if close > 0:
             _toss_krx_close_put(code, today, close, source="cap")
     except Exception as e:
@@ -1339,10 +1345,17 @@ def _toss_chart_data(code, period_type='daily', is_overseas=False, target_bars=N
     # 장전에 조회하면 당일 정규장 데이터가 없어 빈 값이 되고(→ 호출부에서 장전 안내),
     # 장중이면 개장~현재, 장후면 정규장 전체가 된다.
     # 경계는 market-calendar/KR 값을 쓴다(기본 09:00~15:30) — 임시 지연·단축 개장 대응.
+    #  [1.2.21 · 2026-10-07 실측] 분봉 timestamp 는 **봉 종료 시각**([ts−1분, ts) 집계)이다. 그래서
+    #   정규장은 (개장, 마감+1분] 이다 — 09:00 봉은 08:59~09:00(NXT 프리 단일가 구간)이고, 15:30:00
+    #   종가 단일가 체결은 15:31 봉에 실린다. 실측(10-07): 005930(NXT 거래) 09:00 봉 거래량 0·09:01 봉에
+    #   시가 체결, 15:30 봉 거래량 0·15:31 봉 134만주 268,500 = KRX 종가(yfinance 대조). 069500(KRX 단독
+    #   ETF)은 15:30 봉에 종가 단일가가 실리고 15:31 봉이 없다 — 이 범위로 두 경우가 모두 맞는다.
+    #   종전 [개장, 마감] 은 NXT 종목의 종가 단일가 봉을 잘라 마지막 봉이 단일가 직전 가격으로 남았다.
+    #   (15:31~15:40 은 NXT 애프터 단일가 접수 구간이라 체결이 없어 15:31 봉에 다른 체결이 섞이지 않는다.)
     last_day = df['date'].dt.normalize().max()
     (sh, sm), (eh, em) = _toss_krx_regular_bounds(last_day.strftime('%Y%m%d'))
     minutes = df['date'].dt.hour * 60 + df['date'].dt.minute
-    in_session = (minutes >= sh * 60 + sm) & (minutes <= eh * 60 + em)
+    in_session = (minutes > sh * 60 + sm) & (minutes <= eh * 60 + em + 1)
     return df[(df['date'].dt.normalize() == last_day) & in_session].reset_index(drop=True)
 
 

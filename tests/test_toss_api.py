@@ -732,14 +732,19 @@ def test_chart_data_adapter_intraday_today_session_only():
         return {"timestamp": ts, "openPrice": "100", "highPrice": "110",
                 "lowPrice": "90", "closePrice": "105", "volume": "1000"}
 
-    # 당일(23일): 장전 NXT(08:30) + 정규장(09:00/12:00/15:30) + 시간외 NXT(18:00)
+    # 당일(23일): 장전 NXT(08:30) + 정규장(09:01/12:00/15:30/15:31) + 시간외 NXT(18:00)
     # 전일(22일): 정규장(15:00) → 당일이 아니므로 제외
+    #  [1.2.21] timestamp 는 봉 종료 시각 — 09:00 봉은 08:59~09:00(개장 전), 15:31 봉은 15:30:00
+    #   종가 단일가가 실리는 봉(NXT 종목 실측 2026-10-07)이다.
     one_page = {
         "candles": [
             C("2026-06-23T18:00:00+09:00"),   # 당일 시간외(NXT) → 제외
+            C("2026-06-23T15:41:00+09:00"),   # NXT 애프터 첫 체결 봉 → 제외
+            C("2026-06-23T15:31:00+09:00"),   # 종가 단일가 봉 → 포함
             C("2026-06-23T15:30:00+09:00"),
             C("2026-06-23T12:00:00+09:00"),
-            C("2026-06-23T09:00:00+09:00"),
+            C("2026-06-23T09:01:00+09:00"),   # 개장 단일가 봉 → 포함
+            C("2026-06-23T09:00:00+09:00"),   # 08:59~09:00(개장 전) → 제외
             C("2026-06-23T08:30:00+09:00"),   # 당일 장전(NXT) → 제외
             C("2026-06-22T15:00:00+09:00"),   # 전일 → 제외
         ],
@@ -756,12 +761,10 @@ def test_chart_data_adapter_intraday_today_session_only():
     finally:
         config.session.is_toss = False
 
-    # 당일(23일) 정규장 09:00~15:30만 (08:30/18:00/전일 제외)
+    # 당일(23일) 정규장 (09:00, 15:31] 만 (08:30/09:00/15:41/18:00/전일 제외)
     assert df['date'].dt.normalize().nunique() == 1
     assert df['date'].dt.day.unique().tolist() == [23]
-    assert df.iloc[0]['date'].strftime("%H:%M") == "09:00"
-    assert df.iloc[-1]['date'].strftime("%H:%M") == "15:30"
-    assert len(df) == 3  # 09:00, 12:00, 15:30
+    assert [t.strftime("%H:%M") for t in df['date']] == ["09:01", "12:00", "15:30", "15:31"]
 
 
 def test_chart_data_adapter_intraday_premarket_returns_empty():
@@ -1733,16 +1736,16 @@ def test_intraday_filter_follows_calendar_bounds():
         "timestamp": f"2026-03-25T{h:02d}:{m:02d}:00+09:00",
         "openPrice": "100", "highPrice": "100", "lowPrice": "100",
         "closePrice": "100", "volume": "10",
-    } for h, m in [(8, 30), (9, 0), (10, 0), (13, 0), (14, 0), (15, 30), (16, 0)]]
+    } for h, m in [(8, 30), (9, 0), (9, 1), (10, 0), (13, 0), (14, 0), (14, 1), (14, 2), (15, 30), (16, 0)]]
 
     config.session.is_toss = True
     try:
-        # 단축장(09:00~14:00) → 14:00 초과 봉 제외, NXT 프리(08:30)·애프터(15:30/16:00) 제거
+        # 단축장(09:00~14:00) → 봉 종료 시각 기준 (09:00, 14:01] 만. 09:00 봉(개장 전)·14:02 이후 제외
         with patch("brokers.toss_api.get_market_calendar",
                    return_value=_cal_payload(end="14:00:00")), \
              patch("brokers.toss_api.get_candles", return_value={"candles": candles, "nextBefore": None}):
             df = api._toss_chart_data("005930", period_type='intraday', is_overseas=False)
-        assert [t.strftime('%H:%M') for t in df['date']] == ['09:00', '10:00', '13:00', '14:00']
+        assert [t.strftime('%H:%M') for t in df['date']] == ['09:01', '10:00', '13:00', '14:00', '14:01']
     finally:
         config.session.is_toss = False
         _reset_cal_cache()
