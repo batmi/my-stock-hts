@@ -882,13 +882,24 @@ def parse_dividend_decision(text):
     return out
 
 
-def get_dart_dividend_decision(stock_code, days=200):
+#  배당결정·잠정실적은 둘 다 거래소공시(I)다. [2026-10-09] 전체 유형으로 받으면 공시가 많은 대형사는
+#   400일 목록이 페이지 상한(20쪽·2,000건)에서 잘렸다 — 삼성전자는 지난 배당결정 2건과 잠정실적 공시가
+#   빠져 실적 예상일이 사라졌다. 거래소공시로 좁히면 잘리지 않고, 호출도 41종목 100→45건으로 준다.
+DART_EXCHANGE_FILING = "I"
+
+
+def get_dart_dividend_decision(stock_code, days=200, rows=None):
     """최근 배당결정 공시(현금ㆍ현물배당결정)를 찾아 원문에서 확정 배당 정보를 추출.
 
     반환: {"dps", "record_date", "pay_date", "yield", "rcept_dt", "rcept_no"} 또는 None.
     분기·결산 배당의 '확정' 기준일을 제공한다 (캘린더의 추정 배당락일을 확정값으로 대체).
+    rows: 이미 받아 둔 거래소공시 목록(최신순, days 보다 넓어도 된다) — 주면 목록을 다시 받지 않는다.
     """
-    rows = _api().get_dart_disclosures(stock_code, days=days)
+    if rows is None:
+        rows = _api().get_dart_disclosures(stock_code, days=days, pblntf_ty=DART_EXCHANGE_FILING)
+    else:
+        cutoff = (datetime.now() - timedelta(days=int(days))).strftime("%Y%m%d")
+        rows = [r for r in rows if str(r.get("rcept_dt") or "") >= cutoff]
     for r in rows:  # 최신순 — 첫 매칭이 최근 결정
         nm = r.get("report_nm", "")
         if not any(k in nm for k in _DIV_DECISION_TITLE):

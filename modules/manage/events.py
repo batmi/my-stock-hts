@@ -7,7 +7,11 @@
 """
 import calendar as _cal
 import concurrent.futures
+import json
 import logging
+import os
+import threading
+import time
 from datetime import datetime, date, timedelta
 
 from rich.table import Table
@@ -92,41 +96,143 @@ def _kr_yf_dividends(code):
 #  [2026-10-08] 배당 이력은 관심종목 전체를 한 번에 받는다. yfinance 호출은 tz 캐시(SQLite) 경합 때문에
 #   전역 락(api.yf_ticker_call)으로 한 줄로 서므로, 종목마다 따로 물으면 8스레드라도 30여 건이 하나씩
 #   지나간다(실측 0.5~0.6초 × 52건 ≈ 30초 — 6-5 캘린더 '예정 일정 조회'가 멈춘 듯 보이던 자리).
-#   일괄 다운로드는 락 한 번 안에서 yfinance 가 내부 병렬로 받는다(8종목 1.2초). 400일만 쓰므로 2년이면 충분.
+#   일괄 다운로드는 락 한 번 안에서 yfinance 가 내부 병렬로 받는다(41종목 2~4초). 400일만 쓰므로 2년이면 충분.
+#  [2026-10-09] 그래도 Yahoo 가 느린 시간대엔 일괄 하나가 21초, 화면 전체가 44초였다(같은 날 다른 시각
+#   13~15초). 배당 이력·해외 실적/배당락 예정일은 하루 안에 거의 안 바뀌므로 성공한 조회만
+#   _YF_CACHE_TTL_SEC 동안 디스크에 둔다(매일 08:20 캘린더 알림이 같은 수집을 하므로 낮 화면은 대개 캐시).
+#   조회 실패는 저장하지 않는다 — 실패를 '일정 없음'으로 굳히지 않는다. DART(확정 배당 공시)는 매번 새로 읽는다.
 _KR_DIV_BATCH_PERIOD = "2y"
+_YF_CACHE_FILE = "calendar_yf_cache.json"
+_YF_CACHE_TTL_SEC = 12 * 3600
+_yf_cache_lock = threading.Lock()
+
+
+def _yf_cache_path():
+    return os.path.join(config.JSON_DIR, _YF_CACHE_FILE)
+
+
+def _yf_cache_get(section, key, now=None):
+    """신선한 캐시 항목(dict) 또는 None."""
+    now = now or time.time()
+    with _yf_cache_lock:
+        try:
+            with open(_yf_cache_path(), "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:       # noqa: BLE001 - 없거나 깨졌으면 새로 받는다
+            return None
+    item = (data.get(section) or {}).get(key)
+    if not isinstance(item, dict) or now - float(item.get("at", 0)) >= _YF_CACHE_TTL_SEC:
+        return None
+    return item
+
+
+def _yf_cache_put(section, items, now=None):
+    """items: {key: dict} — 'at' 을 찍어 원자적으로 저장한다."""
+    if not items:
+        return
+    now = now or time.time()
+    path = _yf_cache_path()
+    with _yf_cache_lock:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:       # noqa: BLE001
+            data = {}
+        sec = data.setdefault(section, {})
+        for k, v in items.items():
+            sec[k] = dict(v, at=now)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+            os.replace(tmp, path)
+        except Exception as e:  # noqa: BLE001 - 저장 실패는 다음에 다시 받을 뿐이다
+            logger.debug(f"[캘린더] yfinance 캐시 저장 실패: {e}")
+
+
+def _series_to_rows(ser):
+    return [[str(getattr(d, "date", lambda: d)()), float(v)] for d, v in zip(ser.index, ser.values)]
+
+
+def _rows_to_series(rows):
+    import pandas as pd
+    if not rows:
+        return pd.Series([], dtype=float, index=pd.DatetimeIndex([]))
+    return pd.Series([v for _d, v in rows], index=pd.to_datetime([d for d, _v in rows]))
+
+
+def _kr_suffix_order(code):
+    """시장 구분(단일 소스)으로 먼저 물을 접미사를 고른다 — 모르면 종전 순서(.KS→.KQ)."""
+    try:
+        from modules import analysis
+        mk = analysis.get_market_type(code)
+    except Exception:           # noqa: BLE001
+        mk = None
+    return (".KQ", ".KS") if mk == "KOSDAQ" else (".KS", ".KQ")
 
 
 def _kr_yf_dividends_batch(codes):
-    """{종목코드: 배당 시계열(>0만)} — .KS 로 한 번, 배당이 안 나온 종목만 .KQ 로 한 번 더(단건 _kr_yf_dividends 와 같은 순서).
+    """{종목코드: 배당 시계열(>0만, 배당이 없으면 빈 시계열)} — 결과에 없는 종목은 **모름**(조회 실패).
 
-    일괄 조회 자체가 실패하면 빈 dict — 그 종목들은 단건 경로(_kr_yf_dividends)로 다시 묻는다.
+    캐시(12시간)에 있는 종목은 묻지 않는다. 나머지는 시장 구분에 맞는 접미사로 한 번에 묻고,
+    시세 자체가 안 나온 종목(접미사가 틀렸거나 실패)만 다른 접미사로 한 번 더 묻는다.
+    시세는 나왔는데 배당이 0건이면 '배당 없음'(빈 시계열)으로 확정한다.
     """
-    out = {}
+    out, fresh = {}, {}
     if yf is None or not codes:
         return out
-    left = list(codes)
-    for sfx in (".KS", ".KQ"):
+    left = []
+    for c in codes:
+        hit = _yf_cache_get("kr_div", c)
+        if hit is not None:
+            out[c] = _rows_to_series(hit.get("div") or [])
+        else:
+            left.append(c)
+    order = {c: _kr_suffix_order(c) for c in left}
+    for step in (0, 1):
         if not left:
             break
-        tickers = [c + sfx for c in left]
+        tickers = [c + order[c][step] for c in left]
         try:
             df = api.fetch_yfinance_data(tickers, period=_KR_DIV_BATCH_PERIOD, actions=True, threads=True)
-            divs = df["Dividends"] if df is not None and not df.empty and "Dividends" in df.columns.get_level_values(0) else None
+            ok = df is not None and not df.empty and "Dividends" in df.columns.get_level_values(0)
         except Exception as e:      # noqa: BLE001 - 일괄이 실패하면 단건 경로가 맡는다
-            logger.debug(f"[캘린더] 배당 이력 일괄 조회 실패({sfx}): {e}")
-            divs = None
-        if divs is None:
+            logger.debug(f"[캘린더] 배당 이력 일괄 조회 실패: {e}")
+            ok = False
+        if not ok:
             continue
+        divs, closes = df["Dividends"], df["Close"] if "Close" in df.columns.get_level_values(0) else None
         nxt = []
         for c, t in zip(left, tickers):
+            priced = closes is not None and t in closes and closes[t].notna().any()
+            if not priced:
+                nxt.append(c)       # 이 접미사로는 시세가 없다 — 다른 접미사로
+                continue
             ser = divs[t].dropna() if t in divs else None
-            ser = ser[ser > 0] if ser is not None else None
-            if ser is not None and len(ser) > 0:
-                out[c] = ser
-            else:
-                nxt.append(c)
+            ser = ser[ser > 0] if ser is not None else _rows_to_series([])
+            out[c] = ser
+            fresh[c] = {"div": _series_to_rows(ser)}
         left = nxt
+    _yf_cache_put("kr_div", fresh)
     return out
+
+
+def prewarm_yf_cache(stop=None):
+    """캘린더의 yfinance 몫(국내 배당 이력·해외 예정일)만 미리 캐시에 채운다 — DART 는 부르지 않는다.
+
+    [왜 · 2026-10-09] 캐시는 화면을 열 때만 채워져 하루 첫 화면은 여전히 10~40초(Yahoo 응답에 따라)였다.
+     앱이 기동 뒤 백그라운드에서 채우고(api.start_calendar_warmer) 만료 전에 다시 채운다. 캐시에 있는
+     종목은 묻지 않으므로 신선할 때는 네트워크 0회다. DART 확정 공시는 화면에서 매번 새로 읽는다.
+    stop: threading.Event — 켜지면 해외 종목 사이에서 멈춘다.
+    """
+    kr, us = _gather_watchlist()
+    if kr:
+        _kr_yf_dividends_batch([c for c, _n in kr])
+    for code, name in us:
+        if stop is not None and stop.is_set():
+            return
+        _collect_us(code, name)
 
 
 def _yf_ex_dates(div_series):
@@ -205,7 +311,45 @@ def _next_kr_ex_date(months, today):
     return cands[0] if cands else None
 
 
-def _collect_kr(code, name, div_batch=None):
+class _OncePerKey:
+    """같은 키의 조회를 한 번만 한다 — 여러 스레드가 동시에 물어도 첫 스레드만 받고 나머지는 기다린다.
+
+    국내 종목마다 배당결정(200일)·실적 예상(400일) 두 작업이 같은 거래소공시 목록을 쓴다(2026-10-09).
+    조회가 실패하면 기다리던 쪽도 같은 예외를 받는다(실패를 '공시 없음'으로 바꾸지 않는다).
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._slots = {}
+
+    def get(self, key, fn):
+        with self._lock:
+            slot = self._slots.get(key)
+            owner = slot is None
+            if owner:
+                slot = self._slots[key] = {"done": threading.Event(), "val": None, "err": None}
+        if owner:
+            try:
+                slot["val"] = fn()
+            except Exception as e:      # noqa: BLE001 - 기다리는 쪽에도 같은 실패를 돌려준다
+                slot["err"] = e
+            finally:
+                slot["done"].set()
+        else:
+            slot["done"].wait()
+        if slot["err"] is not None:
+            raise slot["err"]
+        return slot["val"]
+
+
+_KR_DISCLOSURE_DAYS = 400       # 실적 예상(전년 공시일 +1년)에 400일, 배당결정은 그 안의 200일만 쓴다
+
+
+def _kr_exchange_filings(code):
+    return api.get_dart_disclosures(code, days=_KR_DISCLOSURE_DAYS, pblntf_ty="I")
+
+
+def _collect_kr(code, name, div_batch=None, filings=None):
     """국내 종목의 확정 배당 정보(DART) + 배당주기 반영 다음 예상 배당락일(추정).
 
     div_batch: 배당 이력 일괄 조회(_kr_yf_dividends_batch)의 Future. 거기서 이 종목이 안 나왔으면
@@ -241,7 +385,10 @@ def _collect_kr(code, name, div_batch=None):
     #    매수·매도 시점 판단에 직접 쓰인다.
     decision_unread = False
     try:
-        dec = api.get_dart_dividend_decision(code, days=200)
+        if filings is not None:
+            dec = api.get_dart_dividend_decision(code, days=200, rows=filings(code))
+        else:
+            dec = api.get_dart_dividend_decision(code, days=200)
         if dec and dec.get("record_date"):
             last_confirmed_rec = datetime.strptime(dec["record_date"], "%Y%m%d").date()
     except Exception as e:      # noqa: BLE001 - 행 전체를 잃지 않되 못 읽은 사실은 남긴다
@@ -283,7 +430,7 @@ def _collect_kr(code, name, div_batch=None):
 _EARNINGS_TITLE_KEYWORDS = ("잠정실적", "손익구조", "매출액또는손익")
 
 
-def _collect_kr_earnings_est(code, name):
+def _collect_kr_earnings_est(code, name, filings=None):
     """전년 잠정실적 공시일 패턴으로 다음 실적발표 예상일 산출 (best-effort).
 
     최근 400일 공시에서 잠정실적류 공시일을 찾아 +1년(같은 요일대 보정 없이 달력일)으로 예상.
@@ -292,7 +439,8 @@ def _collect_kr_earnings_est(code, name):
     try:
         today = datetime.now().date()
         candidates = []
-        for d in api.get_dart_disclosures(code, days=400):
+        rows = filings(code) if filings is not None else _kr_exchange_filings(code)
+        for d in rows:
             nm = (d.get("report_nm") or "").replace(" ", "")
             if not any(k in nm for k in _EARNINGS_TITLE_KEYWORDS):
                 continue
@@ -331,47 +479,57 @@ def _parse_us_date(val):
 
 
 def _collect_us(code, name):
-    """해외 종목의 예정 배당락일/실적발표일(yfinance, best-effort)."""
+    """해외 종목의 예정 배당락일/실적발표일(yfinance, best-effort). 성공한 조회는 12시간 캐시."""
     if yf is None:
         return None
+    hit = _yf_cache_get("us", code)
+    if hit is not None:
+        ex_div, earnings = _parse_us_date(hit.get("ex")), _parse_us_date(hit.get("earn"))
+    else:
+        try:
+            ex_div, earnings, clean = _read_us_dates(code)
+        except Exception:
+            return None
+        if clean:               # 속성 읽기가 하나라도 실패했으면 '없음'으로 굳히지 않는다
+            _yf_cache_put("us", {code: {"ex": ex_div.isoformat() if ex_div else None,
+                                        "earn": earnings.isoformat() if earnings else None}})
     events = []
-    try:
-        #  속성 접근(calendar·info)이 곧 네트워크다 — 공용 락 안에서 한 번에 읽는다(8스레드 동시 호출).
-        def _read(tk):
-            try:
-                cal = tk.calendar or {}
-            except Exception:
-                cal = {}
-            info = None
-            _c = cal if isinstance(cal, dict) else {}
-            if (_parse_us_date(_c.get("Ex-Dividend Date")) is None
-                    or _parse_us_date(_c.get("Earnings Date")) is None):
-                try:
-                    info = tk.info or {}
-                except Exception:
-                    info = {}
-            return cal, info
-
-        cal, info = api.yf_ticker_call(code, _read)
-
-        ex_div = _parse_us_date(cal.get("Ex-Dividend Date") if isinstance(cal, dict) else None)
-        earnings = _parse_us_date(cal.get("Earnings Date") if isinstance(cal, dict) else None)
-
-        # calendar가 비면 info로 폴백
-        if ex_div is None or earnings is None:
-            info = info or {}
-            if ex_div is None:
-                ex_div = _parse_us_date(info.get("exDividendDate"))
-            if earnings is None:
-                earnings = _parse_us_date(info.get("earningsTimestamp") or info.get("earningsTimestampStart"))
-
-        if ex_div:
-            events.append({"code": code, "name": name, "type": "배당락", "date": ex_div})
-        if earnings:
-            events.append({"code": code, "name": name, "type": "실적발표", "date": earnings})
-    except Exception:
-        return None
+    if ex_div:
+        events.append({"code": code, "name": name, "type": "배당락", "date": ex_div})
+    if earnings:
+        events.append({"code": code, "name": name, "type": "실적발표", "date": earnings})
     return events or None
+
+
+def _read_us_dates(code):
+    """(배당락일, 실적발표일, 실패 없이 읽었나). 속성 접근(calendar·info)이 곧 네트워크다 — 공용 락 안에서 한 번에."""
+    def _read(tk):
+        failed = False
+        try:
+            cal = tk.calendar or {}
+        except Exception:
+            cal, failed = {}, True
+        info = None
+        _c = cal if isinstance(cal, dict) else {}
+        if (_parse_us_date(_c.get("Ex-Dividend Date")) is None
+                or _parse_us_date(_c.get("Earnings Date")) is None):
+            try:
+                info = tk.info or {}
+            except Exception:
+                info, failed = {}, True
+        return cal, info, failed
+
+    cal, info, failed = api.yf_ticker_call(code, _read)
+    ex_div = _parse_us_date(cal.get("Ex-Dividend Date") if isinstance(cal, dict) else None)
+    earnings = _parse_us_date(cal.get("Earnings Date") if isinstance(cal, dict) else None)
+    # calendar가 비면 info로 폴백
+    if ex_div is None or earnings is None:
+        info = info or {}
+        if ex_div is None:
+            ex_div = _parse_us_date(info.get("exDividendDate"))
+        if earnings is None:
+            earnings = _parse_us_date(info.get("earningsTimestamp") or info.get("earningsTimestampStart"))
+    return ex_div, earnings, not failed
 
 
 def _gather_watchlist():
@@ -407,9 +565,14 @@ def _collect_watchlist_events(kr, us, on_progress=None, failures=None):
         if config.DART_API_KEY:
             #  배당 이력 일괄 조회를 맨 먼저 띄운다 — 국내 작업은 DART 를 먼저 읽고 나서야 이 결과를 기다린다.
             div_batch = ex.submit(_kr_yf_dividends_batch, [c for c, _n in kr]) if kr else None
+            once = _OncePerKey()
+
+            def filings(code):
+                return once.get(code, lambda: _kr_exchange_filings(code))
+
             for code, name in kr:
-                futures[ex.submit(_collect_kr, code, name, div_batch)] = ("kr", code)
-                futures[ex.submit(_collect_kr_earnings_est, code, name)] = ("kr_earn", code)
+                futures[ex.submit(_collect_kr, code, name, div_batch, filings)] = ("kr", code)
+                futures[ex.submit(_collect_kr_earnings_est, code, name, filings)] = ("kr_earn", code)
         for code, name in us:
             futures[ex.submit(_collect_us, code, name)] = ("us", code)
 

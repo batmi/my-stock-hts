@@ -811,6 +811,35 @@ def prefetch_watchlists_async():
     _register_warm_thread(t)
     return t # [수정] 테스트 코드에서 제어할 수 있도록 스레드 객체 반환
 
+#  [2026-10-09] 6-5 투자 캘린더의 yfinance 몫(국내 배당 이력·해외 예정일) 예열. 캐시 유효 12시간보다
+#   짧게 다시 채워 앱이 떠 있는 동안 첫 화면도 캐시로 끝나게 한다. 기동 직후에는 잔고·지수 예열과 겹치지
+#   않게 조금 기다린다.
+CALENDAR_WARM_DELAY_SEC = 60
+CALENDAR_WARM_INTERVAL_SEC = 6 * 3600
+
+
+def start_calendar_warmer():
+    """캘린더 yfinance 캐시를 백그라운드에서 채우고 CALENDAR_WARM_INTERVAL_SEC 마다 다시 채운다."""
+    def worker():
+        if _WARM_STOP.wait(CALENDAR_WARM_DELAY_SEC):
+            return
+        while True:
+            try:
+                from modules.manage import events
+                t0 = time.time()
+                events.prewarm_yf_cache(stop=_WARM_STOP)
+                logger.info(f"[Cache] 캘린더 일정 예열 완료 ({time.time() - t0:.1f}초)")
+            except Exception as e:      # noqa: BLE001 - 예열 실패는 화면이 직접 받으면 그만이다
+                logger.warning(f"[Cache] 캘린더 일정 예열 실패 — 다음 주기에 다시: {e}")
+            if _WARM_STOP.wait(CALENDAR_WARM_INTERVAL_SEC):
+                return
+
+    t = threading.Thread(target=worker, daemon=True, name="CalendarWarmer")
+    t.start()
+    _register_warm_thread(t)
+    return t
+
+
 _OVERVIEW_WARMER_STARTED = False
 #  개요 예열 결과를 화면이 마지막으로 쓴 시각. 기동 시각으로 시작해, 아무도 개요를
 #  열지 않으면 워머가 조용해진다(첫 화면의 이점은 그대로 두기 위해 0 이 아니라 지금이다).
