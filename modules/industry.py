@@ -9,7 +9,7 @@
 
 [호출 예산] 상장사 하나에 한 번씩 불러야 한다. 처음 한 번 수백 건이 들고, 그 뒤로는 캐시
  (json/dart_industry.json)에서 끝난다 — 업종은 거의 안 바뀌므로 REFRESH_DAYS 마다 다시 묻는다.
- 속도는 dart_api 의 관문(DART_MIN_INTERVAL_SEC)이 정하고, 차단기가 열리면 그 자리에서 멈춘다.
+ 속도는 dart_api 의 관문(토큰 버킷 DART_BURST·DART_REFILL_PER_SEC)이 정하고, 차단기가 열리면 그 자리에서 멈춘다.
  **여기서 스레드를 늘리지 말 것** — 2026-10-07 4스레드 일괄 조회가 DART IP 차단을 불렀다.
 """
 import json

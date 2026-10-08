@@ -64,15 +64,26 @@ class DartBlockedError(DartQueryError):
 #   은 정상). 일일 한도(20,000건, 응답 020)와 별개로 **순간 빈도**로 IP 를 막는다. 막힌 동안 같은
 #   공유기 뒤의 모든 DART 기능(6-5~6-8, 텔레그램 공시 알림)이 함께 죽었다.
 #   그래서 DART 로 나가는 HTTP 는 전부 _dart_get 하나를 지난다:
-#    · 프로세스 전체(모든 스레드 합산)에서 호출 사이 최소 간격 DART_MIN_INTERVAL_SEC 를 지킨다.
+#    · 프로세스 전체(모든 스레드 합산) 토큰 버킷 — 짧은 몰림은 DART_BURST 건까지 바로 보내고, 그 뒤로는
+#      초당 DART_REFILL_PER_SEC 건씩만 채운다. 메뉴 6(공시·수급·재무·캘린더)은 관심종목마다 여러 건을
+#      8스레드로 몰아 부르고(6-7 은 41종목에 369건 이상), 이 몰림은 몇 달 동안 차단된 적이 없다. 막힌 것은
+#      10분 넘게 쉬지 않고 이어진 대량 호출이었다. [2026-10-08] 처음엔 고정 간격 0.25초로 막았는데, 그러면
+#      6-7 하나가 1분 반 넘게 걸려 운용자가 체감할 만큼 느려졌다 — 몰림은 살리고 지속량만 묶는다.
 #    · 연결이 연달아 끊기면(차단 신호) DART_BLOCK_COOLDOWN_SEC 동안 아예 보내지 않는다 — 막힌 상태에서
 #      두드리면 차단이 길어질 수 있다. 020(한도 초과)은 자정까지 보내지 않는다.
-DART_MIN_INTERVAL_SEC = 0.25          # 분당 최대 240건 — 차단을 부른 속도(4스레드 무간격)의 수 분의 1
+DART_BURST = 1000                     # 쉬고 있다가 바로 보낼 수 있는 건수 — 메뉴 6 무거운 화면 두세 개를 연달아 열어도 기다리지 않는다
+DART_REFILL_PER_SEC = 5.0             # 버킷이 빈 뒤의 지속 속도(분당 300건) — 3분 남짓이면 다시 가득
 DART_BLOCK_AFTER_CONN_ERRORS = 3      # 연결 오류가 이만큼 연달아 나면 차단으로 본다
+#  [2026-10-08 실측] 서버 응답은 중앙 0.16초인데 꼬리가 길다(6-7 한 번에 399건 중 3초 초과 13건·최대 39초).
+#   8스레드라도 느린 몇 건이 화면 전체를 붙잡는다. 읽기 대기는 DART_READ_TIMEOUT_SEC 에서 끊고 한 번만 다시
+#   보낸다(조회라 중복돼도 해가 없다). 연결은 재사용한다 — 매번 새로 TLS 를 맺으면 중앙값이 3배 늘었다(0.18→0.06초).
+DART_CONNECT_TIMEOUT_SEC = 5
+DART_READ_TIMEOUT_SEC = 6
 DART_BLOCK_COOLDOWN_SEC = 30 * 60
 
 _dart_gate_lock = threading.Lock()
-_dart_next_slot = 0.0                 # 다음 호출이 나가도 되는 time.monotonic()
+_dart_tokens = None                   # 남은 토큰(음수 = 앞서 줄 선 몫). None 이면 가득 찬 것으로 시작
+_dart_tokens_at = 0.0                 # 토큰을 마지막으로 계산한 time.monotonic()
 _dart_conn_errors = 0                 # 연속 연결 오류 수
 _dart_blocked_until = 0.0             # time.time() — 이 시각 전에는 보내지 않는다
 _dart_blocked_reason = ""
@@ -99,23 +110,65 @@ def _next_midnight_ts():
     return (now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)).timestamp()
 
 
+def _take_token():
+    """토큰 하나를 가져가고, 기다려야 할 초를 돌려준다(잠금 밖에서 잔다)."""
+    global _dart_tokens, _dart_tokens_at
+    with _dart_gate_lock:
+        now = time.monotonic()
+        if _dart_tokens is None:
+            _dart_tokens = float(DART_BURST)
+        else:
+            _dart_tokens = min(float(DART_BURST),
+                               _dart_tokens + (now - _dart_tokens_at) * DART_REFILL_PER_SEC)
+        _dart_tokens_at = now
+        _dart_tokens -= 1.0
+        return 0.0 if _dart_tokens >= 0 else -_dart_tokens / DART_REFILL_PER_SEC
+
+
+_dart_session = None
+_dart_session_lock = threading.Lock()
+
+
+def _send(url, params=None, timeout=None):
+    """실제 전송 — 프로세스 공용 연결 풀(keep-alive). 테스트는 이 자리를 갈아끼운다."""
+    global _dart_session
+    if _dart_session is None:
+        with _dart_session_lock:
+            if _dart_session is None:
+                from requests.adapters import HTTPAdapter
+                s = requests.Session()
+                s.mount("https://", HTTPAdapter(pool_connections=1, pool_maxsize=16))
+                _dart_session = s
+    return _dart_session.get(url, params=params, timeout=timeout)
+
+
 def _dart_get(path, params, timeout):
-    """DART 로 나가는 유일한 HTTP 자리. 간격을 지키고, 차단기가 열려 있으면 보내지 않는다."""
-    global _dart_next_slot, _dart_conn_errors
+    """DART 로 나가는 유일한 HTTP 자리. 속도를 지키고, 차단기가 열려 있으면 보내지 않는다."""
+    global _dart_conn_errors
     reason = dart_blocked_reason()
     if reason:
         raise DartBlockedError(f"DART 호출 중단 중({reason})")
-    with _dart_gate_lock:                      # 자리만 예약하고 잠금 밖에서 기다린다
-        now = time.monotonic()
-        slot = max(now, _dart_next_slot)
-        _dart_next_slot = slot + DART_MIN_INTERVAL_SEC
-    if slot > now:
-        time.sleep(slot - now)
+    wait = _take_token()
+    if wait > 0:
+        time.sleep(wait)
         reason = dart_blocked_reason()      # 기다리는 사이 차단기가 열렸으면 줄 선 호출도 보내지 않는다
         if reason:
             raise DartBlockedError(f"DART 호출 중단 중({reason})")
+    url = f"{DART_BASE_URL}/{path}"
+    limits = (DART_CONNECT_TIMEOUT_SEC, min(float(timeout or DART_READ_TIMEOUT_SEC), DART_READ_TIMEOUT_SEC))
     try:
-        res = requests.get(f"{DART_BASE_URL}/{path}", params=params, timeout=timeout)
+        try:
+            res = _send(url, params=params, timeout=limits)
+        except requests.exceptions.ReadTimeout:
+            #  서버 꼬리 지연 — 한 번만 다시(토큰도 다시 낸다). 그 사이 차단기가 열렸으면 보내지 않는다.
+            logger.debug(f"[DART] {path} 읽기 {limits[1]}초 초과 — 한 번 다시 보냄")
+            wait = _take_token()
+            if wait > 0:
+                time.sleep(wait)
+            reason = dart_blocked_reason()
+            if reason:
+                raise DartBlockedError(f"DART 호출 중단 중({reason})")
+            res = _send(url, params=params, timeout=limits)
     except requests.exceptions.ConnectionError:
         with _dart_gate_lock:
             _dart_conn_errors += 1

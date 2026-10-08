@@ -89,6 +89,46 @@ def _kr_yf_dividends(code):
     return None
 
 
+#  [2026-10-08] 배당 이력은 관심종목 전체를 한 번에 받는다. yfinance 호출은 tz 캐시(SQLite) 경합 때문에
+#   전역 락(api.yf_ticker_call)으로 한 줄로 서므로, 종목마다 따로 물으면 8스레드라도 30여 건이 하나씩
+#   지나간다(실측 0.5~0.6초 × 52건 ≈ 30초 — 6-5 캘린더 '예정 일정 조회'가 멈춘 듯 보이던 자리).
+#   일괄 다운로드는 락 한 번 안에서 yfinance 가 내부 병렬로 받는다(8종목 1.2초). 400일만 쓰므로 2년이면 충분.
+_KR_DIV_BATCH_PERIOD = "2y"
+
+
+def _kr_yf_dividends_batch(codes):
+    """{종목코드: 배당 시계열(>0만)} — .KS 로 한 번, 배당이 안 나온 종목만 .KQ 로 한 번 더(단건 _kr_yf_dividends 와 같은 순서).
+
+    일괄 조회 자체가 실패하면 빈 dict — 그 종목들은 단건 경로(_kr_yf_dividends)로 다시 묻는다.
+    """
+    out = {}
+    if yf is None or not codes:
+        return out
+    left = list(codes)
+    for sfx in (".KS", ".KQ"):
+        if not left:
+            break
+        tickers = [c + sfx for c in left]
+        try:
+            df = api.fetch_yfinance_data(tickers, period=_KR_DIV_BATCH_PERIOD, actions=True, threads=True)
+            divs = df["Dividends"] if df is not None and not df.empty and "Dividends" in df.columns.get_level_values(0) else None
+        except Exception as e:      # noqa: BLE001 - 일괄이 실패하면 단건 경로가 맡는다
+            logger.debug(f"[캘린더] 배당 이력 일괄 조회 실패({sfx}): {e}")
+            divs = None
+        if divs is None:
+            continue
+        nxt = []
+        for c, t in zip(left, tickers):
+            ser = divs[t].dropna() if t in divs else None
+            ser = ser[ser > 0] if ser is not None else None
+            if ser is not None and len(ser) > 0:
+                out[c] = ser
+            else:
+                nxt.append(c)
+        left = nxt
+    return out
+
+
 def _yf_ex_dates(div_series):
     """배당 시계열 index를 tz-naive date 리스트로 변환."""
     if div_series is None or len(div_series) == 0:
@@ -165,14 +205,25 @@ def _next_kr_ex_date(months, today):
     return cands[0] if cands else None
 
 
-def _collect_kr(code, name):
-    """국내 종목의 확정 배당 정보(DART) + 배당주기 반영 다음 예상 배당락일(추정)."""
+def _collect_kr(code, name, div_batch=None):
+    """국내 종목의 확정 배당 정보(DART) + 배당주기 반영 다음 예상 배당락일(추정).
+
+    div_batch: 배당 이력 일괄 조회(_kr_yf_dividends_batch)의 Future. 거기서 이 종목이 안 나왔으면
+     (배당 없음·일괄 실패) 단건 경로로 한 번 더 묻는다 — 일괄 실패를 '배당 없음'으로 굳히지 않는다.
+    """
     info = api.get_dart_dividend(code)
     if not info:
         return None
     acc = api.get_dart_acc_month(code)
     today = datetime.now().date()
-    div = _kr_yf_dividends(code)
+    div = None
+    if div_batch is not None:
+        try:
+            div = div_batch.result().get(code)
+        except Exception:       # noqa: BLE001 - 일괄이 깨졌으면 단건으로
+            div = None
+    if div is None:
+        div = _kr_yf_dividends(code)
     count = _kr_dividend_count(div, today)
     months, freq_label = _kr_dividend_plan(count, acc)
 
@@ -354,8 +405,10 @@ def _collect_watchlist_events(kr, us, on_progress=None, failures=None):
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
         futures = {}
         if config.DART_API_KEY:
+            #  배당 이력 일괄 조회를 맨 먼저 띄운다 — 국내 작업은 DART 를 먼저 읽고 나서야 이 결과를 기다린다.
+            div_batch = ex.submit(_kr_yf_dividends_batch, [c for c, _n in kr]) if kr else None
             for code, name in kr:
-                futures[ex.submit(_collect_kr, code, name)] = ("kr", code)
+                futures[ex.submit(_collect_kr, code, name, div_batch)] = ("kr", code)
                 futures[ex.submit(_collect_kr_earnings_est, code, name)] = ("kr_earn", code)
         for code, name in us:
             futures[ex.submit(_collect_us, code, name)] = ("us", code)

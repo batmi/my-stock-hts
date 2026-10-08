@@ -48,27 +48,27 @@ def corp_map(monkeypatch):
 
 
 def test_한도초과는_예외다(key):
-    with patch.object(dart_api.requests, "get",
+    with patch.object(dart_api, "_send",
                       return_value=_Res({"status": "020", "message": "요청 제한을 초과하였습니다."})):
         with pytest.raises(DartQueryError):
             dart_api.call_dart("list.json", {"corp_code": "x"})
 
 
 def test_네트워크_오류는_예외다(key):
-    with patch.object(dart_api.requests, "get", side_effect=OSError("connection reset")):
+    with patch.object(dart_api, "_send", side_effect=OSError("connection reset")):
         with pytest.raises(DartQueryError):
             dart_api.call_dart("list.json", {"corp_code": "x"})
 
 
 def test_데이터없음_013만_None(key):
     """'봤는데 없다'는 실패가 아니다 — 여기가 예외가 되면 정상 화면이 경고로 뒤덮인다."""
-    with patch.object(dart_api.requests, "get",
+    with patch.object(dart_api, "_send",
                       return_value=_Res({"status": "013", "message": "조회된 데이타가 없습니다."})):
         assert dart_api.call_dart("list.json", {"corp_code": "x"}) is None
 
 
 def test_정상_응답은_list를_준다(key):
-    with patch.object(dart_api.requests, "get",
+    with patch.object(dart_api, "_send",
                       return_value=_Res({"status": "000", "list": [{"rcept_no": "1"}]})):
         assert dart_api.call_dart("list.json", {"corp_code": "x"}) == [{"rcept_no": "1"}]
 
@@ -81,7 +81,7 @@ def test_정상_응답은_list를_준다(key):
 ])
 def test_한도초과가_빈_결과로_둔갑하지_않는다(key, corp_map, getter, args):
     """[핵심] 오버행·유상증자·공시가 '없다'로 보이면 판단이 반대로 간다."""
-    with patch.object(dart_api.requests, "get",
+    with patch.object(dart_api, "_send",
                       return_value=_Res({"status": "020", "message": "한도초과"})):
         with pytest.raises(DartQueryError):
             getattr(dart_api, getter)(*args)
@@ -90,7 +90,7 @@ def test_한도초과가_빈_결과로_둔갑하지_않는다(key, corp_map, get
 def test_기업코드_맵을_못_받으면_예외다(key, monkeypatch):
     """맵이 비면 관심종목 전부가 조용히 '해당 없음'이 된다."""
     monkeypatch.setattr(dart_api, "_dart_corp_map_cache", None, raising=False)
-    with patch.object(dart_api.requests, "get", side_effect=OSError("dns")), \
+    with patch.object(dart_api, "_send", side_effect=OSError("dns")), \
          patch.object(dart_api.os.path, "exists", return_value=False):
         with pytest.raises(DartQueryError):
             dart_api.get_dart_corp_map(force_refresh=True)
@@ -117,7 +117,7 @@ def test_실패가_수급물량_화면에_밝혀진다(key, monkeypatch, capsys)
                       return_value=[("005930", "삼성전자"), ("000660", "SK하이닉스")]), \
          patch.object(dart_api, "get_dart_corp_map",
                       return_value={"005930": "00126380", "000660": "00164779"}), \
-         patch.object(dart_api.requests, "get",
+         patch.object(dart_api, "_send",
                       return_value=_Res({"status": "020", "message": "한도초과"})), \
          patch("core.utils.clear_screen", lambda: None):
         insider.show_insider_trades(days=90)

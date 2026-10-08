@@ -81,7 +81,7 @@ def yf_ticker_call(symbol, fn):
         return fn(yf.Ticker(symbol))
 
 
-def fetch_yfinance_data(tickers, period=None, start=None, end=None, interval="1d", group_by='column', _retried=False, threads=False):
+def fetch_yfinance_data(tickers, period=None, start=None, end=None, interval="1d", group_by='column', _retried=False, threads=False, actions=False):
     """yfinance 데이터 조회 통합 함수.
 
     [DB Lock 대응]
@@ -94,10 +94,12 @@ def fetch_yfinance_data(tickers, period=None, start=None, end=None, interval="1d
       _YF_LOCK이 '외부 호출자 간' 경합은 계속 직렬화하므로, 시장 지수처럼 티커가 많은
       일괄 조회는 True로 켜면 티커당 순차 왕복(N회)이 병렬로 줄어 수 배 빨라진다.
       (결과 데이터는 동일. 빈 응답/DB Lock 재시도 시엔 안전하게 순차(False)로 폴백)
+    actions: True 면 배당(Dividends)·분할(Stock Splits) 열을 함께 받는다 — 배당 캘린더가 관심종목
+      배당 이력을 종목마다 따로 묻지 않고 한 번에 받는다(2026-10-08).
     """
     try:
         with _YF_LOCK:
-            df = yf.download(tickers, period=period, start=start, end=end, interval=interval, group_by=group_by, progress=False, threads=threads)
+            df = yf.download(tickers, period=period, start=start, end=end, interval=interval, group_by=group_by, progress=False, threads=threads, actions=actions)
 
         # [추가] 빈 결과(= tz 캐시 lock 등으로 인한 조용한 실패 가능성) → 캐시 정리 후 1회 재시도
         if not _retried and (df is None or getattr(df, 'empty', True)):
@@ -105,7 +107,7 @@ def fetch_yfinance_data(tickers, period=None, start=None, end=None, interval="1d
                 config.console.print(f"[dim yellow]yfinance 빈 응답({tickers}). 캐시 정리 후 1회 재시도합니다.[/dim yellow]")
             clear_yfinance_cache()
             time.sleep(0.5)  # 파일 잠금 해제 대기
-            return fetch_yfinance_data(tickers, period, start, end, interval, group_by, _retried=True)
+            return fetch_yfinance_data(tickers, period, start, end, interval, group_by, _retried=True, actions=actions)
         return df
     except Exception as e:
         err_msg = str(e).lower()
@@ -114,7 +116,7 @@ def fetch_yfinance_data(tickers, period=None, start=None, end=None, interval="1d
                 config.console.print(f"[dim yellow]yfinance DB Lock 감지: {e}. 캐시 정리 후 재시도합니다.[/dim yellow]")
             clear_yfinance_cache()
             time.sleep(0.5) # 파일 잠금 해제 대기
-            return fetch_yfinance_data(tickers, period, start, end, interval, group_by, _retried=True)
+            return fetch_yfinance_data(tickers, period, start, end, interval, group_by, _retried=True, actions=actions)
         raise e
 
 # ==========================================================
