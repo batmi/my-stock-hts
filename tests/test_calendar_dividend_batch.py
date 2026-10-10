@@ -241,3 +241,17 @@ def test_once_per_key_shares_failure():
     for t in ts:
         t.join()
     assert calls == [1] and errs == ["DART 020"] * 4     # 실패도 한 번, 모두에게 같은 실패
+
+
+def test_batch_is_chunked_so_yf_lock_is_released_between(monkeypatch):
+    calls = []
+    codes = [f"{i:06d}" for i in range(1, 26)]
+    monkeypatch.setattr(E, "_kr_suffix_order", lambda c: (".KS", ".KQ"))
+
+    def fake(tickers, **k):
+        calls.append(len(tickers))
+        return _frame({t: [1.0, 0.0, 0.0] for t in tickers})
+
+    with patch.object(api, "fetch_yfinance_data", side_effect=fake):
+        out = E._kr_yf_dividends_batch(codes)
+    assert calls == [10, 10, 5] and len(out) == 25

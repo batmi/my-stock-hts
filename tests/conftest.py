@@ -376,6 +376,11 @@ def dart_gate_fresh(monkeypatch):
     monkeypatch.setattr(dart_api, "_dart_tokens", None)
     monkeypatch.setattr(dart_api, "_dart_conn_errors", 0)
     monkeypatch.setattr(dart_api, "_dart_blocked_until", 0.0)
+    #  기업코드 맵 '없는 종목 재확인'(2026-10-10)도 프로세스 전역 상태 — 테스트마다 맵 시점·재확인 표식을 비운다.
+    monkeypatch.setattr(dart_api, "_dart_corp_map_asof", 0.0)
+    monkeypatch.setattr(dart_api, "_corp_miss_refresh_day", None)
+    monkeypatch.setattr(dart_api, "_corp_miss_refresh_error", None)
+    monkeypatch.setattr(dart_api, "_dart_corp_map_last_error", None)
 
 
 @pytest.fixture(autouse=True)

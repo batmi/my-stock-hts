@@ -102,6 +102,10 @@ def _kr_yf_dividends(code):
 #   _YF_CACHE_TTL_SEC 동안 디스크에 둔다(매일 08:20 캘린더 알림이 같은 수집을 하므로 낮 화면은 대개 캐시).
 #   조회 실패는 저장하지 않는다 — 실패를 '일정 없음'으로 굳히지 않는다. DART(확정 배당 공시)는 매번 새로 읽는다.
 _KR_DIV_BATCH_PERIOD = "2y"
+#  [2026-10-10] 한 번에 다 묻지 않고 이만큼씩 나눠 묻는다. 일괄 조회는 yfinance 전역 락을 쥔 채 도는데,
+#   Yahoo 가 느린 시각엔 41종목 한 덩어리가 21초 — 그동안 지수·해외 시세 같은 다른 yfinance 조회가 전부 섰다.
+#   나누면 덩어리 사이에 락이 풀려 다른 조회가 끼어든다(종목 수가 같아 총 시간은 거의 같다).
+_KR_DIV_BATCH_CHUNK = 10
 _YF_CACHE_FILE = "calendar_yf_cache.json"
 _YF_CACHE_TTL_SEC = 12 * 3600
 _yf_cache_lock = threading.Lock()
@@ -193,26 +197,29 @@ def _kr_yf_dividends_batch(codes):
     for step in (0, 1):
         if not left:
             break
-        tickers = [c + order[c][step] for c in left]
-        try:
-            df = api.fetch_yfinance_data(tickers, period=_KR_DIV_BATCH_PERIOD, actions=True, threads=True)
-            ok = df is not None and not df.empty and "Dividends" in df.columns.get_level_values(0)
-        except Exception as e:      # noqa: BLE001 - 일괄이 실패하면 단건 경로가 맡는다
-            logger.debug(f"[캘린더] 배당 이력 일괄 조회 실패: {e}")
-            ok = False
-        if not ok:
-            continue
-        divs, closes = df["Dividends"], df["Close"] if "Close" in df.columns.get_level_values(0) else None
         nxt = []
-        for c, t in zip(left, tickers):
-            priced = closes is not None and t in closes and closes[t].notna().any()
-            if not priced:
-                nxt.append(c)       # 이 접미사로는 시세가 없다 — 다른 접미사로
+        for i in range(0, len(left), _KR_DIV_BATCH_CHUNK):
+            chunk = left[i:i + _KR_DIV_BATCH_CHUNK]
+            tickers = [c + order[c][step] for c in chunk]
+            try:
+                df = api.fetch_yfinance_data(tickers, period=_KR_DIV_BATCH_PERIOD, actions=True, threads=True)
+                ok = df is not None and not df.empty and "Dividends" in df.columns.get_level_values(0)
+            except Exception as e:      # noqa: BLE001 - 일괄이 실패하면 단건 경로가 맡는다
+                logger.debug(f"[캘린더] 배당 이력 일괄 조회 실패: {e}")
+                ok = False
+            if not ok:
+                nxt.extend(chunk)       # 이 덩어리는 다른 접미사로 한 번 더(그래도 없으면 단건 경로)
                 continue
-            ser = divs[t].dropna() if t in divs else None
-            ser = ser[ser > 0] if ser is not None else _rows_to_series([])
-            out[c] = ser
-            fresh[c] = {"div": _series_to_rows(ser)}
+            divs, closes = df["Dividends"], df["Close"] if "Close" in df.columns.get_level_values(0) else None
+            for c, t in zip(chunk, tickers):
+                priced = closes is not None and t in closes and closes[t].notna().any()
+                if not priced:
+                    nxt.append(c)       # 이 접미사로는 시세가 없다 — 다른 접미사로
+                    continue
+                ser = divs[t].dropna() if t in divs else None
+                ser = ser[ser > 0] if ser is not None else _rows_to_series([])
+                out[c] = ser
+                fresh[c] = {"div": _series_to_rows(ser)}
         left = nxt
     _yf_cache_put("kr_div", fresh)
     return out

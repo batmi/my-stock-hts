@@ -243,27 +243,65 @@ def get_dart_corp_map(force_refresh=False):
         return _load_dart_corp_map_locked(force_refresh)
 
 
+_DART_CORP_MAP_TTL_DAYS = 30
+_dart_corp_map_asof = 0.0       # 지금 쥔 맵의 자료 시점(time.time) — 파일 mtime 또는 받은 시각
+_dart_corp_map_last_error = None  # 마지막 다시 받기 실패 사유(성공하면 비운다)
+
+
+def _dart_error_text(content):
+    """ZIP 대신 온 오류 응답(XML/JSON)에서 'status 메시지'를 뽑는다. 못 뽑으면 앞부분 그대로."""
+    import re
+    txt = content[:400].decode("utf-8", errors="replace") if isinstance(content, (bytes, bytearray)) else str(content)[:400]
+    st = re.search(r'<status>(\w+)</status>|"status"\s*:\s*"(\w+)"', txt)
+    msg = re.search(r'<message>(.*?)</message>|"message"\s*:\s*"(.*?)"', txt, re.S)
+    if st:
+        code = st.group(1) or st.group(2)
+        text = (msg.group(1) or msg.group(2)).strip() if msg else ""
+        hint = " — DART 시스템 점검 중" if code == "800" else ""
+        return f"DART 응답 status {code} {text}{hint}".strip()
+    return f"ZIP 이 아닌 응답: {txt[:120]!r}"
+
+
+def _save_json_atomic(path, data):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    os.replace(tmp, path)
+
+
 def _load_dart_corp_map_locked(force_refresh):
-    """락 보유 상태에서 DART 기업코드 맵을 파일캐시/다운로드로 로드한다."""
-    global _dart_corp_map_cache
+    """락 보유 상태에서 DART 기업코드 맵을 파일캐시/다운로드로 로드한다.
+
+    [만료된 파일도 버리지 않는다 · 2026-10-10] 종전엔 30일이 지난 뒤 다시 받기가 실패하면 갖고 있던
+     파일을 쓰지 않고 바로 실패했다 — DART 점검(status 800, 2026-10-09 아침 실측)·IP 차단과 겹치면
+     6-5~6-8·텔레그램 공시 알림·탐색 업종이 한꺼번에 멈춘다. 종목코드↔고유번호 대응은 거의 바뀌지
+     않으므로(새로 상장한 종목만 빠진다) 옛 파일로 계속 쓰고 경고를 남긴다. 오염 값 폴백이 아니다 —
+     옛 맵에 **있는** 대응은 지금도 맞는 값이다. 빠진 종목은 corp_code_for 가 '모름'으로 다룬다.
+    """
+    global _dart_corp_map_cache, _dart_corp_map_asof, _dart_corp_map_last_error
     cache_path = os.path.join(config.JSON_DIR, "dart_corp_map.json")
 
-    # 파일 캐시 확인 (30일 이내면 재사용)
-    if not force_refresh and os.path.exists(cache_path):
+    stale = None            # (맵, mtime) — 다시 받기가 실패하면 쓴다
+    if os.path.exists(cache_path):
         try:
-            age_days = (time.time() - os.path.getmtime(cache_path)) / 86400.0
-            if age_days < 30:
-                with open(cache_path, "r", encoding="utf-8") as f:
-                    _dart_corp_map_cache = json.load(f)
-                return _dart_corp_map_cache
-        except Exception:
-            pass
+            mtime = os.path.getmtime(cache_path)
+            with open(cache_path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict) and loaded:
+                if not force_refresh and (time.time() - mtime) / 86400.0 < _DART_CORP_MAP_TTL_DAYS:
+                    _dart_corp_map_cache, _dart_corp_map_asof = loaded, mtime
+                    return _dart_corp_map_cache
+                stale = (loaded, mtime)
+        except Exception as e:      # noqa: BLE001 - 깨진 파일은 새로 받는다
+            logger.warning(f"[DART] corp_map 캐시 읽기 실패({cache_path}): {e}")
 
     # 신규 다운로드 (ZIP 안에 CORPCODE.xml)
     try:
         import zipfile, io
         import xml.etree.ElementTree as ET
         res = _dart_get("corpCode.xml", {"crtfc_key": config.DART_API_KEY}, timeout=20)
+        if not res.content.startswith(b"PK"):
+            raise DartQueryError(_dart_error_text(res.content))
 
         # [메모리 최적화] 전체 XML(수십 MB)을 트리로 올리지 않고 스트리밍 파싱(iterparse)으로
         # <list> 요소를 하나씩 처리 후 즉시 비워(clear) 메모리 피크를 최소화한다. (저사양 보호)
@@ -280,21 +318,75 @@ def _load_dart_corp_map_locked(force_refresh):
                     item.clear()  # 처리한 요소 즉시 해제
 
         if corp_map:
-            _dart_corp_map_cache = corp_map
+            _dart_corp_map_cache, _dart_corp_map_asof = corp_map, time.time()
+            _dart_corp_map_last_error = None
             try:
-                with open(cache_path, "w", encoding="utf-8") as f:
-                    json.dump(corp_map, f)
+                _save_json_atomic(cache_path, corp_map)
             except Exception as e:
                 logger.warning(f"[DART] corp_map 캐시 저장 실패: {e}")
             return corp_map
+        raise DartQueryError("DART 기업코드 맵이 비어 있습니다(파싱 결과 0건)")
     except Exception as e:
-        logger.error(f"[DART] corp_map 다운로드 오류: {e}")
-        if not _dart_corp_map_cache:
-            raise DartQueryError(f"DART 기업코드 맵을 받지 못했습니다: {e}") from e
+        reason = str(e)
+        _dart_corp_map_last_error = reason
+        if _dart_corp_map_cache:
+            logger.warning(f"[DART] corp_map 다시 받기 실패 — 쥐고 있던 맵을 계속 씁니다: {reason}")
+            return _dart_corp_map_cache
+        if stale is not None:
+            age = (time.time() - stale[1]) / 86400.0
+            logger.warning(f"[DART] corp_map 다시 받기 실패 — 만료된 파일({age:.0f}일 전)을 계속 씁니다: {reason}")
+            _dart_corp_map_cache, _dart_corp_map_asof = stale
+            return _dart_corp_map_cache
+        logger.error(f"[DART] corp_map 다운로드 오류: {reason}")
+        raise DartQueryError(f"DART 기업코드 맵을 받지 못했습니다: {reason}") from e
 
-    if not _dart_corp_map_cache:
-        raise DartQueryError("DART 기업코드 맵이 비어 있습니다(다운로드/파싱 실패)")
-    return _dart_corp_map_cache
+
+#  [2026-10-10] 맵에 없는 종목 — 맵은 기동 때 한 번 읽고 최대 30일 그대로 쓰므로, 그 사이 상장해 관심종목에
+#   넣은 종목은 맵에 없다. 종전엔 12곳이 전부 '해당 없음(빈 값)'으로 답했다 — 조회를 못 한 것인데 '공시 없음'
+#   으로 보였다. 맵이 하루보다 오래됐으면 하루 한 번 다시 받아 확인하고, 다시 받기가 실패하면 '모름'(예외)이다.
+_corp_miss_lock = threading.Lock()
+_corp_miss_refresh_day = None   # 다시 받기를 시도한 날짜(하루 한 번)
+_corp_miss_refresh_error = None # 그날 다시 받기가 실패했으면 사유
+
+
+def _is_watchlist_etf(code):
+    """관심종목에 ETF 로 등록된 코드인가. (6-6 공시는 국내 ETF 도 훑는다 — 24개가 매일 맵 재확인을 부르면 안 된다)"""
+    try:
+        sd = getattr(config.session, "stock_data", None) or {}
+        return any(s.get("code") == code for key in ("etfs_kr", "etfs_us") for s in sd.get(key, []))
+    except Exception:           # noqa: BLE001
+        return False
+
+
+def corp_code_for(stock_code):
+    """종목코드 → DART 고유번호. 상장사가 아니면(새 맵에도 없음) None, 확인할 수 없으면 DartQueryError."""
+    global _corp_miss_refresh_day, _corp_miss_refresh_error
+    corp = _api().get_dart_corp_map().get(stock_code)
+    if corp:
+        return corp
+    if _is_watchlist_etf(stock_code):
+        return None             # ETF 는 DART 공시 주체가 아니다 — 맵에 없는 게 정상(다시 받을 일이 아니다)
+    if not _dart_corp_map_asof or time.time() - _dart_corp_map_asof < 86400:
+        return None             # 하루 안에 받은 맵에도 없다 — 진짜로 없다(ETF·비상장)
+    today = datetime.now().strftime("%Y%m%d")
+    with _corp_miss_lock:
+        if _corp_miss_refresh_day != today:
+            _corp_miss_refresh_day, _corp_miss_refresh_error = today, None
+            before = _dart_corp_map_asof
+            logger.info(f"[DART] 기업코드 맵에 없는 종목({stock_code}) — 맵을 다시 받아 확인합니다")
+            try:
+                _api().get_dart_corp_map(force_refresh=True)
+            except DartQueryError as e:
+                _corp_miss_refresh_error = str(e)
+            if _dart_corp_map_asof == before and not _corp_miss_refresh_error:
+                _corp_miss_refresh_error = _dart_corp_map_last_error or "기업코드 맵 다시 받기 실패(옛 맵 유지)"
+        err = _corp_miss_refresh_error
+    corp = _api().get_dart_corp_map().get(stock_code)
+    if corp:
+        return corp
+    if err:
+        raise DartQueryError(f"{stock_code}: 기업코드 맵에 없고 맵을 새로 받지 못했습니다 — {err}")
+    return None
 
 
 def get_dart_dividend(stock_code, year=None, reprt_code="11011"):
@@ -307,7 +399,7 @@ def get_dart_dividend(stock_code, year=None, reprt_code="11011"):
         # 사업보고서는 다음 해 3월경 공시되므로 직전 회계연도를 우선 조회
         year = datetime.now().year - 1
 
-    corp = _api().get_dart_corp_map().get(stock_code)
+    corp = corp_code_for(stock_code)
     if not corp:
         return None
 
@@ -351,7 +443,7 @@ def get_dart_acc_month(stock_code):
         return _dart_acc_month_cache[stock_code]
 
     acc = None
-    corp = _api().get_dart_corp_map().get(stock_code)
+    corp = corp_code_for(stock_code)
     if corp:
         data = _api().call_dart("company.json", {"corp_code": corp})
         if isinstance(data, dict):
@@ -376,7 +468,7 @@ def get_dart_disclosures(stock_code, days=30, pblntf_ty=None, page_count=100):
     150~250건이라 창의 앞부분(가장 오래된 쪽)이 통째로 빠졌다. 실적 예상일은 하필 그
     오래된 쪽(1년 전 공시)에서 나온다. 한 페이지가 꽉 차면 다음 페이지를 이어 받는다.
     """
-    corp = _api().get_dart_corp_map().get(stock_code)
+    corp = corp_code_for(stock_code)
     if not corp:
         return []
     end = datetime.now()
@@ -412,6 +504,11 @@ def get_dart_disclosures(stock_code, days=30, pblntf_ty=None, page_count=100):
             })
         if added == 0 or len(rows) < int(page_count):
             break
+    else:
+        #  [2026-10-10] 상한까지 꽉 찼다 — 창의 오래된 쪽이 잘렸을 수 있다(관심 41종목 중 삼성전자만 해당:
+        #   730일 3,708건). 조용히 넘기지 않고 남긴다. 거래소공시 등 유형(pblntf_ty)을 좁히면 대개 풀린다.
+        logger.warning(f"[DART] {stock_code} 공시 목록이 {_DISCLOSURE_MAX_PAGES}쪽 상한에 닿았다 — "
+                       f"{days}일 창의 오래된 쪽이 빠졌을 수 있음(유형 {pblntf_ty or '전체'}, {len(out)}건)")
     return out
 
 
@@ -484,7 +581,7 @@ def get_dart_insider_trades(stock_code, since=None, keep_baseline=False):
            유지가 대량 취득으로 보이므로, 직전 보유수량을 알아야 실제 증감을 차분으로
            복원할 수 있다. 보고자당 1건이라 메모리 부담은 거의 없다.
     """
-    corp = _api().get_dart_corp_map().get(stock_code)
+    corp = corp_code_for(stock_code)
     if not corp:
         return []
     rows = _api().call_dart("elestock.json", {"corp_code": corp})
@@ -514,7 +611,7 @@ def get_dart_major_holdings(stock_code):
 
     반환: [{rcept_no, rcept_dt, repror, reason, qty, chg, rate, rate_chg}, ...]
     """
-    corp = _api().get_dart_corp_map().get(stock_code)
+    corp = corp_code_for(stock_code)
     if not corp:
         return []
     rows = _api().call_dart("majorstock.json", {"corp_code": corp})
@@ -540,7 +637,7 @@ def get_dart_financials(stock_code, year, reprt_code):
 
     reprt_code: 11011=사업, 11012=반기, 11013=1분기, 11014=3분기.
     """
-    corp = _api().get_dart_corp_map().get(stock_code)
+    corp = corp_code_for(stock_code)
     if not corp:
         return None
     rows = _api().call_dart("fnlttSinglAcnt.json", {
@@ -555,7 +652,7 @@ def get_dart_paid_increase_detail(stock_code, bgn_de, end_de):
     주요 필드: nstk_ostk_cnt(신주 보통주), nstk_estk_cnt(신주 기타주),
     bfic_tisstk_ostk(증자 전 발행주식총수), ic_mthn(증자방식), fdpp_*(자금 목적).
     """
-    corp = _api().get_dart_corp_map().get(stock_code)
+    corp = corp_code_for(stock_code)
     if not corp:
         return []
     rows = _api().call_dart("piicDecsn.json", {
@@ -582,7 +679,7 @@ def get_dart_bond_issue_detail(stock_code, bgn_de, end_de, kind="CB"):
     endpoint = _BOND_ENDPOINTS.get(kind)
     if not endpoint:
         return []
-    corp = _api().get_dart_corp_map().get(stock_code)
+    corp = corp_code_for(stock_code)
     if not corp:
         return []
     rows = _api().call_dart(endpoint, {
@@ -597,7 +694,7 @@ def _decsn_rows(stock_code, endpoint, bgn_de, end_de):
 
     이 계열(자기주식·무상증자·감자 등)은 rcept_dt를 주지 않아 접수번호에서 복원해 주입한다.
     """
-    corp = _api().get_dart_corp_map().get(stock_code)
+    corp = corp_code_for(stock_code)
     if not corp:
         return []
     rows = _api().call_dart(endpoint, {
@@ -677,7 +774,7 @@ def get_dart_shares_outstanding(stock_code):
     """
     if stock_code in _dart_shares_cache:
         return _dart_shares_cache[stock_code]
-    corp = _api().get_dart_corp_map().get(stock_code)
+    corp = corp_code_for(stock_code)
     result = (None, None)
     if corp:
         y = datetime.now().year
@@ -712,7 +809,7 @@ def get_dart_financial_index(stock_code, year, reprt_code, idx_cl_code):
     idx_cl_code: M210000 수익성 / M220000 안정성 / M230000 성장성 / M240000 활동성.
     row 필드: idx_nm(지표명), idx_val(값), bsns_year, stlm_dt. 없으면 None.
     """
-    corp = _api().get_dart_corp_map().get(stock_code)
+    corp = corp_code_for(stock_code)
     if not corp:
         return None
     rows = _api().call_dart("fnlttSinglIndx.json", {

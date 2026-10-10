@@ -86,7 +86,7 @@ def lookup(codes, progress=None, today=None):
     progress: progress(done, total) — 새로 묻는 건수 기준.
     """
     import api
-    from modules.dart_api import DartBlockedError, DartQueryError
+    from modules.dart_api import DartBlockedError, DartQueryError, corp_code_for
 
     today = today or date.today()
     with _lock:
@@ -97,7 +97,7 @@ def lookup(codes, progress=None, today=None):
             return known, None
 
         try:
-            corp_map = api.get_dart_corp_map()
+            api.get_dart_corp_map()
         except DartQueryError as e:
             return known, str(e)
 
@@ -105,10 +105,11 @@ def lookup(codes, progress=None, today=None):
         for i, code in enumerate(todo):
             if progress:
                 progress(i, len(todo))
-            corp = corp_map.get(code)
-            if not corp:            # 맵에 없음(최근 상장으로 맵이 아직 모름 등) — 모름으로 둔다
-                continue
             try:
+                #  맵에 없으면 하루 한 번 맵을 다시 받아 확인한다(새로 상장한 종목). 그래도 없으면 모름으로 둔다.
+                corp = corp_code_for(code)
+                if not corp:
+                    continue
                 data = api.call_dart("company.json", {"corp_code": corp})
             except DartBlockedError as e:
                 reason = str(e)
