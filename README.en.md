@@ -549,9 +549,11 @@ my-stock-hts/
 │   ├── holiday_calendar_update.py # 7-day auto refresh of the holidays package with before/after diff alerts
 │   ├── krx_daily.py        # Domestic daily bars (Open API first → FDR fallback; today's bar appended from FDR — its close swapped to the regular-session close by api/toss)
 │   ├── krx_openapi.py      # KRX Open API primary source (per-date snapshots in data/krx_openapi.db, backfill, split adjustment)
-│   ├── krx_data.py         # Official KRX data (gold, indices, derivatives, flows)
+│   ├── krx_data.py         # Official KRX data (gold, indices, VKOSPI200, KOSPI200 futures — delegated to Open API)
 │   ├── intraday_bars.py    # Intraday bar collection/cache (tvDatafeed)
 │   ├── dart_api.py         # OpenDART integration
+│   ├── industry.py         # Domestic industry (DART company profile KSIC code, 180-day cache — discover rules)
+│   ├── ksic11.py           # KSIC rev. 11 name table (do not edit by hand)
 │   ├── market_halt.py      # Circuit breaker / VI detection
 │   ├── telegram_bot.py     # Telegram command handling
 │   ├── telegram_notify.py  # Telegram sending

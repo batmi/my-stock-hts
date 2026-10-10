@@ -125,7 +125,8 @@ def _yf_cache_get(section, key, now=None):
         except Exception:       # noqa: BLE001 - 없거나 깨졌으면 새로 받는다
             return None
     item = (data.get(section) or {}).get(key)
-    if not isinstance(item, dict) or now - float(item.get("at", 0)) >= _YF_CACHE_TTL_SEC:
+    #  'at' 이 비거나 깨진 항목은 만료로 본다(맨 float 은 None/'' 에서 화면 전체를 죽인다).
+    if not isinstance(item, dict) or now - api.safe_float(item.get("at"), default=0.0) >= _YF_CACHE_TTL_SEC:
         return None
     return item
 

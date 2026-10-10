@@ -548,9 +548,11 @@ my-stock-hts/
 │   ├── holiday_calendar_update.py # holidays 패키지 7일 자동 갱신 + 전후 휴장일 비교·알림
 │   ├── krx_daily.py        # 국내 일봉 (Open API 1순위 → FDR 폴백, 오늘 봉은 FDR 덧대기 — 그 봉의 종가는 api/toss가 정규장 종가로 교체)
 │   ├── krx_openapi.py      # KRX Open API 정본 (날짜별 스냅샷 data/krx_openapi.db·백필·분할 보정)
-│   ├── krx_data.py         # KRX 공식 시세 (금현물·지수·파생·수급)
+│   ├── krx_data.py         # KRX 공식 시세 (금현물·지수·V코스피200·코스피200선물 — Open API 위임)
 │   ├── intraday_bars.py    # 분봉 수집·캐시 (tvDatafeed)
 │   ├── dart_api.py         # OpenDART 연동
+│   ├── industry.py         # 국내 업종 (DART 기업개황 표준산업분류 코드, 캐시 180일 — 탐색 메뉴 규칙)
+│   ├── ksic11.py           # 한국표준산업분류 11차 이름표 (손으로 고치지 말 것)
 │   ├── market_halt.py      # 서킷브레이커·VI 감지
 │   ├── telegram_bot.py     # 텔레그램 명령 수신·처리
 │   ├── telegram_notify.py  # 텔레그램 발신
