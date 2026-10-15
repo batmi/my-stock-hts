@@ -76,10 +76,17 @@ def _domestic_page(dates):
 
 
 def _fetch_domestic(pages):
-    """call_api가 pages를 순서대로 돌려주게 하고 호출 횟수를 센다."""
+    """call_api가 pages를 순서대로 돌려주게 하고 **일봉 조회** 호출 횟수를 센다.
+
+    [2026-10-15] 일봉 조회 뒤 '오늘 봉 종가가 임시값인가' 판정이 평일 16시 이후 KIS 휴장일 조회
+     (chk_holiday)를 부른다. 그것까지 세면 평일·휴장일 캐시가 빈 작업자에서만 1회 초과로 실패했다
+     (2026-10-09 금 07:4x·10-15 목 22시 재현, 토요일엔 통과). 이 파일이 재는 것은 페이지 헛호출뿐이다.
+    """
     calls = []
 
     def _fake(url_path, market, category, action, params=None, **kw):
+        if action != "chart":
+            return {'rt_cd': '1', 'msg1': 'test: 일봉 외 호출'}
         calls.append(params)
         i = len(calls) - 1
         return pages[i] if i < len(pages) else pages[-1]

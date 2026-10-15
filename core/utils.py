@@ -365,6 +365,15 @@ def print_breadcrumb():
             config.console.print(f"\n[dim]경로: {path_str}[/dim]")
             config.console.print()
 
+def menu_footer(pairs):
+    """메뉴 하단의 이동 키 줄. pairs: [(키, 이름, 설명), ...] — 예: [("Q", "종료", "Quit"), ("H", "도움말", "Help")].
+
+    [2026-10-15] 종전엔 줄 전체가 [dim]이라, 실제로 누를 수 있는 Q·B·H 가 비활성(회색) 항목처럼 보였다.
+     회색은 '지금 고를 수 없음'에만 쓴다(show_menu disabled). 키·이름은 메뉴 항목과 같은 색, 영문 설명만 흐리게.
+    """
+    return "  [dim]|[/dim]  ".join(f"[menu][{k}] {name}[/menu] [dim]({desc})[/dim]" for k, name, desc in pairs)
+
+
 def show_menu(title, menu_items, default_choice="1", cancel_choice="b", text_before=None,
               custom_prompt=None, disabled=None):
     """
@@ -416,7 +425,7 @@ def show_menu(title, menu_items, default_choice="1", cancel_choice="b", text_bef
     
     # [추가] 1-Depth 메뉴일 경우 하단에 Q/H 안내 및 선택지 추가
     if is_depth_1:
-        config.console.print(f"[dim][{cancel_choice.upper()}] 이전 (Back)  |  [H] 도움말 (Help)[/dim]")
+        config.console.print(menu_footer([(cancel_choice.upper(), "이전", "Back"), ("H", "도움말", "Help")]))
         valid_choices.extend(['h', 'H'])
         
     # [추가] 메인 메뉴 점프(q) 처리를 위해 모든 show_menu의 유효 선택지에 q 포함

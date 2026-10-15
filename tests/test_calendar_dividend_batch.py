@@ -159,8 +159,8 @@ def test_watchlist_events_make_one_batch_call(monkeypatch):
 def test_prewarm_fills_yf_only_without_dart(monkeypatch):
     monkeypatch.setattr(E, "_gather_watchlist", lambda: ([("005930", "삼성전자")], [("MU", "마이크론"), ("NVDA", "엔비디아")]))
     batches, us = [], []
-    monkeypatch.setattr(E, "_kr_yf_dividends_batch", lambda codes: batches.append(list(codes)) or {})
-    monkeypatch.setattr(E, "_collect_us", lambda code, name: us.append(code))
+    monkeypatch.setattr(E, "_kr_yf_dividends_batch", lambda codes, max_age=None: batches.append(list(codes)) or {})
+    monkeypatch.setattr(E, "_collect_us", lambda code, name, max_age=None: us.append(code))
     with patch.object(api, "call_dart", side_effect=AssertionError("예열은 DART 를 부르지 않는다")):
         E.prewarm_yf_cache()
     assert batches == [["005930"]] and us == ["MU", "NVDA"]
@@ -171,9 +171,40 @@ def test_prewarm_stops_between_us_tickers(monkeypatch):
     stop = threading.Event()
     monkeypatch.setattr(E, "_gather_watchlist", lambda: ([], [("MU", "a"), ("NVDA", "b")]))
     seen = []
-    monkeypatch.setattr(E, "_collect_us", lambda code, name: (seen.append(code), stop.set()))
+    monkeypatch.setattr(E, "_collect_us", lambda code, name, max_age=None: (seen.append(code), stop.set()))
     E.prewarm_yf_cache(stop=stop)
     assert seen == ["MU"]
+
+
+def test_prewarm_refreshes_items_before_they_expire(monkeypatch):
+    """[2026-10-15] 예열은 화면보다 짧은 잣대로 '오래됨'을 본다 — 만료 직전 항목을 건너뛰면 다음 주기까지 빈다."""
+    E._yf_cache_put("kr_div", {"005930": {"div": []}}, now=1000.0)
+    E._yf_cache_put("us", {"MU": {"ex": None, "earn": None}}, now=1000.0)
+    t = 1000.0 + E._YF_PREWARM_REFRESH_SEC
+    assert E._yf_cache_get("kr_div", "005930", now=t) is not None                       # 화면은 아직 캐시로
+    assert E._yf_cache_get("kr_div", "005930", now=t, max_age=E._YF_PREWARM_REFRESH_SEC) is None
+    monkeypatch.setattr(E, "_gather_watchlist", lambda: ([("005930", "삼성전자")], [("MU", "마이크론")]))
+    ages = []
+    monkeypatch.setattr(E, "_kr_yf_dividends_batch", lambda codes, max_age=None: ages.append(max_age) or {})
+    monkeypatch.setattr(E, "_collect_us", lambda code, name, max_age=None: ages.append(max_age))
+    E.prewarm_yf_cache()
+    assert ages == [E._YF_PREWARM_REFRESH_SEC] * 2
+
+
+def test_prewarm_cycle_keeps_cache_fresh_between_runs():
+    """예열 주기마다 새로 받으려면 '다시 받을 나이' < 주기 < 화면 유효기간이어야 한다.
+    (종전 6시간 주기·12시간 건너뛰기에선 12~18시간째 6시간 동안 첫 화면이 다시 느렸다)"""
+    from api import chart_cache as cc
+    assert E._YF_PREWARM_REFRESH_SEC < cc.CALENDAR_WARM_INTERVAL_SEC < E._YF_CACHE_TTL_SEC
+    #  주기를 그대로 흉내 낸다: 0·6·12·18·24시간에 예열하고, 그때마다 오래된 항목만 다시 받는다.
+    filled_at, worst = None, 0.0
+    for k in range(6):
+        now = k * cc.CALENDAR_WARM_INTERVAL_SEC + 30.0          # 예열 한 번에 30초 걸린다고 보고
+        if filled_at is not None:
+            worst = max(worst, now - filled_at)
+        if filled_at is None or now - filled_at >= E._YF_PREWARM_REFRESH_SEC:
+            filled_at = now
+    assert worst < E._YF_CACHE_TTL_SEC
 
 
 def test_calendar_warmer_runs_then_stops(monkeypatch):

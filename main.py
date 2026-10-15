@@ -1541,7 +1541,7 @@ def main():
             grid.add_row("[8] 종목 주문 관리", "(Order Management)")
             grid.add_row("[9] 자산 관리", "(Asset Management)")
             config.console.print(grid)
-            config.console.print("[dim][Q] 종료 (Quit)  |  [H] 도움말 (Help)[/dim]")
+            config.console.print(utils.menu_footer([("Q", "종료", "Quit"), ("H", "도움말", "Help")]))
             config.console.print("[dim]" + "─"*50 + "[/dim]"); config.console.print()
             try:
                 choice = Prompt.ask("선택 ", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "q", "Q", "h", "H"], default=last_choice)

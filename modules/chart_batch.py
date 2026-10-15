@@ -242,6 +242,7 @@ def batch_chart_menu():
     """[3]-7 일괄 차트 생성 메뉴. 바구니는 메뉴를 나갈 때까지 유지된다(같은 종목으로 유형만 바꿔 다시 그리기)."""
     basket = []
     base_len = len(context.USER_ACTION_BREADCRUMB)
+    last_choice = "1"
     while True:
         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_len]
         menu_items = [
@@ -250,12 +251,16 @@ def batch_chart_menu():
             ("5", "시장 지수", "Market Indices"), ("6", "직접 입력", "Direct Input, comma-separated"),
             ("7", "선택 비우기", "Clear"), ("8", "차트 생성 실행", "Run"),
         ]
+        #  [2026-10-15] 다른 메뉴와 같이 마지막 선택을 기본값으로 둔다(종전엔 바구니가 차면 늘 8번 고정).
+        #   비활성 항목(바구니가 비었을 때의 7·8)이 마지막 선택이면 1번으로 돌아간다.
+        default = "1" if (not basket and last_choice in ("7", "8")) else last_choice
         choice = utils.show_menu("일괄 차트 생성 (Batch Chart)", menu_items,
-                                 default_choice="8" if basket else "1",
+                                 default_choice=default,
                                  text_before=_basket_text(basket),
                                  disabled=None if basket else {"7", "8"})
         if choice.lower() in ("b", "q"):
             return
+        last_choice = choice
         sub_map = dict((k, v) for k, v, _ in menu_items)
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {sub_map.get(choice, '')}")
 

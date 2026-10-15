@@ -10,12 +10,15 @@
 [호출 예산] 상장사 하나에 한 번씩 불러야 한다. 처음 한 번 수백 건이 들고, 그 뒤로는 캐시
  (json/dart_industry.json)에서 끝난다 — 업종은 거의 안 바뀌므로 REFRESH_DAYS 마다 다시 묻는다.
  속도는 dart_api 의 관문(토큰 버킷 DART_BURST·DART_REFILL_PER_SEC)이 정하고, 차단기가 열리면 그 자리에서 멈춘다.
+ 대량 조회라 관문보다 더 묶는다(FAST_CALLS·PACE_SEC·MAX_PER_RUN·REFRESH_JITTER_DAYS 주석 참조).
  **여기서 스레드를 늘리지 말 것** — 2026-10-07 4스레드 일괄 조회가 DART IP 차단을 불렀다.
 """
 import json
 import logging
 import os
 import threading
+import time
+import zlib
 from datetime import date, datetime
 
 import config
@@ -26,6 +29,17 @@ logger = logging.getLogger(__name__)
 CACHE_FILE = "dart_industry.json"
 REFRESH_DAYS = 180          # 이보다 오래된 항목은 다시 묻는다(실패하면 옛 값을 계속 쓴다)
 SAVE_EVERY = 20             # 조회 도중 끊겨도 받은 만큼은 남게 이만큼마다 저장
+#  [2026-10-15] 대량 조회 예산. 관문(DART_BURST 1000건 즉시·이후 초당 5건)은 메뉴 6의 짧은 몰림에 맞춘 것이라,
+#   탐색 메뉴가 시가총액 상위 2,000위(후보 약 1,500건)를 처음 채우면 2~3분 동안 쉬지 않고 이어진다 —
+#   10-07 IP 차단을 부른 것과 같은 꼴(수천 건을 몇 분 동안 연달아)이다. 그래서 이 모듈만 따로 더 묶는다:
+#    · 한 번 실행에 처음 FAST_CALLS 건은 관문 속도로, 그 뒤로는 PACE_SEC 간격(분당 60건)으로 보낸다
+#    · 한 번 실행에 MAX_PER_RUN 건까지만 묻고 나머지는 '업종 미상'으로 두어 다음 실행에 이어 받는다
+#    · 만료일을 종목마다 REFRESH_JITTER_DAYS 안에서 흩는다 — 첫날 한꺼번에 받은 항목이 180일 뒤 같은 날
+#      한꺼번에 만료되어 같은 대량 조회가 되풀이되지 않게. 새로 받을 종목을 만료된 종목보다 먼저 묻는다.
+FAST_CALLS = 300
+PACE_SEC = 1.0
+MAX_PER_RUN = 600
+REFRESH_JITTER_DAYS = 60
 
 _lock = threading.Lock()
 
@@ -60,12 +74,17 @@ def _save(cache):
         logger.warning(f"[업종] 캐시 저장 실패({path}): {e}")
 
 
-def _is_stale(entry, today):
+def _refresh_days(code):
+    """종목마다 고정된 만료 일수(REFRESH_DAYS ~ +REFRESH_JITTER_DAYS-1) — 실행마다 같은 값이어야 한다(hash 는 실행마다 바뀐다)."""
+    return REFRESH_DAYS + zlib.crc32(str(code).encode()) % REFRESH_JITTER_DAYS
+
+
+def _is_stale(entry, today, code=""):
     try:
         at = datetime.strptime(str(entry.get("at", ""))[:10], "%Y-%m-%d").date()
     except ValueError:
         return True
-    return (today - at).days >= REFRESH_DAYS
+    return (today - at).days >= _refresh_days(code)
 
 
 def name(ksic):
@@ -92,24 +111,31 @@ def lookup(codes, progress=None, today=None):
     with _lock:
         cache = _load()
         known = {c: cache[c].get("ksic", "") for c in codes if c in cache}
-        todo = [c for c in codes if c not in cache or _is_stale(cache[c], today)]
+        #  새로 받을 종목이 먼저(업종 미상을 줄인다), 만료된 종목은 옛 값이 있으니 뒤로.
+        todo = ([c for c in codes if c not in cache]
+                + [c for c in codes if c in cache and _is_stale(cache[c], today, c)])
         if not todo:
             return known, None
+        deferred = max(0, len(todo) - MAX_PER_RUN)
+        todo = todo[:MAX_PER_RUN]
 
         try:
             api.get_dart_corp_map()
         except DartQueryError as e:
             return known, str(e)
 
-        reason, dirty, failed = None, 0, 0
+        reason, dirty, failed, sent = None, 0, 0, 0
         for i, code in enumerate(todo):
             if progress:
                 progress(i, len(todo))
+            if sent >= FAST_CALLS and PACE_SEC > 0:
+                time.sleep(PACE_SEC)
             try:
                 #  맵에 없으면 하루 한 번 맵을 다시 받아 확인한다(새로 상장한 종목). 그래도 없으면 모름으로 둔다.
                 corp = corp_code_for(code)
                 if not corp:
                     continue
+                sent += 1
                 data = api.call_dart("company.json", {"corp_code": corp})
             except DartBlockedError as e:
                 reason = str(e)
@@ -128,5 +154,8 @@ def lookup(codes, progress=None, today=None):
             progress(len(todo), len(todo))
         if dirty:
             _save(cache)
+        if deferred and not (reason and "중단" in reason):
+            note = f"이번 실행 상한 {MAX_PER_RUN}건 — 남은 {deferred}건은 다음 실행에서"
+            reason = f"{reason} · {note}" if reason else note
         logger.info(f"[업종] DART 조회 {dirty}/{len(todo)}건 저장" + (f" · {reason}" if reason else ""))
         return known, reason

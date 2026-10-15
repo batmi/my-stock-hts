@@ -547,3 +547,27 @@ def test_oco_challenges_an_already_reached_level(mock_ask, mock_menu, mock_bal, 
     trading.register_reserved_order()
 
     mock_insert.assert_not_called()
+
+
+# ==========================================================
+# 쓸 수 없는 메뉴 항목은 숨기지 않고 회색 (2026-10-15 통일)
+# ==========================================================
+@pytest.mark.parametrize("ct, disabled", [("STOP", None), ("TRAILING_STOP", {"2"})])
+def test_reserved_edit_greys_out_target_instead_of_hiding(ct, disabled):
+    """목표가가 없는 조건도 [2] 자리를 지킨다 — 빼면 번호가 1·3·4 로 비었다."""
+    order = {"id": 7, "name": "삼성전자", "code": "005930", "market": "KR", "condition_type": ct,
+             "target_price": 70000, "order_type": "sell", "qty": 1, "order_price": 0, "_curr_price": 70000}
+    with patch('modules.trading.utils.show_menu', return_value="b") as menu, \
+         patch('config.console.print'):
+        trading._edit_reserved_order(order)
+    items = menu.call_args.args[1]
+    assert [k for k, *_ in items] == ["1", "2", "3", "4"]
+    assert menu.call_args.kwargs.get("disabled") == disabled
+
+
+def test_menu_footer_keys_are_not_greyed():
+    """하단 Q·B·H 는 실제로 누를 수 있다 — 회색(dim)은 비활성에만 쓴다. 키·이름은 메뉴 항목 색, 설명만 흐리게."""
+    from core import utils as u
+    s = u.menu_footer([("Q", "종료", "Quit"), ("H", "도움말", "Help")])
+    assert "[menu][Q] 종료[/menu]" in s and "[menu][H] 도움말[/menu]" in s
+    assert "[dim](Quit)[/dim]" in s and "[dim][Q]" not in s

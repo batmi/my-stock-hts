@@ -1061,8 +1061,14 @@ def manual_holding_analysis():
 
     while True:
         config.console.print()
-        choice = Prompt.ask("작업 선택 (0: 분석, 1: 추가, 2: 수정, 3: 삭제) [dim](이전: b, 메인: q)[/dim]",
-                            choices=["0", "1", "2", "3", "b", "q"], default="0")
+        #  [2026-10-15] 종목이 없으면 분석·수정·삭제를 회색으로 두고 고를 수 없게 한다(show_menu disabled 와 같은 규칙).
+        #   종전엔 고르게 둔 뒤 '종목이 없습니다'로 돌려보냈다.
+        def _opt(key, label):
+            return f"{key}: {label}" if positions else f"[dim]{key}: {label}[/dim]"
+        choice = Prompt.ask(f"작업 선택 ({_opt('0', '분석')}, 1: 추가, {_opt('2', '수정')}, {_opt('3', '삭제')}) "
+                            f"[dim](이전: b, 메인: q)[/dim]",
+                            choices=(["0", "1", "2", "3"] if positions else ["1"]) + ["b", "q"],
+                            default="0" if positions else "1")
         if choice.lower() in ('b', 'q'):
             # 분석 없이 나가더라도 편집분은 잃지 않도록 저장 여부는 물어본다.
             if dirty:

@@ -108,6 +108,10 @@ _KR_DIV_BATCH_PERIOD = "2y"
 _KR_DIV_BATCH_CHUNK = 10
 _YF_CACHE_FILE = "calendar_yf_cache.json"
 _YF_CACHE_TTL_SEC = 12 * 3600
+#  [2026-10-15] 예열은 이보다 오래된 항목을 다시 받는다. 화면 기준(12시간)과 같은 잣대로 '신선하면 건너뛰기'를
+#   하면 6시간 주기 예열이 만료 직전 항목(나이 12시간-몇 초)을 건너뛰어, 12~18시간째 6시간 동안 캐시가 비었다.
+#   예열 주기(6시간)보다 짧게 잡아 매 주기 새로 채운다 — 화면이 보는 나이는 늘 주기+조회 시간 이하다.
+_YF_PREWARM_REFRESH_SEC = 4 * 3600
 _yf_cache_lock = threading.Lock()
 
 
@@ -115,9 +119,10 @@ def _yf_cache_path():
     return os.path.join(config.JSON_DIR, _YF_CACHE_FILE)
 
 
-def _yf_cache_get(section, key, now=None):
-    """신선한 캐시 항목(dict) 또는 None."""
+def _yf_cache_get(section, key, now=None, max_age=None):
+    """신선한 캐시 항목(dict) 또는 None. max_age(초)를 주면 그보다 오래된 것도 None(예열용)."""
     now = now or time.time()
+    max_age = _YF_CACHE_TTL_SEC if max_age is None else min(max_age, _YF_CACHE_TTL_SEC)
     with _yf_cache_lock:
         try:
             with open(_yf_cache_path(), "r", encoding="utf-8") as f:
@@ -126,7 +131,7 @@ def _yf_cache_get(section, key, now=None):
             return None
     item = (data.get(section) or {}).get(key)
     #  'at' 이 비거나 깨진 항목은 만료로 본다(맨 float 은 None/'' 에서 화면 전체를 죽인다).
-    if not isinstance(item, dict) or now - api.safe_float(item.get("at"), default=0.0) >= _YF_CACHE_TTL_SEC:
+    if not isinstance(item, dict) or now - api.safe_float(item.get("at"), default=0.0) >= max_age:
         return None
     return item
 
@@ -177,7 +182,7 @@ def _kr_suffix_order(code):
     return (".KQ", ".KS") if mk == "KOSDAQ" else (".KS", ".KQ")
 
 
-def _kr_yf_dividends_batch(codes):
+def _kr_yf_dividends_batch(codes, max_age=None):
     """{종목코드: 배당 시계열(>0만, 배당이 없으면 빈 시계열)} — 결과에 없는 종목은 **모름**(조회 실패).
 
     캐시(12시간)에 있는 종목은 묻지 않는다. 나머지는 시장 구분에 맞는 접미사로 한 번에 묻고,
@@ -189,7 +194,7 @@ def _kr_yf_dividends_batch(codes):
         return out
     left = []
     for c in codes:
-        hit = _yf_cache_get("kr_div", c)
+        hit = _yf_cache_get("kr_div", c, max_age=max_age)
         if hit is not None:
             out[c] = _rows_to_series(hit.get("div") or [])
         else:
@@ -230,17 +235,18 @@ def prewarm_yf_cache(stop=None):
     """캘린더의 yfinance 몫(국내 배당 이력·해외 예정일)만 미리 캐시에 채운다 — DART 는 부르지 않는다.
 
     [왜 · 2026-10-09] 캐시는 화면을 열 때만 채워져 하루 첫 화면은 여전히 10~40초(Yahoo 응답에 따라)였다.
-     앱이 기동 뒤 백그라운드에서 채우고(api.start_calendar_warmer) 만료 전에 다시 채운다. 캐시에 있는
-     종목은 묻지 않으므로 신선할 때는 네트워크 0회다. DART 확정 공시는 화면에서 매번 새로 읽는다.
+     앱이 기동 뒤 백그라운드에서 채우고(api.start_calendar_warmer) 만료 전에 다시 채운다. 예열 주기마다
+     _YF_PREWARM_REFRESH_SEC 보다 오래된 항목을 새로 받는다(만료 직전 항목을 건너뛰면 다음 주기까지 빈다).
+     새로 받다 실패한 항목은 옛 캐시가 12시간까지 그대로 쓰인다. DART 확정 공시는 화면에서 매번 새로 읽는다.
     stop: threading.Event — 켜지면 해외 종목 사이에서 멈춘다.
     """
     kr, us = _gather_watchlist()
     if kr:
-        _kr_yf_dividends_batch([c for c, _n in kr])
+        _kr_yf_dividends_batch([c for c, _n in kr], max_age=_YF_PREWARM_REFRESH_SEC)
     for code, name in us:
         if stop is not None and stop.is_set():
             return
-        _collect_us(code, name)
+        _collect_us(code, name, max_age=_YF_PREWARM_REFRESH_SEC)
 
 
 def _yf_ex_dates(div_series):
@@ -486,11 +492,11 @@ def _parse_us_date(val):
         return None
 
 
-def _collect_us(code, name):
+def _collect_us(code, name, max_age=None):
     """해외 종목의 예정 배당락일/실적발표일(yfinance, best-effort). 성공한 조회는 12시간 캐시."""
     if yf is None:
         return None
-    hit = _yf_cache_get("us", code)
+    hit = _yf_cache_get("us", code, max_age=max_age)
     if hit is not None:
         ex_div, earnings = _parse_us_date(hit.get("ex")), _parse_us_date(hit.get("earn"))
     else:

@@ -137,3 +137,22 @@ def test_menu_flow_watchlist_all_then_run():
     basket, p_type, months = run.call_args.args
     assert [b["code"] for b in basket] == ["005930", "000660"]
     assert p_type == "weekly" and all(b["ovs"] is False for b in basket)
+
+
+def test_menu_default_is_last_choice():
+    """[2026-10-15] 다른 메뉴처럼 마지막 선택이 기본값 — 바구니가 차도 8번에 고정되지 않는다.
+    비활성(바구니가 빈 7·8)이 마지막 선택이면 1번으로."""
+    stocks = [{"code": "005930", "name": "삼성전자"}]
+    choices = iter(["1", "3", "7", "b"])
+    defaults = []
+
+    def fake_menu(title, items, default_choice="1", **k):
+        defaults.append(default_choice)
+        return next(choices)
+
+    with patch("core.utils.show_menu", side_effect=fake_menu), \
+         patch.object(config.session, "stock_data", {"stocks_kr": stocks, "stocks_us": []}, create=True), \
+         patch.object(chart_batch, "_pick_from_watchlist", return_value=[]), \
+         patch("core.utils.pause"), patch("core.utils.clear_screen"):
+        chart_batch.batch_chart_menu()
+    assert defaults == ["1", "1", "3", "1"]

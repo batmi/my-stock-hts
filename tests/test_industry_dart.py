@@ -115,6 +115,43 @@ def test_corp_map_failure_returns_cached_only(cache_dir, monkeypatch):
     assert known == {"000010": "264"} and "기업코드" in why
 
 
+# ── 대량 조회 예산(2026-10-15) — 관문만으론 탐색 2,000위 첫 조회가 10-07 차단과 같은 꼴이 된다 ──────────
+def test_paces_after_fast_calls_and_caps_per_run(cache_dir, monkeypatch):
+    codes = {f"{i:06d}": "264" for i in range(1, 11)}
+    asked = _dart(monkeypatch, codes)
+    monkeypatch.setattr(industry, "FAST_CALLS", 3)
+    monkeypatch.setattr(industry, "MAX_PER_RUN", 7)
+    slept = []
+    monkeypatch.setattr(industry.time, "sleep", lambda s: slept.append(s))
+    known, why = industry.lookup(list(codes), today=date(2026, 10, 7))
+    assert len(asked) == 7 and len(known) == 7          # 한 번에 상한까지만
+    assert slept == [industry.PACE_SEC] * 4              # 처음 3건은 바로, 나머지 4건은 간격을 두고
+    assert "남은 3건은 다음 실행" in why
+    asked.clear()
+    known, why = industry.lookup(list(codes), today=date(2026, 10, 7))
+    assert len(asked) == 3 and len(known) == 10 and why is None   # 다음 실행에 이어 받는다
+
+
+def test_missing_codes_go_before_stale_ones(cache_dir, monkeypatch):
+    (cache_dir / industry.CACHE_FILE).write_text(json.dumps(
+        {"000010": {"ksic": "264", "at": "2025-01-01"}}))
+    asked = _dart(monkeypatch, {"000010": "264", "000020": "61220"})
+    monkeypatch.setattr(industry, "MAX_PER_RUN", 1)
+    known, _ = industry.lookup(["000010", "000020"], today=date(2026, 10, 7))
+    assert asked == ["000020"]                           # 모르는 종목 먼저 — 만료된 종목은 옛 값이 있다
+    assert known == {"000010": "264", "000020": "61220"}
+
+
+def test_refresh_dates_are_spread_and_stable():
+    """첫날 한꺼번에 받은 항목이 180일 뒤 같은 날 한꺼번에 만료되지 않게 흩는다(실행이 바뀌어도 같은 값)."""
+    days = [industry._refresh_days(f"{i:06d}") for i in range(1000)]
+    assert min(days) >= industry.REFRESH_DAYS
+    assert max(days) < industry.REFRESH_DAYS + industry.REFRESH_JITTER_DAYS
+    assert len(set(days)) > industry.REFRESH_JITTER_DAYS // 2
+    assert max(days.count(d) for d in set(days)) < 60    # 하루에 몰리는 건 1000건 중 수십 건
+    assert industry._refresh_days("005930") == industry._refresh_days("005930")
+
+
 def test_lookup_is_sequential_no_thread_pool():
     """2026-10-07 IP 차단의 원인 — 이 모듈에서 병렬 조회를 들이지 말 것."""
     import inspect

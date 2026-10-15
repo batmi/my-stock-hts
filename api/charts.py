@@ -520,8 +520,12 @@ def _kis_daily_close_is_provisional():
     16:00~새벽 배치 전(같은 달력일의 krx_after·offhours). 배치가 끝난 다음날 새벽에는 봉 날짜가
     어제라 여기 걸리지 않는다. 15:30~16:00 휴게는 애프터 체결이 없어 그대로 정규장 종가다.
     """
+    #  [2026-10-15] 시각을 먼저 본다 — _nxt_quote_phase 는 평일이면 KIS 휴장일 조회(chk_holiday)를 부른다.
+    #   16시 전에는 답이 늘 False 인데도 일봉 조회마다 휴장일 호출이 한 번 끼어들었다.
+    if datetime.now().strftime("%H%M") < "1600":
+        return False
     try:
-        return _api()._nxt_quote_phase() in ('krx_after', 'offhours') and datetime.now().strftime("%H%M") >= "1600"
+        return _api()._nxt_quote_phase() in ('krx_after', 'offhours')
     except Exception:      # noqa: BLE001
         return False
 

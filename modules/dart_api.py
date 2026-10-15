@@ -69,7 +69,7 @@ class DartBlockedError(DartQueryError):
 #      8스레드로 몰아 부르고(6-7 은 41종목에 369건 이상), 이 몰림은 몇 달 동안 차단된 적이 없다. 막힌 것은
 #      10분 넘게 쉬지 않고 이어진 대량 호출이었다. [2026-10-08] 처음엔 고정 간격 0.25초로 막았는데, 그러면
 #      6-7 하나가 1분 반 넘게 걸려 운용자가 체감할 만큼 느려졌다 — 몰림은 살리고 지속량만 묶는다.
-#    · 연결이 연달아 끊기면(차단 신호) DART_BLOCK_COOLDOWN_SEC 동안 아예 보내지 않는다 — 막힌 상태에서
+#    · 연결이 연달아 끊기면(차단 신호) 처음엔 DART_BLOCK_SHORT_SEC, 그 뒤에도 이어지면 DART_BLOCK_COOLDOWN_SEC 동안 아예 보내지 않는다 — 막힌 상태에서
 #      두드리면 차단이 길어질 수 있다. 020(한도 초과)은 자정까지 보내지 않는다.
 DART_BURST = 1000                     # 쉬고 있다가 바로 보낼 수 있는 건수 — 메뉴 6 무거운 화면 두세 개를 연달아 열어도 기다리지 않는다
 DART_REFILL_PER_SEC = 5.0             # 버킷이 빈 뒤의 지속 속도(분당 300건) — 3분 남짓이면 다시 가득
@@ -80,6 +80,11 @@ DART_BLOCK_AFTER_CONN_ERRORS = 3      # 연결 오류가 이만큼 연달아 나
 DART_CONNECT_TIMEOUT_SEC = 5
 DART_READ_TIMEOUT_SEC = 6
 DART_BLOCK_COOLDOWN_SEC = 30 * 60
+#  [2026-10-15] 연결 오류 3연속을 곧장 30분 차단으로 보면, 8스레드 화면(6-5~6-8)에서는 와이파이·DNS 가 1~2초만
+#   끊겨도 동시에 나간 3건이 함께 실패해 30분이 묶였다(네트워크가 곧 돌아와도 공시 알림까지 멈춘다).
+#   처음엔 짧게 막고, 풀린 뒤에도 성공 없이 다시 3연속이면(=IP 차단이 이어진다) 그때 길게 막는다.
+DART_BLOCK_SHORT_SEC = 2 * 60
+_dart_conn_tripped = False            # 짧은 차단을 연 뒤 아직 성공한 호출이 없다(다음 차단은 길게)
 
 _dart_gate_lock = threading.Lock()
 _dart_tokens = None                   # 남은 토큰(음수 = 앞서 줄 선 몫). None 이면 가득 찬 것으로 시작
@@ -144,7 +149,7 @@ def _send(url, params=None, timeout=None):
 
 def _dart_get(path, params, timeout):
     """DART 로 나가는 유일한 HTTP 자리. 속도를 지키고, 차단기가 열려 있으면 보내지 않는다."""
-    global _dart_conn_errors
+    global _dart_conn_errors, _dart_conn_tripped
     reason = dart_blocked_reason()
     if reason:
         raise DartBlockedError(f"DART 호출 중단 중({reason})")
@@ -174,11 +179,17 @@ def _dart_get(path, params, timeout):
             _dart_conn_errors += 1
             if _dart_conn_errors >= DART_BLOCK_AFTER_CONN_ERRORS:
                 _dart_conn_errors = 0
-                _open_breaker(time.time() + DART_BLOCK_COOLDOWN_SEC,
-                              f"연결이 {DART_BLOCK_AFTER_CONN_ERRORS}번 연달아 끊김(IP 차단 의심)")
+                if _dart_conn_tripped:
+                    _open_breaker(time.time() + DART_BLOCK_COOLDOWN_SEC,
+                                  f"짧은 중단 뒤에도 연결이 {DART_BLOCK_AFTER_CONN_ERRORS}번 연달아 끊김(IP 차단 의심)")
+                else:
+                    _dart_conn_tripped = True
+                    _open_breaker(time.time() + DART_BLOCK_SHORT_SEC,
+                                  f"연결이 {DART_BLOCK_AFTER_CONN_ERRORS}번 연달아 끊김(네트워크 일시 장애 또는 IP 차단)")
         raise
     with _dart_gate_lock:
         _dart_conn_errors = 0
+        _dart_conn_tripped = False
     return res
 
 

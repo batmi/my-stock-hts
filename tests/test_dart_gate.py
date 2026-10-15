@@ -78,6 +78,37 @@ def test_repeated_connection_errors_open_breaker(monkeypatch, key):
     assert len(calls) == dart_api.DART_BLOCK_AFTER_CONN_ERRORS     # 막힌 뒤엔 보내지 않는다
 
 
+def _trip(monkeypatch):
+    """연결 오류를 DART_BLOCK_AFTER_CONN_ERRORS 번 연달아 내고, 열린 차단기의 남은 초를 돌려준다."""
+    def boom(*a, **k):
+        raise requests.exceptions.ConnectionError("reset")
+
+    monkeypatch.setattr(dart_api, "_send", boom)
+    for _ in range(dart_api.DART_BLOCK_AFTER_CONN_ERRORS):
+        with pytest.raises(dart_api.DartQueryError):
+            dart_api.call_dart("company.json", {"corp_code": "1"})
+    return dart_api._dart_blocked_until - time.time()
+
+
+def test_first_trip_is_short_then_escalates(monkeypatch, key):
+    """[2026-10-15] 1~2초 끊김(8스레드가 동시에 3건 실패)으로 30분을 묶지 않는다 — 처음엔 짧게,
+    풀린 뒤에도 성공 없이 다시 끊기면(IP 차단이 이어진다) 길게."""
+    left = _trip(monkeypatch)
+    assert 0 < left <= dart_api.DART_BLOCK_SHORT_SEC
+    monkeypatch.setattr(dart_api, "_dart_blocked_until", 0.0)          # 짧은 차단이 풀렸다
+    left = _trip(monkeypatch)
+    assert left > dart_api.DART_BLOCK_SHORT_SEC
+    assert left <= dart_api.DART_BLOCK_COOLDOWN_SEC
+
+
+def test_success_after_short_trip_resets_escalation(monkeypatch, key):
+    _trip(monkeypatch)
+    monkeypatch.setattr(dart_api, "_dart_blocked_until", 0.0)
+    monkeypatch.setattr(dart_api, "_send", lambda *a, **k: _ok())
+    dart_api.call_dart("company.json", {"corp_code": "1"})              # 네트워크가 돌아왔다
+    assert _trip(monkeypatch) <= dart_api.DART_BLOCK_SHORT_SEC           # 다음 끊김은 다시 짧게
+
+
 def test_success_resets_connection_error_count(monkeypatch, key):
     seq = iter([requests.exceptions.ConnectionError("x"), requests.exceptions.ConnectionError("x"),
                 None, requests.exceptions.ConnectionError("x"), requests.exceptions.ConnectionError("x")])

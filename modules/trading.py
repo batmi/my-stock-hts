@@ -2860,16 +2860,16 @@ def _edit_reserved_order(order):
             f"유효: {'무기한' if (order.get('expire_dt') or '20991231') == '20991231' else order['expire_dt']}",
             title="예약 주문 수정", border_style="cyan", expand=False))
 
-        items = [("1", "수량 변경", "Quantity")]
-        if editable_target:
-            items.append(("2", "발동 목표가 변경", "Target Price"))
-        items.append(("3", "주문 단가 변경", "Order Price"))
-        items.append(("4", "유효 기간 변경", "Expiry"))
+        #  [2026-10-15] 목표가가 없는 조건이면 [2]를 빼지 않고 회색으로 둔다(show_menu disabled) —
+        #   빼면 번호가 1·3·4 로 비었다. 쓸 수 없는 항목은 어디서나 회색·선택 불가로 통일한다.
+        items = [("1", "수량 변경", "Quantity"), ("2", "발동 목표가 변경", "Target Price"),
+                 ("3", "주문 단가 변경", "Order Price"), ("4", "유효 기간 변경", "Expiry")]
         if not editable_target:
             config.console.print("[dim]※ 이 조건은 목표가가 없어 수량·단가·유효기간만 바꿀 수 있습니다. "
                                  "조건 자체를 바꾸려면 취소 후 다시 등록하세요.[/dim]")
 
-        choice = utils.show_menu(f"수정할 항목 (ID {order['id']})", items, default_choice="1")
+        choice = utils.show_menu(f"수정할 항목 (ID {order['id']})", items, default_choice="1",
+                                 disabled=None if editable_target else {"2"})
         if choice.lower() in ('b', 'q'):
             return False
 
