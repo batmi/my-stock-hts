@@ -44,8 +44,11 @@ class TLSAdapter(HTTPAdapter):
             # urllib3 v2.x
             self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, ssl_minimum_version=ssl.TLSVersion.TLSv1_2)
         else:
-            # urllib3 v1.x
-            self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, ssl_version=ssl.PROTOCOL_TLSv1_2)
+            # urllib3 v1.x — requirements 는 urllib3>=2.0 이라 여기 오면 오래된 환경이다.
+            #  [2026-10-16] OpenSSL 4.0 으로 빌드된 파이썬(Homebrew 3.14.8)에는 ssl.PROTOCOL_TLSv1_2 가
+            #  없다 — 상수가 없으면 PROTOCOL_TLS_CLIENT(현행 OpenSSL 기본 하한 TLS 1.2)로 간다.
+            proto = getattr(ssl, "PROTOCOL_TLSv1_2", ssl.PROTOCOL_TLS_CLIENT)
+            self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, ssl_version=proto)
 
 # Rate Limit(초당 한도 초과) 재시도 대기. 서버 장애용 지수 백오프와 분리한다 —
 #  한도 초과는 다음 TPS 창만 비면 풀리므로, 재시도까지 몇 초씩 잠들 이유가 없다.

@@ -232,7 +232,13 @@ def test_conclusion_closes_zero_fill_cancelled_orders(paper, monkeypatch):
 def live_trader(paper, monkeypatch):
     from modules.auto_trade import AutoTrader
     clock, _ = paper
-    clock.t = datetime.now() - timedelta(minutes=10)      # 미체결 타임아웃(120초)을 넘긴 주문
+    #  미체결 타임아웃을 넘긴 주문 — 단, **같은 날** 안에서. 종전엔 `지금 − 10분` 이라 자정 직후
+    #   10분 동안은 주문이 전날로 넘어가 체결 반영이 안 됐다(2026-10-17 00:03 결정적 실패, 운용 영향
+    #   없음 — 가상투자는 국내 전용이라 자정을 넘는 주문이 없다). 시각은 그날 0시로 묶고 타임아웃을
+    #   0초로 고정해 벽시계와 무관하게 '오래된 미체결'을 만든다([[test-suite-open-delay-clock]]).
+    now = datetime.now()
+    clock.t = max(now - timedelta(minutes=10), now.replace(hour=0, minute=0, second=0, microsecond=0))
+    monkeypatch.setattr(config, "UNFILLED_ORDER_CANCEL_SECONDS", 0, raising=False)
     monkeypatch.setattr(api, "send_telegram_message", lambda *a, **k: True)
     AutoTrader._instance = None
     t = AutoTrader()

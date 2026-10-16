@@ -88,8 +88,60 @@ def isolate_krx_openapi_snapshot(tmp_path_factory):
         config.KRX_OPENAPI_DB_PATH = prev
 
 
+#  [격리 · 2026-10-16] 세션 초기화(core.session.initialize)가 읽는 계좌·앱키 환경변수.
+#   종전에는 운용자 셸(~/.htsrc)의 **실제 값**을 그대로 읽었다 — 맥북 테스트 출력에 실계좌번호가
+#   찍혔고, 그 값이 없는 CI(GitHub Actions)에서는 initialize 가 '계좌번호 입력' 프롬프트를 띄워
+#   모든 테스트가 준비 단계에서 죽었다(2026-10-16 첫 CI 실행 32건 전부 setup ERROR).
+#   네트워크는 차단 픽스처가 막지만, 테스트 결과가 셸 환경에 따라 갈리면 안 된다 → 항상 가짜 값.
+_FAKE_SESSION_ENV = {
+    "REAL_APP_KEY": "TEST_REAL_APP_KEY", "REAL_APP_SECRET": "TEST_REAL_APP_SECRET",
+    "REAL_ACC_NUM": "11112222-01", "REAL_HTS_ID": "testhts",
+    "AUTO_APP_KEY": "", "AUTO_APP_SECRET": "", "AUTO_ACC_NUM": "",
+    "VIRT_APP_KEY": "", "VIRT_APP_SECRET": "", "VIRT_ACC_NUM": "",
+    "TOSS_APP_KEY": "TEST_TOSS_APP_KEY", "TOSS_APP_SECRET": "TEST_TOSS_APP_SECRET",
+    "TOSS_ACC_NUM": "33334444", "KIS_HTS_ID": "", "HTS_ID": "",
+}
+#  외부 서비스 키는 '있다/없다'로 기능이 갈리므로 없을 때만 가짜로 채운다(있으면 그대로 — 네트워크는 차단).
+_FAKE_SERVICE_ENV_DEFAULTS = {"DART_API_KEY": "TEST_DART_KEY", "KRX_OPENAPI_KEY": "TEST_KRX_OPENAPI_KEY"}
+
+
+@pytest.fixture(autouse=True)
+def fresh_krx_openapi_db(tmp_path_factory, isolate_krx_openapi_snapshot):
+    """[격리 · 2026-10-16] 테스트마다 빈 Open API 저장소.
+
+    세션 하나가 임시 DB 하나를 공유하자, 가짜 응답(_call 패치)으로 적재한 테스트의 행이 같은 워커의
+    뒤 테스트로 넘어갔다 — CI 에서 지수 폴백 체인 테스트가 KIS/tvDatafeed 대신 앞 테스트가 남긴 가짜
+    코스피 6,700 평평한 1년치를 읽고 'OPENAPI' 로 답했다(test_toss_api, 실행 순서에 따라서만 실패).
+    경로를 직접 지정하는 테스트(test_krx_openapi 의 store)는 이 위에서 다시 바꾼다.
+    """
+    path = tmp_path_factory.mktemp("krx_openapi_t") / "krx_openapi.db"
+    prev = config.KRX_OPENAPI_DB_PATH
+    config.KRX_OPENAPI_DB_PATH = str(path)
+    yield str(path)
+    config.KRX_OPENAPI_DB_PATH = prev
+
+
 @pytest.fixture(scope="session", autouse=True)
-def setup_config(isolate_production_db):
+def fake_session_env():
+    prev = {k: os.environ.get(k) for k in list(_FAKE_SESSION_ENV) + list(_FAKE_SERVICE_ENV_DEFAULTS)}
+    os.environ.update(_FAKE_SESSION_ENV)
+    for k, v in _FAKE_SERVICE_ENV_DEFAULTS.items():
+        os.environ.setdefault(k, v)
+    #  config 가 import 시점에 한 번 읽는 키는 환경변수로는 늦다 — 값에 직접 넣는다.
+    prev_gemini = getattr(config, "GEMINI_API_KEY", "")
+    if not prev_gemini:
+        config.GEMINI_API_KEY = "TEST_GEMINI_KEY"
+    yield
+    config.GEMINI_API_KEY = prev_gemini
+    for k, v in prev.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+
+@pytest.fixture(scope="session", autouse=True)
+def setup_config(isolate_production_db, fake_session_env):
     """테스트 세션 동안 사용할 설정 초기화 (한투증권 모드).
 
     [주의] mode 1은 **가상투자(paper)**다. 여기서 mode 1로 초기화하면 paper_broker가
