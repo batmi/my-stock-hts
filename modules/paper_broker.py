@@ -13,12 +13,15 @@ trailing_stops·half_tp_status가 code를 PK로 쓰기 때문에 같은 파일�
 실계좌 포지션의 트레일링 최고가가 페이퍼 포지션에 오염된다.
 
 [체결 모델] 트레이더가 실시간 호가로 정한 주문가에 **즉시 전량 체결**로 가정하고
-수수료·거래세만 차감한다. 미체결·부분체결은 재현하지 않는다(1단계 범위).
+수수료·거래세만 차감한다. 미체결·부분체결은 기본적으로 재현하지 않는다. 주문 상태기계를
+시험할 때만 '시험 모델'(config.PAPER_FAULT_MODEL, 기본 꺼짐 — 아래 절)을 켜 거절·지연·
+부분체결·취소 경합을 시드로 재현한다. 시험 모델은 현실 시장의 재현이 아니다.
 백테스트가 종가 기준이라 청산일 하락갭(실측 평균 -1.44%)만큼 낙관 편향이 있는 반면,
 이 모드는 실제 장중 판단 시점 가격으로 체결되므로 그 편향이 없다.
 """
 import json
 import logging
+import random
 import threading
 from datetime import datetime
 
@@ -86,6 +89,13 @@ def init_tables():
                        odno TEXT)''')
     cur.execute('''CREATE TABLE IF NOT EXISTS paper_equity (
                        date TEXT PRIMARY KEY, cash REAL, stock_value REAL, total REAL)''')
+    # [시험 모델] 지연·부분체결 주문의 상태. 즉시 체결(기본)에서는 한 행도 생기지 않는다.
+    cur.execute('''CREATE TABLE IF NOT EXISTS paper_orders (
+                       odno TEXT PRIMARY KEY, code TEXT, name TEXT, side TEXT,
+                       qty INTEGER, price REAL, filled_qty INTEGER DEFAULT 0,
+                       fill_amount REAL DEFAULT 0, status TEXT, created_at TEXT,
+                       updated_at TEXT, last_fill_at TEXT, schedule TEXT,
+                       next_stage INTEGER DEFAULT 0, race INTEGER DEFAULT 0, note TEXT)''')
     # [마이그레이션] 스냅샷 시점의 시드(누적 투입원금). 누적 수익률의 분모다.
     #  현재 시드로 과거 행을 나누면 입출금 전 구간의 수익률이 왜곡된다 — 같은 계열의 사고를
     #  daily_asset_history 에서 겪었다([[daily-asset-baseline-transfers]]). 분모는 그 시점 값을
@@ -312,6 +322,7 @@ def get_domestic_balance():
         #  실계좌 경로는 구간별 예외를 잡아 degraded 로 표시한다(account.get_asset_status_data).
         #  가상 계좌도 같은 기계를 타야 한다 — 그러려면 실패가 **예외로** 올라가야 한다.
         cash = get_cash(strict=True)
+        open_sell = _open_sell_qty()   # [시험 모델] 미체결 매도 잔량(즉시 체결에서는 빈 dict)
         output1, total_eval, total_pchs = [], 0.0, 0.0
         for p in positions:
             price, price_stale = _price_with_status(p['code'], p['avg_price'])
@@ -324,7 +335,7 @@ def get_domestic_balance():
                 'pdno': p['code'],
                 'prdt_name': p['name'] or p['code'],
                 'hldg_qty': str(p['qty']),
-                'ord_psbl_qty': str(p['qty']),
+                'ord_psbl_qty': str(max(0, p['qty'] - open_sell.get(p['code'], 0))),
                 'pchs_avg_pric': f"{p['avg_price']:.4f}",
                 'pchs_amt': str(int(pchs)),
                 'prpr': str(int(price)),
@@ -355,8 +366,10 @@ def get_deposit_balance():
     조회 실패는 '예수금 0원'이 아니다 — 던져서 호출부가 구간 실패로 다루게 한다.
     """
     cash = int(get_cash(strict=True))
+    #  [시험 모델] 미체결 매수 잔량은 주문가능금액에서 뺀다(실계좌와 같다). 즉시 체결에서는 0.
+    reserved = int(_reserved_cash())
     return {"deposit": cash, "foreign_deposit": 0, "withdraw": cash,
-            "d2_deposit": cash, "order_possible": cash, "d2_real": cash}
+            "d2_deposit": cash, "order_possible": cash - reserved, "d2_real": cash}
 
 
 def fill_price(price, action, market=False, is_etf=False):
@@ -396,7 +409,10 @@ def _etf_untraded(code, name):
 
 
 def place_order(action, code, qty, price, name=None):
-    """api.place_order 대체. 즉시 전량 체결로 처리하고 KIS 형식 응답을 만든다."""
+    """api.place_order 대체. 즉시 전량 체결로 처리하고 KIS 형식 응답을 만든다.
+
+    시험 모델(config.PAPER_FAULT_MODEL)이 켜져 있으면 거절·지연·부분체결 시나리오를 따른다.
+    """
     with _lock:
         try:
             qty = int(qty)
@@ -427,9 +443,9 @@ def place_order(action, code, qty, price, name=None):
             if price <= 0:
                 return _fail("현재가를 확인할 수 없어 체결 불가")
 
-        pos = _db().execute_query(
-            "SELECT name, qty, avg_price, first_buy_at FROM paper_positions WHERE code=?",
-            (code,), fetch='one')
+        if fault_model_enabled():
+            return _place_with_faults(action, code, name, qty, price, is_market)
+
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         odno = _new_odno(code)
 
@@ -442,85 +458,101 @@ def place_order(action, code, qty, price, name=None):
             _is_etf = False
         price = fill_price(price, action, market=is_market, is_etf=_is_etf)
 
-        #  [원자성 · 2026-09-05] 예수금·포지션·체결 기록은 **함께** 맞아야 한다. 종전에는
-        #   세 번의 execute_query 로 각각 커밋했다. 중간에 하나가 실패하면(잠금 5회 소진 →
-        #   execute_query 는 raise 한다) 절반만 반영된 원장이 남는다:
-        #     · 매수 — 예수금은 빠졌는데 포지션이 없다(가상 자산이 조용히 증발)
-        #     · 매도 — 예수금은 늘었는데 포지션이 그대로다(자산이 공짜로 불어난다)
-        #   가상 계좌의 자산곡선은 드로다운 → 리스크 한도로 이어지므로, 어긋난 원장이
-        #   그대로 매매 강도를 바꾼다([[daily-asset-baseline-transfers]] 와 같은 계열).
-        #   읽기(get_cash·pos)는 트랜잭션 **밖**에서 이미 끝냈다 — 같은 스레드에서
-        #   execute_query 를 부르면 먼저 커밋해 버려 트랜잭션이 깨진다.
-        _FILL_SQL = ("INSERT INTO paper_fills (time, type, code, name, qty, price, amount, fee, "
-                     "profit_amt, profit_rate, odno) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
-        _CASH_SQL = "INSERT OR REPLACE INTO paper_state (key, value) VALUES (?, ?)"
-
-        if action.lower() == 'buy':
-            amount = price * qty
-            fee = trading_cost.buy_fee(amount)
-            try:
-                cash = get_cash(strict=True)
-            except Exception as e:      # noqa: BLE001
-                return _fail(f"가상 예수금을 읽지 못했습니다 — 주문하지 않습니다: {e}")
-            if cash < amount + fee:
-                return _fail(f"가상 예수금 부족 (필요 {int(amount+fee):,} / 보유 {int(cash):,})")
-            if pos and int(pos[1]) > 0:
-                new_qty = int(pos[1]) + qty
-                new_avg = (float(pos[2]) * int(pos[1]) + amount) / new_qty
-                pos_sql = ("UPDATE paper_positions SET qty=?, avg_price=?, last_buy_at=?, "
-                           "name=? WHERE code=?")
-                pos_args = (new_qty, new_avg, now, name or pos[0], code)
-            else:
-                pos_sql = ("INSERT OR REPLACE INTO paper_positions "
-                           "(code, name, qty, avg_price, first_buy_at, last_buy_at) "
-                           "VALUES (?,?,?,?,?,?)")
-                pos_args = (code, name, qty, price, now, now)
-            try:
-                with _db().transaction() as cur:
-                    cur.execute(_CASH_SQL, ('cash', json.dumps(cash - amount - fee)))
-                    cur.execute(pos_sql, pos_args)
-                    cur.execute(_FILL_SQL, (now, '매수', code, name, qty, price,
-                                            amount, fee, 0.0, 0.0, odno))
-            except Exception as e:      # noqa: BLE001
-                logger.error(f"[PAPER] 매수 원장 기록 실패({code} {qty}주) — "
-                             f"되돌렸습니다(주문 없음): {e}", exc_info=True)
-                return _fail(f"가상 원장 기록 실패 — 주문이 접수되지 않았습니다: {e}")
-
-        elif action.lower() == 'sell':
-            if not pos or int(pos[1]) < qty:
-                return _fail(f"가상 보유수량 부족 (요청 {qty} / 보유 {int(pos[1]) if pos else 0})")
-            amount = price * qty
-            fee = trading_cost.sell_fee(amount)
-            avg = float(pos[2])
-            # 보고 손익은 왕복 비용을 모두 뺀다(매수 수수료는 진입 시 현금에서 이미 나갔지만,
-            # '이 거래로 얼마를 벌었나'는 양쪽을 다 뺀 값이어야 한다 — trading_cost 주석 참조).
-            profit_amt, profit_rate = trading_cost.net_realized_profit(avg, price, qty)
-            #  strict — 여기서 0으로 떨어지면 매도대금이 예수금 잔액을 **덮는다**.
-            try:
-                new_cash = get_cash(strict=True) + amount - fee
-            except Exception as e:      # noqa: BLE001
-                return _fail(f"가상 예수금을 읽지 못했습니다 — 주문하지 않습니다: {e}")
-            remain = int(pos[1]) - qty
-            if remain > 0:
-                pos_sql, pos_args = "UPDATE paper_positions SET qty=? WHERE code=?", (remain, code)
-            else:
-                pos_sql, pos_args = "DELETE FROM paper_positions WHERE code=?", (code,)
-            try:
-                with _db().transaction() as cur:
-                    cur.execute(_CASH_SQL, ('cash', json.dumps(new_cash)))
-                    cur.execute(pos_sql, pos_args)
-                    cur.execute(_FILL_SQL, (now, '매도', code, name or pos[0], qty, price,
-                                            amount, fee, profit_amt, profit_rate, odno))
-            except Exception as e:      # noqa: BLE001
-                logger.error(f"[PAPER] 매도 원장 기록 실패({code} {qty}주) — "
-                             f"되돌렸습니다(주문 없음): {e}", exc_info=True)
-                return _fail(f"가상 원장 기록 실패 — 주문이 접수되지 않았습니다: {e}")
-        else:
-            return _fail(f"알 수 없는 주문 유형: {action}")
+        _booked = _book_fill(action, code, name, qty, price, odno, now)
+        if _booked is not None:
+            return _booked
 
         logger.info(f"[PAPER] {action.upper()} 체결 {code} {qty}주 @{price:,.0f} (No.{odno})")
         return {"rt_cd": "0", "msg_cd": "PAPER", "msg1": "가상투자 체결",
                 "output": {"ODNO": odno, "ORD_TMD": datetime.now().strftime('%H%M%S')}}
+
+
+def _book_fill(action, code, name, qty, price, odno, now):
+    """체결 한 건을 가상 원장(예수금·포지션·체결 기록)에 한 트랜잭션으로 반영한다.
+
+    성공이면 None, 실패면 _fail() 응답을 돌려준다. 즉시 체결(place_order)과 시험 모델의
+    지연·분할 체결(_advance_orders)이 같은 원장 코드를 쓴다 — 두 벌이면 비용·손익 계산이
+    갈라진다. 호출부가 _lock 을 잡고 부른다.
+    """
+    pos = _db().execute_query(
+        "SELECT name, qty, avg_price, first_buy_at FROM paper_positions WHERE code=?",
+        (code,), fetch='one')
+    #  [원자성 · 2026-09-05] 예수금·포지션·체결 기록은 **함께** 맞아야 한다. 종전에는
+    #   세 번의 execute_query 로 각각 커밋했다. 중간에 하나가 실패하면(잠금 5회 소진 →
+    #   execute_query 는 raise 한다) 절반만 반영된 원장이 남는다:
+    #     · 매수 — 예수금은 빠졌는데 포지션이 없다(가상 자산이 조용히 증발)
+    #     · 매도 — 예수금은 늘었는데 포지션이 그대로다(자산이 공짜로 불어난다)
+    #   가상 계좌의 자산곡선은 드로다운 → 리스크 한도로 이어지므로, 어긋난 원장이
+    #   그대로 매매 강도를 바꾼다([[daily-asset-baseline-transfers]] 와 같은 계열).
+    #   읽기(get_cash·pos)는 트랜잭션 **밖**에서 이미 끝냈다 — 같은 스레드에서
+    #   execute_query 를 부르면 먼저 커밋해 버려 트랜잭션이 깨진다.
+    _FILL_SQL = ("INSERT INTO paper_fills (time, type, code, name, qty, price, amount, fee, "
+                 "profit_amt, profit_rate, odno) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+    _CASH_SQL = "INSERT OR REPLACE INTO paper_state (key, value) VALUES (?, ?)"
+
+    if action.lower() == 'buy':
+        amount = price * qty
+        fee = trading_cost.buy_fee(amount)
+        try:
+            cash = get_cash(strict=True)
+        except Exception as e:      # noqa: BLE001
+            return _fail(f"가상 예수금을 읽지 못했습니다 — 주문하지 않습니다: {e}")
+        if cash < amount + fee:
+            return _fail(f"가상 예수금 부족 (필요 {int(amount+fee):,} / 보유 {int(cash):,})")
+        if pos and int(pos[1]) > 0:
+            new_qty = int(pos[1]) + qty
+            new_avg = (float(pos[2]) * int(pos[1]) + amount) / new_qty
+            pos_sql = ("UPDATE paper_positions SET qty=?, avg_price=?, last_buy_at=?, "
+                       "name=? WHERE code=?")
+            pos_args = (new_qty, new_avg, now, name or pos[0], code)
+        else:
+            pos_sql = ("INSERT OR REPLACE INTO paper_positions "
+                       "(code, name, qty, avg_price, first_buy_at, last_buy_at) "
+                       "VALUES (?,?,?,?,?,?)")
+            pos_args = (code, name, qty, price, now, now)
+        try:
+            with _db().transaction() as cur:
+                cur.execute(_CASH_SQL, ('cash', json.dumps(cash - amount - fee)))
+                cur.execute(pos_sql, pos_args)
+                cur.execute(_FILL_SQL, (now, '매수', code, name, qty, price,
+                                        amount, fee, 0.0, 0.0, odno))
+        except Exception as e:      # noqa: BLE001
+            logger.error(f"[PAPER] 매수 원장 기록 실패({code} {qty}주) — "
+                         f"되돌렸습니다(주문 없음): {e}", exc_info=True)
+            return _fail(f"가상 원장 기록 실패 — 주문이 접수되지 않았습니다: {e}")
+
+    elif action.lower() == 'sell':
+        if not pos or int(pos[1]) < qty:
+            return _fail(f"가상 보유수량 부족 (요청 {qty} / 보유 {int(pos[1]) if pos else 0})")
+        amount = price * qty
+        fee = trading_cost.sell_fee(amount)
+        avg = float(pos[2])
+        # 보고 손익은 왕복 비용을 모두 뺀다(매수 수수료는 진입 시 현금에서 이미 나갔지만,
+        # '이 거래로 얼마를 벌었나'는 양쪽을 다 뺀 값이어야 한다 — trading_cost 주석 참조).
+        profit_amt, profit_rate = trading_cost.net_realized_profit(avg, price, qty)
+        #  strict — 여기서 0으로 떨어지면 매도대금이 예수금 잔액을 **덮는다**.
+        try:
+            new_cash = get_cash(strict=True) + amount - fee
+        except Exception as e:      # noqa: BLE001
+            return _fail(f"가상 예수금을 읽지 못했습니다 — 주문하지 않습니다: {e}")
+        remain = int(pos[1]) - qty
+        if remain > 0:
+            pos_sql, pos_args = "UPDATE paper_positions SET qty=? WHERE code=?", (remain, code)
+        else:
+            pos_sql, pos_args = "DELETE FROM paper_positions WHERE code=?", (code,)
+        try:
+            with _db().transaction() as cur:
+                cur.execute(_CASH_SQL, ('cash', json.dumps(new_cash)))
+                cur.execute(pos_sql, pos_args)
+                cur.execute(_FILL_SQL, (now, '매도', code, name or pos[0], qty, price,
+                                        amount, fee, profit_amt, profit_rate, odno))
+        except Exception as e:      # noqa: BLE001
+            logger.error(f"[PAPER] 매도 원장 기록 실패({code} {qty}주) — "
+                         f"되돌렸습니다(주문 없음): {e}", exc_info=True)
+            return _fail(f"가상 원장 기록 실패 — 주문이 접수되지 않았습니다: {e}")
+    else:
+        return _fail(f"알 수 없는 주문 유형: {action}")
+    return None
 
 
 def _fail(msg):
@@ -604,6 +636,14 @@ def get_fill_by_odno(odno):
     """
     if not odno:
         return None
+    #  [시험 모델] 지연·분할 주문은 **종결된 뒤에만** 누적 체결 한 건으로 답한다. 체결 감시는
+    #   주문번호당 한 번 반영하므로(conclusion._handle_simulation_fill), 부분을 먼저 넘기면
+    #   잔량 체결이 영영 반영되지 않는다. 즉시 체결 주문은 이 표에 없다 — 종전 경로 그대로.
+    order = _order_row(odno)
+    if order is not None:
+        _advance_orders()
+        order = _order_row(odno)
+        return _settled_fill(order)
     row = _db().execute_query(
         f"SELECT {_FILL_COLS} FROM paper_fills WHERE odno=? ORDER BY id DESC",
         (str(odno),), fetch='one')
@@ -977,3 +1017,278 @@ def reset(seed=None):
     _clear_daily_baseline()
     _clear_restricted_stocks()
     return cleared
+
+
+# ==========================================================
+# [시험 모델 · 2026-10-16] 체결 장애 시나리오 — config.PAPER_FAULT_MODEL
+# ==========================================================
+#  목적은 시장 재현이 아니라 **주문 상태기계 시험**이다: 거절, 지연 체결, 부분체결과 잔량,
+#  취소와 체결의 경합, 재시작 뒤 이어지는 미체결. 주문마다 (SEED, 일련번호)로 시나리오를
+#  미리 정해 paper_orders 에 적어 두고, 시간이 된 체결은 누가 조회할 때(미체결 목록·체결
+#  확인·취소·잔고) 진행한다. 같은 SEED·같은 주문 순서면 결과가 같다.
+#  체결 자체는 _book_fill(즉시 체결과 같은 원장 코드)로 남긴다.
+
+_ORDER_COLS = ("odno, code, name, side, qty, price, filled_qty, fill_amount, status, created_at, "
+               "updated_at, last_fill_at, schedule, next_stage, race, note")
+_OPEN = "open"
+_FINAL = ("filled", "cancelled", "failed")
+
+
+def _now():
+    """시험 모델의 시계(테스트가 바꿔 끼운다)."""
+    return datetime.now()
+
+
+def fault_config():
+    cfg = dict(getattr(config, "PAPER_FAULT_MODEL", None) or {})
+    cfg.setdefault("ENABLED", False)
+    return cfg
+
+
+def fault_model_enabled():
+    return bool(fault_config().get("ENABLED"))
+
+
+def _order_dict(r):
+    keys = [k.strip() for k in _ORDER_COLS.split(",")]
+    d = dict(zip(keys, r))
+    d["schedule"] = json.loads(d["schedule"] or "[]")
+    return d
+
+
+def _order_row(odno):
+    try:
+        r = _db().execute_query(f"SELECT {_ORDER_COLS} FROM paper_orders WHERE odno=?",
+                                (str(odno),), fetch='one')
+    except Exception as e:      # noqa: BLE001  (표가 없으면 시험 모델을 쓴 적이 없다)
+        logger.debug(f"[PAPER] 주문 상태 조회 실패({odno}): {e}")
+        return None
+    return _order_dict(r) if r else None
+
+
+def _open_orders_rows():
+    try:
+        rows = _db().execute_query(
+            f"SELECT {_ORDER_COLS} FROM paper_orders WHERE status=? ORDER BY created_at, odno",
+            (_OPEN,), fetch='all') or []
+    except Exception as e:      # noqa: BLE001
+        logger.debug(f"[PAPER] 미체결 조회 실패: {e}")
+        return []
+    return [_order_dict(r) for r in rows]
+
+
+def _next_fault_seq():
+    seq = int(_get_state("fault_seq", 0) or 0) + 1
+    _set_state("fault_seq", seq)
+    return seq
+
+
+def _settled_fill(order):
+    """종결된 주문의 누적 체결 한 건(체결 0이거나 아직 미체결이면 None)."""
+    if not order or order["status"] not in _FINAL or int(order["filled_qty"] or 0) <= 0:
+        return None
+    qty = int(order["filled_qty"])
+    return {"time": order["last_fill_at"] or order["updated_at"], "type": "매수" if order["side"] == "buy" else "매도",
+            "code": order["code"], "name": order["name"], "qty": qty,
+            "price": float(order["fill_amount"]) / qty, "amount": float(order["fill_amount"]),
+            "fee": 0.0, "profit_amt": 0.0, "profit_rate": 0.0, "odno": order["odno"],
+            "partial": qty < int(order["qty"]), "status": order["status"]}
+
+
+def _update_order(odno, **kw):
+    kw["updated_at"] = _now().strftime('%Y-%m-%d %H:%M:%S')
+    cols = ", ".join(f"{k}=?" for k in kw)
+    _db().execute_query(f"UPDATE paper_orders SET {cols} WHERE odno=?", (*kw.values(), str(odno)))
+
+
+def _execute_stage(order, qty, when):
+    """주문 한 건의 체결 단계 하나를 원장에 남긴다. 실패면 주문을 'failed' 로 닫는다."""
+    stamp = when.strftime('%Y-%m-%d %H:%M:%S')
+    booked = _book_fill(order["side"], order["code"], order["name"], qty, order["price"],
+                        order["odno"], stamp)
+    if booked is not None:
+        _update_order(order["odno"], status="failed", note=str(booked.get("msg1")))
+        order["status"] = "failed"
+        return False
+    order["filled_qty"] = int(order["filled_qty"] or 0) + qty
+    order["fill_amount"] = float(order["fill_amount"] or 0) + qty * float(order["price"])
+    done = order["filled_qty"] >= int(order["qty"])
+    order["status"] = "filled" if done else _OPEN
+    _update_order(order["odno"], filled_qty=order["filled_qty"], fill_amount=order["fill_amount"],
+                  status=order["status"], last_fill_at=stamp, next_stage=order["next_stage"])
+    return True
+
+
+def _advance_orders(now=None):
+    """시간이 된 체결 단계를 진행한다. 호출부가 아니어도 _lock 을 잡는다(재진입 가능)."""
+    now = now or _now()
+    with _lock:
+        for order in _open_orders_rows():
+            stages = order["schedule"]
+            while order["status"] == _OPEN and order["next_stage"] < len(stages):
+                at, qty = stages[order["next_stage"]]
+                due = datetime.strptime(at, '%Y-%m-%d %H:%M:%S')
+                if due > now:
+                    break
+                order["next_stage"] += 1
+                #  체결 시각은 '예정 시각'으로 남긴다 — 조회 시각을 쓰면 같은 시드라도 기록이 달라진다
+                if not _execute_stage(order, int(qty), due):
+                    break
+
+
+def _place_with_faults(action, code, name, qty, price, is_market):
+    """시험 모델의 주문 접수 — 시나리오를 정해 적고, 지금 도래한 체결은 바로 진행한다."""
+    cfg = fault_config()
+    side = action.lower()
+    if side not in ("buy", "sell"):
+        return _fail(f"알 수 없는 주문 유형: {action}")
+    seq = _next_fault_seq()
+    rng = random.Random(f"{cfg.get('SEED', 0)}:{seq}")
+    rejected = rng.random() < float(cfg.get("REJECT_PROB", 0) or 0)
+    delayed = rng.random() < float(cfg.get("DELAY_PROB", 0) or 0)
+    partial = rng.random() < float(cfg.get("PARTIAL_PROB", 0) or 0) and qty >= 2
+    race = rng.random() < float(cfg.get("CANCEL_RACE_PROB", 0) or 0)
+    if rejected:
+        return _fail(f"[시험 모델] 주문 거절(시드 {cfg.get('SEED', 0)} · {seq}번째 주문)")
+
+    now = _now()
+    stamp = now.strftime('%Y-%m-%d %H:%M:%S')
+    odno = _new_odno(code)
+    try:
+        import api as _api_mod
+        _is_etf = bool(_api_mod.is_domestic_etf_etn(code, name))
+    except Exception:           # noqa: BLE001
+        _is_etf = False
+    price = fill_price(price, action, market=is_market, is_etf=_is_etf)
+
+    # 접수 시점 확인 — 실계좌처럼 주문가능금액·주문가능수량을 넘는 주문은 받지 않는다
+    if side == "buy":
+        need = price * qty + trading_cost.buy_fee(price * qty)
+        try:
+            avail = get_cash(strict=True) - _reserved_cash()
+        except Exception as e:  # noqa: BLE001
+            return _fail(f"가상 예수금을 읽지 못했습니다 — 주문하지 않습니다: {e}")
+        if avail < need:
+            return _fail(f"가상 주문가능금액 부족 (필요 {int(need):,} / 가능 {int(avail):,})")
+    else:
+        pos = _db().execute_query("SELECT qty FROM paper_positions WHERE code=?", (code,), fetch='one')
+        held = int(pos[0]) if pos else 0
+        if held - _open_sell_qty().get(code, 0) < qty:
+            return _fail(f"가상 주문가능수량 부족 (요청 {qty} / 가능 {held - _open_sell_qty().get(code, 0)})")
+
+    delay = int(cfg.get("DELAY_SECONDS", 30) or 0)
+    first_at = now if not delayed else now.replace(microsecond=0) + _seconds(delay)
+    stages = []
+    if partial:
+        q1 = max(1, min(qty - 1, int(qty * float(cfg.get("PARTIAL_RATIO", 0.5) or 0.5))))
+        stages.append((first_at.strftime('%Y-%m-%d %H:%M:%S'), q1))
+        rem_sec = int(cfg.get("REMAINDER_FILL_SECONDS", 0) or 0)
+        if rem_sec > 0:
+            stages.append(((first_at + _seconds(rem_sec)).strftime('%Y-%m-%d %H:%M:%S'), qty - q1))
+    else:
+        stages.append((first_at.strftime('%Y-%m-%d %H:%M:%S'), qty))
+
+    with _lock:
+        _db().execute_query(
+            f"INSERT INTO paper_orders ({_ORDER_COLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (odno, code, name, side, qty, price, 0, 0.0, _OPEN, stamp, stamp, None,
+             json.dumps(stages), 0, 1 if race else 0,
+             f"seq={seq} delayed={int(delayed)} partial={int(partial)}"))
+        _advance_orders(now)
+    logger.info(f"[PAPER·시험] {side.upper()} 접수 {code} {qty}주 @{price:,.0f} (No.{odno}) "
+                f"지연={delayed} 부분={partial} 경합={race}")
+    return {"rt_cd": "0", "msg_cd": "PAPER", "msg1": "가상투자 접수(시험 모델)",
+            "output": {"ODNO": odno, "ORD_TMD": now.strftime('%H%M%S')}}
+
+
+def _seconds(n):
+    from datetime import timedelta
+    return timedelta(seconds=int(n))
+
+
+def _reserved_cash():
+    """미체결 매수 잔량에 묶인 현금(주문가 기준 + 수수료). 즉시 체결에서는 0."""
+    total = 0.0
+    for o in _open_orders_rows():
+        if o["side"] == "buy":
+            rem = int(o["qty"]) - int(o["filled_qty"] or 0)
+            amt = rem * float(o["price"])
+            total += amt + trading_cost.buy_fee(amt)
+    return total
+
+
+def _open_sell_qty():
+    out = {}
+    for o in _open_orders_rows():
+        if o["side"] == "sell":
+            out[o["code"]] = out.get(o["code"], 0) + int(o["qty"]) - int(o["filled_qty"] or 0)
+    return out
+
+
+def open_orders():
+    """api.get_domestic_open_orders 대체(KIS 정정취소가능주문 형식). 즉시 체결에서는 빈 목록."""
+    _advance_orders()
+    out = []
+    for o in _open_orders_rows():
+        created = datetime.strptime(o["created_at"], '%Y-%m-%d %H:%M:%S')
+        rem = int(o["qty"]) - int(o["filled_qty"] or 0)
+        out.append({"odno": o["odno"], "pdno": o["code"], "prdt_name": o["name"] or o["code"],
+                    "ord_qty": str(o["qty"]), "tot_ccld_qty": str(o["filled_qty"] or 0),
+                    "rmn_qty": str(rem), "psbl_qty": str(rem), "ord_unpr": str(o["price"]),
+                    "ord_tmd": created.strftime('%H%M%S'), "ord_dt": created.strftime('%Y%m%d'),
+                    "sll_buy_dvsn_cd": "02" if o["side"] == "buy" else "01",
+                    "sll_buy_dvsn_cd_name": "매수" if o["side"] == "buy" else "매도", "_paper": True})
+    return out
+
+
+def cancel_order(org_no):
+    """api.revise_cancel_order(취소) 대체. 시험 모델 주문이 아니면 종전 응답(대상 없음)."""
+    with _lock:
+        order = _order_row(org_no)
+        if order is None:
+            return {"rt_cd": "1", "msg_cd": "PAPER_REJECT",
+                    "msg1": "[가상투자] 즉시 체결되어 정정/취소할 주문이 없습니다", "output": {}}
+        _advance_orders()                       # 취소 시각 이전에 도래한 체결이 먼저다
+        order = _order_row(org_no)
+        if order["status"] != _OPEN:
+            return {"rt_cd": "1", "msg_cd": "PAPER_REJECT",
+                    "msg1": f"[가상투자] 이미 종결된 주문입니다({order['status']})", "output": {}}
+        if order["race"]:
+            # 경합: 취소가 닿기 전에 잔량이 체결된다 — 취소는 실패한다
+            rem = int(order["qty"]) - int(order["filled_qty"] or 0)
+            order["next_stage"] = len(order["schedule"])
+            _execute_stage(order, rem, _now())
+            return {"rt_cd": "1", "msg_cd": "PAPER_RACE",
+                    "msg1": "[가상투자·시험] 취소 전에 잔량이 체결되었습니다(경합)", "output": {}}
+        _update_order(org_no, status="cancelled", note=(order.get("note") or "") + " cancelled")
+        return {"rt_cd": "0", "msg_cd": "PAPER", "msg1": "가상투자 취소(시험 모델)",
+                "output": {"ODNO": f"C{org_no}"}}
+
+
+def get_order_state(odno):
+    """시험 모델 주문의 현재 상태 dict(시험 모델 주문이 아니면 None)."""
+    if _order_row(odno) is None:
+        return None
+    _advance_orders()
+    return _order_row(odno)
+
+
+def get_settled_fills():
+    """체결 감시 재기동 복구용 — 주문번호당 한 건(즉시 체결 행은 그대로, 시험 모델 주문은 종결 누적).
+
+    시험 모델을 쓴 적이 없으면 get_fills() 와 같다.
+    """
+    fills = get_fills()
+    try:
+        model = {r[0] for r in (_db().execute_query("SELECT odno FROM paper_orders", fetch='all') or [])}
+    except Exception:           # noqa: BLE001
+        model = set()
+    if not model:
+        return fills
+    _advance_orders()
+    out = [f for f in fills if f.get("odno") not in model]
+    for odno in sorted(model):
+        sf = _settled_fill(_order_row(odno))
+        if sf:
+            out.append(sf)
+    return out

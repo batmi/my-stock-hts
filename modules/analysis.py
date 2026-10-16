@@ -30,6 +30,7 @@ import contextlib
 from core import indicators
 from core import utils
 from core import caching
+from modules import score_model
 import time
 from datetime import datetime, timedelta
 import urllib.request
@@ -863,7 +864,39 @@ def check_smart_money_turnaround(code, is_overseas=False):
         return False, ""
 
 def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, rsi=None, adx=None, cci=None, obv_trend=None, macd=None, macd_signal=None, weights=None, smart_money=False, plus_di=None, minus_di=None, df=None, ind=None, ema_5=None, macd_hist=None, prev_macd_hist=None, prev_cci=None, vol_spike=False, vol_trend=False, w52_pos=None, mom_ret=None, mom_ret_1m=None, mom_ret_3m=None, trend_persist=None):
-    """퀀트 멀티팩터 스코어링 모델 (10점 만점)"""
+    """퀀트 멀티팩터 스코어링 모델 (10점 만점) — (총점, 설명 문자열 목록) 호환 어댑터.
+
+    채점 본체는 score_breakdown 이다. 이 함수는 기존 호출자와 감사 도구의 monkeypatch 지점
+    (analysis.calculate_score)을 유지하려고 남긴 얇은 어댑터이며, 반환값은 리팩터링 전과
+    비트 단위로 같다(tests/test_score_breakdown.py). 항목별 수치가 필요하면 문자열을
+    해석하지 말고 score_breakdown 을 부를 것.
+    """
+    res = score_breakdown(price=price, ema20=ema20, ema60=ema60, ema120=ema120, sar=sar, rsi=rsi, adx=adx, cci=cci,
+                          obv_trend=obv_trend, macd=macd, macd_signal=macd_signal, weights=weights,
+                          smart_money=smart_money, plus_di=plus_di, minus_di=minus_di, df=df, ind=ind, ema_5=ema_5,
+                          macd_hist=macd_hist, prev_macd_hist=prev_macd_hist, prev_cci=prev_cci,
+                          vol_spike=vol_spike, vol_trend=vol_trend, w52_pos=w52_pos, mom_ret=mom_ret,
+                          mom_ret_1m=mom_ret_1m, mom_ret_3m=mom_ret_3m, trend_persist=trend_persist)
+    _LAST_BREAKDOWN.res = res
+    return res.total, res.details
+
+
+# [관측] 어댑터가 방금 만든 구조화 결과를 **같은 스레드에서** 꺼내는 통로. 엔진은 기존처럼
+#  calculate_score 를 부르고(테스트·감사 도구의 monkeypatch 지점 유지), 계측이 필요할 때만
+#  last_breakdown_for(details) 로 그 호출의 항목 결과를 얻는다 — 채점을 두 번 하지 않는다.
+#  details 리스트의 **동일성**(is)으로 '바로 그 호출'인지 확인하므로, calculate_score 가 목으로
+#  바뀌었거나 다른 호출이 끼어든 경우에는 None 을 돌려준다(계측만 빠지고 판단은 그대로).
+_LAST_BREAKDOWN = threading.local()
+
+
+def last_breakdown_for(details):
+    res = getattr(_LAST_BREAKDOWN, "res", None)
+    if res is not None and details is not None and res.details is details:
+        return res
+    return None
+
+
+def _resolve_weights(weights):
     if weights is None: weights = config.SCORING_WEIGHTS
     # [안전장치] 개별 룰의 가중치는 DB에 JSON 문자열로 저장된다. 보강 단계가 실패하면
     #  문자열이 그대로 들어와 아래 weights.get()이 AttributeError를 낸다. 점수 계산은
@@ -874,6 +907,16 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
         except Exception:
             weights = config.SCORING_WEIGHTS
     if not isinstance(weights, dict): weights = config.SCORING_WEIGHTS
+    return weights
+
+
+def score_breakdown(price=None, ema20=None, ema60=None, ema120=None, sar=None, rsi=None, adx=None, cci=None, obv_trend=None, macd=None, macd_signal=None, weights=None, smart_money=False, plus_di=None, minus_di=None, df=None, ind=None, ema_5=None, macd_hist=None, prev_macd_hist=None, prev_cci=None, vol_spike=False, vol_trend=False, w52_pos=None, mom_ret=None, mom_ret_1m=None, mom_ret_3m=None, trend_persist=None):
+    """퀀트 멀티팩터 스코어링 모델 (10점 만점) — 항목별 구조화 결과(score_model.ScoreResult).
+
+    입력 해석·산술 순서는 리팩터링 전 calculate_score 와 같다. 항목의 상태·배점·기여·
+    입력값과 규칙판·임계값 스냅샷을 함께 돌려준다(score_model 독스트링 참조).
+    """
+    weights = _resolve_weights(weights)
 
     # r_* 는 '각 팩터의 세부 항목 기본배점 합(=설계상 만점)' 대비 사용자 가중치의 스케일 배수다.
     # 분모는 세부항목 기본배점 합(고정값)이며 분자만 가중치로 바뀐다.
@@ -884,9 +927,10 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
     r_str = weights.get("STRENGTH", 1.5) / 1.5
     r_syn = weights.get("SYNERGY", 2.0) / 2.0
 
-    score = 0
-    details = []
-    
+    # [관측] 호출자가 넘기지 않아 아래에서 df 로부터 산출한 입력 — 실매매(df 경로)와
+    #  백테스트(사전계산 인자 경로)가 같은 판단에서 어느 값을 썼는지 가르는 근거다.
+    derived = []
+
     # [Fix] df가 전달되지 않는 백테스팅 환경을 위한 변수 초기화
     vol_spike_flag = vol_spike
     vol_trend_flag = vol_trend
@@ -918,6 +962,7 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
         # [Early] 선행 지표 동적 계산
         if ema_5 is None:
             ema_5 = df['close'].ewm(span=config.INDICATOR_PARAMS.get('EMA_SHORT', 5), adjust=False).mean().iloc[-1]
+            derived.append('ema_5')
             
         if macd is not None and macd_signal is not None and (macd_hist is None or prev_macd_hist is None):
             fast = config.INDICATOR_PARAMS.get('MACD_FAST', 12)
@@ -928,6 +973,7 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
             hist_series = macd_series - signal_series
             if len(hist_series) > 0: macd_hist = hist_series.iloc[-1]
             if len(hist_series) > 1: prev_macd_hist = hist_series.iloc[-2]
+            derived.append('macd_hist')
 
         if plus_di is None or minus_di is None:
             try:
@@ -945,6 +991,7 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
                 if atr_val == 0 or np.isnan(atr_val): atr_val = 1.0 # 0 나누기 방어
                 plus_di = 100 * pd.Series(pos_dm).ewm(alpha=1/adx_period, adjust=False).mean().iloc[-1] / atr_val
                 minus_di = 100 * pd.Series(neg_dm).ewm(alpha=1/adx_period, adjust=False).mean().iloc[-1] / atr_val
+                derived.append('dmi')
             except Exception: pass
 
         if prev_cci is None and len(df) > 20:
@@ -953,12 +1000,14 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
                 # [최적화] 동일 수식의 벡터화 버전에 위임 (rolling.apply 대비 100배 이상 빠름, 결과 동일)
                 cci_series = indicators.get_cci_full_series(df, window)
                 if len(cci_series) > 1: prev_cci = cci_series.iloc[-2]
+                derived.append('prev_cci')
             except Exception: pass
 
         vol_ma_period = config.INDICATOR_PARAMS.get('VOLUME_MA_PERIOD', 20)
         if len(df) >= vol_ma_period:
             vol_ma20 = df['volume'].rolling(window=vol_ma_period).mean().iloc[-1]
             vol_ma5 = df['volume'].rolling(window=5).mean().iloc[-1]
+            derived.append('volume')
 
             if vol_ma5 > vol_ma20:
                 vol_trend_flag = True
@@ -978,12 +1027,14 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
                 h52, l52 = _w52_band(df)
                 if h52 > l52:
                     w52_pos = (price - l52) / (h52 - l52) * 100
+                    derived.append('w52_pos')
             if mom_ret is None and price is not None:
                 mom_lb = config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK', 126)
                 if len(df) > mom_lb:
                     past_close = float(df['close'].iloc[-(mom_lb + 1)])
                     if past_close > 0:
                         mom_ret = (price / past_close - 1) * 100
+                        derived.append('mom_ret')
             # [추세추종] 다중 기간 모멘텀(1·3개월) — 6개월 가격 모멘텀 가점의 정합 게이트 입력
             if mom_ret_1m is None and price is not None:
                 lb = config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK_1M', 21)
@@ -991,12 +1042,14 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
                     past_close = float(df['close'].iloc[-(lb + 1)])
                     if past_close > 0:
                         mom_ret_1m = (price / past_close - 1) * 100
+                        derived.append('mom_ret_1m')
             if mom_ret_3m is None and price is not None:
                 lb = config.INDICATOR_PARAMS.get('MOMENTUM_LOOKBACK_3M', 63)
                 if len(df) > lb:
                     past_close = float(df['close'].iloc[-(lb + 1)])
                     if past_close > 0:
                         mom_ret_3m = (price / past_close - 1) * 100
+                        derived.append('mom_ret_3m')
             # [추세추종] 추세 지속 이력 — 최근 N일 중 종가가 60일선 위였던 비율(%).
             #   오래 유지된 추세가 계속될 확률이 높다는 지속성 원칙의 직접 측정치.
             if trend_persist is None:
@@ -1005,11 +1058,61 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
                     ema60_series = df['close'].ewm(span=60, adjust=False).mean()
                     above = df['close'].tail(persist_lb).to_numpy(dtype=float) > ema60_series.tail(persist_lb).to_numpy(dtype=float)
                     trend_persist = float(above.mean() * 100)
+                    derived.append('trend_persist')
         except Exception:
             pass
 
+    score_rsi_mid = config.INDICATOR_PARAMS.get('SCORE_RSI_MID', 50)
+    score_rsi_strong = config.INDICATOR_PARAMS.get('SCORE_RSI_STRONG', 60)
+    score_rsi_overheat = config.INDICATOR_PARAMS.get('SCORE_RSI_OVERHEAT', 80)
+    score_rsi_rebound = config.INDICATOR_PARAMS.get('SCORE_RSI_REBOUND', 40)
+    cci_lower = config.INDICATOR_PARAMS.get('CCI_LOWER', -100)
+    cci_strong = config.INDICATOR_PARAMS.get('SCORE_CCI_STRONG', 0)
+    mom_w52_near = config.INDICATOR_PARAMS.get('MOMENTUM_W52_NEAR', 80)
+    adx_min = config.INDICATOR_PARAMS.get('SCORE_ADX_MIN', 20)
+    persist_min = config.INDICATOR_PARAMS.get('TREND_PERSIST_MIN', 70)
+    persist_lb_param = config.INDICATOR_PARAMS.get('TREND_PERSIST_LOOKBACK', 120)
+    params = {
+        "SCORE_RSI_MID": score_rsi_mid, "SCORE_RSI_STRONG": score_rsi_strong,
+        "SCORE_RSI_OVERHEAT": score_rsi_overheat, "SCORE_RSI_REBOUND": score_rsi_rebound,
+        "CCI_LOWER": cci_lower, "SCORE_CCI_STRONG": cci_strong, "MOMENTUM_W52_NEAR": mom_w52_near,
+        "SCORE_ADX_MIN": adx_min, "TREND_PERSIST_MIN": persist_min,
+        "TREND_PERSIST_LOOKBACK": persist_lb_param, "MACD_EXPAND_RATIO": score_model.MACD_EXPAND_RATIO,
+        "MA_CLUSTER_CAP": score_model.MA_CLUSTER_CAP_BASE,
+    }
+    applied_weights = {"TREND": weights.get("TREND", 4.0), "MOMENTUM": weights.get("MOMENTUM", 2.5),
+                       "STRENGTH": weights.get("STRENGTH", 1.5), "SYNERGY": weights.get("SYNERGY", 2.0)}
+
+    miss = score_model.is_missing
+    inputs_all = {
+        "price": price, "ema20": ema20, "ema60": ema60, "ema120": ema120, "ema_5": ema_5, "sar": sar,
+        "rsi": rsi, "adx": adx, "cci": cci, "prev_cci": prev_cci, "macd": macd, "macd_signal": macd_signal,
+        "macd_hist": macd_hist, "prev_macd_hist": prev_macd_hist, "plus_di": plus_di, "minus_di": minus_di,
+        "w52_pos": w52_pos, "mom_ret": mom_ret, "mom_ret_1m": mom_ret_1m, "mom_ret_3m": mom_ret_3m,
+        "trend_persist": trend_persist, "obv_trend": obv_trend,
+    }
+    r_axes = {"TREND": r_trend, "MOMENTUM": r_mom, "STRENGTH": r_str, "SYNERGY": r_syn}
+
+    # [성능] 백테스트·감사는 이 함수를 수십만 번 부른다. 채점 중에는 항목을 튜플로만 쌓고,
+    #  ScoreItem 객체(상태 판정·입력 사본 포함)는 결과의 .items 를 처음 읽을 때 만든다
+    #  (score_model.ScoreResult). 총점·설명만 쓰는 calculate_score 경로는 그 비용을 내지 않는다.
+    items = []
+
+    def _item(item_id, cond, contribution=None, detail=None, status=None, unverified=()):
+        """항목 하나를 기록한다. cond 는 조건 충족 여부, status 를 주면 그대로 쓴다."""
+        items.append((item_id, cond, contribution, detail, status, unverified))
+
+    def _result(total, raw_total, details, penalty, ma_cluster, diagnostics):
+        return score_model.ScoreResult(
+            total=total, raw_total=raw_total, details=details, penalty=penalty, ma_cluster=ma_cluster,
+            weights=applied_weights, params=params, derived_inputs=tuple(derived), diagnostics=diagnostics,
+            raw_items=items, inputs=inputs_all, axes=r_axes)
+
     if price is None:
-        return 0.0, details
+        return _result(0.0, 0.0, [], 0.0,
+                       {"raw": 0.0, "cap": round(score_model.MA_CLUSTER_CAP_BASE * r_trend, 2), "applied": False}, {})
+
+    score = 0
 
     # 1. Trend Factor (4.0점) — MA 군집(상한 2.0) + 추세 지속 이력 0.5 + MACD 0선 0.5 + MACD GC/확산 0.5 + SAR 0.5
     # [개선 #2] 이동평균선(EMA) 기반 신호들은 상호 상관(collinearity)이 매우 높아
@@ -1021,84 +1124,129 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
     #          현재 상태(정배열)만 보는 MA 군집과 달리 '얼마나 오래 유지됐는가'를 재는
     #          독립 신호로, 갓 골든크로스한 미검증 추세와 장기 지속 추세를 점수로 구분한다.
     ma_trend_score = 0.0
-    ma_details = []
-    if ema20 is not None and price > ema20:
-        s = round(0.5 * r_trend, 2); ma_trend_score += s; ma_details.append(f"EMA: 현재가 > 20일선 (+{s:.2f})")
-    if ema20 is not None and ema60 is not None and ema120 is not None and ema20 > ema60 and ema60 > ema120:
-        s = round(1.0 * r_trend, 2); ma_trend_score += s; ma_details.append(f"EMA: 20/60/120 정배열 (+{s:.2f})")
-    if ema20 is not None and ema_5 is not None and ema_5 > ema20:
-        s = round(0.5 * r_trend, 2); ma_trend_score += s; ma_details.append(f"EMA: 5일선 > 20일선 (+{s:.2f})")
-    if ema20 is not None and ema60 is not None:
-        if ema20 <= ema60 and price > ema60:
-            s = round(0.5 * r_trend, 2); ma_trend_score += s; ma_details.append(f"EMA: 60일선 돌파 [초기] (+{s:.2f})")
-        elif ema_5 is not None and price > ema_5 and ema_5 > ema20 and ema20 > ema60:
-            s = round(0.5 * r_trend, 2); ma_trend_score += s; ma_details.append(f"EMA: 단기 급등 추세 (+{s:.2f})")
-    if ema120 is not None and price > ema120:
-        s = round(0.5 * r_trend, 2); ma_trend_score += s; ma_details.append(f"EMA: 장기 지지(현재가>120일선) (+{s:.2f})")
+
+    def _ma(item_id, cond, label):
+        nonlocal ma_trend_score
+        if cond:
+            s = round(score_model.ITEM_SPECS[item_id][1] * r_trend, 2); ma_trend_score += s
+            _item(item_id, True, contribution=s, detail=f"{label} (+{s:.2f})")
+        else:
+            _item(item_id, False)
+
+    _ma("trend.ema20_above", ema20 is not None and price > ema20, "EMA: 현재가 > 20일선")
+    _ma("trend.ema_aligned", ema20 is not None and ema60 is not None and ema120 is not None and ema20 > ema60 and ema60 > ema120, "EMA: 20/60/120 정배열")
+    _ma("trend.ema5_over_20", ema20 is not None and ema_5 is not None and ema_5 > ema20, "EMA: 5일선 > 20일선")
+    # 60일선 돌파[초기] / 단기 급등 — 같은 슬롯(0.5)을 나눠 쓰는 elif 관계(조건상 상호 배타)
+    _brk = ema20 is not None and ema60 is not None and ema20 <= ema60 and price > ema60
+    _ma("trend.ma60_breakout_early", _brk, "EMA: 60일선 돌파 [초기]")
+    _srg = (not _brk and ema20 is not None and ema60 is not None and ema_5 is not None
+            and price > ema_5 and ema_5 > ema20 and ema20 > ema60)
+    _ma("trend.short_surge", _srg, "EMA: 단기 급등 추세")
+    _ma("trend.ema120_support", ema120 is not None and price > ema120, "EMA: 장기 지지(현재가>120일선)")
 
     # [개선 #2] MA 포지션 점수 상한 적용 (상관 신호의 과대 가점 방지)
-    ma_cap = round(2.0 * r_trend, 2)
-    details.extend(ma_details)
-    if ma_trend_score > ma_cap:
-        details.append(f"[상한] EMA 군집 신호 상한 적용 ({ma_cap:.2f})")
+    #  상한이 깎은 양은 trend.ma_cluster_cap 한 항목의 음수 기여로 싣는다 — 개별 EMA 항목의
+    #  기여는 상한 전 값 그대로라 '단순 합'과 '실제 반영값'의 차이가 결과에 보인다.
+    ma_cap = round(score_model.MA_CLUSTER_CAP_BASE * r_trend, 2)
+    ma_raw = ma_trend_score
+    ma_capped = ma_trend_score > ma_cap
+    if ma_capped:
         ma_trend_score = ma_cap
+        _item("trend.ma_cluster_cap", True, contribution=ma_cap - ma_raw, detail=f"[상한] EMA 군집 신호 상한 적용 ({ma_cap:.2f})")
+    else:
+        _item("trend.ma_cluster_cap", False, status=score_model.UNMET, contribution=0.0)
     score += ma_trend_score
 
     # [추세추종] 추세 지속 이력: 최근 TREND_PERSIST_LOOKBACK일 중 종가가 60일선 위였던
     #   비율이 기준(TREND_PERSIST_MIN%) 이상일 때 가점. 순간 상태가 아닌 '유지된 기간'을
     #   재는 지속성 신호로, MA 상한 축소분(0.5)을 이관받았다. (NaN은 비교식에서 자동 False)
-    if trend_persist is not None and trend_persist >= config.INDICATOR_PARAMS.get('TREND_PERSIST_MIN', 70):
+    if trend_persist is not None and trend_persist >= persist_min:
         s = round(0.5 * r_trend, 2); score += s
-        details.append(f"추세 지속: 최근 {config.INDICATOR_PARAMS.get('TREND_PERSIST_LOOKBACK', 120)}일 중 {trend_persist:.0f}% 60일선 위 (+{s:.2f})")
+        _item("trend.persist", True, contribution=s, detail=f"추세 지속: 최근 {persist_lb_param}일 중 {trend_persist:.0f}% 60일선 위 (+{s:.2f})")
+    else:
+        _item("trend.persist", False)
 
     # [개선 #2] MACD 0선 위(추세 확립): MA 포지션과 독립적인 추세 확인 신호
     if macd is not None and macd > 0:
-        s = round(0.5 * r_trend, 2); score += s; details.append(f"MACD: 0선 위 (추세 확립) (+{s:.2f})")
+        s = round(0.5 * r_trend, 2); score += s
+        _item("trend.macd_above_zero", True, contribution=s, detail=f"MACD: 0선 위 (추세 확립) (+{s:.2f})")
+    else:
+        _item("trend.macd_above_zero", False)
 
     # [수정] 단순 MACD > Signal 상태 유지가 아닌, 신규 골든크로스 또는 0선 위 확산 추세일 때만 점수 부여 (인플레이션 방지)
-    if macd_hist is not None and prev_macd_hist is not None:
-        if macd_hist > 0 and prev_macd_hist <= 0:
-            s = round(0.5 * r_trend, 2); score += s; details.append(f"MACD: 신규 골든크로스 (+{s:.2f})")
-        elif macd is not None and macd > 0 and macd_hist > prev_macd_hist and macd_hist > 0:
-            s = round(0.5 * r_trend, 2); score += s; details.append(f"MACD: 상승 추세 확산 (+{s:.2f})")
+    _gc = macd_hist is not None and prev_macd_hist is not None and macd_hist > 0 and prev_macd_hist <= 0
+    _exp_cond = (macd_hist is not None and prev_macd_hist is not None and macd is not None and macd > 0
+                 and macd_hist > prev_macd_hist and macd_hist > 0)
+    if _gc:
+        s = round(0.5 * r_trend, 2); score += s
+        _item("trend.macd_new_gc", True, contribution=s, detail=f"MACD: 신규 골든크로스 (+{s:.2f})")
+        _item("trend.macd_expanding", False, status=(score_model.SHADOWED if _exp_cond else None), contribution=0.0)
+    elif _exp_cond:
+        _item("trend.macd_new_gc", False)
+        s = round(0.5 * r_trend, 2); score += s
+        _item("trend.macd_expanding", True, contribution=s, detail=f"MACD: 상승 추세 확산 (+{s:.2f})")
+    else:
+        _item("trend.macd_new_gc", False)
+        _item("trend.macd_expanding", False)
 
     if sar is not None and price > sar:
-        s = round(0.5 * r_trend, 2); score += s; details.append(f"SAR: 상승 추세 (+{s:.2f})")
+        s = round(0.5 * r_trend, 2); score += s
+        _item("trend.sar", True, contribution=s, detail=f"SAR: 상승 추세 (+{s:.2f})")
+    else:
+        _item("trend.sar", False)
     
     # 2. Momentum Factor (2.5점) — RSI 1.0 + CCI 0.5 + DMI 0.5 + 가격 모멘텀 0.5
-    score_rsi_mid = config.INDICATOR_PARAMS.get('SCORE_RSI_MID', 50)
-    score_rsi_strong = config.INDICATOR_PARAMS.get('SCORE_RSI_STRONG', 60)
-    score_rsi_overheat = config.INDICATOR_PARAMS.get('SCORE_RSI_OVERHEAT', 80)
-    score_rsi_rebound = config.INDICATOR_PARAMS.get('SCORE_RSI_REBOUND', 40)
-
     # [추세추종] 반등 성격 가점(RSI 상승 여력, CCI 과매도 탈출)은 추세 구조(주가>60일선) 위에서만 인정.
     #   USE_MEAN_REVERSION 기본 OFF 기조와 정합: '상승 추세 내 눌림목 회복'만 가점하고,
     #   추세 없는 약세 종목의 단순 기술적 반등이 매수 점수를 밀어올리는 것을 차단.
     in_uptrend_structure = ema60 is not None and price > ema60
 
+    rsi_strong = rsi_ext = rsi_pull = False
     if rsi is not None:
         # [Fix] RSI 상단 제한(75) 해제로 과열 구간에서도 기본 강세 점수는 유지 (스코어 클리프 방지)
         if rsi >= score_rsi_mid:
-            s = round(0.5 * r_mom, 2); score += s; details.append(f"RSI: 강세 구간 (+{s:.2f})")
+            rsi_strong = True
+            s = round(0.5 * r_mom, 2); score += s
+            _item("momentum.rsi_strong", True, contribution=s, detail=f"RSI: 강세 구간 (+{s:.2f})")
             # [개선 #6] 과열 구간(>=80)에서는 추가 '모멘텀 확장' 가점을 동결하여
             #          이미 과열된 종목에 고점매수 신호가 강화되는 것을 방지.
             if score_rsi_strong <= rsi < score_rsi_overheat:
-                s = round(0.5 * r_mom, 2); score += s; details.append(f"RSI: 모멘텀 확장 (+{s:.2f})")
+                rsi_ext = True
+                s = round(0.5 * r_mom, 2); score += s
+                _item("momentum.rsi_extension", True, contribution=s, detail=f"RSI: 모멘텀 확장 (+{s:.2f})")
         elif score_rsi_rebound <= rsi < score_rsi_mid and in_uptrend_structure:
-            s = round(0.5 * r_mom, 2); score += s; details.append(f"RSI: 상승 여력 구간(추세 내 눌림) (+{s:.2f})")
+            rsi_pull = True
+            s = round(0.5 * r_mom, 2); score += s
+            _item("momentum.rsi_pullback", True, contribution=s, detail=f"RSI: 상승 여력 구간(추세 내 눌림) (+{s:.2f})")
+    if not rsi_strong:
+        _item("momentum.rsi_strong", False)
+    if not rsi_ext:
+        _item("momentum.rsi_extension", False)
+    if not rsi_pull:
+        _item("momentum.rsi_pullback", False)
 
-    cci_lower = config.INDICATOR_PARAMS.get('CCI_LOWER', -100)
-    cci_strong = config.INDICATOR_PARAMS.get('SCORE_CCI_STRONG', 0)
+    cci_up = cci is not None and cci > cci_strong
+    cci_esc_cond = (cci is not None and in_uptrend_structure and prev_cci is not None
+                    and prev_cci <= cci_lower and cci > cci_lower)
     if cci is not None:
         # [개선] 'CCI 모멘텀 심화'는 'CCI 상승 추세'·RSI 강세와 상관이 높아 정보 가치가 낮으므로 폐지하고,
         #        그 0.5점을 아래 '가격 모멘텀' 항목으로 이관. CCI는 상승/과매도탈출 중 하나만 인정(최대 0.5).
-        if cci > cci_strong:
-            s = round(0.5 * r_mom, 2); score += s; details.append(f"CCI: 상승 추세 (+{s:.2f})")
-        elif in_uptrend_structure and prev_cci is not None and prev_cci <= cci_lower and cci > cci_lower:
-            s = round(0.5 * r_mom, 2); score += s; details.append(f"CCI: 과매도권 탈출(추세 내) (+{s:.2f})")
+        if cci_up:
+            s = round(0.5 * r_mom, 2); score += s
+            _item("momentum.cci_up", True, contribution=s, detail=f"CCI: 상승 추세 (+{s:.2f})")
+        elif cci_esc_cond:
+            s = round(0.5 * r_mom, 2); score += s
+            _item("momentum.cci_escape", True, contribution=s, detail=f"CCI: 과매도권 탈출(추세 내) (+{s:.2f})")
+    if not cci_up:
+        _item("momentum.cci_up", False)
+    if not (cci_esc_cond and not cci_up):
+        _item("momentum.cci_escape", False, status=(score_model.SHADOWED if (cci_esc_cond and cci_up) else None), contribution=0.0)
 
     if plus_di is not None and minus_di is not None and plus_di > minus_di:
-        s = round(0.5 * r_mom, 2); score += s; details.append(f"DMI: +DI > -DI 크로스 (+{s:.2f})")
+        s = round(0.5 * r_mom, 2); score += s
+        _item("momentum.dmi", True, contribution=s, detail=f"DMI: +DI > -DI 크로스 (+{s:.2f})")
+    else:
+        _item("momentum.dmi", False)
 
     # [추세추종] 가격 모멘텀 (절대 모멘텀 + 52주 신고가 근접) — '강한 종목을 매수하라' 핵심 팩터.
     #   6개월(MOMENTUM_LOOKBACK) 수익률이 양수이고 52주 위치가 기준(MOMENTUM_W52_NEAR) 이상인
@@ -1106,38 +1254,58 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
     # [추세추종] 다중 기간 모멘텀 정합: 1·3개월 수익률이 명시적으로 음수면 6개월 가점을 보류.
     #   6개월 수치만 좋고 최근 1~3개월이 꺾인 '식어가는 추세'의 고점 진입을 걸러낸다.
     #   단기 수익률을 알 수 없으면(None/NaN) 게이트를 적용하지 않는다(fail-open, 기존 호출자 호환).
+    #   [관측] 그 경우 unverified 에 확인하지 못한 입력을 남긴다 — 점수는 바꾸지 않는다.
     mom_align_ok = True
     if mom_ret_1m is not None and mom_ret_1m <= 0: mom_align_ok = False
     if mom_ret_3m is not None and mom_ret_3m <= 0: mom_align_ok = False
 
-    mom_w52_near = config.INDICATOR_PARAMS.get('MOMENTUM_W52_NEAR', 80)
     if mom_ret is not None and mom_ret > 0 and w52_pos is not None and w52_pos >= mom_w52_near:
         if mom_align_ok:
+            unv = tuple(k for k in score_model.OPTIONAL_GATE_INPUTS if miss(inputs_all[k]))
             s = round(0.5 * r_mom, 2); score += s
-            details.append(f"가격 모멘텀: 6개월 +{mom_ret:.1f}% & 52주 위치 {w52_pos:.0f}% (+{s:.2f})")
+            _item("momentum.price_momentum", True, contribution=s, unverified=unv, detail=f"가격 모멘텀: 6개월 +{mom_ret:.1f}% & 52주 위치 {w52_pos:.0f}% (+{s:.2f})")
         else:
-            details.append("가격 모멘텀 보류: 단기(1·3개월) 모멘텀 이탈 (식어가는 추세)")
+            _item("momentum.price_momentum", False, status=score_model.HELD, contribution=0.0, detail="가격 모멘텀 보류: 단기(1·3개월) 모멘텀 이탈 (식어가는 추세)")
+    else:
+        _item("momentum.price_momentum", False)
 
     # 3. Strength & Volume Factor (1.5점)
-    adx_min = config.INDICATOR_PARAMS.get('SCORE_ADX_MIN', 20)
     if adx is not None and adx >= adx_min:
-        s = round(0.5 * r_str, 2); score += s; details.append(f"ADX: 추세 형성 (+{s:.2f})")
+        s = round(0.5 * r_str, 2); score += s
+        _item("strength.adx", True, contribution=s, detail=f"ADX: 추세 형성 (+{s:.2f})")
+    else:
+        _item("strength.adx", False)
         
     if vol_spike_flag or vol_trend_flag:
         s = round(0.5 * r_str, 2); score += s
         if vol_spike_flag:
-            details.append(f"VOL: 거래량 폭증/양봉 (+{s:.2f})")
+            _item("strength.vol_spike", True, contribution=s, detail=f"VOL: 거래량 폭증/양봉 (+{s:.2f})")
+            _item("strength.vol_trend", False, status=(score_model.SHADOWED if vol_trend_flag else None), contribution=0.0)
         else:
-            details.append(f"VOL: 거래량 추세 상승 (+{s:.2f})")
+            _item("strength.vol_spike", False)
+            _item("strength.vol_trend", True, contribution=s, detail=f"VOL: 거래량 추세 상승 (+{s:.2f})")
+    else:
+        _item("strength.vol_spike", False)
+        _item("strength.vol_trend", False)
         
     if obv_trend or smart_money:
-        s = round(0.5 * r_str, 2); score += s; details.append(f"수급: OBV/SM 개선 (+{s:.2f})")
+        s = round(0.5 * r_str, 2); score += s
+        _item("strength.flow", True, contribution=s, detail=f"수급: OBV/SM 개선 (+{s:.2f})")
+    else:
+        _item("strength.flow", False, status=(score_model.UNKNOWN if obv_trend is None and not smart_money else None))
 
     # 4. Synergy Bonus (2.0점)
     # [수정] 시너지 보너스를 확산(macd_hist > prev_macd_hist) 조건 단독에서 완화. MACD가 시그널 위에 있고(macd_hist > 0) 심한 축소가 아닐 때 유지하여 단기 노이즈로 인한 2.0점 증발 방어
+    #  [경계 계측] 두 시너지 항목이 이 조건을 공유하므로 경계(macd_hist == prev*0.8)에서 2점이
+    #   함께 움직인다. 여유값(macd_hist - prev*0.8)을 diagnostics 에 남겨 경계 근처 판단을 센다.
     is_macd_expanding = False
+    macd_expand_margin = None
     if macd_hist is not None and prev_macd_hist is not None:
-        is_macd_expanding = (macd_hist > 0 and macd_hist >= prev_macd_hist * 0.8)
+        is_macd_expanding = (macd_hist > 0 and macd_hist >= prev_macd_hist * score_model.MACD_EXPAND_RATIO)
+        try:
+            macd_expand_margin = float(macd_hist - prev_macd_hist * score_model.MACD_EXPAND_RATIO)
+        except Exception:
+            macd_expand_margin = None
 
     # [개선] 시너지 구조 게이트: 장기 역배열(주가<120일선) '이고' MACD가 0선 아래인 '지하실'에서
     #   히스토그램만 골든크로스한 '데드캣 바운스'가 시너지 2.0점을 쓸어담는 것을 차단.
@@ -1146,16 +1314,28 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
     #   회복) 중 하나라도 충족할 때만 시너지를 인정한다. (단독 Trend 가점의 macd>0 게이트와 정합)
     synergy_structure_ok = not (macd is not None and macd <= 0 and (ema120 is None or price <= ema120))
 
+    #  [경계 계측] 확산 조건 하나에 걸려 있는 시너지 점수(stake) — 나머지 조건은 충족한 항목의
+    #   배점 합이다. 확산이 참이면 '이 조건이 뒤집히면 잃을 점수', 거짓이면 '뒤집히면 얻을 점수'.
+    #   조건식을 다른 곳에서 다시 쓰지 않도록 채점 코드 안에서 함께 센다(관측 전용, 점수 불변).
+    _syn_unit = round(1.0 * r_syn, 2)
+    _ts_other = bool(ema60 is not None and price > ema60 and (adx is not None and adx >= adx_min) and synergy_structure_ok)
+    _mt_other = bool((rsi is not None and rsi >= score_rsi_strong) and obv_trend and synergy_structure_ok)
+    synergy_stake = _syn_unit * (int(_ts_other) + int(_mt_other))
+
     if ema60 is not None and price > ema60 and is_macd_expanding and (adx is not None and adx >= adx_min) and synergy_structure_ok:
         s = round(1.0 * r_syn, 2)
         score += s
-        details.append(f"추세 시작: 주가>60일선+MACD확산+ADX 20↑ (+{s:.2f})")
+        _item("synergy.trend_start", True, contribution=s, detail=f"추세 시작: 주가>60일선+MACD확산+ADX 20↑ (+{s:.2f})")
+    else:
+        _item("synergy.trend_start", False)
 
     # Momentum Thrust
     if is_macd_expanding and (rsi is not None and rsi >= score_rsi_strong) and obv_trend and synergy_structure_ok:
         s = round(1.0 * r_syn, 2)
         score += s
-        details.append(f"모멘텀 폭발: MACD확산+RSI 60↑+OBV (+{s:.2f})")
+        _item("synergy.momentum_thrust", True, contribution=s, detail=f"모멘텀 폭발: MACD확산+RSI 60↑+OBV (+{s:.2f})")
+    else:
+        _item("synergy.momentum_thrust", False)
 
     # 5. 추세 악화 감점 (Deterioration Penalty)
     # [개선 #1] 기존 스코어는 '가산 전용'이라 추세가 꺾여도 후행 지표(EMA 정배열 등)가
@@ -1163,17 +1343,36 @@ def calculate_score(price=None, ema20=None, ema60=None, ema120=None, sar=None, r
     #          명확한 하락 반전 신호에 대해 감점을 부여하여 점수가 악화를 적시 반영하도록 보정.
     penalty = 0.0
     if macd is not None and macd_signal is not None and macd < macd_signal:
-        p = round(0.5 * r_trend, 2); penalty -= p; details.append(f"감점: MACD 데드크로스 (-{p:.2f})")
+        p = round(0.5 * r_trend, 2); penalty -= p
+        _item("penalty.macd_dead_cross", True, contribution=-p, detail=f"감점: MACD 데드크로스 (-{p:.2f})")
+    else:
+        _item("penalty.macd_dead_cross", False)
     if macd_hist is not None and prev_macd_hist is not None and macd_hist < 0 and macd_hist < prev_macd_hist:
-        p = round(0.5 * r_mom, 2); penalty -= p; details.append(f"감점: MACD 하락 가속(0선 이하 확대) (-{p:.2f})")
+        p = round(0.5 * r_mom, 2); penalty -= p
+        _item("penalty.macd_accel_down", True, contribution=-p, detail=f"감점: MACD 하락 가속(0선 이하 확대) (-{p:.2f})")
+    else:
+        _item("penalty.macd_accel_down", False)
     if plus_di is not None and minus_di is not None and minus_di > plus_di:
-        p = round(0.5 * r_str, 2); penalty -= p; details.append(f"감점: -DI 우위(매도세 강화) (-{p:.2f})")
+        p = round(0.5 * r_str, 2); penalty -= p
+        _item("penalty.minus_di", True, contribution=-p, detail=f"감점: -DI 우위(매도세 강화) (-{p:.2f})")
+    else:
+        _item("penalty.minus_di", False)
 
     score += penalty
+    raw_total = score
     if score < 0:
         score = 0.0
 
-    return round(score, 2), details
+    # 화면 설명은 항목 순서 그대로(=리팩터링 전 문자열 순서). 단, EMA 군집 상한 문구는
+    #  리팩터링 전처럼 EMA 항목들 바로 뒤에 온다 — 항목 기록 순서가 이미 그렇다.
+    #  같은 슬롯의 대체 항목은 '충족한 쪽'이 먼저 기록되도록 위에서 순서를 맞췄다.
+    details = [t[3] for t in items if t[3] is not None]
+
+    return _result(round(score, 2), raw_total, details, penalty,
+                   {"raw": ma_raw, "cap": ma_cap, "applied": ma_capped},
+                   {"macd_expand_margin": macd_expand_margin, "macd_expanding": is_macd_expanding,
+                    "synergy_structure_ok": synergy_structure_ok, "synergy_stake": synergy_stake,
+                    "macd_hist": macd_hist, "prev_macd_hist": prev_macd_hist})
 
 # [추가] 시장 지수 데이터 공유 캐시
 # get_market_regime은 자동매매/체결감시/예약감시/텔레그램 등 여러 스레드에서 동시에 호출되며,
@@ -1963,7 +2162,11 @@ def get_index_momentum(market_type="KOSPI", lookback=None):
         logger.debug(f"지수 모멘텀 계산 실패({market_type}): {e}")
         return None
 
-def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=None, rsi=None, prev_rsi=None, adx=None, cci=None, obv_trend=None, macd=None, macd_signal=None, thresholds=None, w52_pos=None, smart_money=False, plus_di=None, minus_di=None, df=None, ind=None, ema_5=None, macd_hist=None, prev_macd_hist=None, prev_cci=None, vol_spike=False, vol_trend=False, is_yangbong=False, mom_ret=None, mom_ret_1m=None, mom_ret_3m=None, trend_persist=None):
+def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=None, rsi=None, prev_rsi=None, adx=None, cci=None, obv_trend=None, macd=None, macd_signal=None, thresholds=None, w52_pos=None, smart_money=False, plus_di=None, minus_di=None, df=None, ind=None, ema_5=None, macd_hist=None, prev_macd_hist=None, prev_cci=None, vol_spike=False, vol_trend=False, is_yangbong=False, mom_ret=None, mom_ret_1m=None, mom_ret_3m=None, trend_persist=None, score=None):
+    # score: 같은 판단에서 호출자가 이미 calculate_score 로 구한 점수(0 하한 적용, 반올림 전).
+    #  주면 내부에서 다시 채점하지 않는다 — 상태 분류와 표시·게이트 점수가 같은 계산 결과를
+    #  쓰게 하고(5-5 입력 일관성), 판단 1회당 채점 2회를 1회로 줄인다. 호출자는 이 함수에
+    #  넘기는 것과 같은 입력으로 채점해야 한다(engine.analyze_buy·backtest.calculate_daily_status).
     if df is not None and ind is not None:
         if not df.empty: price = float(df.iloc[-1]['close'])
         ema20 = ind.get('ema_20')
@@ -2054,14 +2257,15 @@ def classify_stock_state(price=None, ema20=None, ema60=None, ema120=None, sar=No
 
     # [수정] 가중치 적용 점수 계산 (thresholds에 weights가 포함되어 있을 수 있음)
     weights = thresholds.get("WEIGHTS") if thresholds else None
-    score, _ = calculate_score(
-        price=price, ema20=ema20, ema60=ema60, ema120=ema120, sar=sar, rsi=rsi, adx=adx, cci=cci,
-        obv_trend=obv_trend, macd=macd, macd_signal=macd_signal, weights=weights, smart_money=smart_money,
-        plus_di=plus_di, minus_di=minus_di, df=df, ind=ind, ema_5=ema_5, macd_hist=macd_hist,
-        prev_macd_hist=prev_macd_hist, prev_cci=prev_cci, vol_spike=vol_spike, vol_trend=vol_trend,
-        w52_pos=w52_pos, mom_ret=mom_ret,  # [추세추종] 가격 모멘텀 팩터 입력 전달 (df 없이 호출되는 백테스트 경로 패리티)
-        mom_ret_1m=mom_ret_1m, mom_ret_3m=mom_ret_3m, trend_persist=trend_persist  # [추세추종] 다중 기간 정합·추세 지속 이력 동일 전달
-    )
+    if score is None:
+        score, _ = calculate_score(
+            price=price, ema20=ema20, ema60=ema60, ema120=ema120, sar=sar, rsi=rsi, adx=adx, cci=cci,
+            obv_trend=obv_trend, macd=macd, macd_signal=macd_signal, weights=weights, smart_money=smart_money,
+            plus_di=plus_di, minus_di=minus_di, df=df, ind=ind, ema_5=ema_5, macd_hist=macd_hist,
+            prev_macd_hist=prev_macd_hist, prev_cci=prev_cci, vol_spike=vol_spike, vol_trend=vol_trend,
+            w52_pos=w52_pos, mom_ret=mom_ret,  # [추세추종] 가격 모멘텀 팩터 입력 전달 (df 없이 호출되는 백테스트 경로 패리티)
+            mom_ret_1m=mom_ret_1m, mom_ret_3m=mom_ret_3m, trend_persist=trend_persist  # [추세추종] 다중 기간 정합·추세 지속 이력 동일 전달
+        )
 
     # [수정] config.py의 설정값을 사용하여 상태 판정
     if thresholds:
@@ -4208,19 +4412,15 @@ def analyze_market_stocks(market_type):
             }
             config.console.print(f"[dim]기본 설정으로 진행합니다. (매수: {params['BUY_SCORE']}점, RSI: {params['BUY_RSI_MAX']}, 체결: {params['BUY_VOL_STRENGTH']}%, 상승: {params['RISE_SCORE']}점)[/dim]")
         
-        # 설정 백업 및 적용 — 반드시 **제자리**로 넣고 제자리로 되돌린다.
-        #  config.ANALYSIS_THRESHOLDS 는 모듈 __getattr__ 이 config.settings 로 넘겨주는
-        #  같은 객체다. 여기에 대입(=)하면 config 모듈에 그 이름의 속성이 새로 생겨
-        #  settings 쪽 필드를 영구히 가린다. 그때부터 저장(_save_dynamic_config)이 읽는
-        #  config.settings 에는 **이 스크리닝이 임시로 낮춘 값이 그대로 남고**, 이후 메뉴에서
-        #  고친 값은 그림자 쪽에만 들어가 저장되지 않는다(실측: 임시 3.0 이 저장되고
-        #  메뉴에서 고친 8.0 이 사라진다).
-        original_thresholds = config.ANALYSIS_THRESHOLDS.copy()
-        config.ANALYSIS_THRESHOLDS["BUY_SCORE"] = params["BUY_SCORE"]
-        config.ANALYSIS_THRESHOLDS["BUY_RSI_MAX"] = params["BUY_RSI_MAX"]
-        config.ANALYSIS_THRESHOLDS["RISE_SCORE"] = params["RISE_SCORE"]
-        config.ANALYSIS_THRESHOLDS["BUY_VOL_STRENGTH"] = params["BUY_VOL_STRENGTH"]
-        
+        # [전역 설정을 바꾸지 않는다 · 2026-10-16] 종전에는 이 화면의 문턱(BUY_SCORE·BUY_RSI_MAX·
+        #  RISE_SCORE·BUY_VOL_STRENGTH)을 분석하는 동안 config.ANALYSIS_THRESHOLDS 에 **제자리로
+        #  써 넣었다가** finally 에서 되돌렸다. 그런데 자동매매는 같은 프로세스의 백그라운드
+        #  스레드이고, 매 주기 build_buy_thresholds 가 바로 그 딕셔너리를 다시 읽는다. 분석이
+        #  도는 수 분 동안 실매매가 화면용으로 낮춘 매수 점수·꺼진 체결강도 게이트(0.0)로 판단할
+        #  수 있었다. 화면 결과에는 기여하지 않았다 — 종목 워커(_analyze_stock_worker)는 이미
+        #  상태 분류에 thresholds=params 를, 체결강도 기준에 params 를 쓴다. 그래서 값은 params 로만
+        #  넘긴다(tests/test_config_no_global_override.py 가 재발을 막는다).
+
         config.console.print("\n[bold cyan]━━━ 전체 종목 분석 시작 (중단: Ctrl+C) ━━━[/bold cyan]")
 
         try:
@@ -4291,10 +4491,6 @@ def analyze_market_stocks(market_type):
                     
         except KeyboardInterrupt:
             config.console.print("\n[yellow]분석이 사용자에 의해 중단되었습니다.[/yellow]")
-        finally:
-            # 설정 복구 (대입 금지 — 위 주석 참조)
-            config.ANALYSIS_THRESHOLDS.clear()
-            config.ANALYSIS_THRESHOLDS.update(original_thresholds)
 
     # 결과 테이블 출력
     if not buy_candidates:

@@ -9,6 +9,9 @@
 
 [구현] 프로덕션 코드는 건드리지 않는다. analysis.calculate_score를 감싸(monkeypatch) 항목의
  점수만 빼는데, 두 가지를 정확히 처리해야 결과가 참이 된다.
+   ⓪ [2026-10-16] 항목·배점은 analysis.score_breakdown 의 구조화 결과(항목 ID·기여값)로 읽는다.
+      종전에는 설명 문구의 접두사와 "(+0.50)"을 정규식으로 다시 뽑았다 — 화면 문구를 고치면
+      실험 계산이 조용히 틀어지는 구조였다. 산술은 종전과 같다(같은 입력에서 같은 점수).
    ① MA 군집 상한 — EMA 계열 항목을 빼도 나머지가 여전히 상한(2.0)을 넘으면 총점은 그대로다.
       단순 뺄셈을 하면 있지도 않은 감소를 만든다. 그래서 상한을 다시 적용해 계산한다.
    ② 만점 스케일 — 같은 슬롯을 나눠 쓰는 항목(VOL급증/VOL추세, CCI상승/CCI탈출)은 하나만 빼면
@@ -23,7 +26,6 @@
 import argparse
 import os
 import random
-import re
 import sys
 
 import numpy as np
@@ -34,26 +36,24 @@ import config  # noqa: E402
 from modules import analysis  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
 from tools.audit_scoring_weights import metrics  # noqa: E402
+from modules import score_model  # noqa: E402
 from tools.audit_common import seed_notice  # noqa: E402
 
 INITIAL_CAPITAL = 10_000_000
-_PTS = re.compile(r"\(([+-]?\d+\.\d+)\)")
 
-# 라벨 → 상세 문구 접두사
+# 라벨 → 항목 ID (modules/score_model.ITEM_SPECS)
 ITEMS = {
-    "60돌파초기": "EMA: 60일선 돌파",
-    "CCI탈출": "CCI: 과매도권 탈출",
-    "VOL급증": "VOL: 거래량 폭증",
-    "VOL추세": "VOL: 거래량 추세",
+    "60돌파초기": "trend.ma60_breakout_early",
+    "CCI탈출": "momentum.cci_escape",
+    "VOL급증": "strength.vol_spike",
+    "VOL추세": "strength.vol_trend",
 }
-MA_PREFIX = "EMA: "
-CAP_PREFIX = "[상한] EMA 군집"
 
-# 강화·신설 대상 (정보량 상위 항목). 접두사로 상세 문구를 집는다.
+# 강화·신설 대상 (정보량 상위 항목). (항목 ID, 그 항목이 이 상태일 때 가점)
 BOOST = {
-    "지속이력": "추세 지속:",
-    "가격모멘텀": "가격 모멘텀:",
-    "모멘텀보류": "가격 모멘텀 보류",
+    "지속이력": ("trend.persist", score_model.MET),
+    "가격모멘텀": ("momentum.price_momentum", score_model.MET),
+    "모멘텀보류": ("momentum.price_momentum", score_model.HELD),
 }
 
 # (라벨, 제거 항목, 가점 조정 {항목: 증분}, 만점 스케일)
@@ -81,49 +81,47 @@ ARMS = [
 
 
 def make_patch(orig, disabled, boosts, scale):
-    """항목을 빼거나 더한 점수를 돌려주는 래퍼. 아무 조정도 없으면 원본을 그대로 쓴다."""
+    """항목을 빼거나 더한 점수를 돌려주는 래퍼. 아무 조정도 없으면 원본을 그대로 쓴다.
+
+    orig 는 설명 문구를 돌려주는 원래 calculate_score 다(화면 호환용 반환값). 항목별 수치는
+    같은 입력으로 analysis.score_breakdown 을 불러 얻는다 — calculate_score 는 그 얇은
+    어댑터라 두 쪽의 총점은 같다(tests/test_score_breakdown.py).
+    """
     if not disabled and not boosts and scale == 1.0:
         return orig
-    prefixes = [ITEMS[k] for k in disabled]
+    removed = {ITEMS[k] for k in disabled}
     boost_pairs = [(BOOST[k], v) for k, v in (boosts or {}).items()]
-    ma_cap_base = 2.0
+    breakdown = analysis.score_breakdown
 
     def patched(*a, **kw):
-        score, details = orig(*a, **kw)
-        weights = kw.get("weights") or config.SCORING_WEIGHTS
-        if not isinstance(weights, dict):
-            weights = config.SCORING_WEIGHTS
-        r_trend = weights.get("TREND", 4.0) / 4.0
-        cap = round(ma_cap_base * r_trend, 2)
+        res = breakdown(*a, **kw)
+        cap = res.ma_cluster["cap"]
 
         drop = 0.0
         add = 0.0
         ma_raw = 0.0
         ma_removed = 0.0
-        capped = False
-        for d in details:
-            m = _PTS.search(d)
-            pts = float(m.group(1)) if m else 0.0
-            if d.startswith(CAP_PREFIX):
-                capped = True
+        for it in res.items:
+            if it.item_id == "trend.ma_cluster_cap":
                 continue
-            hit = any(d.startswith(p) for p in prefixes)
-            if d.startswith(MA_PREFIX):
-                ma_raw += pts
+            hit = it.item_id in removed
+            if it.item_id in score_model.MA_CLUSTER:
+                ma_raw += it.contribution
                 if hit:
-                    ma_removed += pts
+                    ma_removed += it.contribution
             elif hit:
-                drop += pts
-            for bp, delta in boost_pairs:
-                if d.startswith(bp):
+                drop += it.contribution
+            for (bid, bstatus), delta in boost_pairs:
+                if it.item_id == bid and it.status == bstatus:
                     add += delta
         # MA 군집은 상한을 다시 적용해 실제 감소분만 반영한다.
-        old_ma = cap if capped else ma_raw
+        old_ma = cap if res.ma_cluster["applied"] else ma_raw
         new_ma = min(ma_raw - ma_removed, cap)
-        adj = score - drop + add + (new_ma - old_ma)
+        #  res.total 은 0 하한이 걸린 총점이다(종전 문자열 경로와 같은 기준 — 결과 동일성 유지).
+        adj = res.total - drop + add + (new_ma - old_ma)
         if adj < 0:
             adj = 0.0
-        return round(adj * scale, 2), details
+        return round(adj * scale, 2), res.details
 
     return patched
 

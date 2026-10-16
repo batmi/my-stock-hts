@@ -32,6 +32,7 @@ from modules import holdings_backfill # [추가] 기동 시 외부 체결 동기
 from modules import chart # [추가] 차트 모듈
 from modules import instance_lock # [추가] 자동매매 단일 실행 보장
 from modules import telegram_notify # [추가] 알림 발신 상태 조회
+from modules.auto_trade import performance # 성과 보고 계산(순수 함수)
 import re # [추가] 정규식 모듈
 import pandas as pd
 
@@ -304,61 +305,8 @@ class AutoTrader:
             return {c: e['state'] for c, e in context._STOCK_STATE.items()}
 
     def _refine_trade_records(self, records):
-        """거래 내역 중복 제거 및 우선순위 적용 (전략 사유 > 체결 확인)"""
-        unique_records = {}
-        
-        for r in records:
-            odno = r.get('odno')
-            # odno가 없으면 고유 키 생성하여 포함
-            if not odno:
-                key = f"NO_ODNO_{r.get('time', '')}_{r.get('code', '')}_{r.get('type', '')}_{len(unique_records)}"
-                unique_records[key] = r
-                continue
-
-            # [수정] KIS 주문번호(odno)는 영업일 단위로 채번되어 날짜가 다르면 재사용된다.
-            #  키를 odno만 쓰면 서로 다른 날짜의 거래가 같은 odno로 병합되어 한쪽이
-            #  소실(누락)되므로, (거래일 + odno)를 키로 사용해 날짜 충돌을 막는다.
-            #  (같은 날의 접수→체결 병합은 그대로 유지된다)
-            date_key = str(r.get('time', ''))[:10]
-            key = f"{date_key}_{odno}"
-
-            if key not in unique_records:
-                unique_records[key] = dict(r) # 복사본 저장
-            else:
-                existing = unique_records[key]
-                
-                # 새 레코드(r)가 더 최신 정보(체결 등)를 담고 있을 때 병합
-                if (api.safe_float(r.get('price'), default=0.0) > 0
-                            and api.safe_float(existing.get('price'), default=0.0) <= 0):
-                    existing['price'] = r['price']
-                    
-                if r.get('profit_amt'):
-                    existing['profit_amt'] = r['profit_amt']
-                    existing['cost_amt'] = r.get('cost_amt') or 0.0   # 손익과 같은 행의 비용을 함께 따라가야 순손익이 맞다
-                if r.get('profit_rate'):
-                    existing['profit_rate'] = r['profit_rate']
-                    
-                old_reason = str(existing.get('reason', ''))
-                new_reason = str(r.get('reason', ''))
-                
-                if "체결 확인" in old_reason and "체결 확인" not in new_reason:
-                    existing['reason'] = new_reason
-                elif "체결 확인" not in old_reason and "체결 확인" in new_reason:
-                    pass # 기존 구체적 사유 유지
-                else:
-                    existing['reason'] = new_reason # 최신 사유로 덮어씀
-
-                existing['time'] = r.get('time', existing.get('time'))
-                if r.get('order_status'):
-                    existing['order_status'] = r['order_status']
-
-                # [추가] 주문 출처 꼬리표(type_full)는 '접수' 원본이 정확하다. 레코드는 시간
-                #  오름차순으로 들어오므로 먼저 자리잡은 값(=접수)을 유지하고, 비어 있을 때만 채운다.
-                #  (체결 확인 시점에 원주문 조회가 실패하면 그 레코드에는 (외부)가 붙는다)
-                if not existing.get('type_full') and r.get('type_full'):
-                    existing['type_full'] = r['type_full']
-        
-        return list(unique_records.values())
+        """거래 내역 중복 제거 및 우선순위 적용 (전략 사유 > 체결 확인) — performance 에 위임."""
+        return performance.refine_trade_records(records)
 
     def update_order_status(self, code, odno, status):
         """체결 모니터에서 호출하여 주문 상태 업데이트"""
@@ -2835,7 +2783,7 @@ class AutoTrader:
         table.add_row("", f"샹들리에 트레일링스탑 (발동: {ts_act} / 이탈: 고점대비 ATR x{ts_atr_mult}, 하한 -{ts_call}%)")
 
         # 투자 설정
-        max_holdings = config.settings.SYSTEM_MAX_HOLDINGS
+        max_holdings = config.SYSTEM_MAX_HOLDINGS
         include_etf = getattr(config, 'SYSTEM_INCLUDE_ETF', False)
         etf_str = "포함" if include_etf else "제외"
         table.add_row("투자 설정", f"비중 {config.format_invest_ratio()} (최대 {max_holdings}종목, ETF {etf_str})")
@@ -3279,146 +3227,10 @@ class AutoTrader:
         return msg.strip()
 
     def _calculate_statistics(self, records=None):
+        """성과 통계 — performance.calculate_statistics 에 위임(기간 밖 매수 기록은 DB 에서)."""
         if records is None: records = self.trade_records
-        
-        # [수정] 이미 정제된 레코드를 사용하므로 필터링 제거
-        # 수동 매매('체결 확인')도 통계에 포함
-        
-        total_trades = len(records)
-        buy_trades = [r for r in records if r['type'] == 'buy']
-        sell_trades = [r for r in records if r['type'] == 'sell']
-        
-        win_trades = 0
-        loss_trades = 0
-        total_profit = 0
-        total_profit_rate = 0.0
-        total_buy_amt_for_sell = 0
-        
-        # [추가] Best/Worst 및 사유 분석 변수
-        best_trade = None
-        worst_trade = None
-        sell_reasons = Counter()
-        buy_reasons = Counter()
-        
-        # [추가] 보유 기간 계산
-        total_holding_seconds = 0
-        holding_count = 0
-        buy_times = {} # code -> list of datetime
-
-        # 시간순 처리를 위해 전체 기록 순회
-        for r in records:
-            code = r['code']
-            try:
-                dt = datetime.strptime(r['time'], "%Y-%m-%d %H:%M:%S")
-            except Exception: continue
-
-            if r['type'] == 'buy':
-                if code not in buy_times: buy_times[code] = []
-                buy_times[code].append(dt)
-                
-                reason_raw = r.get('reason', '')
-                reason_key = "기타"
-                if "조건 만족" in reason_raw:
-                    if "슈퍼모멘텀" in reason_raw:
-                        reason_key = "추격 매수 (돌파)"
-                    else:
-                        reason_key = "스코어 진입 (조건 만족)"
-                elif "역매수" in reason_raw or "역추세" in reason_raw:
-                    reason_key = "역추세 매수 (낙폭과대)"
-                elif "수동" in reason_raw or "사용자 수동 주문" in reason_raw:
-                    reason_key = "수동 매수"
-                elif "예약" in reason_raw:
-                    reason_key = "예약 매수"
-                buy_reasons[reason_key] += 1
-            elif r['type'] == 'sell':
-                # 매도 시 매수 기록과 매칭 (FIFO: 먼저 산 것을 먼저 판다고 가정)
-                if code in buy_times and buy_times[code]:
-                    buy_dt = buy_times[code].pop(0)
-                    diff = (dt - buy_dt).total_seconds()
-                    total_holding_seconds += diff
-                    holding_count += 1
-                else:
-                    # [추가] 기간 검색으로 인해 주어진 레코드에 매수 기록이 없는 경우 DB에서 과거 내역 조회
-                    try:
-                        from modules import db_manager
-                        past_trades = db_manager.db.get_trades(code=code, limit=100)
-                        for pt in past_trades:
-                            pt_type = pt.get('type', '').lower()
-                            if "buy" in pt_type or "매수" in pt_type:
-                                pt_dt = datetime.strptime(pt['time'], "%Y-%m-%d %H:%M:%S")
-                                if pt_dt < dt:
-                                    diff = (dt - pt_dt).total_seconds()
-                                    total_holding_seconds += diff
-                                    holding_count += 1
-                                    break
-                    except Exception:
-                        pass
-        
-        for t in sell_trades:
-            profit = t.get('profit_amt', 0)
-            rate = t.get('profit_rate', 0.0)
-            total_profit += profit
-            total_profit_rate += rate
-            
-            qty = api.safe_int(t.get('qty'))
-            price = api.safe_float(t.get('price'), default=0.0)
-            sell_amt = qty * price
-            buy_amt = sell_amt - profit
-            total_buy_amt_for_sell += buy_amt
-            
-            if profit > 0: win_trades += 1
-            else: loss_trades += 1
-            
-            # [추가] Best/Worst 갱신
-            if best_trade is None or profit > best_trade.get('profit_amt', 0):
-                best_trade = t
-            if worst_trade is None or profit < worst_trade.get('profit_amt', 0):
-                worst_trade = t
-            
-            # [추가] 매도 사유 분석
-            reason = t.get('reason', '기타')
-            reason_key = "기타"
-            if "반익절" in reason: reason_key = "반익절"
-            elif "과열" in reason: reason_key = "과열매도"
-            elif "익절" in reason: reason_key = "익절"
-            elif "ATR손절" in reason: reason_key = "ATR손절"
-            elif "손절" in reason: reason_key = "손절"
-            elif "트레일링" in reason: reason_key = "트레일링스탑"
-            elif "시간청산" in reason: reason_key = "시간청산"
-            elif "추세" in reason or "점수하락" in reason or "매도진입" in reason: reason_key = "추세이탈"
-            elif "수동" in reason: reason_key = "수동매도"
-            sell_reasons[reason_key] += 1
-            
-        avg_profit_rate = (total_profit_rate / len(sell_trades)) if sell_trades else 0.0
-        win_rate = (win_trades / len(sell_trades) * 100) if sell_trades else 0.0
-        total_realized_rate = (total_profit / total_buy_amt_for_sell * 100) if total_buy_amt_for_sell > 0 else 0.0
-
-        # [추가] 평균 보유 기간 포맷팅
-        avg_holding_str = "-"
-        if holding_count > 0:
-            avg_sec = total_holding_seconds / holding_count
-            if avg_sec < 60: avg_holding_str = f"{int(avg_sec)}초"
-            elif avg_sec < 3600: avg_holding_str = f"{int(avg_sec//60)}분 {int(avg_sec%60)}초"
-            else: avg_holding_str = f"{int(avg_sec//3600)}시간 {int((avg_sec%3600)//60)}분"
-
-        return {
-            "total_trades": total_trades,
-            "buy_count": len(buy_trades),
-            "sell_count": len(sell_trades),
-            "win_trades": win_trades,
-            "loss_trades": loss_trades,
-            "total_profit": total_profit,
-            "total_realized_rate": total_realized_rate,
-            "total_buy_amt_for_sell": total_buy_amt_for_sell, # [추가] 투자 원금 기준 알파 계산용
-            "avg_profit_rate": avg_profit_rate,
-            "win_rate": win_rate,
-            "avg_holding_str": avg_holding_str,
-            "sell_trades_exist": len(sell_trades) > 0,
-            "best_trade": best_trade,
-            "worst_trade": worst_trade,
-            "sell_reasons": sell_reasons,
-            "buy_reasons": buy_reasons
-        }
+        return performance.calculate_statistics(
+            records, past_trades_of=lambda code: db_manager.db.get_trades(code=code, limit=100))
 
     def _print_summary_table(self, stats, holdings_summary=None):
         summary_table = Table(title="트레이딩 성과 요약", title_justify="center", title_style="", box=box.HORIZONTALS, show_header=False, border_style="dim")
@@ -4143,13 +3955,17 @@ class AutoTrader:
                         _cycle_restricted = get_restricted_stocks(_cycle_cano, _cycle_acnt)
 
                         # [수정] 락 범위 축소: 전체 로직을 감싸던 락 제거 (api.call_api 내부 락 활용)
-                        # 1. 매도 조건 점검 (리스크 관리)
-                        self._check_sell_conditions(holdings, current_market_status, rules_map=_cycle_rules_map, restricted_stocks=_cycle_restricted)
-                        # 2. 매수 조건 점검 ([안전장치] 잔고 0건 재확인 대기 중에는 건너뛴다)
-                        if not balance_unconfirmed:
-                            self._check_buy_conditions(holdings, deposit_res, current_market_status, rules_map=_cycle_rules_map, restricted_stocks=_cycle_restricted)
-                        # 3. 미체결 주문 관리 (오래된 주문 취소) - 장 중에만 수행
-                        self.order_manager.manage_unfilled_orders()
+                        # [주기 설정 스냅샷 · 2026-10-16] 아래 세 단계는 시작 시점의 설정 한 벌로
+                        #  판단한다 — 도중에 메뉴·텔레그램이 바꾼 값은 다음 주기에 반영된다
+                        #  (config.cycle_snapshot 주석). 워커 풀은 inherit_account_context 로 물려받는다.
+                        with config.cycle_snapshot():
+                            # 1. 매도 조건 점검 (리스크 관리)
+                            self._check_sell_conditions(holdings, current_market_status, rules_map=_cycle_rules_map, restricted_stocks=_cycle_restricted)
+                            # 2. 매수 조건 점검 ([안전장치] 잔고 0건 재확인 대기 중에는 건너뛴다)
+                            if not balance_unconfirmed:
+                                self._check_buy_conditions(holdings, deposit_res, current_market_status, rules_map=_cycle_rules_map, restricted_stocks=_cycle_restricted)
+                            # 3. 미체결 주문 관리 (오래된 주문 취소) - 장 중에만 수행
+                            self.order_manager.manage_unfilled_orders()
                         # 4. DB 쓰기 실패 확인 — 실패는 인메모리 캐시에 가려 세션 중엔
                         #    안 보이고, 재기동해야 소실이 드러난다. 그 전에 알린다.
                         self._check_db_write_failures()
@@ -6329,7 +6145,7 @@ class AutoTrader:
         
         # [수정] 최대 보유 종목 수 체크 (투자 비중은 개별 룰이 없으면 전역/자동값을 따른다)
         invest_ratio = config.resolve_invest_ratio()
-        max_holdings = config.settings.SYSTEM_MAX_HOLDINGS
+        max_holdings = config.SYSTEM_MAX_HOLDINGS
 
         can_buy = True
         # [추가] 스킵 사유를 문자열로 들고 간다. 종전에는 여기서만 로그로 흘리고 버려서,
@@ -6702,6 +6518,7 @@ class AutoTrader:
             if not result:
                 self.set_stock_state(code, None)
                 return None
+            self._note_score_boundary(code, name, result)
 
             # [추세추종] 추세품질 상한 게이트 — '너무 가파른' 추세는 사지 않는다.
             #  추세품질은 단조가 아니다. 300 위에서는 전방수익이 음수로 꺾이고 꼬리가
@@ -6914,10 +6731,44 @@ class AutoTrader:
             logger.exception(f"[매수분석] {item.get('code')} 판정 실패")
             return None
 
+    # [관측 · 2026-10-16] 채점 경계 원장(db.record_score_boundary)용 주기 수집기.
+    #  매수 판정 워커(at_cand 풀)가 analyze_buy 직후 사건이 있던 종목만 넣고, 주기 끝에
+    #  신호 원장과 같은 자리에서 한 번에 쓴다. 판단에는 쓰지 않는다. 직전 확산 상태는
+    #  메모리에만 둔다 — 재시작 뒤 첫 관측은 '뒤집힘'으로 세지 않는다(관측이 덜 셀 뿐).
+    _BOUNDARY_LOCK = threading.Lock()
+
+    def _note_score_boundary(self, code, name, result):
+        try:
+            diag = result.get('score_diag') if isinstance(result, dict) else None
+            if not isinstance(diag, dict):
+                return
+            with self._BOUNDARY_LOCK:
+                last = self.__dict__.setdefault('_boundary_last_exp', {})
+                prev = last.get(code)
+                last[code] = diag.get('expanding')
+                flip = prev is not None and prev != diag.get('expanding')
+                #  '사건' = 비율 경계 근처 · 직전 대비 확산 뒤집힘 · 가격 모멘텀 fail-open.
+                #  (확산 조건이 문턱을 가르는 것 자체는 매수 후보 대부분에서 상시라 사건이 아니다)
+                if not (diag.get('near') or flip or diag.get('fail_open')):
+                    return
+                rows = self.__dict__.get('_boundary_rows')
+                if rows is not None:
+                    rows.append({'code': code, 'name': name, 'diag': diag, 'flip': flip})
+        except Exception as e:
+            logger.debug(f"[경계계측] 수집 생략({code}): {e}")
+
+    def _drain_boundary_rows(self):
+        with self._BOUNDARY_LOCK:
+            rows = self.__dict__.get('_boundary_rows') or []
+            self.__dict__['_boundary_rows'] = None
+            return rows
+
     def _analyze_candidates(self, targets, holding_codes, rules_map, reentry_hurdles, holding_names_map, holding_groups_map, restricted_stocks=None, stop_exit_prices=None, buy_block=None):
         candidates = []
         skipped_stocks = []
         ledger_rows = []               # [신호 원장] 이 주기의 매수 신호 판정 (주기 끝에 1회 기록)
+        with self._BOUNDARY_LOCK:
+            self.__dict__['_boundary_rows'] = []   # [관측] 이 주기의 채점 경계 사건
         restricted_skipped_stocks = [] # [추가] 트레이딩 제한 스킵 리스트
         correlation_skipped_stocks = [] # [추가] 상관관계 스킵 리스트
         rs_skipped_stocks = [] # [추세추종] 상대강도(RS) 필터 스킵 리스트
@@ -7050,6 +6901,13 @@ class AutoTrader:
                     datetime.now().strftime("%Y%m%d"), ledger_rows)
             except Exception as e:
                 logger.warning(f"[Ledger] 신호 원장 기록 생략: {e}")
+        boundary_rows = self._drain_boundary_rows()
+        if boundary_rows:
+            try:
+                db_manager.db.record_score_boundary(
+                    datetime.now().strftime("%Y%m%d"), boundary_rows)
+            except Exception as e:
+                logger.warning(f"[Ledger] 채점 경계 원장 기록 생략: {e}")
 
         # [추가] 트레이딩 제한 종목 스킵 로그 기록
         if restricted_skipped_stocks:

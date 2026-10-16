@@ -31,49 +31,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
 from modules import analysis, backtest  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
+from modules import score_model  # noqa: E402
 from tools.audit_common import (  # noqa: E402
     add_universe_args, seeded_targets, universe_seeds,
 )
 
-# 상세 문구 → 짧은 항목 키. 문구가 바뀌면 여기도 바뀌어야 한다(미분류는 '기타'로 뜬다).
-LABELS = [
-    ("EMA: 현재가 > 20일선", "추세 EMA20위"),
-    ("EMA: 20/60/120 정배열", "추세 정배열"),
-    ("EMA: 5일선 > 20일선", "추세 EMA5>20"),
-    ("EMA: 60일선 돌파", "추세 60돌파[초기]"),
-    ("EMA: 단기 급등", "추세 단기급등"),
-    ("EMA: 장기 지지", "추세 EMA120위"),
-    ("[상한] EMA 군집", "추세 MA상한적용"),
-    ("추세 지속:", "추세 지속이력"),
-    ("MACD: 0선 위", "추세 MACD0선위"),
-    ("MACD: 신규 골든크로스", "추세 MACD신규GC"),
-    ("MACD: 상승 추세 확산", "추세 MACD확산"),
-    ("SAR: 상승 추세", "추세 SAR"),
-    ("RSI: 강세 구간", "모멘텀 RSI강세"),
-    ("RSI: 모멘텀 확장", "모멘텀 RSI확장"),
-    ("RSI: 상승 여력", "모멘텀 RSI눌림"),
-    ("CCI: 상승 추세", "모멘텀 CCI상승"),
-    ("CCI: 과매도권 탈출", "모멘텀 CCI탈출"),
-    ("DMI: +DI", "모멘텀 DMI"),
-    ("가격 모멘텀 보류", "모멘텀 가격보류"),
-    ("가격 모멘텀:", "모멘텀 가격"),
-    ("ADX: 추세 형성", "강도 ADX"),
-    ("VOL: 거래량 폭증", "강도 VOL급증"),
-    ("VOL: 거래량 추세", "강도 VOL추세"),
-    ("수급: OBV/SM", "강도 수급"),
-    ("추세 시작:", "시너지 추세시작"),
-    ("모멘텀 폭발:", "시너지 모멘텀폭발"),
-    ("감점: MACD 데드크로스", "감점 MACD_DC"),
-    ("감점: MACD 하락 가속", "감점 MACD가속"),
-    ("감점: -DI 우위", "감점 -DI우위"),
-]
-
-
-def key_of(detail):
-    for needle, label in LABELS:
-        if detail.startswith(needle):
-            return label
-    return "기타: " + detail[:20]
+# [2026-10-16] 항목 키는 score_breakdown 의 구조화 결과(score_model.ITEM_LABELS)에서 온다.
+#  종전에는 설명 문구 접두사 → 라벨 표를 여기 두고 문자열로 맞췄다(문구가 바뀌면 '기타'로
+#  떨어졌다). 라벨 이름은 그대로 옮겨 과거 출력과 행 이름이 같다.
 
 
 def main():
@@ -102,7 +67,6 @@ def run_once(targets, args):
     print(f"[준비] 사용 {len(dfs)}종목 / 거래일 {len(dates)}일"
           + (f" · 제외 {len(failed)}" if failed else ""))
 
-    weights = config.SCORING_WEIGHTS
     fired = defaultdict(list)     # 항목 -> 전방수익 리스트(켜진 날)
     unfired = defaultdict(list)   # 항목 -> 전방수익 리스트(꺼진 날)
     fired2 = defaultdict(list)
@@ -113,6 +77,8 @@ def run_once(targets, args):
     seen_keys = set()
     pair = defaultdict(int)
     single = defaultdict(int)
+    unknown = defaultdict(int)     # 항목 ID -> 확인 불가(필수 입력 결측) 일수
+    unverified = defaultdict(int)  # 항목 ID -> fail-open 게이트로 통과한 일수
 
     for code, df in dfs.items():
         rows = df.to_dict("records")
@@ -121,35 +87,29 @@ def run_once(targets, args):
         for i, row in enumerate(rows):
             if i + args.fwd >= len(rows):
                 break
-            # [SSOT] 입력 조립은 backtest.calculate_daily_status와 같은 순서·같은 필드여야 한다.
-            #  여기서 하나라도 다르면 '실제로 매매를 결정하는 점수'가 아닌 다른 점수를 재게 된다.
+            # [SSOT] 입력 조립은 backtest.score_inputs 하나다 — calculate_daily_status 와 같은 함수.
+            #  종전에는 여기 조립을 손으로 복제해 두고 '같은 순서·같은 필드여야 한다'고만 적었다.
             try:
-                _score, details = analysis.calculate_score(
-                    price=row["close"], ema20=row["EMA20"], ema60=row["EMA60"], ema120=row["EMA120"],
-                    sar=row["SAR"], rsi=row["RSI"], adx=row["ADX"], cci=row["CCI"],
-                    obv_trend=(row["OBV"] > row["OBV_MA"]), macd=row.get("MACD"),
-                    macd_signal=row.get("MACD_Signal"), weights=weights,
-                    smart_money=row.get("smart_money", False),
-                    plus_di=row.get("PLUS_DI"), minus_di=row.get("MINUS_DI"),
-                    ema_5=row.get("EMA5"), macd_hist=row.get("MACD_Hist"),
-                    prev_macd_hist=(prev.get("MACD_Hist") if prev is not None else None),
-                    prev_cci=(prev.get("CCI") if prev is not None else None),
-                    vol_spike=row.get("VOL_SPIKE", False), vol_trend=row.get("VOL_TREND", False),
-                    w52_pos=row.get("w52_pos", 0.0), mom_ret=row.get("MOM_RET"),
-                    mom_ret_1m=row.get("MOM_RET_1M"), mom_ret_3m=row.get("MOM_RET_3M"),
-                    trend_persist=row.get("TREND_PERSIST"),
-                )
+                res = analysis.score_breakdown(**backtest.score_inputs(row, prev))
             except Exception:
                 prev = row
                 continue
             prev = row
+            _score = res.total
             base = closes[i]
             if base <= 0:
                 continue
             fwd = (closes[i + args.fwd] / base - 1) * 100
             fwd2 = ((closes[i + args.fwd2] / base - 1) * 100
                     if i + args.fwd2 < len(rows) else None)
-            keys = {key_of(d) for d in details}
+            keys = res.labels()
+            # [결측 관측] 항목별 '확인 불가'(입력 None/NaN)와 fail-open 통과를 센다 —
+            #  조건 미충족과 데이터 부족을 갈라, 같은 점수에 담긴 정보 범위를 드러낸다.
+            for it in res.items:
+                if it.status == score_model.UNKNOWN:
+                    unknown[it.item_id] += 1
+                if it.unverified:
+                    unverified[it.item_id] += 1
             seen_keys |= keys
             n_days += 1
             scores.append(round(_score, 1))
@@ -218,6 +178,15 @@ def run_once(targets, args):
     tops = sorted(pair.items(), key=lambda x: -x[1])[:15]
     for (a, b), c in tops:
         print(f"{a:<22}{b:<22}{c / n_days * 100:>9.1f}{c / max(single[a], 1) * 100:>16.1f}")
+
+    print("\n" + "-" * W)
+    print("확인 불가(필수 입력 None/NaN) 비율 — '조건 미충족'과 다르다. 점수는 0으로 같지만")
+    print("  확인한 정보가 다르다. fail-open = 선택 게이트 입력이 없어 게이트 없이 가점된 날.")
+    print(f"{'항목':<22}{'확인불가%':>10}{'fail-open%':>12}")
+    print("-" * W)
+    for iid in sorted(set(unknown) | set(unverified), key=lambda x: -(unknown[x] + unverified[x])):
+        print(f"{score_model.ITEM_LABELS.get(iid, iid):<22}{unknown[iid] / max(n_days, 1) * 100:>10.2f}"
+              f"{unverified[iid] / max(n_days, 1) * 100:>12.2f}")
 
     print("\n[한계] 전방 수익률은 신호의 값어치이지 시스템 성과가 아니다. 창이 겹쳐 자기상관이")
     print("       있으므로 차이의 크기와 표본 수만 보고, 채택 판정은 짝비교 백테스트로 할 것.")

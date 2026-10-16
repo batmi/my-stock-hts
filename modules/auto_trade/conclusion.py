@@ -1214,7 +1214,17 @@ class ConclusionMonitor:
                     # 발주 직후 선점용 임시 ID(PRE_*)는 원장에 없다 — 조회 자체를 건너뛴다.
                     if str(odno).startswith("PRE_"):
                         continue
-                    self._apply_paper_fill(trader, code, odno, paper_broker.get_fill_by_odno(odno))
+                    fill = paper_broker.get_fill_by_odno(odno)
+                    if fill:
+                        self._apply_paper_fill(trader, code, odno, fill)
+                        continue
+                    #  [시험 모델] 체결 없이 종결된 주문(취소·원장 실패)은 상태기계에서 정리한다.
+                    #   종결 전이면 그대로 둔다 — 미체결 관리가 보고 있다. 즉시 체결 주문은
+                    #   시험 모델 표에 없으므로 get_order_state 가 None 이다(종전 동작).
+                    st = paper_broker.get_order_state(odno)
+                    if st and st.get("status") in ("cancelled", "failed") and not int(st.get("filled_qty") or 0):
+                        trader.order_manager.update_order_status(
+                            code, odno, OrderStatus.CANCELED if st["status"] == "cancelled" else OrderStatus.REJECTED)
 
             # [재기동 복구] pending_orders는 메모리라 재시작하면 비고, 가상 주문은 미체결
             #  목록으로 복원할 수도 없다(관찰 모드의 미체결은 항상 빈 리스트). 그대로 두면
@@ -1224,7 +1234,8 @@ class ConclusionMonitor:
             if not self.paper_backfill_done:
                 self.paper_backfill_done = True
                 today = datetime.now().strftime('%Y-%m-%d')
-                for fill in paper_broker.get_fills():
+                #  주문번호당 한 건 — 시험 모델의 분할 체결은 종결 누적 한 건으로 묶인다.
+                for fill in paper_broker.get_settled_fills():
                     if not str(fill.get('time') or '').startswith(today):
                         continue
                     self._apply_paper_fill(trader, fill['code'], fill.get('odno'), fill)

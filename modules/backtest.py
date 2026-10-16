@@ -61,63 +61,55 @@ def _trend_smo_str(close, psar, macd, macd_signal, obv_trend):
     elif obv_trend is False: obv_icon = "[blue]▼[/]"
     return f"{sar_icon} {macd_icon} {obv_icon}"
 
+def score_inputs(row, prev_row, thresholds=None):
+    """백테스트 한 행(사전계산 지표) → analysis.calculate_score / score_breakdown 키워드 인자.
+
+    [SSOT 2026-10-16] 백테스트 쪽 채점 입력 조립은 여기 하나다. 종전에는 이 조립이
+     calculate_daily_status 와 tools/audit_score_factors.py 에 두 벌 있었고, '같은 순서·같은
+     필드여야 한다'는 주석만이 둘을 묶었다. 감사가 실제 매매 점수가 아닌 다른 점수를 재는
+     것을 막으려면 같은 함수를 불러야 한다. classify_stock_state 에는 weights 를 뺀 나머지를
+     그대로 넘긴다(매개변수 이름이 같다).
+    """
+    return dict(
+        price=row['close'], ema20=row['EMA20'], ema60=row['EMA60'], ema120=row['EMA120'],
+        sar=row['SAR'], rsi=row['RSI'], adx=row['ADX'], cci=row['CCI'],
+        obv_trend=(row['OBV'] > row['OBV_MA']),
+        macd=row.get('MACD'), macd_signal=row.get('MACD_Signal'),
+        weights=thresholds.get("WEIGHTS") if thresholds else None,
+        smart_money=row.get('smart_money', False),  # [추가] 사전 병합된 스마트머니 시그널 확인
+        plus_di=row.get('PLUS_DI'), minus_di=row.get('MINUS_DI'),
+        ema_5=row.get('EMA5'), macd_hist=row.get('MACD_Hist'),
+        prev_macd_hist=prev_row.get('MACD_Hist') if prev_row is not None else None,
+        prev_cci=prev_row.get('CCI') if prev_row is not None else None,
+        vol_spike=row.get('VOL_SPIKE', False), vol_trend=row.get('VOL_TREND', False),
+        w52_pos=row.get('w52_pos', 0.0),
+        mom_ret=row.get('MOM_RET'),  # [추가] 가격 모멘텀 팩터 (라이브와 동기화)
+        mom_ret_1m=row.get('MOM_RET_1M'), mom_ret_3m=row.get('MOM_RET_3M'),  # [추세추종] 다중 기간 정합
+        trend_persist=row.get('TREND_PERSIST'),  # [추세추종] 추세 지속 이력
+    )
+
+
 def calculate_daily_status(row, prev_row, thresholds=None):
     """
     analysis.py의 로직을 기반으로 일별 상태 및 점수 계산
     반환값: (raw_score, sell_check_score, can_buy_state, state, reason)
     """
-    price = row['close']
-    ema20 = row['EMA20']
-    ema60 = row['EMA60']
-    ema120 = row['EMA120']
-    sar = row['SAR']
-    rsi = row['RSI']
-    adx = row['ADX']
-    cci = row['CCI']
-    
-    macd = row.get('MACD')
-    macd_signal = row.get('MACD_Signal')
-    # OBV Trend
-    obv = row['OBV']
-    obv_ma = row['OBV_MA']
-    obv_trend = (obv > obv_ma)
-
+    kw = score_inputs(row, prev_row, thresholds)
     # Previous RSI for divergence check
     prev_rsi = prev_row['RSI'] if prev_row is not None else None
-    w52_pos = row.get('w52_pos', 0.0)
-    smart_money = row.get('smart_money', False) # [추가] 사전 병합된 스마트머니 시그널 확인
-    
-    # [추가] 점수 산정에 필요한 세부 지표들
-    ema_5 = row.get('EMA5')
-    prev_cci = prev_row.get('CCI') if prev_row is not None else None
-    vol_spike = row.get('VOL_SPIKE', False)
-    vol_trend = row.get('VOL_TREND', False)
-    macd_hist = row.get('MACD_Hist')
-    prev_macd_hist = prev_row.get('MACD_Hist') if prev_row is not None else None
 
-    # [수정] analysis 모듈을 사용하여 로직 동기화
-    is_yangbong_flag = (row['close'] > row['open'])
-    # 1. 상태 분류 (위험/주의/관망/상승/매수)
+    # 1. 점수 계산 — 한 번만 채점해 상태 분류에도 같은 값을 넘긴다(score=). 감사 도구가
+    #  analysis.calculate_score 를 monkeypatch 하면 그 값이 상태와 점수 양쪽에 함께 걸린다(종전과 같다).
+    raw_score_unrounded, _ = analysis.calculate_score(**kw)
+
+    # 2. 상태 분류 (위험/주의/관망/상승/매수)
+    kw.pop('weights')
     state, _, reason = analysis.classify_stock_state(
-        price, ema20, ema60, ema120, sar, rsi, prev_rsi, adx, cci, obv_trend, macd, macd_signal,
-        thresholds=thresholds, w52_pos=w52_pos, smart_money=smart_money,
-        plus_di=row.get('PLUS_DI'), minus_di=row.get('MINUS_DI'),
-        ema_5=ema_5, macd_hist=macd_hist, prev_macd_hist=prev_macd_hist, prev_cci=prev_cci, vol_spike=vol_spike, vol_trend=vol_trend,
-        is_yangbong=is_yangbong_flag, mom_ret=row.get('MOM_RET'),  # [추세추종] 가격 모멘텀 팩터 (상태 분류 내부 점수도 동일 입력 사용)
-        mom_ret_1m=row.get('MOM_RET_1M'), mom_ret_3m=row.get('MOM_RET_3M'), trend_persist=row.get('TREND_PERSIST')  # [추세추종] 다중 기간 정합·추세 지속 이력
+        prev_rsi=prev_rsi, thresholds=thresholds,
+        is_yangbong=(row['close'] > row['open']),
+        score=raw_score_unrounded, **kw
     )
-    
-    # 2. 점수 계산
-    weights = thresholds.get("WEIGHTS") if thresholds else None
-    raw_score, _ = analysis.calculate_score(
-        price, ema20, ema60, ema120, sar, rsi, adx, cci, obv_trend, macd, macd_signal,
-        ema_5=ema_5, prev_cci=prev_cci, vol_spike=vol_spike, vol_trend=vol_trend,
-        weights=weights, smart_money=smart_money, plus_di=row.get('PLUS_DI'), minus_di=row.get('MINUS_DI'),
-        macd_hist=macd_hist, prev_macd_hist=prev_macd_hist,
-        w52_pos=w52_pos, mom_ret=row.get('MOM_RET'),  # [추가] 가격 모멘텀 팩터 (라이브와 동기화)
-        mom_ret_1m=row.get('MOM_RET_1M'), mom_ret_3m=row.get('MOM_RET_3M'), trend_persist=row.get('TREND_PERSIST')  # [추세추종] 다중 기간 정합·추세 지속 이력
-    )
-    raw_score = round(raw_score, 1) # [Fix] 부동소수점 오차 제거 (예: 6.9999 -> 7.0)
+    raw_score = round(raw_score_unrounded, 1) # [Fix] 부동소수점 오차 제거 (예: 6.9999 -> 7.0)
     
     # 3. 백테스팅용 플래그 변환
     can_buy_state = (state not in ["매도", "주의"]) # 매도/주의가 아니면 매수 후보 (역매수 포함)
@@ -559,7 +551,7 @@ def _resolve_backtest_market(code):
     return "KOSPI"
 
 
-def prepare_market_filter(code, is_overseas, days):
+def prepare_market_filter(code, is_overseas, days, use_filter=None):
     """설정값(USE_MARKET_FILTER, MARKET_FILTER_MA)을 읽어 백테스트용 '신규 매수 차단일' 집합을 준비.
 
     실매매 필터(trader._update_market_indices_status)와 동일 기준: 지수 종가가
@@ -570,7 +562,9 @@ def prepare_market_filter(code, is_overseas, days):
     국내는 stock.json exchange로 KOSPI/KOSDAQ 지수를 구분하고, 해외는 S&P500을 사용한다.
     반환: (차단일수, 설명) 또는 None(미사용/실패 — 이때 필터 없이 시뮬레이션됨)
     """
-    use_filter = getattr(config, 'USE_MARKET_FILTER', True)
+    # use_filter: None 이면 설정값. 화면에서 고른 ON/OFF 는 인자로 받는다(전역 설정을 바꾸지 않는다).
+    if use_filter is None:
+        use_filter = getattr(config, 'USE_MARKET_FILTER', True)
     ma = int(getattr(config, 'MARKET_FILTER_MA', 80))
     band = float(getattr(config, 'MARKET_FILTER_BAND', 1.0))
     rel_bear = bool(getattr(config, 'MARKET_FILTER_RELEASE_ON_BEAR', False))
@@ -2432,17 +2426,12 @@ def run_backtest():
             transient=True
         ) as progress:
             task_id = progress.add_task(f"[cyan]{name} ({code}) 데이터 분석 및 시뮬레이션 준비 중...[/cyan]", total=None)
-            # KIS API 사용 시를 대비해 설정 변경 (yfinance 실패 시 동작)
-            original_lookback = config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"]
-            needed_days = days + 400 # 52주 윈도우 충족 위해 약 1년 워밍업 확보
-            if needed_days > original_lookback:
-                config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"] = needed_days
-                
-            try:
-                # [수정] yfinance 우선 조회 함수 사용
-                df = get_backtest_data(code, is_overseas, days)
-            finally:
-                config.INDICATOR_PARAMS["CHART_LOOKBACK_DAYS"] = original_lookback
+            # [전역 설정을 바꾸지 않는다 · 2026-10-16] 종전에는 차트 API 폴백을 대비해 조회 동안
+            #  config.INDICATOR_PARAMS['CHART_LOOKBACK_DAYS'] 를 늘렸다 되돌렸다. 그 사이 백그라운드
+            #  자동매매의 차트 조회도 늘어난 기간으로 나갔다(호출·메모리 증가 — 파이에서 의미 있다).
+            #  결과에는 기여하지 않았다: 국내는 krx_daily(lookback 인자), 해외 1순위 yfinance 는 기간을
+            #  직접 넘기고, 최종 폴백 차트 API 는 일봉을 250봉으로 자른다(기본 730일 ≫ 250봉).
+            df = get_backtest_data(code, is_overseas, days)
 
             if df is None or df.empty:
                 progress.stop()
@@ -2475,12 +2464,9 @@ def run_backtest():
             #  모든 모드(단일/몬테카를로/워크포워드/최적화)가 이 차단일 집합을 공유한다.
             #  ON/OFF만 조건 변경에서 고른 값(use_market_filter)으로 덮어쓴다 — prepare_market_filter가
             #  config를 직접 읽으므로 호출 동안만 바꾸고 곧바로 되돌린다(전역 설정 오염 방지).
-            _mf_saved = getattr(config, 'USE_MARKET_FILTER', True)
-            try:
-                config.USE_MARKET_FILTER = use_market_filter
-                mf_result = prepare_market_filter(code, is_overseas, days)
-            finally:
-                config.USE_MARKET_FILTER = _mf_saved
+            #  [2026-10-16] 종전에는 config.USE_MARKET_FILTER 를 호출 동안 바꿨다 되돌렸다 — 그 사이
+            #   백그라운드 자동매매가 꺼진 시장 필터로 신규 진입을 판단할 수 있었다. 인자로 넘긴다.
+            mf_result = prepare_market_filter(code, is_overseas, days, use_filter=use_market_filter)
 
             # [동적 손절 캡] 날짜별 지수 변동성 배율 준비. 실패해도 배율 1.0(고정 캡)으로
             #  동작하므로 시뮬레이션은 그대로 진행된다.

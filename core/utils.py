@@ -833,13 +833,19 @@ def inherit_account_context(fn):
         executor.submit(utils.inherit_account_context(worker), item)
     """
     captured = getattr(context.trade_context, 'use_auto_account', False)
+    # [주기 설정 스냅샷] 제출 스레드가 매매 주기 안이면 같은 설정 한 벌을 워커에도 건다
+    #  (config.cycle_snapshot 주석). 계좌 문맥과 같은 이유로 스레드 간 상속되지 않기 때문이다.
+    snap = config.current_cycle_snapshot()
 
     @functools.wraps(fn)
     def _wrapped(*args, **kwargs):
         prev = getattr(context.trade_context, 'use_auto_account', False)
         context.trade_context.use_auto_account = captured
         try:
-            return fn(*args, **kwargs)
+            if snap is None:
+                return fn(*args, **kwargs)
+            with config.cycle_snapshot(snap):
+                return fn(*args, **kwargs)
         finally:
             context.trade_context.use_auto_account = prev
 

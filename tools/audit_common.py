@@ -34,6 +34,13 @@
 #   시뮬레이터에 사유가 하나 늘 때 감사 표본만 옛 어휘로 남는다.
 from modules.portfolio_backtest import EXIT_REASONS as SELL_REASONS  # noqa: E402
 
+# [실행 기록 · 2026-10-16] 이 모듈을 쓰는 감사 도구가 **스크립트로** 실행되면 커밋·설정·데이터
+#  출처·씨드·의존성·미모델 조건·결과 표(표준출력 꼬리)를 data/audit_runs/ 에 남긴다
+#  (modules/run_manifest 주석). import(테스트)에서는 켜지지 않는다. 끄려면 HTS_NO_RUN_MANIFEST=1.
+import sys as _sys  # noqa: E402
+from modules import run_manifest as _run_manifest  # noqa: E402
+_run_manifest.auto_start_for_script(getattr(_sys.modules.get("__main__"), "__file__", None))
+
 
 def exits(r):
     """청산 표본. run_portfolio 결과에서 신규 매수·증액을 제외한 실현 거래.
@@ -220,4 +227,6 @@ def seeded_targets(args, seed):
     """
     from tools.audit_discover_fit import rule_pool
     from tools.audit_universe import dead_targets
-    return rule_pool(args.pool, args.stocks, seed) + dead_targets(args.dead)
+    targets = rule_pool(args.pool, args.stocks, seed) + dead_targets(args.dead)
+    _run_manifest.note_universe(seed, targets)      # 실행 기록에 씨드별 표본을 남긴다
+    return targets

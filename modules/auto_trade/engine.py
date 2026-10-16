@@ -25,6 +25,9 @@ import api
 from core import utils
 from core import indicators
 from modules import analysis, account # [수정] account 모듈 재사용
+from modules import score_model
+from modules import exit_rules
+from modules import position_sizing
 import math # [추가] math 모듈
 from modules import db_manager # [추가] DB 매니저
 from modules import chart # [추가] 차트 모듈
@@ -213,7 +216,8 @@ def profit_lock_stop_rate(max_profit_rate, min_mfe=None, giveback=None):
 
 
 def compute_trailing_stop(highest_price, buy_price, current_price, ind=None, thresholds=None,
-                          ts_activation=None, ts_callback=None, ts_atr_mult=None, use_atr_stop=None):
+                          ts_activation=None, ts_callback=None, ts_atr_mult=None, use_atr_stop=None,
+                          breakeven_mode=None):
     """샹들리에 트레일링 스탑 발동선을 계산한다. (순수 함수 · 부수효과 없음)
 
     주청산 로직인 TS 콜백 산식의 단일 소스. analyze_sell의 청산 판정과 잔고 화면의
@@ -262,7 +266,11 @@ def compute_trailing_stop(highest_price, buy_price, current_price, ind=None, thr
     #   구간5 수익승이 23/30 → 14/30으로 무너졌다. 매수가 기준이라야 문턱이 진입 시점에
     #   고정되고, 검증된 결과가 재현된다.
     stop_price = highest_price * (1 - actual_callback / 100)
-    if str(ss.get("TS_ACTIVATION_MODE", "breakeven")).lower() == "breakeven":
+    #  breakeven_mode: None 이면 config(TS_ACTIVATION_MODE)를 읽는다. 백테스트·감사는 실행
+    #   파라미터로 직접 넘긴다(modules/exit_rules.evaluate_exit — 청산 체인의 공통 계층).
+    if breakeven_mode is None:
+        breakeven_mode = str(ss.get("TS_ACTIVATION_MODE", "breakeven")).lower() == "breakeven"
+    if breakeven_mode:
         # [분리] 발동선은 콜백 배수(ts_atr_mult)가 아니라 발동 전용 배수로 계산한다.
         ts_activation = breakeven_activation_rate(atr_val, buy_price, ts_callback,
                                                   ts_activation_atr_mult(), use_atr_stop)
@@ -1274,19 +1282,25 @@ class DefaultStrategy:
         is_overseas = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
         sm_flag, sm_reason = analysis.check_smart_money_turnaround(code, is_overseas)
 
-        state, _, state_reason = analysis.classify_stock_state(
-            df=df, ind=ind, prev_rsi=prev_rsi, thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag
-        )
-        
         # [SSOT] w52_pos를 반드시 함께 넘긴다. 넘기지 않으면 calculate_score가 내부 폴백으로
-        #  _w52_band(365 달력일)를 쓰는데, 바로 위 classify_stock_state에는 tail(250 거래일)로
+        #  _w52_band(365 달력일)를 쓰는데, 아래 classify_stock_state에는 tail(250 거래일)로
         #  계산한 값을 넘기고 있어 같은 시점에 52주 위치가 두 개 존재하게 된다. 그러면 가격
         #  모멘텀 팩터(+0.5, 임계 80%)가 상태와 점수에서 다르게 매겨진다.
-        score, _ = analysis.calculate_score(
+        # [SSOT 2026-10-16] 채점은 한 번만 하고 상태 분류에 그 점수를 넘긴다(score=). 종전에는
+        #  classify_stock_state 안에서 같은 입력으로 한 번 더 채점했다 — 값은 같았지만 상태와
+        #  점수가 '같은 계산'이라는 보장이 호출 규약에만 있었다.
+        raw_score, _score_details = analysis.calculate_score(
             df=df, ind=ind, weights=thresholds.get('WEIGHTS') if thresholds else None,
             smart_money=sm_flag, w52_pos=w52_pos
         )
-        score = round(score, 1)
+        state, _, state_reason = analysis.classify_stock_state(
+            df=df, ind=ind, prev_rsi=prev_rsi, thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag,
+            score=raw_score
+        )
+        score = round(raw_score, 1)
+        score_diag = self._score_boundary_diag(
+            _score_details, thresholds, state,
+            dict(df=df, ind=ind, prev_rsi=prev_rsi, thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag))
 
         # [수정] 역매수 상태에 따른 체결강도 분기
         if state == "역매수":
@@ -1351,8 +1365,78 @@ class DefaultStrategy:
             'vol_reject_reason': vol_reject_reason,
             'smart_money': sm_flag,
             'w52_pos': w52_pos,  # [추세추종] 매수 후보 우선순위(강한 종목 우선) 정렬용 52주 위치
-            'trend_quality': trend_quality  # [추세추종] 추세 품질(회귀 모멘텀) — 후보 랭킹 1순위 키
+            'trend_quality': trend_quality,  # [추세추종] 추세 품질(회귀 모멘텀) — 후보 랭킹 1순위 키
+            'score_diag': score_diag,  # [관측] 시너지 경계·결측 계측(판단에 쓰지 않는다, None 가능)
         }
+
+    @staticmethod
+    def _score_boundary_diag(details, thresholds, state, classify_kwargs):
+        """[관측 · 지시서 5-4] 이번 채점의 시너지 경계·결측 관측값. 판단에는 쓰지 않는다.
+
+        채점은 다시 하지 않는다 — 방금 calculate_score 가 만든 구조화 결과를 같은 스레드에서
+        꺼낸다(analysis.last_breakdown_for). 경계 근처에서 확산 조건이 BUY_SCORE 를 갈랐을 때만 반사실 점수로
+        상태 분류를 한 번 더 돌려(채점 없이 score= 로) '경계가 아니었다면 매수 상태였나'를 남긴다.
+        어떤 실패도 매수 판단을 막지 않는다(None 을 돌려줄 뿐).
+        """
+        try:
+            bd = analysis.last_breakdown_for(details)
+            if bd is None:
+                return None
+            buy_score = (thresholds.get("BUY_SCORE") if thresholds else None)
+            if buy_score is None:
+                buy_score = config.ANALYSIS_THRESHOLDS.get("BUY_SCORE", 7.0)
+            ev = score_model.boundary_event(bd, buy_score)
+            ev['state'] = state
+            ev['cf_state'] = None
+            #  반사실 상태는 경계 근처에서만 — 확산 조건은 경계와 멀어도 문턱을 가를 수 있지만
+            #  (예: 히스토그램이 커서 확산이 확실한 날) 그것은 경계 효과가 아니다.
+            if ev['cross'] and ev['near'] and ev['cf_score'] is not None:
+                ev['cf_state'] = analysis.classify_stock_state(score=ev['cf_score'], **classify_kwargs)[0]
+            return ev
+        except Exception as e:
+            logger.debug(f"[경계계측] 생략: {e}")
+            return None
+
+    @staticmethod
+    def _live_sell_reason(d, profit_rate, max_profit_rate, holding_days, highest_price, ts_info,
+                          state, state_reason, score, ind):
+        """공통 청산 판정(exit_rules) 결과 → 실매매 사유 문자열. 종전 analyze_sell 의 형식 그대로다
+        (매매 기록·텔레그램·웹저널·감사 도구가 이 문자열을 읽는다)."""
+        c = d.code
+        if not d.sell or c is None:
+            return ""
+        if c == exit_rules.HALF_TAKE_PROFIT:
+            return f"반익절({profit_rate:.1f}%)"
+        if c == exit_rules.TAKE_PROFIT:
+            return f"익절({profit_rate}%)"
+        if c == exit_rules.PROFIT_PRESERVE:
+            # [Fix] 보존선 하한 +0.5% — 익절 목표를 3% 이하로 설정한 경우 '수익보존' 명목의 손실 매도 방지
+            return f"수익보존(목표돌파후 하락, {profit_rate:.1f}%)"
+        if c == exit_rules.PROFIT_LOCK:
+            return f"이익보호({profit_rate:.1f}%, 고점 {max_profit_rate:.1f}%)"
+        if c == exit_rules.BEP_STOP:
+            return f"본전청산({profit_rate:.1f}%)"
+        if c in (exit_rules.ATR_STOP, exit_rules.STOP_LOSS):
+            return f"손절({profit_rate:.1f}%)"
+        if c == exit_rules.TIME_STOP:
+            return f"시간청산({holding_days}일경과, 상방모멘텀 상실)"
+        if c == exit_rules.TRAILING_STOP:
+            return (f"트레일링스탑 (최고가:{int(highest_price):,}원, "
+                    f"하락률:-{ts_info['drop_rate']:.1f}%, 기준:-{ts_info['callback']:.1f}%)")
+        if c == exit_rules.RSI_TAKE_PROFIT:
+            if d.is_super:
+                return f"RSI과열(슈퍼모멘텀, 기준:{d.actual_tp_rsi})"
+            return f"RSI과열(기준:{d.actual_tp_rsi})"
+        if c == exit_rules.DEFENSIVE_HALF:
+            return f"하락반전(방어적 반매도, 수익률:+{profit_rate:.1f}%)"
+        ind = ind or {}
+        rsi_val = f"{ind.get('rsi'):.1f}" if ind.get('rsi') is not None else "-"
+        if c == exit_rules.STATE_SELL:
+            return f"매도진입({state_reason}) [점수:{score}, RSI:{rsi_val}]"
+        adx_val = f"{ind.get('adx'):.1f}" if ind.get('adx') is not None else "-"
+        cci_val = f"{ind.get('cci'):.1f}" if ind.get('cci') is not None else "-"
+        return (f"추세이탈({state}/점수하락+60일선이탈) "
+                f"[점수:{score}, RSI:{rsi_val}, ADX:{adx_val}, CCI:{cci_val}]")
 
     def analyze_pyramid(self, profit_rate, state, score, pyramid_count, thresholds=None):
         """[추세추종] 수익 포지션 증액(피라미딩) 여부 판단
@@ -1381,6 +1465,7 @@ class DefaultStrategy:
         ind = {}
         score = 0
         state = ""
+        state_reason = ""
         state_color = "[white]"
         sell_ratio = 1.0 # 기본값 전량 매도
         
@@ -1390,9 +1475,8 @@ class DefaultStrategy:
         tp_rsi = thresholds.get("TAKE_PROFIT_RSI", config.SELL_STRATEGY["TAKE_PROFIT_RSI"]) if thresholds else config.SELL_STRATEGY["TAKE_PROFIT_RSI"]
         sell_score_limit = thresholds.get("SELL_SCORE", config.SELL_STRATEGY["SELL_SCORE"]) if thresholds else config.SELL_STRATEGY["SELL_SCORE"]
         
-        # [추가] 반익절 설정 및 계산 (익절 설정의 절반)
+        # [추가] 반익절 설정 (발동선 = 익절 설정의 절반, exit_rules 가 계산한다)
         use_half_tp = thresholds.get("HALF_TAKE_PROFIT_USE", config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False)) if thresholds else config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False)
-        half_tp_rate = tp_rate / 2.0
         
         # [추가] 시간 청산 설정 로드
         use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
@@ -1432,183 +1516,76 @@ class DefaultStrategy:
             is_overseas = not (len(code) == 6 and code[0].isdigit() and code.isalnum())
             sm_flag, sm_reason = analysis.check_smart_money_turnaround(code, is_overseas)
 
-            state, state_color, state_reason = analysis.classify_stock_state(
-                df=df, ind=ind, prev_rsi=prev_rsi, thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag
-            )
-            
-            # [SSOT] 위 classify_stock_state와 같은 w52_pos를 쓴다 (analyze_buy 주석 참조)
-            score, _ = analysis.calculate_score(
+            # [SSOT] classify_stock_state와 같은 w52_pos를 쓰고, 채점은 한 번만 해 상태 분류에
+            #  넘긴다 (analyze_buy 주석 참조)
+            raw_score, _ = analysis.calculate_score(
                 df=df, ind=ind, weights=thresholds.get('WEIGHTS') if thresholds else None,
                 smart_money=sm_flag, w52_pos=w52_pos
             )
-            score = round(score, 1)
+            state, state_color, state_reason = analysis.classify_stock_state(
+                df=df, ind=ind, prev_rsi=prev_rsi, thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag,
+                score=raw_score
+            )
+            score = round(raw_score, 1)
 
-        # [추가] 본전 청산(BEP) 임계값 재설정 로직
-        is_bep_applied = False
-        max_profit_rate = 0.0
+        # [2026-10-16] 청산 판정 체인은 modules/exit_rules.evaluate_exit 하나다 — 백테스트
+        #  (portfolio_backtest.decide_sell)도 같은 함수를 부른다. 여기서는 실매매 입력(현재가·
+        #  DB 의 트레일링 최고가·개별 룰 thresholds)을 그 입력으로 옮기고, 사유 코드를 종전과
+        #  같은 문자열로 바꾼다. 우선순위·유예·'체인을 소비하지 않는다' 규칙의 근거 주석은
+        #  exit_rules 에 함께 옮겼다.
         # [2026-08-04] BEP는 기본 OFF (config.SELL_STRATEGY 주석의 반사실 실측 참조).
         #  끄더라도 max_profit_rate는 트레일링·표시에 쓰이므로 계산은 유지한다.
         use_bep = (thresholds.get("USE_BREAK_EVEN_STOP", config.SELL_STRATEGY.get("USE_BREAK_EVEN_STOP", False))
                    if thresholds else config.SELL_STRATEGY.get("USE_BREAK_EVEN_STOP", False))
-        if highest_price > 0 and buy_price > 0:
-            max_profit_rate = ((highest_price - buy_price) / buy_price) * 100
-            if use_bep and max_profit_rate >= bep_activation:
-                if sl_rate < bep_stop:
-                    sl_rate = bep_stop
-                    is_bep_applied = True
-
         # [이익 보호선] 무장 전 구간의 공백을 메운다. TS가 켜지면 그쪽이 더 높아 자연히 무의미해진다.
-        is_lock_applied = False
         use_lock = (thresholds.get("PROFIT_LOCK_USE", config.SELL_STRATEGY.get("PROFIT_LOCK_USE", False))
                     if thresholds else config.SELL_STRATEGY.get("PROFIT_LOCK_USE", False))
-        if use_lock and buy_price > 0:
-            lock_rate = profit_lock_stop_rate(
-                max_profit_rate,
-                (thresholds or {}).get("PROFIT_LOCK_MIN_MFE"),
-                (thresholds or {}).get("PROFIT_LOCK_GIVEBACK"))
-            if lock_rate is not None and lock_rate > sl_rate:
-                sl_rate = lock_rate
-                is_lock_applied = True
-                is_bep_applied = False   # 표시·사유가 겹치지 않게 더 높은 쪽만 남긴다
+        use_super = thresholds.get("SUPER_MOMENTUM_USE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True)) if thresholds else config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True)
+        super_score = thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.0)
+        super_w52 = thresholds.get("SUPER_MOMENTUM_W52_POS", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0)
+        super_tp_rsi = thresholds.get("SUPER_TAKE_PROFIT_RSI", config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 90.0)) if thresholds else config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 90.0)
+        has_bars = df is not None and not df.empty
+        # 시간청산 유예(최근 5일 고점 ≥ 10일 고점)는 10봉 이상일 때만 판정한다 — 없으면 유예 없음
+        roll5 = roll10 = None
+        if has_bars and len(df) >= 10:
+            roll5 = df['high'].tail(5).max()
+            roll10 = df['high'].tail(10).max()
+        atr_applied = bool(thresholds and thresholds.get("ATR_APPLIED_SL_RATE") is not None)
 
-        # [추가] 트레일링 스탑 동적 콜백 계산 및 판별
-        # [SSOT] 콜백 산식은 compute_trailing_stop()이 단독 보유한다. 잔고 화면(메뉴 9-2)의
-        #  'TS 청산가' 표시도 같은 함수를 호출해, 표시된 선과 실제 청산선이 어긋나지 않게 한다.
-        ts_msg = ""
-        ts_info = compute_trailing_stop(highest_price, buy_price, current_price, ind=ind,
-                                        thresholds=thresholds,
-                                        ts_activation=ts_activation, ts_callback=ts_callback,
-                                        ts_atr_mult=ts_atr_mult, use_atr_stop=use_atr_stop)
-        if ts_info and ts_info['triggered']:
-            ts_msg = (f"트레일링스탑 (최고가:{int(highest_price):,}원, "
-                      f"하락률:-{ts_info['drop_rate']:.1f}%, 기준:-{ts_info['callback']:.1f}%)")
+        rules = exit_rules.ExitRules(
+            use_atr=use_atr_stop, use_time_stop=use_time_stop, time_stop_days=time_stop_days,
+            time_stop_min=time_stop_min_profit,
+            ts_act=ts_activation, ts_callback=ts_callback, ts_atr_mult=ts_atr_mult,
+            ts_breakeven=str(config.SELL_STRATEGY.get("TS_ACTIVATION_MODE", "breakeven")).lower() == "breakeven",
+            sell_score_limit=sell_score_limit,
+            profit_lock_use=use_lock,
+            profit_lock_min_mfe=(thresholds or {}).get("PROFIT_LOCK_MIN_MFE"),
+            profit_lock_giveback=(thresholds or {}).get("PROFIT_LOCK_GIVEBACK"),
+            bep_use=use_bep, bep_activation=bep_activation, bep_stop=bep_stop,
+            tp_rate=tp_rate, half_tp_use=use_half_tp, tp_rsi=tp_rsi,
+            super_use=use_super, super_score=super_score, super_w52=super_w52, super_tp_rsi=super_tp_rsi,
+            defensive_half_use=defensive_half_tp, mr_grace_loss_rate=mr_grace_loss_rate,
+            require_judged=True, state_sell_always=True,
+        )
+        decision = exit_rules.evaluate_exit(exit_rules.ExitInputs(
+            price=current_price, avg=buy_price, high=highest_price, profit_rate=profit_rate,
+            holding_days=holding_days, sl_rate=sl_rate, atr_applied=atr_applied,
+            atr=(ind.get('atr') if ind else None), state=state, state_reason=state_reason,
+            score=score, ema60=(ind.get('ema_60') if ind else None),
+            roll_high_5=roll5, roll_high_10=roll10, has_bars=has_bars,
+            rsi=ind.get('rsi') if ind else None, psar=ind.get('psar') if ind else None,
+            ema_5=ind.get('ema_5') if ind else None, w52_pos=w52_pos,
+            already_half_sold=already_half_sold, is_mr_holding=is_mr_holding,
+        ), rules)
+        sl_rate = decision.applied_sl_rate
+        is_bep_applied = decision.is_bep
+        is_lock_applied = decision.is_lock
+        max_profit_rate = decision.max_profit_rate
+        ts_info = decision.ts
+        sell_ratio = decision.sell_ratio
+        reason = self._live_sell_reason(decision, profit_rate, max_profit_rate, holding_days,
+                                        highest_price, ts_info, state, state_reason, score, ind)
 
-        # 2. 고정 익절/손절 및 시간 청산
-        # [수정] 반익절 후 잔여 물량(천장 해제, Let profit run)은 이 elif 체인을 '소비'하면 안 된다.
-        #  기존에는 목표 도달 시 pass로 체인이 끝나 아래 손절/시간청산/트레일링 스탑이 전부 차단되어,
-        #  고수익 구간에서 TS가 영원히 발동하지 않는 버그가 있었다. 해당 케이스를 조건에서 제외해
-        #  체인이 계속 흐르도록 한다.
-        if tp_rate > 0 and use_half_tp and not already_half_sold and profit_rate >= half_tp_rate:
-            reason = f"반익절({profit_rate:.1f}%)"
-            sell_ratio = 0.5
-        elif tp_rate > 0 and profit_rate >= tp_rate and not (use_half_tp and already_half_sold):
-            reason = f"익절({profit_rate}%)"
-
-        # [추가] 반익절 이후 Let profit run 시, 최소 수익 보존선 (Profit Lock-in)
-        # 목표가를 한 번 뚫고 내려올 경우 TS(예: 4%) 발동 전이라도 목표가-3%에서 즉시 매도하여 수익 방어
-        # (미발동 시 체인이 계속 흐르도록 판정 조건을 elif 조건식 안에 인라인)
-        # [Fix] 보존선 하한 +0.5% — 익절 목표를 3% 이하로 설정한 경우 '수익보존' 명목의 손실 매도 방지
-        elif (tp_rate > 0 and use_half_tp and already_half_sold and highest_price > 0
-              and max_profit_rate >= tp_rate and profit_rate <= max(tp_rate - 3.0, 0.5)):
-            reason = f"수익보존(목표돌파후 하락, {profit_rate:.1f}%)"
-        elif sl_rate != 0 and profit_rate <= sl_rate:
-            if is_lock_applied:
-                reason = f"이익보호({profit_rate:.1f}%, 고점 {max_profit_rate:.1f}%)"
-            elif is_bep_applied:
-                reason = f"본전청산({profit_rate:.1f}%)"
-            else:
-                reason = f"손절({profit_rate:.1f}%)"
-        elif use_time_stop and holding_days >= time_stop_days and profit_rate < time_stop_min_profit:
-            time_stop_triggered = True
-            # [수정] 매도 최적화 4번: 시간 청산 유예 조건을 가격 상방 모멘텀 유무로 엄격하게 변경
-            if df is not None and not df.empty and len(df) >= 10:
-                if state in ["매수", "강매수", "역매수", "상승", "대기"]:
-                    recent_5d_high = df['high'].tail(5).max()
-                    recent_10d_high = df['high'].tail(10).max()
-                    # 최근 5일의 고점이 최근 10일 고점과 같거나 크면 상방 모멘텀이 살아있는 것으로 간주
-                    if recent_5d_high >= recent_10d_high:
-                        time_stop_triggered = False # 유예
-            
-            if time_stop_triggered:
-                reason = f"시간청산({holding_days}일경과, 상방모멘텀 상실)"
-
-        # 3. 트레일링 스탑 (외부에서 계산된 메시지 반영)
-        # [체인을 소비하지 않는다] 종전에는 `elif ts_msg:` 였다. 시간청산 조건이 참인데
-        #  **유예**되면 reason 이 빈 채로 체인이 끝나, 그날 트레일링 스탑 판정이 통째로
-        #  건너뛰어졌다 — 승자가 무너지는 순간 청산을 미루는 방향이다. 위 반익절 절이
-        #  같은 형태로 이미 한 번 고쳐졌는데(그 주석 참조) 여기만 남아 있었다.
-        #  다른 절들은 걸리면 reason 을 채우므로 이 후치 판정은 종전과 동등하고,
-        #  **유예된 경우만** 새로 TS 를 볼 수 있게 된다.
-        #  [실측 2026-09-01] 백테스트 10년에서 삼킨 사례 0건이고
-        #   TIME_STOP_MIN_PROFIT_RATE 를 5·10 으로 올려 유예를 146·417건까지 늘려도 0이다
-        #   (유예 조건 '최근 5일 고점 ≥ 10일 고점'과 TS 발동 조건 '고점 대비 콜백만큼 하락'이
-        #    거의 배타적이다). 그래도 그 안전이 유예 조건의 형태에 기대고 있어 함정을 없앤다.
-        if not reason and ts_msg:
-            reason = ts_msg
-        
-        if df is not None and not df.empty:
-            # [추가] 슈퍼 모멘텀 동적 매도 평가 로직
-            use_super = thresholds.get("SUPER_MOMENTUM_USE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True)) if thresholds else config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True)
-            super_score = thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.0)
-            super_w52 = thresholds.get("SUPER_MOMENTUM_W52_POS", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_W52_POS", 90.0)
-            super_tp_rsi = thresholds.get("SUPER_TAKE_PROFIT_RSI", config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 90.0)) if thresholds else config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 90.0)
-            
-            actual_tp_rsi = tp_rsi
-            is_super = False
-            if use_super and score >= super_score and w52_pos >= super_w52:
-                actual_tp_rsi = super_tp_rsi
-                is_super = True
-                
-            # 4. RSI 과열 익절 (TAKE_PROFIT_RSI가 0이면 미사용 - 추세추종 기조)
-            if not reason and tp_rsi > 0 and ind.get('rsi') is not None and ind['rsi'] > actual_tp_rsi:
-                if is_super:
-                    reason = f"RSI과열(슈퍼모멘텀, 기준:{actual_tp_rsi})"
-                else:
-                    reason = f"RSI과열(기준:{actual_tp_rsi})"
-            
-            # [추가] 매도 최적화 3번: 방어적 반매도 (하락 반전 신호 발생 시 절반 덜어내기)
-            # [개선 #7] 이미 추세가 '매도'로 확정 붕괴된 경우에는 절반만 덜어내지 않고
-            #          아래 추세이탈 로직에서 전량 청산하도록 방어적 반매도를 건너뜀
-            #          (잔여 물량이 갭하락으로 손실 전환되는 것을 방지).
-            if not reason and defensive_half_tp and not already_half_sold and state != "매도":
-                if ind.get('psar') is not None and ind.get('ema_5') is not None:
-                    # [엣지 케이스 방어] 손실 구간에서의 조기 손절(반손절)을 방지하고 '수익 보전' 목적에 맞게,
-                    # 최소한의 의미 있는 수익(time_stop_min_profit, 기본 3.0%) 이상일 때만 발동하도록 안전장치 추가
-                    if profit_rate >= time_stop_min_profit and current_price < ind['psar'] and current_price < ind['ema_5']:
-                        reason = f"하락반전(방어적 반매도, 수익률:+{profit_rate:.1f}%)"
-                        sell_ratio = 0.5
-
-            # 5. 추세 이탈
-            # [추세추종] 점수 하락 단독으로는 매도하지 않고 추세 구조 훼손(주가<60일선)을 동시 요구.
-            #   스코어는 단기 신호(5>20 EMA, MACD 히스토그램, SAR 등) 비중이 커서 정배열 유지 중의
-            #   통상적 눌림목에서도 기준 미만으로 떨어질 수 있음 → 주청산(샹들리에 TS)의 fat-tail
-            #   추종을 점수 매도가 조기에 잘라내는 것을 방지. ('매도' 상태는 자체 조건이 이미 엄격하므로 즉시 발동)
-            #  [판정이 성립했을 때만 판다 · 2026-09-06]
-            #   위 `if df is not None and not df.empty` 는 **그릇**만 본다. 프레임이 있어도
-            #   내용이 못 쓸 수 있다 — 마지막 봉이 결측이거나(yfinance 가 최신 종가를 자주
-            #   비운다) 상장 초기라 60일선이 아직 없거나. 그때 calculate_score 는 '모름'이
-            #   아니라 **숫자**를 돌려주고(실측: 지표 전무 → 1.0~1.5점), ema_60 이 None 이라
-            #   structure_broken 도 True 가 되어 **점수매도가 전량 청산을 낸다**.
-            #   실측 사유 문자열이 그 상태를 그대로 적는다:
-            #     "추세이탈(-/점수하락+60일선이탈) [점수:1.0, RSI:-, ADX:-, CCI:-]"
-            #   — 아무것도 못 쟀다고 적으면서 판다.
-            #
-            #   [백테스트에는 이 팔이 없다] backtest 의 같은 식은 `row.get('EMA60')` 인데
-            #   그쪽 EMA60 은 `ewm(adjust=False)` 라 0번 봉부터 값이 있고 결측이면 NaN 이다
-            #   (None 이 아니다). 즉 `is None` 팔은 백테스트에서 죽은 코드고, **실매매에만
-            #   있는 이 경로는 한 번도 측정된 적이 없다**. 점수하락의 60일선 조건은
-            #   주청산(샹들리에 TS)의 버팀목이라 제거 시 수익이 1/3 이 되는 자리인데,
-            #   '모름'을 '이탈'로 읽는 것은 가장 모르는 순간에 그 버팀목을 빼는 것이다.
-            #
-            #   판정 가능 여부는 classify_stock_state 가 단독으로 안다(입력이 없으면 '-').
-            #   그 하나를 그대로 쓴다 — 조건을 복제하면 조용히 갈라진다.
-            judged = state not in ("", "-")
-            ema60_val = ind.get('ema_60') if ind else None
-            structure_broken = ema60_val is None or current_price < ema60_val
-            if not reason and (state == "매도" or (judged and score < sell_score_limit and structure_broken)):
-                rsi_val = f"{ind.get('rsi'):.1f}" if ind.get('rsi') is not None else "-"
-                adx_val = f"{ind.get('adx'):.1f}" if ind.get('adx') is not None else "-"
-                cci_val = f"{ind.get('cci'):.1f}" if ind.get('cci') is not None else "-"
-                
-                # [수정] 역추세 매수 종목은 점수 하락뿐만 아니라 '매도' 상태일지라도 지정된 유예 기간 내에는 손절을 보류함
-                if is_mr_holding and holding_days <= time_stop_days and profit_rate > mr_grace_loss_rate:
-                    pass # 유예 기간 적용
-                else:
-                    if state == "매도":
-                        reason = f"매도진입({state_reason}) [점수:{score}, RSI:{rsi_val}]"
-                    else:
-                        reason = f"추세이탈({state}/점수하락+60일선이탈) [점수:{score}, RSI:{rsi_val}, ADX:{adx_val}, CCI:{cci_val}]"
-            
         # [기록] 매도 사유에 그때의 청산선을 붙인다. 사유만으로는 '어디서 끊길 예정이었나'가
         #  남지 않아, 청산이 끝난 뒤에는 그 값을 어디서도 복원할 수 없다(화면은 현재만 보여준다).
         if reason:
@@ -2678,12 +2655,12 @@ class RiskManager:
         최종액 ≤ 1)이므로 집중 캡도 유지된다. 다만 3)의 확대(scale>1)로 2)의 축소분을 되돌리던
         동작은 사라진다(그 복원은 손실액 캡을 넘길 수 있어 애초에 위험한 방향이었다).
         """
-        risk_per_trade = getattr(config, 'SYSTEM_RISK_PER_TRADE', 4.0)
-        risk_based_amt = 0
+        # [2026-10-16] 3층 min 결합은 modules/position_sizing.position_budget 하나다 — 백테스트
+        #  (portfolio_backtest.allocate_amount)도 같은 함수를 부른다. 여기서는 계좌 상태(입출금
+        #  보정 기준선·시장별 리스크 스케일)를 읽어 넘기고 로그를 남긴다.
         risk_scale = self.current_risk_scale(market_type)
-        risk_params = getattr(config, 'RISK_SCALING_PARAMS', {}) or {}
 
-        # [리스크 스케일링] 배수를 '기초 비중'에 적용한다.
+        # [리스크 스케일링] 배수를 '기초 비중'에 적용한다(리스크층에도 곱한다 — scale_risk_layer).
         #  종전에는 2)리스크층에만 곱했는데 그 층이 최종액을 결정하는 일이 없어(3)이 상시 구속)
         #  배수가 0.45 아래로 떨어지기 전까지 배분액이 1원도 변하지 않았다 = 사실상 무력.
         #  기초 비중에 곱하면 3)의 상한(기초×변동성배수)도 함께 내려가 곧바로 방어가 걸린다.
@@ -2692,55 +2669,18 @@ class RiskManager:
         #    대가는 3년 수익 중앙 -16.9%p·-24.1%p, 유휴현금 +13%p.
         #    타이밍 가치 확인: 같은 평균 배수를 상수로 준 대조군은 수익이 절반(146.5%→71.0%)이고
         #    PF도 낮아(2.83→2.20) 국면 판단이 실제로 기여함을 확인했다(셔플 대조군도 동일).
-        scaled_ratio = invest_ratio * risk_scale
-
         # [입출금 보정] 차단기와 같은 기준선을 쓴다. 두 장치가 서로 다른 자본을 보면
         #  종목당 한도는 걸리는데 합산 한도는 안 걸리는 식으로 어긋난다.
         equity_base = self._equity_baseline()
-        if equity_base > 0:
-            target_invest_amt = int(equity_base * scaled_ratio)
-        else:
-            target_invest_amt = int(avail_cash * scaled_ratio)
-
-        base_amt = target_invest_amt
-
-        if risk_per_trade > 0 and stop_loss_rate and abs(stop_loss_rate) > 0:
-            total_equity = equity_base if equity_base > 0 else avail_cash
-            max_loss_amt = total_equity * (risk_per_trade * risk_scale / 100.0)
-            try:
-                gap_buffer = max(1.0, float(risk_params.get("GAP_RISK_BUFFER", 1.2)))
-            except (TypeError, ValueError):
-                gap_buffer = 1.2
-            sl_ratio = (abs(stop_loss_rate) / 100.0) * gap_buffer
-            risk_based_amt = int(max_loss_amt / sl_ratio)
-            target_invest_amt = min(target_invest_amt, risk_based_amt)
-
-        scale = 1.0
-        vol_based_amt = 0
-        vol_targeting_on = getattr(config, 'USE_VOLATILITY_TARGETING', True)
-        #  [조용히 꺼지지 않게 한다 · 2026-09-06] 위 독스트링의 실측대로 **3)변동성 층이
-        #   상시 구속**한다(2)리스크 층의 상한은 항상 그보다 크다). 그래서 ATR 을 못 구하면
-        #   이 층이 통째로 빠지고 배분액이 곧바로 2)까지 올라간다 — 변동성을 모르는 종목을
-        #   더 크게 사는 방향이다. 설정으로 끄면 settings 가 요란하게 경고하는 안전장치인데
-        #   (USE_VOLATILITY_TARGETING: "MDD -20%→-30%"), 값이 없어 꺼지면 아무도 몰랐다.
-        vol_input_bad = vol_targeting_on and not (atr and current_price and current_price > 0)
-        if vol_targeting_on and atr and current_price and current_price > 0:
-            daily_vol = atr / current_price
-            annual_vol = daily_vol * math.sqrt(252)
-
-            target_vol = getattr(config, 'TARGET_VOLATILITY', 0.25)
-            scale_max = getattr(config, 'VOLATILITY_SCALING_MAX', 2.0)
-            scale_min = getattr(config, 'VOLATILITY_SCALING_MIN', 0.4)
-
-            if annual_vol > 0:
-                scale = target_vol / annual_vol
-                scale = max(scale_min, min(scale_max, scale))
-                # 변동성 상한은 '기초 비중 기준'으로 산출한다(리스크 상한에 곱하지 않는다 → 중복 축소 제거).
-                # 확대(scale>1)는 기초 비중을 넘을 수 없으므로 집중 캡도 자동 충족된다.
-                vol_based_amt = min(int(base_amt * scale), base_amt)
-                target_invest_amt = min(target_invest_amt, vol_based_amt)
-
-        invest_amt = min(target_invest_amt, avail_cash)
+        # [조용히 꺼지지 않게 한다 · 2026-09-06] 3)변동성 층이 상시 구속하므로 ATR 을 못 구하면
+        #  배분액이 곧바로 2)까지 올라간다 — 변동성을 모르는 종목을 더 크게 사는 방향이다.
+        #  결과의 vol_input_bad 로 로그에 남긴다(설정으로 끈 경우와 구분).
+        sized = position_sizing.position_budget(
+            equity_base if equity_base > 0 else avail_cash, avail_cash, invest_ratio,
+            stop_loss_rate, atr, current_price, position_sizing.params_from_config(config),
+            risk_scale=risk_scale, scale_risk_layer=True)
+        base_amt, risk_based_amt, vol_based_amt = sized.base, sized.risk_cap, sized.vol_cap
+        scale, vol_input_bad, invest_amt = sized.vol_scale, sized.vol_input_bad, sized.final
 
         log_msg = f"[자산배분] 기초:{base_amt:,}원"
         if risk_scale < 1.0:

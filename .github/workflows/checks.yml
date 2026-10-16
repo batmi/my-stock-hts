@@ -1,0 +1,63 @@
+# 자동 검사 — 빠른 핵심 검사(매 푸시·PR)와 전체 회귀 검사(수동 실행)를 나눈다.
+#
+#  · 핵심 검사: tools/core_checks.py 의 목록(판단·주문·설정 불변식과 재발 방지 가드).
+#    시각·장 상태에 기대지 않고 네트워크 없이 돈다 — CI 신호로 쓸 수 있는 것만 담았다.
+#  · 전체 회귀: `python -m pytest` 전체. 요일·시각에 따라 갈리는 테스트가 있어 매번 돌리지
+#    않고 필요할 때 Actions 화면에서 수동으로 실행한다(workflow_dispatch).
+#  · 운영은 라즈베리파이(파이썬 3.10 이상)다 — 최소 지원판(3.10)과 개발기 판을 함께 본다.
+#  · 실계좌·외부 서비스 호출 없음: tests/conftest.py 가 네트워크 호스트와 운영 파일을 막는다.
+name: checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      full:
+        description: "전체 회귀 검사도 돌린다"
+        type: boolean
+        default: false
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: 의존성 설치
+        run: python -m pip install -r requirements-dev.txt
+      - name: 핵심 검사
+        env:
+          TZ: Asia/Seoul
+          HTS_NO_RUN_MANIFEST: "1"
+        run: python tools/core_checks.py -q
+
+  full:
+    if: github.event_name == 'workflow_dispatch' && inputs.full
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: 의존성 설치
+        run: python -m pip install -r requirements-dev.txt
+      - name: 전체 회귀 검사
+        env:
+          TZ: Asia/Seoul
+          HTS_NO_RUN_MANIFEST: "1"
+        run: python -m pytest -q

@@ -61,6 +61,10 @@ Chosen at startup or via `--mode`. Each mode keeps a separate config profile, so
 > query bug its conditions diverged from live trading. **Mode 1 (paper) replaces it** — quotes,
 > indicators, and decisions take the same path as live; only fills are simulated. The old
 > `--mode 4` still works but warns and runs as mode 1.
+>
+> Paper fills default to an immediate full fill at the order price. To exercise the order state
+> machine, `config.PAPER_FAULT_MODEL` (off by default) replays rejects, delays, partial fills and
+> cancel/fill races **deterministically from a seed** — a fault-injection tool, not a market model.
 
 ### Highlights
 
@@ -247,6 +251,8 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 # 3) Dependencies
 pip install -r requirements.txt
 pip install -r requirements-dev.txt   # for development and tests
+python tools/core_checks.py           # fast core checks (decision/order/config invariants, ~20s) — CI runs these on every push
+python -m pytest                      # full regression suite (includes clock-dependent tests; run when needed)
 
 # 4) Run
 chmod +x run.sh                    # first time only
@@ -520,6 +526,10 @@ my-stock-hts/
 │   ├── settings.py         # [0] Settings
 │   ├── market.py           # [1] Market indices
 │   ├── analysis.py         # [2] Quotes and technical analysis
+│   ├── score_model.py      #     Structured score results (item IDs, status, contributions, boundary probes)
+│   ├── exit_rules.py       #     Shared exit-decision layer (live and backtest use one priority chain)
+│   ├── position_sizing.py  #     Shared entry sizing (base weight, risk and volatility caps, min-combined)
+│   ├── run_manifest.py     #     Experiment run records (commit, config, data sources, seeds, results → data/audit_runs/)
 │   ├── chart.py            # [3] Chart rendering
 │   ├── chart_batch.py      #     [3]-7 Batch chart generation (many stocks, same quality)
 │   ├── web_dashboard.py    #     Responsive web dashboard for chart galleries
@@ -529,6 +539,7 @@ my-stock-hts/
 │   │   ├── engine.py       #     Trading engine (strategy, orders, risk)
 │   │   ├── trader.py       #     Main loop (analyze → buy/sell → report)
 │   │   ├── conclusion.py   #     Fill monitoring and confirmation
+│   │   ├── performance.py  #     Performance-report math (record cleanup, statistics; pure functions)
 │   │   ├── common.py       #     Shared helpers (restrictions, hours, order status)
 │   │   └── menu.py         #     Trading-rule and restriction menus
 │   ├── theme_analysis.py   # [6] Discovery + AI (Gemini) reports
@@ -616,6 +627,8 @@ my-stock-hts/
 
 **Observability & operations**
 - **Signal ledger** — live-only gates that daily bars cannot reproduce (volume strength, ask/bid ratio, same-day re-entry block) record their verdicts in the DB, **one row per (date, symbol)**, retained for 3 years by default. "Blocked all day" is distinguishable from "blocked on some cycles". Auto-trading logs are kept 120 days, separate from general logs (30 days). Analyze with `python3 tools/audit_signal_ledger.py`.
+- **Score boundary ledger** — only symbols that came near the MACD-expansion boundary shared by both synergy items (0.8× the previous histogram), flipped that condition, or received the price-momentum bonus fail-open are recorded, **one row per (date, symbol)** (kept 1 year by default; observation only, never used for decisions). Counterfactual states count both the cycles the boundary admitted and the ones it excluded. Analyze with `python3 tools/audit_score_boundary.py`.
+- **Audit run records** — running any `tools/audit_*.py` writes one file to `data/audit_runs/` with the commit and modified files, the full config and its fingerprint, scoring-rule version, trading costs, seeds, daily/flow data-source summary, conditions the backtest cannot reproduce, and the result table (output tail). Same commit and config but different data sources or dates count as a different experiment. Disable with `HTS_NO_RUN_MANIFEST=1`.
 - **Process death detection** — the live process stamps `logs/heartbeat.json` every minute together with a deadline for its next stamp; an external cron watcher (`tools/hts_watchdog.py`) only checks whether that promise expired. **It never auto-restarts** — restarting blind either dies the same way or comes back half-alive and places orders. Clean shutdowns do not alert.
 - **Per-mode config profiles** — live reads and writes only the baseline file; other modes layer their own profile on top, storing only the deltas. A safeguard disabled for observation cannot leak into live, and promotion is manual.
 - **Memory protection** — quote and chart caches have item caps with oldest-first eviction, so memory does not grow without bound on a 1 GB Raspberry Pi.

@@ -26,7 +26,6 @@
 import argparse
 import os
 import random
-import re
 import sys
 
 import numpy as np
@@ -36,17 +35,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
 from modules import analysis, backtest  # noqa: E402
 from modules import portfolio_backtest as pb  # noqa: E402
+from modules import score_model  # noqa: E402
 from tools.audit_scoring_weights import metrics, rolling_trend_quality  # noqa: E402
 from tools.audit_common import seed_notice  # noqa: E402
 
 INITIAL_CAPITAL = 10_000_000
-_PTS = re.compile(r"\(([+-]?\d+\.\d+)\)")
-CCI_ESCAPE = "CCI: 과매도권 탈출"
-MA_BREAK = "EMA: 60일선 돌파"
-MA_SURGE = "EMA: 단기 급등 추세"
-CCI_UP = "CCI: 상승 추세"
-MA_PREFIX = "EMA: "
-CAP_PREFIX = "[상한] EMA 군집"
+# 슬롯 판정에 쓰는 항목 ID (modules/score_model.ITEM_SPECS). [2026-10-16] 종전에는 설명 문구
+#  접두사로 집었다 — 문구가 바뀌면 슬롯 점유가 조용히 False 로 읽혔다.
+CCI_ESCAPE = "momentum.cci_escape"
+MA_BREAK = "trend.ma60_breakout_early"
+MA_SURGE = "trend.short_surge"
+CCI_UP = "momentum.cci_up"
 
 # 추세품질 밴드(indicators.TREND_QUALITY_BANDS): 30 미만 약함 · 30~60 양호 · 60+ 강함
 TQ_STRONG = 60.0
@@ -90,15 +89,15 @@ def make_patches(orig_status, orig_score, cci_to, ma_to, add_only):
         _CTX["tq"] = row.get("TQ")
         return orig_status(row, prev, thresholds=thresholds)
 
+    breakdown = analysis.score_breakdown
+
     def patched_score(*a, **kw):
-        score, details = orig_score(*a, **kw)
+        res = breakdown(*a, **kw)
+        score, details = res.total, res.details
         tq = _CTX.get("tq")
-        weights = kw.get("weights") or config.SCORING_WEIGHTS
-        if not isinstance(weights, dict):
-            weights = config.SCORING_WEIGHTS
-        r_trend = weights.get("TREND", 4.0) / 4.0
-        r_mom = weights.get("MOMENTUM", 2.5) / 2.5
-        cap = round(2.0 * r_trend, 2)
+        r_trend = res.axes["TREND"]
+        r_mom = res.axes["MOMENTUM"]
+        cap = res.ma_cluster["cap"]
         unit_t = round(0.5 * r_trend, 2)
         unit_m = round(0.5 * r_mom, 2)
 
@@ -108,23 +107,13 @@ def make_patches(orig_status, orig_score, cci_to, ma_to, add_only):
         #    · MA 돌파 슬롯(0.5): 'EMA 60일선 돌파[초기]' 또는 'EMA 단기 급등 추세' 중 하나만
         #  따라서 교체는 '그 조건이 차지하던 자리'만 바꿔야 한다. 무조건 더하면 슬롯이 두 배가
         #  되어 만점이 커지고, 측정하려던 것(조건 교체)이 아니라 문턱 완화를 재게 된다.
-        ma_raw = 0.0
-        cci_up = cci_escape = ma_break = ma_surge = False
-        for d in details:
-            if d.startswith(CAP_PREFIX):
-                continue
-            m = _PTS.search(d)
-            pts = float(m.group(1)) if m else 0.0
-            if d.startswith(MA_PREFIX):
-                ma_raw += pts
-                if d.startswith(MA_BREAK):
-                    ma_break = True
-                elif d.startswith(MA_SURGE):
-                    ma_surge = True
-            elif d.startswith(CCI_ESCAPE):
-                cci_escape = True
-            elif d.startswith(CCI_UP):
-                cci_up = True
+        #  점유 = 그 항목이 점수를 받았다(status met). 같은 슬롯의 뒷 항목은 shadowed 로 남는다.
+        met = {it.item_id for it in res.items if it.status == score_model.MET}
+        ma_raw = res.ma_cluster["raw"]
+        cci_up = CCI_UP in met
+        cci_escape = CCI_ESCAPE in met
+        ma_break = MA_BREAK in met
+        ma_surge = MA_SURGE in met
 
         # ── 2) 슬롯 단위로 교체한다. 배점·만점은 그대로다.
         delta = 0.0

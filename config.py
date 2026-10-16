@@ -2950,6 +2950,18 @@ settings = GlobalSettings()
 # ==========================================================
 # [헬퍼] 종목당 기초 비중 확정 (자동/수동 + 개별 룰 오버라이드)
 # ==========================================================
+def _setting(name, default=None):
+    """설정 한 값 — 이 스레드에 주기 스냅샷이 걸려 있으면 그 값(config.cycle_snapshot 주석).
+
+    config 모듈 **안의** 함수는 모듈 __getattr__ 을 거치지 않고 settings 를 직접 읽게 되므로,
+    매매 판단에 쓰이는 함수는 이 헬퍼로 읽는다(그래야 한 주기가 한 벌의 설정으로 끝난다).
+    """
+    snap = current_cycle_snapshot()
+    if snap is not None and name in snap:
+        return snap[name]
+    return getattr(settings, name, default)
+
+
 def resolve_invest_ratio(rule_ratio=None):
     """종목당 기초 비중을 확정한다. 0/None은 '자동'(1.0 / SYSTEM_MAX_HOLDINGS)을 뜻한다.
 
@@ -2957,7 +2969,7 @@ def resolve_invest_ratio(rule_ratio=None):
     개별 룰이 0/None이면 전역을 따르고, 전역도 0이면 슬롯 수로 균등 분할한다.
     개별 룰에 값이 박제돼 슬롯 수 변경을 따라오지 못하는 문제를 '0=자동'으로 회피한다.
     """
-    for candidate in (rule_ratio, getattr(settings, 'SYSTEM_INVEST_PER_STOCK', 0.0)):
+    for candidate in (rule_ratio, _setting('SYSTEM_INVEST_PER_STOCK', 0.0)):
         try:
             value = float(candidate or 0.0)
         except (TypeError, ValueError):
@@ -2966,7 +2978,7 @@ def resolve_invest_ratio(rule_ratio=None):
             return value
 
     try:
-        holdings = int(getattr(settings, 'SYSTEM_MAX_HOLDINGS', 4) or 4)
+        holdings = int(_setting('SYSTEM_MAX_HOLDINGS', 4) or 4)
     except (TypeError, ValueError):
         holdings = 4
     return 1.0 / max(1, holdings)
@@ -2974,7 +2986,7 @@ def resolve_invest_ratio(rule_ratio=None):
 
 def is_invest_ratio_auto(rule_ratio=None):
     """해당 비중이 '자동(슬롯 균등 분할)' 모드로 결정되는가."""
-    for candidate in (rule_ratio, getattr(settings, 'SYSTEM_INVEST_PER_STOCK', 0.0)):
+    for candidate in (rule_ratio, _setting('SYSTEM_INVEST_PER_STOCK', 0.0)):
         try:
             if float(candidate or 0.0) > 0:
                 return False
@@ -3001,9 +3013,9 @@ def nominal_exposure_warning(ratio=None, holdings=None, override_ratios=None):
                      지정하면 '개별 룰 합 + 나머지 슬롯 × 전역 비중'으로 명목합을 계산한다.
     """
     if ratio is None:
-        ratio = getattr(settings, 'SYSTEM_INVEST_PER_STOCK', 0.0)
+        ratio = _setting('SYSTEM_INVEST_PER_STOCK', 0.0)
     if holdings is None:
-        holdings = getattr(settings, 'SYSTEM_MAX_HOLDINGS', 4)
+        holdings = _setting('SYSTEM_MAX_HOLDINGS', 4)
 
     try:
         holdings = int(holdings or 0)
@@ -3539,6 +3551,23 @@ KRX_SESSION_SHIFT_DAYS = {
 #  초기화도 이 파일 하나만 지우면 끝난다. (세션 mode 1 진입 시 db.switch_path로 전환)
 PAPER_DB_FILE_PATH = os.path.join(DB_DIR, "paper_trading.db")
 
+# [시험 모델 · 2026-10-16] 가상투자 체결 장애 시나리오(modules/paper_broker 의 '시험 모델' 절).
+#  기본은 꺼짐 — 끄면 종전대로 '주문가에 즉시 전량 체결'이다(관찰 모드의 운용 기준).
+#  켜면 주문마다 (SEED, 주문 일련번호)로 정한 난수로 거절·지연·부분체결·취소 경합을 만든다.
+#  **현실 시장의 재현이 아니다** — 주문 상태기계·현금 예약·재시작 복원을 시험하는 장치다.
+#  같은 SEED·같은 주문 순서면 주문·현금·보유 결과가 같다(일련번호는 DB 에 남아 재시작에도 잇는다).
+PAPER_FAULT_MODEL = {
+    "ENABLED": False,
+    "SEED": 0,
+    "REJECT_PROB": 0.0,            # 접수 거절
+    "DELAY_PROB": 0.0,             # 첫 체결 지연
+    "DELAY_SECONDS": 30,
+    "PARTIAL_PROB": 0.0,           # 일부만 체결(수량 2주 이상일 때)
+    "PARTIAL_RATIO": 0.5,
+    "REMAINDER_FILL_SECONDS": 0,   # 부분체결 잔량이 체결되기까지(0 = 취소 전까지 체결 안 됨)
+    "CANCEL_RACE_PROB": 0.0,       # 취소 요청 순간 잔량이 먼저 체결된다(취소 실패)
+}
+
 # ==========================================================
 # [설정] 데이터 보존 및 관리 정책
 # ==========================================================
@@ -3553,6 +3582,9 @@ DB_DATA_RETENTION_DAYS = 365
 #  1행이라 하루 최대 44행 = 1년에 1.5MB 남짓이라 오래 두어도 부담이 없다.
 #  실매매 전용 게이트의 사후 수익 판정은 최소 3개월, 국면을 걸쳐 보려면 수년이 필요하다.
 SIGNAL_LEDGER_RETENTION_DAYS = 1095
+# [관측 · 2026-10-16] 채점 경계 원장(score_boundary_ledger) 보존 일수. 사건이 있던 종목만
+#  (일자, 종목)당 1행이라 작다. 판단에 쓰지 않는 관측 표다(db_manager.record_score_boundary).
+SCORE_BOUNDARY_LEDGER_RETENTION_DAYS = 365
 
 # [추가] 로그 파일 보존 기간 (일 단위)
 # 설정된 기간보다 오래된 로그 파일은 자동매매 시작 시 자동으로 삭제됩니다.
@@ -4482,8 +4514,59 @@ CONFIG_DESCRIPTIONS = {
 # 모듈 로드 시 자동 실행
 load_dynamic_config()
 
+# ==========================================================
+# [주기 설정 스냅샷 · 2026-10-16] 한 매매 주기(매도 점검 → 매수 점검 → 미체결 관리)는 시작할 때의
+#  설정 한 벌로 끝까지 판단한다. 메뉴·텔레그램이 주기 도중에 설정을 바꾸면 종전에는 같은 주기의
+#  앞 종목과 뒤 종목이 서로 다른 값으로 판단될 수 있었다(주기는 수십 초~수 분). 이제 바뀐 값은
+#  **다음 주기에 한꺼번에** 반영된다.
+#  · 스냅샷은 스레드별이다(threading.local). 매매 루프가 cycle_snapshot() 으로 걸고, 워커 풀은
+#    core.utils.inherit_account_context 가 계좌 문맥과 함께 물려준다. 메뉴·텔레그램·다른 감시
+#    스레드에는 스냅샷이 없으므로 언제나 실시간 값을 읽는다(설정 화면은 고친 값을 바로 본다).
+#  · 쓰기는 그대로 settings 에 간다(대입 라우팅). 스냅샷 안에서 쓴 값은 그 스레드에서 다음
+#    주기부터 보인다 — 런타임 코드는 설정을 쓰지 않는다(tests/test_config_no_global_override.py).
+#  · settings.<필드> 를 직접 읽으면 스냅샷을 우회한다 — 판단 경로에서는 config.<필드> 로 읽을 것.
+# ==========================================================
+_CYCLE_LOCAL = threading.local()
+
+
+def capture_cycle_snapshot():
+    """현재 설정 한 벌의 사본({필드: 값}). 중첩 딕셔너리까지 복사한다."""
+    import copy as _copy
+    with _settings_lock:
+        dump = getattr(settings, 'model_dump', settings.dict)()
+    return _copy.deepcopy(dump)
+
+
+def current_cycle_snapshot():
+    """이 스레드에 걸린 주기 스냅샷(없으면 None)."""
+    return getattr(_CYCLE_LOCAL, 'snap', None)
+
+
+class cycle_snapshot:
+    """with config.cycle_snapshot(): — 블록 동안 이 스레드의 config.<필드> 읽기를 스냅샷으로 고정.
+
+    values 를 주면 그 사본을 건다(워커 스레드에 제출 스레드의 스냅샷을 물려줄 때).
+    중첩해도 안쪽이 끝나면 바깥 스냅샷으로 돌아간다.
+    """
+    def __init__(self, values=None):
+        self._values = values
+        self._prev = None
+
+    def __enter__(self):
+        self._prev = getattr(_CYCLE_LOCAL, 'snap', None)
+        _CYCLE_LOCAL.snap = capture_cycle_snapshot() if self._values is None else self._values
+        return _CYCLE_LOCAL.snap
+
+    def __exit__(self, *exc):
+        _CYCLE_LOCAL.snap = self._prev
+        return False
+
+
 # 기존 코드 호환용 PEP 562 모듈 레벨 __getattr__ 래퍼
 def __getattr__(name):
+    snap = getattr(_CYCLE_LOCAL, 'snap', None)
+    if snap is not None and name in snap:
+        return snap[name]
     if hasattr(settings, name):
         with _settings_lock:
             return getattr(settings, name)

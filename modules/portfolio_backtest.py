@@ -106,106 +106,66 @@ EXIT_REASONS = ("ATR손절", "손절", "본전청산", "이익보호", "시간�
                 "익절", "반익절", "수익보존")
 
 
+# 공통 청산 체인의 사유 코드 → 백테스트 집계 어휘(EXIT_REASONS·PRICE_EXIT_REASONS 와 같은 말)
+_BT_REASON = {
+    "profit_lock": "이익보호", "bep_stop": "본전청산", "atr_stop": "ATR손절", "stop_loss": "손절",
+    "time_stop": "시간청산", "trailing_stop": "트레일링스탑",
+}
+
+
 def decide_sell(*, price, high, avg, sl_rate, atr_applied, is_bep, holding_days,
                 state, state_reason, raw_score, sell_check, ema60, atr,
                 roll_high_5=0.0, roll_high_10=0.0, cfg=None):
     """백테스트의 청산 판정 — (sell: bool, reason: str).
 
-    [왜 함수로 빼두는가] 이 판정은 실매매의 engine.DefaultStrategy.analyze_sell 과
-    **별도 구현**이다. 두 구현이 어긋나면 백테스트 수치가 실매매를 설명하지 못하고,
-    그 수치로 정한 파라미터의 근거가 통째로 흔들린다. 호출 가능한 형태여야 두 구현을
-    같은 입력으로 나란히 돌려 대조할 수 있다(tools/audit_exit_parity.py).
+    [2026-10-16] 판정 체인은 modules/exit_rules.evaluate_exit 하나다 — 실매매
+    engine.DefaultStrategy.analyze_sell 도 같은 함수를 부른다. 여기는 백테스트 입력
+    (그날 행·lot 가중 손절률·실행 파라미터 cfg)을 그 함수의 입력으로 옮기고, 사유 코드를
+    백테스트 집계 어휘로 바꾸는 어댑터다. 실매매에만 있는 경로(익절 계열·RSI 익절·방어적
+    반매도·역추세 유예)는 끈 채로 부른다 — UNMODELED_SELL_TOGGLES 가 켜졌을 때 경고한다.
+
+    남은 규칙 차이 두 가지(판정 불가 상태의 점수매도, SELL_SCORE ≤ 0 일 때 '매도' 상태)는
+    종전 동작을 그대로 지키도록 require_judged=False·state_sell_always=False 로 넘긴다
+    (exit_rules 독스트링). 두 구현을 같은 입력으로 대조하는 하네스는 그대로 유효하다
+    (tools/audit_exit_parity.py · tests/test_exit_parity.py).
     """
+    from modules import exit_rules as xr
     c = cfg or {}
-    use_atr = c.get("use_atr", True)
-    use_time_stop = c.get("use_time_stop", True)
-    time_stop_days = c.get("time_stop_days", 20)
-    # [패리티] 실매매(engine.analyze_sell)는 TIME_STOP_MIN_PROFIT_RATE 를 문턱으로 쓰는데
-    #  여기는 0(손실일 때만)이 하드코딩돼 있어 그 다이얼을 백테스트로 잴 수 없었다.
-    #  config 기본값이 0.0이라 기본 동작은 종전과 같다.
-    time_stop_min = c.get("time_stop_min", 0.0)
-    ts_act = c.get("ts_act", 10.0)
-    ts_callback = c.get("ts_callback", 5.0)
-    # [SSOT] 폴백 리터럴은 config 정본(3.5)·실매매(engine.analyze_sell)와 맞춘다.
-    #  종전 3.0은 키가 빠진 호출에서만 조용히 발현해, 백테스트만 더 좁은 콜백으로
-    #  돌게 만든다(청산이 빨라져 fat-tail이 잘린다).
-    ts_atr_mult = c.get("ts_atr_mult", 3.5)
-    ts_breakeven = c.get("ts_breakeven", False)
-    sell_score_limit = c.get("sell_score_limit", 4.0)
-
-    loss_rate = (price - avg) / avg * 100
-    max_profit = (high - avg) / avg * 100
-
-    # [이익 보호선] 무장 전 구간 전용. 실매매(analyze_sell)와 같은 식을 써야 이 백테스트로
-    #  정한 파라미터가 의미를 갖는다 — 산식은 engine.profit_lock_stop_rate가 단독 보유한다.
-    is_lock = False
-    if c.get("profit_lock_use", False):
-        from modules.auto_trade.engine import profit_lock_stop_rate
-        lock = profit_lock_stop_rate(max_profit, c.get("profit_lock_min_mfe"),
-                                     c.get("profit_lock_giveback"))
-        if lock is not None and lock > sl_rate:
-            sl_rate, is_lock = lock, True
-
-    sell, reason = False, ""
-    if sl_rate != 0 and loss_rate <= sl_rate:
-        sell = True
-        if is_lock:
-            reason = "이익보호"
-        else:
-            reason = "본전청산" if is_bep else ("ATR손절" if (use_atr and atr_applied) else "손절")
-    else:
-        # [체인을 소비하지 않는다] 종전에는 이 절이 elif 였다. 시간청산 조건이 참인데
-        #  **유예**되면 reason 이 비어 있는 채로 체인이 끝나, 아래 트레일링 스탑 판정이
-        #  그날 통째로 건너뛰어졌다 — 승자가 무너지는 순간 청산을 미루는 방향이다.
-        #  바로 위 반익절 절이 같은 형태로 한 번 고쳐진 적이 있다(그 주석 참조).
-        #  [실측 2026-09-01] 현재 설정에서 삼킨 사례는 0건이고, TIME_STOP_MIN_PROFIT_RATE 를
-        #   5·10 으로 올려 유예를 146·417건까지 늘려도 여전히 0이다. 우연이 아니라 구조다 —
-        #   유예 조건(최근 5일 고점 ≥ 10일 고점 = 고점을 최근에 찍었다)과 TS 발동 조건
-        #   (고점 대비 콜백만큼 하락)이 논리적으로 거의 배타적이기 때문이다. 그래서 이 수정은
-        #   **수치를 바꾸지 않는다.** 그럼에도 고치는 이유는 그 안전이 유예 조건의 형태에
-        #   기대고 있어서, 그 조건을 손대는 순간 되살아나는 함정이기 때문이다.
-        if use_time_stop and holding_days >= time_stop_days and loss_rate < time_stop_min:
-            # 시간청산 유예: 매수 계열 상태 유지 + 상방 모멘텀(최근 5일 고점 ≥ 10일 고점)
-            grace = state in ("매수", "강매수", "역매수", "상승", "대기") and \
-                roll_high_5 >= roll_high_10
-            # [실험 · bear_swing] 스윙 프로필의 시간청산은 '정산'이라 유예가 없다.
-            if c.get("time_stop_strict", False):
-                grace = False
-            if not grace:
-                sell, reason = True, "시간청산"
-
-        if not sell and high > 0 and (ts_breakeven or max_profit >= ts_act):
-            drop = (high - price) / high * 100
-            callback = ts_callback
-            if use_atr and atr and atr > 0:
-                dynamic = (atr * ts_atr_mult / high) * 100
-                # [SSOT] 반납 상한(TS_MAX_GIVEBACK_RATIO)은 engine.giveback_callback_cap이 단독
-                #  보유한다. 실매매(compute_trailing_stop)·단일종목 백테스트는 이미 이 캡을 쓰는데
-                #  포트폴리오 백테스트만 순수 샹들리에로 돌고 있었다. 캡이 없으면 콜백이 더 커져
-                #  청산이 늦고, 그만큼 백테스트가 실매매보다 낙관적으로 나온다
-                #  (실측 2026-08-04: 청산 판정 불일치의 96%가 이 한 가지 · 3년 수익 +82.8%p 과대).
-                from modules.auto_trade.engine import effective_callback
-                callback = effective_callback(ts_callback, dynamic, max_profit)
-            # [손익분기 연동] 되돌림 한 번(3.5 ATR)을 맞고도 본전 이상인 지점부터 무장한다.
-            #  [SSOT] 발동선 산식은 engine.breakeven_activation_rate가 단독 보유한다 —
-            #  백테스트가 실매매와 다른 식을 쓰면 튜닝 결과가 무의미해진다(콜백 캡과 같은 규약).
-            if ts_breakeven:
-                from modules.auto_trade.engine import (breakeven_activation_rate,
-                                                       ts_activation_atr_mult)
-                armed = max_profit >= breakeven_activation_rate(atr, avg, ts_callback,
-                                                                ts_activation_atr_mult(), use_atr)
-            else:
-                armed = max_profit >= ts_act
-            if armed and drop >= callback:
-                sell, reason = True, "트레일링스탑"
-
-    if not sell:
-        # 점수 매도는 추세 구조 훼손(주가<60일선 또는 '매도' 상태) 동시 충족 시에만
-        structure_broken = (state == "매도") or ema60 is None or price < ema60
-        if sell_check < sell_score_limit and structure_broken:
-            sell = True
-            reason = state_reason if (sell_check == 0 and raw_score > 0) else "점수하락"
-    return sell, reason
+    rules = xr.ExitRules(
+        use_atr=c.get("use_atr", True),
+        use_time_stop=c.get("use_time_stop", True),
+        time_stop_days=c.get("time_stop_days", 20),
+        # [패리티] 실매매(engine.analyze_sell)는 TIME_STOP_MIN_PROFIT_RATE 를 문턱으로 쓴다.
+        #  config 기본값이 0.0이라 기본 동작은 '손실일 때만'이다.
+        time_stop_min=c.get("time_stop_min", 0.0),
+        time_stop_strict=c.get("time_stop_strict", False),
+        ts_act=c.get("ts_act", 10.0),
+        ts_callback=c.get("ts_callback", 5.0),
+        # [SSOT] 폴백 리터럴은 config 정본(3.5)·실매매(engine.analyze_sell)와 맞춘다.
+        #  종전 3.0은 키가 빠진 호출에서만 조용히 발현해, 백테스트만 더 좁은 콜백으로
+        #  돌게 만든다(청산이 빨라져 fat-tail이 잘린다).
+        ts_atr_mult=c.get("ts_atr_mult", 3.5),
+        ts_breakeven=c.get("ts_breakeven", False),
+        sell_score_limit=c.get("sell_score_limit", 4.0),
+        profit_lock_use=c.get("profit_lock_use", False),
+        profit_lock_min_mfe=c.get("profit_lock_min_mfe"),
+        profit_lock_giveback=c.get("profit_lock_giveback"),
+        require_judged=False, state_sell_always=False,
+    )
+    inp = xr.ExitInputs(
+        price=price, avg=avg, high=high, profit_rate=(price - avg) / avg * 100,
+        holding_days=holding_days, sl_rate=sl_rate, atr_applied=atr_applied, bep_preset=is_bep,
+        atr=atr, state=state, state_reason=state_reason,
+        # 점수매도는 sell_check(=그날 점수, '매도' 상태면 0)로 판정한다
+        score=sell_check, ema60=ema60, roll_high_5=roll_high_5, roll_high_10=roll_high_10,
+        has_bars=True,
+    )
+    d = xr.evaluate_exit(inp, rules)
+    if not d.sell:
+        return False, ""
+    if d.code in (xr.STATE_SELL, xr.TREND_EXIT):
+        return True, (state_reason if (sell_check == 0 and raw_score > 0) else "점수하락")
+    return True, _BT_REASON[d.code]
 
 
 def build_sell_cfg(sell_cfg=None):
@@ -252,29 +212,17 @@ def _weighted_sl(position, default_sl):
 
 
 def allocate_amount(equity, cash, invest_ratio, sl_rate, atr, price):
-    """engine.RiskManager.allocate_budget과 동일한 3층 min 결합(기초비중·리스크·변동성)."""
-    base_amt = int(equity * invest_ratio)
-    amount = base_amt
+    """배분액 — 실매매 engine.RiskManager.allocate_budget 과 같은 함수(position_sizing)를 부른다.
 
-    risk_per_trade = getattr(config, "SYSTEM_RISK_PER_TRADE", 4.0)
-    if risk_per_trade > 0 and sl_rate and abs(sl_rate) > 0:
-        params = getattr(config, "RISK_SCALING_PARAMS", {}) or {}
-        try:
-            gap_buffer = max(1.0, float(params.get("GAP_RISK_BUFFER", 1.2)))
-        except (TypeError, ValueError):
-            gap_buffer = 1.2
-        max_loss = equity * (risk_per_trade / 100.0)
-        amount = min(amount, int(max_loss / ((abs(sl_rate) / 100.0) * gap_buffer)))
-
-    if getattr(config, "USE_VOLATILITY_TARGETING", True) and atr and price > 0:
-        annual_vol = (atr / price) * math.sqrt(252)
-        if annual_vol > 0:
-            scale = getattr(config, "TARGET_VOLATILITY", 0.25) / annual_vol
-            scale = max(getattr(config, "VOLATILITY_SCALING_MIN", 0.4),
-                        min(getattr(config, "VOLATILITY_SCALING_MAX", 2.0), scale))
-            amount = min(amount, min(int(base_amt * scale), base_amt))
-
-    return max(0, min(amount, cash))
+    호출부(run_portfolio)가 리스크 스케일을 비중에 미리 곱해 넘긴다. 리스크층에는 스케일을
+    곱하지 않는다(scale_risk_layer=False) — 종전 동작 그대로이며, 도달 가능한 영역에서는 실매매와
+    원 단위까지 같다(tests/test_sizing_parity.py · modules/position_sizing 독스트링).
+    """
+    from modules import position_sizing
+    res = position_sizing.position_budget(equity, cash, invest_ratio, sl_rate, atr, price,
+                                          position_sizing.params_from_config(config),
+                                          risk_scale=1.0, scale_risk_layer=False)
+    return max(0, res.final)
 
 
 def _trend_quality_cached(df, lookback):

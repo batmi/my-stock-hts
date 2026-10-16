@@ -402,8 +402,12 @@ def revise_cancel_order(market, action, org_no, code, qty, price, type_cd, ord_d
     action: "modify" (정정) or "cancel" (취소)
     type_cd: "01"(정정), "02"(취소) - API 스펙상 구분 코드
     """
-    # [관찰 모드 하드 가드] 즉시 체결이라 정정/취소 대상이 없다. 실주문 경로로 새지 않게 차단한다.
+    # [관찰 모드 하드 가드] 실주문 경로로 새지 않게 차단한다. 기본(즉시 체결)에는 정정/취소
+    #  대상이 없고, 시험 모델(config.PAPER_FAULT_MODEL)의 미체결만 가상으로 취소한다(정정은 미지원).
     if _api()._paper_active():
+        if action == "cancel" and market == "domestic":
+            from modules import paper_broker
+            return paper_broker.cancel_order(org_no)
         return {"rt_cd": "1", "msg_cd": "PAPER_REJECT",
                 "msg1": "[가상투자] 즉시 체결되어 정정/취소할 주문이 없습니다", "output": {}}
     if config.session.is_toss:

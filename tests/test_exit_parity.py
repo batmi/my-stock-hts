@@ -293,13 +293,54 @@ def test_time_stop_still_fires_without_grace():
     assert sell and reason == "시간청산", f"시간청산이 안 걸렸다 ({sell}, {reason!r})"
 
 
-def test_the_live_path_no_longer_uses_elif_for_the_trailing_stop():
-    """실매매 쪽도 같은 형태였다 — 두 구현이 같은 결함을 공유해 패리티로는 못 잡혔다."""
+def test_the_live_path_no_longer_uses_elif_for_the_trailing_stop(monkeypatch):
+    """실매매 쪽도 같은 형태였다 — 두 구현이 같은 결함을 공유해 패리티로는 못 잡혔다.
+
+    [2026-10-16] 종전에는 analyze_sell 소스에 'if not reason and ts_msg:' 가 있는지를 봤다.
+    청산 체인이 modules/exit_rules.evaluate_exit 하나로 옮겨 가 그 문장은 없어졌으므로,
+    같은 불변식을 **실매매 경로의 행동**으로 검사한다: 시간청산이 유예되는 날에도 TS 가 판정된다.
+    """
+    from modules import analysis
+    from modules.auto_trade import engine
+
+    n = 30
+    df = pd.DataFrame({"date": pd.bdate_range("2026-01-02", periods=n).strftime("%Y%m%d"),
+                       "open": [100.0] * n, "high": [150.0] * n, "low": [99.0] * n,
+                       "close": [100.0] * n, "volume": [1000.0] * n})
+    # 유예가 서는 상태(매수 계열 '상승' · 5일 고점 = 10일 고점 · 손실 중)와 TS 가 서는 상태
+    #  (고점 150 대비 33% 하락)를 동시에 만든다. 지표·상태는 고정해 체인만 본다.
+    monkeypatch.setattr(engine.indicators, "calculate_indicators",
+                        lambda _df: {"atr": 0.0, "ema_60": 90.0, "rsi": 55.0, "adx": 25.0, "cci": 0.0})
+    monkeypatch.setattr(engine.indicators, "w52_position", lambda *_a, **_k: 50.0)
+    monkeypatch.setattr(analysis, "check_smart_money_turnaround", lambda *_a, **_k: (False, ""))
+    monkeypatch.setattr(analysis, "calculate_score", lambda **_k: (6.0, []))
+    monkeypatch.setattr(analysis, "classify_stock_state", lambda **_k: ("상승", "[white]", ""))
+    ss = copy.deepcopy(config.SELL_STRATEGY)
+    ss.update({"TIME_STOP_USE": True, "TIME_STOP_DAYS": 15, "TIME_STOP_MIN_PROFIT_RATE": 0.0,
+               "TS_ACTIVATION_MODE": "fixed", "TRAILING_STOP_ACTIVATION_RATE": 10.0,
+               "TRAILING_STOP_CALLBACK_RATE": 5.0, "USE_ATR_STOP": False, "STOP_LOSS_RATE": -30.0,
+               "TAKE_PROFIT_RATE": 0, "TAKE_PROFIT_RSI": 0})
+    monkeypatch.setattr(config, "SELL_STRATEGY", ss)
+
+    r = engine.DefaultStrategy().analyze_sell("005930", "x", df, 100.0, 100.5, -0.5,
+                                             holding_days=20, highest_price=150.0)
+    assert r["action"] == "sell" and r["reason"].startswith("트레일링스탑"), \
+        f"실매매에서 시간청산 유예가 트레일링 스탑을 삼켰다 ({r['reason']!r})"
+
+
+def test_live_and_backtest_share_one_exit_chain():
+    """[구조 가드] 두 판정이 각자 체인을 다시 갖지 않고 exit_rules.evaluate_exit 에 위임한다.
+
+    체인을 다시 적으면 같은 결함을 두 곳에서 따로 고치게 된다 — 이 저장소가 겪은 형태다.
+    """
     import inspect
     from modules.auto_trade import engine
 
-    src = inspect.getsource(engine.DefaultStrategy.analyze_sell)
-    # 주석에는 옛 형태가 설명으로 남아 있다 — 코드 줄만 본다.
-    code = "\n".join(l for l in src.split("\n") if not l.strip().startswith("#"))
-    assert "elif ts_msg:" not in code, "실매매 트레일링 스탑이 여전히 elif 체인에 묶여 있다"
-    assert "if not reason and ts_msg:" in code
+    live = inspect.getsource(engine.DefaultStrategy.analyze_sell)
+    bt = inspect.getsource(pbt.decide_sell)
+    assert "exit_rules.evaluate_exit(" in live
+    assert "xr.evaluate_exit(" in bt
+    for name, src in (("analyze_sell", live), ("decide_sell", bt)):
+        code = "\n".join(l for l in src.split("\n") if not l.strip().startswith("#"))
+        assert "drop >= callback" not in code and "time_stop_triggered" not in code, \
+            f"{name} 이 청산 체인을 다시 갖고 있다 — exit_rules 로 옮길 것"

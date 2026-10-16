@@ -531,6 +531,39 @@ class DBManager:
                     )
                 ''')
 
+                # [채점 경계 원장 · 2026-10-16] 시너지 두 항목(각 1점)은 'MACD 확산 유지'
+                #  (macd_hist >= prev×0.8) 조건을 공유해, 그 경계에서 점수가 2점씩 뛴다.
+                #  경계가 실제로 진입을 가르는지 — 매수 상태가 된 경우뿐 아니라 **경계 때문에
+                #  후보에서 빠진 경우까지** — 알려면 signal_ledger(매수 상태 주기만 센다)로는
+                #  부족하다. 그래서 '경계 근처·확산 뒤집힘·문턱 교차·가격 모멘텀 fail-open' 이
+                #  있었던 종목만 (일자, 종목)당 1행에 센다. 아무 일 없던 종목은 쓰지 않는다
+                #  (파이3 SD카드 쓰기 절감 — 주기당 executemany 1회, 신호 원장과 같은 규약).
+                #  판단에는 쓰지 않는 관측 표다. 값은 score_model.boundary_event 정의를 따른다.
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS score_boundary_ledger (
+                        date TEXT,
+                        code TEXT,
+                        is_sim INTEGER DEFAULT 0,
+                        name TEXT,
+                        cycles INTEGER DEFAULT 0,          -- 이 표에 기록된(사건이 있던) 주기 수
+                        near_cycles INTEGER DEFAULT 0,     -- 비율 경계(0.8배) ±0.1 안
+                        flips INTEGER DEFAULT 0,           -- 직전 관측 대비 확산 조건이 뒤집힌 횟수
+                        admitted_cycles INTEGER DEFAULT 0, -- 확산 덕에 BUY_SCORE 를 넘긴 주기
+                        excluded_cycles INTEGER DEFAULT 0, -- 확산 실패로 BUY_SCORE 미달인 주기
+                        cf_gained_buy INTEGER DEFAULT 0,   -- 반사실 상태가 매수(실제는 아님) = 경계가 막음
+                        cf_lost_buy INTEGER DEFAULT 0,     -- 반사실 상태가 매수 아님(실제는 매수) = 경계가 들임
+                        fail_open_cycles INTEGER DEFAULT 0,-- 가격 모멘텀 단기 게이트 미확인 가점
+                        max_unknown INTEGER DEFAULT 0,     -- 확인 불가 항목 수의 최댓값
+                        min_ratio REAL,
+                        max_ratio REAL,
+                        max_score REAL DEFAULT 0.0,
+                        last_state TEXT,
+                        rules_version TEXT,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (date, code, is_sim)
+                    )
+                ''')
+
                 # [마이그레이션 2026-08-19] is_sim 없이 만들어진 원장을 옮긴다.
                 #  PK가 (date, code) → (date, code, is_sim)로 바뀌므로 ALTER로는 안 되고
                 #  테이블을 다시 만들어야 한다. 기존 행은 전부 실전(0)으로 본다 —
@@ -1919,6 +1952,86 @@ class DBManager:
             except Exception as e:
                 logger.warning(f"[Ledger] 신호 원장 기록 실패 (매매에는 영향 없음): {e}")
 
+    _BUYISH_STATES = ("매수", "강매수", "역매수")
+
+    def record_score_boundary(self, date_str, rows):
+        """한 주기의 채점 경계 관측(engine.analyze_buy 의 score_diag)을 (일자, 종목)으로 누적.
+
+        rows: [{'code','name','diag','flip'}, ...] — 사건이 있던 종목만 넘긴다(호출자가 거른다).
+        주기당 한 번 부른다. 실패해도 매매에 영향을 주지 않는다(계측은 매매를 막지 않는다).
+        """
+        if not rows:
+            return
+        payload = []
+        for r in rows:
+            d = r.get("diag") or {}
+            st, cf = d.get("state"), d.get("cf_state")
+            buyish = st in self._BUYISH_STATES
+            cf_buyish = cf in self._BUYISH_STATES if cf is not None else None
+            ratio = d.get("ratio")
+            payload.append((
+                date_str, r.get("code"), 0, r.get("name"),
+                1 if d.get("near") else 0, 1 if r.get("flip") else 0,
+                1 if d.get("cross") == "admitted" else 0, 1 if d.get("cross") == "excluded" else 0,
+                1 if (cf_buyish is True and not buyish) else 0,
+                1 if (cf_buyish is False and buyish) else 0,
+                1 if d.get("fail_open") else 0, int(d.get("unknown_n") or 0),
+                ratio, ratio, float(d.get("total") or 0.0), st, d.get("ver"),
+            ))
+        sql = '''
+            INSERT INTO score_boundary_ledger
+                (date, code, is_sim, name, cycles, near_cycles, flips, admitted_cycles, excluded_cycles,
+                 cf_gained_buy, cf_lost_buy, fail_open_cycles, max_unknown, min_ratio, max_ratio,
+                 max_score, last_state, rules_version, updated_at)
+            VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(date, code, is_sim) DO UPDATE SET
+                cycles           = cycles + 1,
+                near_cycles      = near_cycles + excluded.near_cycles,
+                flips            = flips + excluded.flips,
+                admitted_cycles  = admitted_cycles + excluded.admitted_cycles,
+                excluded_cycles  = excluded_cycles + excluded.excluded_cycles,
+                cf_gained_buy    = cf_gained_buy + excluded.cf_gained_buy,
+                cf_lost_buy      = cf_lost_buy + excluded.cf_lost_buy,
+                fail_open_cycles = fail_open_cycles + excluded.fail_open_cycles,
+                max_unknown      = MAX(max_unknown, excluded.max_unknown),
+                min_ratio = CASE WHEN excluded.min_ratio IS NULL THEN min_ratio
+                                 WHEN min_ratio IS NULL THEN excluded.min_ratio
+                                 ELSE MIN(min_ratio, excluded.min_ratio) END,
+                max_ratio = CASE WHEN excluded.max_ratio IS NULL THEN max_ratio
+                                 WHEN max_ratio IS NULL THEN excluded.max_ratio
+                                 ELSE MAX(max_ratio, excluded.max_ratio) END,
+                max_score        = MAX(max_score, excluded.max_score),
+                last_state       = COALESCE(excluded.last_state, last_state),
+                rules_version    = COALESCE(excluded.rules_version, rules_version),
+                updated_at       = CURRENT_TIMESTAMP
+        '''
+        with self.lock:
+            try:
+                conn = self._get_conn()
+                conn.executemany(sql, payload)   # 주기당 트랜잭션 1회
+                conn.commit()
+            except Exception as e:
+                logger.warning(f"[Ledger] 채점 경계 원장 기록 실패 (매매에는 영향 없음): {e}")
+
+    def get_score_boundary(self, start_date=None, end_date=None, code=None):
+        """채점 경계 원장 조회. 실패는 None(빈 목록 = '사건 없음'과 구분)."""
+        sql = "SELECT * FROM score_boundary_ledger WHERE 1=1"
+        params = []
+        if start_date:
+            sql += " AND date >= ?"; params.append(start_date)
+        if end_date:
+            sql += " AND date <= ?"; params.append(end_date)
+        if code:
+            sql += " AND code = ?"; params.append(code)
+        sql += " ORDER BY date, code"
+        try:
+            cursor = self._get_conn().cursor()
+            cursor.execute(sql, params)
+            return [dict(r) for r in cursor.fetchall()]
+        except Exception as e:
+            logger.warning(f"[Ledger] 채점 경계 원장 조회 실패: {e}")
+            return None
+
     def record_fill_latency(self, date_str, odno, broker, code, side,
                             ws_event_at, recognized_at, woke_by_ws, poll_interval):
         """체결 하나가 인지된 순간을 한 행으로 남긴다(같은 주문은 첫 인지만).
@@ -2032,6 +2145,11 @@ class DBManager:
             if ledger_days > 0:
                 conn.execute("DELETE FROM signal_ledger WHERE date < ?",
                              ((datetime.now() - timedelta(days=ledger_days)).strftime("%Y%m%d"),))
+            # 채점 경계 원장은 관측용이라 1년이면 판정에 충분하다(사건 있는 종목만, 하루 수 행).
+            boundary_days = getattr(config, 'SCORE_BOUNDARY_LEDGER_RETENTION_DAYS', 365)
+            if boundary_days > 0:
+                conn.execute("DELETE FROM score_boundary_ledger WHERE date < ?",
+                             ((datetime.now() - timedelta(days=boundary_days)).strftime("%Y%m%d"),))
             
             # 2. VACUUM 실행 (공간 회수)
             conn.execute("VACUUM;")

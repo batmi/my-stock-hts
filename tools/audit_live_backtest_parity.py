@@ -11,6 +11,10 @@
 조립 계층이 두 벌이라, 필드 하나가 빠지거나 NaN 처리가 달라도 조용히 다른 점수가 나온다.
 이 스크립트는 같은 일봉을 두 경로에 넣고 점수·상태를 전수 대조한다.
 
+[항목 단위 · 2026-10-16] 총점이 같아도 서로 다른 항목이 상쇄했을 수 있다. 그래서
+ analysis.score_breakdown 의 항목별 (상태, 기여)도 대조해, 어긋나면 **어느 항목이** 갈렸는지
+ 센다. B-live 괴리(워밍업 부족)가 어느 지표에서 생기는지도 같은 표로 드러난다.
+
 [두 가지 대조를 구분해서 본다]
   A vs B-full : 실매매가 백테스트와 같은 길이의 이력을 봤을 때의 차이
                 → 순수한 '조립 방식/로직' 차이. 0이어야 정상이다.
@@ -37,6 +41,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config  # noqa: E402
 from core import indicators  # noqa: E402
+from collections import Counter  # noqa: E402
+
 from modules import analysis, backtest  # noqa: E402
 
 warnings.filterwarnings("ignore")
@@ -71,11 +77,24 @@ def judge_backtest(df):
     for row in rows:
         try:
             raw_score, _, can_buy, state, _ = backtest.calculate_daily_status(row, prev)
+            sig = _item_sig(analysis.score_breakdown(**backtest.score_inputs(row, prev)))
         except Exception as e:
-            raw_score, can_buy, state = np.nan, None, f"ERR:{type(e).__name__}"
-        out.append((raw_score, can_buy, state))
+            raw_score, can_buy, state, sig = np.nan, None, f"ERR:{type(e).__name__}", None
+        out.append((raw_score, can_buy, state, sig))
         prev = row
     return out
+
+
+def _item_sig(res):
+    """항목별 (상태, 기여) — 두 경로의 항목 단위 대조용."""
+    return {it.item_id: (it.status, round(it.contribution, 6)) for it in res.items}
+
+
+def item_mismatches(a, b):
+    """두 항목 서명에서 어긋난 항목 ID 목록(어느 한쪽이 없으면 빈 목록)."""
+    if not a or not b:
+        return []
+    return [k for k in a if a[k] != b.get(k)]
 
 
 def judge_live(df, t, window=None):
@@ -95,14 +114,14 @@ def judge_live(df, t, window=None):
     bar_day = _dt.strptime(str(sub.iloc[-1]['date'])[:8], '%Y%m%d')
     w52_pos = indicators.w52_position(sub, price, now=bar_day)
 
-    state, _, _ = analysis.classify_stock_state(
-        df=sub, ind=ind, prev_rsi=prev_rsi, thresholds=None,
-        w52_pos=w52_pos, smart_money=False)
     # engine.analyze_buy와 동일하게 w52_pos를 함께 넘긴다 — 넘기지 않으면 calculate_score가
     #  _w52_band(365 달력일) 폴백을 써서 상태 분류와 다른 52주 위치로 채점된다.
-    score, _ = analysis.calculate_score(df=sub, ind=ind, weights=None, smart_money=False,
-                                        w52_pos=w52_pos)
-    return round(float(score), 1), state
+    #  채점은 한 번만 하고 상태 분류에 넘긴다(engine.analyze_buy 와 같은 호출 순서).
+    res = analysis.score_breakdown(df=sub, ind=ind, weights=None, smart_money=False, w52_pos=w52_pos)
+    state, _, _ = analysis.classify_stock_state(
+        df=sub, ind=ind, prev_rsi=prev_rsi, thresholds=None,
+        w52_pos=w52_pos, smart_money=False, score=res.total)
+    return round(float(res.total), 1), state, _item_sig(res)
 
 
 def compare(name, code, df, step):
@@ -111,18 +130,20 @@ def compare(name, code, df, step):
 
     rec = []
     for t in idx:
-        b_score, _, b_state = bt[t]
+        b_score, _, b_state, b_sig = bt[t]
         try:
-            f_score, f_state = judge_live(df, t, window=None)
+            f_score, f_state, f_sig = judge_live(df, t, window=None)
         except Exception as e:
-            f_score, f_state = np.nan, f"ERR:{type(e).__name__}"
+            f_score, f_state, f_sig = np.nan, f"ERR:{type(e).__name__}", None
         try:
-            l_score, l_state = judge_live(df, t, window=LIVE_WINDOW)
+            l_score, l_state, l_sig = judge_live(df, t, window=LIVE_WINDOW)
         except Exception as e:
-            l_score, l_state = np.nan, f"ERR:{type(e).__name__}"
+            l_score, l_state, l_sig = np.nan, f"ERR:{type(e).__name__}", None
         rec.append(dict(date=df.iloc[t]['date'], bt_score=b_score, bt_state=b_state,
                         full_score=f_score, full_state=f_state,
-                        live_score=l_score, live_state=l_state))
+                        live_score=l_score, live_state=l_state,
+                        full_items=item_mismatches(b_sig, f_sig),
+                        live_items=item_mismatches(b_sig, l_sig)))
     return pd.DataFrame(rec)
 
 
@@ -185,6 +206,15 @@ def main():
         print(f"    점수 불일치(>0.05) {s['score_mismatch']:.2f}%   "
               f"평균오차 {s['score_mae']:.4f}   최대오차 {s['score_max']:.2f}")
         print(f"    상태 불일치        {s['state_mismatch']:.2f}%")
+
+    # 항목 단위 — 총점이 같아도 항목이 상쇄했을 수 있고, B-live 괴리의 출처가 여기서 보인다
+    print("\n[항목별] 어긋난 항목(건수 · 전체 대비 %) — B-full 은 0 이어야 정상")
+    for tag, col in [("B-full", 'full_items'), ("B-live", 'live_items')]:
+        cnt = Counter(i for lst_ in R[col] for i in lst_)
+        if not cnt:
+            print(f"  {tag}: 없음")
+            continue
+        print(f"  {tag}: " + ", ".join(f"{k} {v}({v / len(R) * 100:.2f}%)" for k, v in cnt.most_common(8)))
 
     # 매수 가능 상태의 불일치는 실제 진입/미진입을 가르므로 따로 본다
     print("\n[핵심] '매수 후보 상태' 판정이 갈리는 비율")
