@@ -322,6 +322,10 @@ def get_period_entry_dates(codes, qty_map=None, cano=None, acnt_prdt_cd=None, mo
         return {}
 
 
+#  주식일별주문체결조회(TTTC8001R·CTSC9115R) 실전 1회 응답 상한. 이 수만큼 오면 잘렸을 수 있다.
+_KIS_CCLD_PAGE_SIZE = 100
+
+
 def _fetch_period_executions(codes, cano=None, acnt_prdt_cd=None, months=12, should_stop=None):
     """기간 체결 내역을 종목별로 모은다. ({code: [체결 dict...]}, window_start, ok) 반환.
 
@@ -354,10 +358,17 @@ def _fetch_period_executions(codes, cano=None, acnt_prdt_cd=None, months=12, sho
     tr_recent = constants.TR_ID_CONFIG["domestic"]["inquiry"]["history"]
     tr_old = constants.TR_ID_CONFIG["domestic"]["inquiry"]["history_old"]
 
-    end = datetime.now()
+    def _query(start, end, tr_id):
+        """[start, end] 구간의 output1. 실패·잘림은 None.
 
-    for chunk in range(max(1, int(math.ceil(months / 3.0)))):
-        start = end - timedelta(days=90)
+        [100건 잘림 · 2026-10-17] 이 TR은 한 번에 최대 _KIS_CCLD_PAGE_SIZE 건을 주고 나머지는
+         연속 조회(tr_cont 헤더 + CTX_AREA)로 넘기는데, call_api 는 응답 본문만 돌려줘 연속
+         조회를 못 한다. 그래서 종전에는 3개월에 체결이 100건을 넘으면 **최신 100건만** 남고
+         그 이전이 조용히 빠졌다 — 수량 역산이 그 구멍을 건너 더 과거(이미 청산된 포지션)의
+         체결로 현재 보유를 '설명'해, 틀린 매수 기록·진입일(시간청산 시계)이 만들어진다.
+         꽉 찬 구간은 반으로 나눠 다시 묻는다. 하루짜리 구간이 꽉 차면 더 나눌 수 없으므로
+         '못 다 읽었다'로 올린다([[unknown-vs-empty]]).
+        """
         params = {
             "CANO": cano, "ACNT_PRDT_CD": acnt_prdt_cd,
             "INQR_STRT_DT": start.strftime("%Y%m%d"),
@@ -370,23 +381,41 @@ def _fetch_period_executions(codes, cano=None, acnt_prdt_cd=None, months=12, sho
             "INQR_DVSN_3": "00", "INQR_DVSN_1": "",
             "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
         }
-
-        res = _api().call_api(url, "domestic", "inquiry", "history", params=params,
-                       tr_id=(tr_recent if chunk == 0 else tr_old))
+        res = _api().call_api(url, "domestic", "inquiry", "history", params=params, tr_id=tr_id)
         if not res or res.get('rt_cd') != '0':
+            logger.warning(f"[체결내역] {params['INQR_STRT_DT']}~{params['INQR_END_DT']} 조회 실패 "
+                           f"(rt_cd={(res or {}).get('rt_cd')}, msg={(res or {}).get('msg1')})")
+            return None
+        out = res.get('output1') or []
+        if len(out) < _KIS_CCLD_PAGE_SIZE:
+            return out
+        span = (end.date() - start.date()).days
+        if span < 1:
+            logger.warning(f"[체결내역] {params['INQR_STRT_DT']} 하루 체결이 {len(out)}건 이상이라 "
+                           f"연속 조회 없이는 다 읽을 수 없습니다 — '읽었다'로 답하지 않습니다")
+            return None
+        mid = start + timedelta(days=span // 2)
+        newer = _query(mid + timedelta(days=1), end, tr_id)
+        older = _query(start, mid, tr_id) if newer is not None else None
+        return None if older is None else newer + older
+
+    end = datetime.now()
+
+    for chunk in range(max(1, int(math.ceil(months / 3.0)))):
+        start = end - timedelta(days=90)
+        output = _query(start, end, tr_recent if chunk == 0 else tr_old)
+        if output is None:
             # 과거 조회 TR을 지원하지 않는 계좌·환경이면 여기서 멈춘다(모은 것까지 쓴다).
             #  [Fix 2026-09-05] 다만 **첫 구간**이 실패하면 모은 것이 없다 — 그것은
             #   '체결이 없다'가 아니라 '못 읽었다'다. 그 사실을 돌려준다.
             if chunk == 0:
                 ok = False
-                logger.warning(
-                    f"[체결내역] 최근 3개월 구간 조회 실패 — 이 결과를 '체결 없음'으로 "
-                    f"읽으면 안 됩니다(rt_cd={(res or {}).get('rt_cd')}, "
-                    f"msg={(res or {}).get('msg1')})")
+                logger.warning("[체결내역] 최근 3개월 구간 조회 실패 — 이 결과를 '체결 없음'으로 "
+                               "읽으면 안 됩니다")
             break
 
         window_start = start.strftime("%Y%m%d")
-        for row in (res.get('output1') or []):
+        for row in output:
             parsed = _parse_execution_row(row, wanted)
             if parsed:
                 rows[parsed['code']].append(parsed)
@@ -446,10 +475,18 @@ def get_period_executions(codes, cano=None, acnt_prdt_cd=None, months=12):
     호출부(holdings_backfill)는 그 둘을 갈라야 한다: 실패를 '없음'으로 읽으면
     보유분 전체가 '진입이 조회 구간보다 과거(부분 복원)'라는 틀린 진단으로 보고되고,
     외부 매수를 못 찾아 제한 등록도 건너뛴다(= 운용자가 직접 산 종목을 시스템이 관리).
-    지원하지 않는 모드(가상투자·토스)는 실패가 아니라 '해당 없음'이라 빈 dict 다.
+    가상투자는 실패가 아니라 '해당 없음'이라 빈 dict 다(체결 원장은 paper DB에 있다).
+    토스는 KIS 체결조회 TR 대신 주문 이력 API 의 기간 조회로 같은 형식을 만든다.
     """
-    if not codes or _paper_active() or config.session.is_toss:
+    if not codes or _paper_active():
         return {}
+    if config.session.is_toss:
+        try:
+            rows, _win = _api()._toss_period_executions(codes, months=months)
+            return rows
+        except Exception as e:
+            logger.warning(f"[Toss] 기간 체결 내역 조회 실패 — '체결 없음'이 아닙니다: {e}")
+            return None
     try:
         rows, _win, ok = _fetch_period_executions(codes, cano=cano,
                                                   acnt_prdt_cd=acnt_prdt_cd, months=months)

@@ -3609,10 +3609,10 @@ class AutoTrader:
 
         동기화 실패가 자동매매 기동 자체를 막아선 안 된다 — 기록은 부가 정보다.
         """
-        is_auto_account = bool(cano and cano == getattr(config.session, 'auto_cano', None))
         try:
             res = holdings_backfill.sync_account(
-                cano, acnt, holdings=holdings, register_restrictions=is_auto_account)
+                cano, acnt, holdings=holdings,
+                register_restrictions=holdings_backfill.is_system_account(cano))
         except Exception as e:
             self.log(f"[기동 동기화] 외부 체결 동기화 실패 — 매매는 계속합니다: {e}")
             return

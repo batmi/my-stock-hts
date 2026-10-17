@@ -40,13 +40,27 @@ def supports_broker_history():
 
     가상투자(mode 1)는 KIS 실전 시세를 쓰지만 체결은 가상이라 증권사에 이력이 없다.
     체결 원장은 paper DB(paper_fills)에 따로 있으므로 복원할 것도, 복원할 곳도 없다.
-    토스는 KIS 체결조회 TR 자체가 없다.
+    외부 매수도 생길 수 없다 — 가상 계좌에는 이 프로그램 밖의 주문 경로가 없고, 프로그램
+    안의 수동 매수는 발주 시점에 기록·제한 등록된다(trading.py).
+
+    토스(mode 3)는 KIS 체결조회 TR이 없지만 주문 이력 API 가 기간(from/to) 조회를 받는다
+    (2026-10-17 실측: 365일 148건). api.get_period_executions 가 그것을 같은 형식으로 준다.
+    [2026-10-17] 종전에는 토스도 막혀 있어, 시스템이 꺼진 사이 토스 앱/HTS로 산 종목이
+    다음 날 켜도 기록되지 않았다. 토스는 거래 계좌가 곧 자동매매 계좌라 제한 등록도 빠져,
+    운용자가 산 종목을 시스템이 자기 포지션으로 손절·트레일링했다.
 
     [주의] 이 가드가 없으면 조회가 빈 값을 돌려주는 것을 '진입이 조회 구간보다 과거'로
       오해해 전 종목이 '부분 복원'으로 표시된다(2026-08-10 관측).
     """
-    return not (getattr(config.session, 'is_paper', False)
-                or getattr(config.session, 'is_toss', False))
+    return not getattr(config.session, 'is_paper', False)
+
+
+def is_system_account(cano):
+    """이 계좌가 시스템 트레이딩 계좌인가 — 외부 매수를 제한 종목으로 올릴지의 기준.
+
+    토스·가상투자는 거래 계좌가 곧 자동매매 계좌다(auto_cano == cano). KIS 는 보통 따로다.
+    """
+    return bool(cano and cano == getattr(config.session, 'auto_cano', None))
 
 
 def select_explaining_executions(executions, current_qty):
@@ -151,10 +165,26 @@ def plan(holdings, cano=None, acnt_prdt_cd=None, months=12):
         records = build_records(picked)
         for r in records:
             r['name'] = r['name'] or name
-        already = sum(1 for r in records if _exists(r['odno']))
+        already = sum(1 for r in records if _exists(r['odno'], on_date=odno_scope_date(r)))
         out.append({'code': code, 'name': name, 'qty': qty,
                     'records': records, 'missing': missing, 'already': already})
     return out
+
+
+def odno_scope_date(rec):
+    """이 체결의 주문번호를 찾을 때 쓸 날짜('YYYY-MM-DD'). 좁히지 않아야 하면 None.
+
+    KIS 주문번호는 **당일 채번**이라 날짜와 짝지어야 유일하다([[odno-daily-reset]]).
+     실측(파이 원장 511행): 0000006612 가 2026-04-27·05-29 두 날짜에 있다. 날짜 없이
+     찾으면 외부 매수가 몇 달 전 같은 번호의 시스템 주문으로 잡혀 '우리 주문'이 되고 —
+     제한 등록이 빠지고(운용자 포지션을 시스템이 손절한다) 남의 손절률을 물려받는다.
+     체결 dict 의 날짜는 주문일(ord_dt)이고, 시스템의 접수 행·체결 행도 그날 적힌다.
+    토스 주문번호(orderId)는 전역에서 유일하다. 날짜로 좁히면 오히려 날짜를 넘긴 체결의
+     접수 행을 놓치므로 좁히지 않는다.
+    """
+    if getattr(config.session, 'is_toss', False):
+        return None
+    return str(rec.get('time') or '')[:10] or None
 
 
 def _exists(odno, on_date=None):
@@ -179,7 +209,7 @@ def _exists(odno, on_date=None):
         return True
 
 
-def our_order_row(odno):
+def our_order_row(odno, on_date=None):
     """이 주문번호를 **시스템이 낸 적이 있는가** — 있으면 그 접수 기록을 돌려준다.
 
     [왜 '체결 기록 없음'으로 판정하면 안 되나] 체결 기록(order_status='체결')은 체결
@@ -190,14 +220,15 @@ def our_order_row(odno):
 
     외부 앱(MTS/HTS) 주문도 접수 기록이 생기지만 type 에 '(외부)'가 붙는다 — 그것은
     우리 주문이 아니다.
+
+    on_date 는 odno_scope_date(체결) 이다. [2026-10-17] 종전에는 '과거를 채우는 경로라
+     날짜로 좁히면 아무것도 못 찾는다'며 일부러 날짜를 주지 않았는데, 좁힐 날짜는 '오늘'이
+     아니라 **그 체결 자신의 주문일**이다 — 그 날짜로 좁혀도 찾을 행은 그대로 찾는다.
     """
     if not odno:
         return None
     try:
-        #  [의도적으로 날짜를 주지 않는다] 여기는 **과거를 채워 넣는** 경로라 애초에
-        #  옛 행을 찾는 것이 목적이다. 날짜로 좁히면 백필이 아무것도 못 찾는다
-        #  (check_trade_exists 가 같은 이유로 on_date=None 을 남겨 둔 것과 같다).
-        row = db_manager.db.get_trade_by_odno(odno)
+        row = db_manager.db.get_trade_by_odno(odno, on_date=on_date)
     except Exception:
         return None
     if not row:
@@ -218,12 +249,13 @@ def apply(plans, cano=None, acnt_prdt_cd=None):
         for p in plans:
             for r in p['records']:
                 #  r['time'] 은 'YYYY-MM-DD HH:MM:SS' — 저장될 날짜와 같은 값이다.
-                if _exists(r['odno'], on_date=str(r.get('time') or '')[:10] or None):
+                on_date = odno_scope_date(r)
+                if _exists(r['odno'], on_date=on_date):
                     skipped += 1
                     continue
                 # 우리가 낸 주문인데 체결 기록만 빠진 경우 — '(외부)'로 적으면 통계도
                 #  틀리고, 무엇보다 진입 시 손절률이 사라져 청산 기준이 폴백으로 내려간다.
-                own = our_order_row(r['odno'])
+                own = our_order_row(r['odno'], on_date=on_date)
                 rec_type = r['type'].replace("(외부)", "") if own else r['type']
                 try:
                     own_sl = float((own or {}).get('stop_loss_rate') or 0.0)
@@ -243,6 +275,45 @@ def apply(plans, cano=None, acnt_prdt_cd=None):
                     skipped += 1
                     logger.warning(f"[보유분 복원] DB 기록 실패: {r['code']} {r['odno']}")
     return written, skipped
+
+
+def external_net_buys(plans):
+    """새로 기록될 외부 체결 중 **순매수가 남는** 종목. {(code, name)} 반환.
+
+    [외부 판정] '체결 기록이 없다'가 아니라 '우리가 낸 주문이 아니다'가 기준이다.
+     our_order_row 주석 참조 — 접수 기록만 남은 자기 주문을 외부로 몰면 그 포지션의
+     손절이 멈춘다(제한 종목 등록).
+    [2026-09-20] 외부 **순매수**가 남아 있는 종목만이다. 시스템이 100주를 들고 있는 동안
+     운용자가 같은 계좌에서 50주를 사고 50주를 판 왕복은 역산에 잡히지만(매도를 지나
+     더 거슬러 올라가므로) 지금 보유분은 전부 시스템 것이다 — 그 종목을 제한하면
+     시스템 포지션의 손절·트레일링이 멈춘다. 외부 매수량 − 외부 매도량 > 0 일 때만 건다.
+    apply() **전에** 불러야 한다 — 기록된 뒤에는 _exists 가 참이 되어 아무것도 안 남는다.
+    """
+    external_net = {}
+    for p in plans:
+        for r in p['records']:
+            on_date = odno_scope_date(r)
+            if _exists(r['odno'], on_date=on_date) or our_order_row(r['odno'], on_date=on_date) is not None:
+                continue
+            key = (p['code'], p['name'])
+            external_net[key] = external_net.get(key, 0) + (r['qty'] if '매수' in r['type'] else -r['qty'])
+    return {k for k, net in external_net.items() if net > 0}
+
+
+def apply_and_restrict(plans, cano=None, acnt_prdt_cd=None, register_restrictions=False):
+    """계획을 기록하고, 시스템 계좌의 외부 순매수 종목은 제한 종목으로 올린다.
+
+    (기록 건수, 건너뛴 건수, 제한 등록한 종목코드 목록) 반환.
+
+    [왜 한 함수인가 · 2026-10-17] 기록과 제한 판정을 떼어 두면 메뉴·CLI 로 먼저 복원한
+     순간 그 체결이 '이미 기록됨'이 되어, 다음 기동 동기화(sync_account)가 그것을 외부
+     매수로 보지 못하고 제한을 건너뛴다. 토스·가상투자는 거래 계좌가 곧 자동매매 계좌라
+     이 경로가 실제로 열린다. 어느 진입점이든 이 함수를 거친다.
+    """
+    new_buy_codes = external_net_buys(plans) if register_restrictions else set()
+    written, skipped = apply(plans, cano=cano, acnt_prdt_cd=acnt_prdt_cd)
+    restricted = _restrict_external_buys(new_buy_codes, cano, acnt_prdt_cd) if new_buy_codes else []
+    return written, skipped, restricted
 
 
 def sync_account(cano=None, acnt_prdt_cd=None, months=12, register_restrictions=False,
@@ -279,26 +350,8 @@ def sync_account(cano=None, acnt_prdt_cd=None, months=12, register_restrictions=
 
         summary['partial'] = [(p['code'], p['name'], p['missing']) for p in plans if p['missing'] > 0]
 
-        # [외부 판정] '체결 기록이 없다'가 아니라 '우리가 낸 주문이 아니다'가 기준이다.
-        #  our_order_row 주석 참조 — 접수 기록만 남은 자기 주문을 외부로 몰면 그 포지션의
-        #  손절이 멈춘다(제한 종목 등록).
-        #  [2026-09-20] 외부 **순매수**가 남아 있는 종목만이다. 시스템이 100주를 들고 있는 동안
-        #   운용자가 같은 계좌에서 50주를 사고 50주를 판 왕복은 역산에 잡히지만(매도를 지나
-        #   더 거슬러 올라가므로) 지금 보유분은 전부 시스템 것이다 — 그 종목을 제한하면
-        #   시스템 포지션의 손절·트레일링이 멈춘다. 외부 매수량 − 외부 매도량 > 0 일 때만 건다.
-        external_net = {}
-        for p in plans:
-            for r in p['records']:
-                if _exists(r['odno']) or our_order_row(r['odno']) is not None:
-                    continue
-                key = (p['code'], p['name'])
-                external_net[key] = external_net.get(key, 0) + (r['qty'] if '매수' in r['type'] else -r['qty'])
-        new_buy_codes = {k for k, net in external_net.items() if net > 0}
-
-        summary['written'], summary['skipped'] = apply(plans, cano=cano, acnt_prdt_cd=acnt_prdt_cd)
-
-        if register_restrictions and new_buy_codes:
-            summary['restricted'] = _restrict_external_buys(new_buy_codes, cano, acnt_prdt_cd)
+        summary['written'], summary['skipped'], summary['restricted'] = apply_and_restrict(
+            plans, cano=cano, acnt_prdt_cd=acnt_prdt_cd, register_restrictions=register_restrictions)
     except Exception as e:
         summary['error'] = str(e)
         #  [2026-09-05] 실패를 '부분 복원' 목록으로 흘려보내지 않는다 — 그러면 조회

@@ -1588,21 +1588,17 @@ def _toss_today_closed_orders():
     return todays
 
 
-def _toss_period_entry_dates(codes, qty_map=None, months=12):
-    """토스 CLOSED 주문 이력에서 현 포지션의 진입일을 찾는다. {code: 'YYYYMMDD'}
+def _toss_period_executions(codes, months=12):
+    """토스 CLOSED 주문 이력을 종목별 체결 목록으로 모은다. ({code: [체결 dict...]}, window_start)
 
-    KIS의 get_period_entry_dates와 같은 역할(수량 흐름 재생). 토스는 기간(from/to)
-    조회를 한 번에 받으므로 3개월씩 끊을 필요가 없다.
+    체결 dict 는 KIS _fetch_period_executions 와 같은 형식이다 —
+    date(YYYYMMDD) · time(HHMMSS) · is_buy · qty · price · odno · name · type_name.
+    토스는 주문 1건이 체결 누적 1건이다(부분 체결 후 취소된 주문도 체결분만 담는다).
+    name 은 비어 있다 — 주문 응답에 종목명이 없고, 호출부가 잔고의 이름으로 채운다.
 
-    [조회 실패는 올린다 · 2026-09-05] 종전에는 `(res or {})` 로 None 을 삼켜, 요청이
-     실패하면 **'이 기간에 주문이 없다'와 똑같이 빈 dict** 를 돌려줬다. 호출부
-     (api.account.get_period_entry_dates)는 그 답을 15분 마이크로 캐시에 굳히므로,
-     토스가 잠깐 흔들리면 그 종목들의 보유일수가 15분 동안 **0일**로 남는다 — 시간청산
-     (15일)의 시계가 그만큼 밀리고, 그 사이 재조회는 0회다(실측).
-     KIS 경로는 같은 결함을 2026-09-05 에 `ok` 플래그로 고쳤다(_fetch_period_executions).
-     토스는 호출부가 예외를 이미 잡아 캐시하지 않고 빠지므로, 여기서는 올리면 된다.
-     페이지 상한(20p=2000건)에 걸린 것도 '다 읽었다'가 아니므로 같이 올린다 —
-     반쪽 이력으로 수량 흐름을 재생하면 엉뚱한 날짜가 나온다.
+    [조회 실패는 올린다] 실패·페이지 상한(20p=2000건) 도달을 빈 결과로 돌려주면 호출부가
+     '이 기간에 체결이 없다'로 읽는다([[unknown-vs-empty]]). 보유분 복원은 그 답으로 외부
+     매수를 못 찾아 제한 등록을 건너뛰고, 진입일 재생은 엉뚱한 날짜를 낸다.
     """
     wanted = set(codes)
     rows = {c: [] for c in wanted}
@@ -1624,7 +1620,7 @@ def _toss_period_entry_dates(codes, qty_map=None, months=12):
             raise RuntimeError(
                 f"토스 주문 이력을 조회하지 못했습니다(status=CLOSED, from={kwargs['from_date']}) "
                 f"— '주문이 없다'가 아닙니다")
-        for o in ((res or {}).get('orders') or []):
+        for o in (res.get('orders') or []):
             side = str(o.get('side') or '').upper()
             if side not in ('BUY', 'SELL'):
                 continue
@@ -1637,24 +1633,60 @@ def _toss_period_entry_dates(codes, qty_map=None, months=12):
                 continue  # 취소·미체결 주문은 수량 흐름에 영향이 없다
             ts = str(ex.get('filledAt') or o.get('orderedAt') or '')
             date = ts[:10].replace('-', '')
-            if len(date) == 8:
-                rows[code].append((date, side == 'BUY', qty))
+            if len(date) != 8:
+                continue
+            # 체결평균가 우선. 없으면 체결금액/수량, 그것도 없으면 주문가(_parse_execution_row 와 같은 순서).
+            price = _toss_float(ex.get('averageFilledPrice'))
+            if price <= 0:
+                amt = _toss_float(ex.get('filledAmount'))
+                price = amt / qty if amt > 0 else _toss_float(o.get('price'))
+            is_buy = side == 'BUY'
+            rows[code].append({
+                'code': code, 'date': date,
+                'time': ts[11:19].replace(':', '').zfill(6) if len(ts) >= 19 else "000000",
+                'is_buy': is_buy, 'qty': qty, 'price': round(price),
+                'odno': str(o.get('orderId') or '').strip(), 'name': '',
+                'type_name': "매수" if is_buy else "매도",
+            })
 
-        if not (res or {}).get('hasNext'):
+        if not res.get('hasNext'):
             exhausted = True
             break
-        cursor = (res or {}).get('nextCursor')
+        cursor = res.get('nextCursor')
         if not cursor:
             exhausted = True
             break
     if not exhausted:
         raise RuntimeError("토스 주문 이력이 페이지 상한(2000건)에서 끊겼습니다 "
-                           "— 반쪽 이력으로 진입일을 재생하지 않습니다")
+                           "— 반쪽 이력으로 수량 흐름을 재생하지 않습니다")
 
-    window_start = start.strftime("%Y%m%d")
+    for c in wanted:
+        rows[c].sort(key=lambda r: (r['date'], r['time'], r['odno']))
+    return rows, start.strftime("%Y%m%d")
+
+
+def _toss_period_entry_dates(codes, qty_map=None, months=12):
+    """토스 CLOSED 주문 이력에서 현 포지션의 진입일을 찾는다. {code: 'YYYYMMDD'}
+
+    KIS의 get_period_entry_dates와 같은 역할(수량 흐름 재생). 토스는 기간(from/to)
+    조회를 한 번에 받으므로 3개월씩 끊을 필요가 없다. 조회는 _toss_period_executions
+    하나로 한다 — 보유분 복원과 같은 체결 목록을 본다.
+
+    [조회 실패는 올린다 · 2026-09-05] 종전에는 `(res or {})` 로 None 을 삼켜, 요청이
+     실패하면 **'이 기간에 주문이 없다'와 똑같이 빈 dict** 를 돌려줬다. 호출부
+     (api.account.get_period_entry_dates)는 그 답을 15분 마이크로 캐시에 굳히므로,
+     토스가 잠깐 흔들리면 그 종목들의 보유일수가 15분 동안 **0일**로 남는다 — 시간청산
+     (15일)의 시계가 그만큼 밀리고, 그 사이 재조회는 0회다(실측).
+     KIS 경로는 같은 결함을 2026-09-05 에 `ok` 플래그로 고쳤다(_fetch_period_executions).
+     토스는 호출부가 예외를 이미 잡아 캐시하지 않고 빠지므로, 여기서는 올리면 된다.
+     페이지 상한(20p=2000건)에 걸린 것도 '다 읽었다'가 아니므로 같이 올린다 —
+     반쪽 이력으로 수량 흐름을 재생하면 엉뚱한 날짜가 나온다.
+    """
+    rows, window_start = _toss_period_executions(codes, months=months)
     found = {}
-    for code, r in rows.items():
-        d = _api()._replay_entry_date(r, (qty_map or {}).get(code), window_start)
+    for code, txs in rows.items():
+        d = _api()._replay_entry_date([(t['date'], t['is_buy'], t['qty']) for t in txs],
+                                      (qty_map or {}).get(code), window_start)
         if d:
             found[code] = d
     return found

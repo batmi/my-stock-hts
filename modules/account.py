@@ -1949,7 +1949,7 @@ def offer_holdings_backfill():
     """
     from modules import holdings_backfill as hb
 
-    # 가상투자·토스는 증권사 체결 이력이 없다. 제안 자체를 띄우지 않는다.
+    # 가상투자는 증권사 체결 이력이 없다. 제안 자체를 띄우지 않는다.
     if not hb.supports_broker_history():
         return
 
@@ -2005,8 +2005,15 @@ def offer_holdings_backfill():
             line += f" [yellow](부분 복원: {p['missing']}주가 조회 구간보다 과거)[/yellow]"
         config.console.print(line)
 
-    written, skipped = hb.apply(plans, cano=cano, acnt_prdt_cd=acnt)
+    #  토스는 이 계좌가 곧 자동매매 계좌다 — 기록만 하고 제한을 빼먹으면 다음 기동 동기화도
+    #  '이미 기록됨'으로 보고 건너뛰어, 운용자가 산 종목을 시스템이 손절한다(apply_and_restrict).
+    written, skipped, restricted = hb.apply_and_restrict(
+        plans, cano=cano, acnt_prdt_cd=acnt, register_restrictions=hb.is_system_account(cano))
     config.console.print(f"[green]복원 완료: {written}건[/green] [dim]/ 건너뜀 {skipped}건[/dim]")
+    if restricted:
+        config.console.print(
+            f"[yellow]⛔ 직접 매수한 종목으로 보고 시스템 매매에서 제외했습니다: {', '.join(restricted)}[/yellow]\n"
+            "[dim]  시스템에 맡기려면 시스템 트레이딩 → 트레이딩 제한 종목에서 해제하세요.[/dim]")
 
 
 def view_trade_history():

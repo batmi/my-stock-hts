@@ -298,8 +298,20 @@ def test_paper_mode_has_nothing_to_restore(monkeypatch):
     assert not called, "가상투자에서 증권사 체결 조회를 시도했다"
 
 
-def test_toss_mode_has_nothing_to_restore(monkeypatch):
-    """토스는 KIS 체결조회 TR 자체가 없다."""
+def test_toss_mode_is_restorable(monkeypatch):
+    """토스는 KIS TR 대신 주문 이력 API 의 기간 조회로 복원한다(2026-10-17).
+
+    종전에는 막혀 있어, 시스템이 꺼진 사이 토스 앱/HTS로 산 종목이 다음 날 켜도
+    기록되지 않았고 — 거래 계좌가 곧 자동매매 계좌라 — 제한 등록도 빠졌다.
+    """
+    monkeypatch.setattr(hb.config.session, 'is_paper', False, raising=False)
+    monkeypatch.setattr(hb.config.session, 'is_toss', True, raising=False)
+    assert hb.supports_broker_history() is True
+
+
+def test_paper_wins_over_any_broker_flag(monkeypatch):
+    """가상투자는 플래그 조합과 무관하게 복원 대상이 아니다."""
+    monkeypatch.setattr(hb.config.session, 'is_paper', True, raising=False)
     monkeypatch.setattr(hb.config.session, 'is_toss', True, raising=False)
     assert hb.supports_broker_history() is False
 
@@ -502,7 +514,7 @@ def test_an_external_round_trip_does_not_restrict_the_systems_own_position(monke
     """시스템 보유 100주 위에서 운용자가 50주 사고 50주 판 왕복 — 외부 순매수 0 → 제한하지 않는다.
     (종전엔 외부 매수 하나만 보고 걸어 시스템 포지션의 손절·트레일링을 멈췄다)"""
     monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: odno == "SYS1")
-    monkeypatch.setattr(hb, 'our_order_row', lambda odno: {'type': '매수'} if odno == "SYS1" else None)
+    monkeypatch.setattr(hb, 'our_order_row', lambda odno, on_date=None: {'type': '매수'} if odno == "SYS1" else None)
     records = hb.build_records([_tx("20260720", True, 100, odno="SYS1"),
                                 _tx("20260728", True, 50, odno="EXT-B"),
                                 _tx("20260729", False, 50, odno="EXT-S")])
@@ -518,3 +530,237 @@ def test_an_external_round_trip_does_not_restrict_the_systems_own_position(monke
     calls = _stub_sync(monkeypatch, plans)
     res = hb.sync_account(holdings=[_holding()], register_restrictions=True)
     assert res['restricted'] == ["005930"]
+
+
+# ─────────────────────────────────────────────
+# 7. 토스 — 주문 이력 기간 조회로 복원 (2026-10-17)
+#
+# [실측] 토스 CLOSED 주문은 from/to 로 1년치가 받아진다(148건). 주문 1건 = 체결 누적
+# 1건이고, 체결가는 execution.averageFilledPrice 다. 그 형식을 KIS 체결 dict 로 바꿔야
+# 이 모듈의 역산·기록·외부 판정이 그대로 돈다.
+# ─────────────────────────────────────────────
+
+def _toss_order(oid, side, filled, at, avg="240500", symbol="005930", qty=None,
+                status="FILLED", amount=None, price=None):
+    ex = {'filledQuantity': str(filled), 'filledAt': at,
+          'averageFilledPrice': avg, 'filledAmount': amount}
+    return {'orderId': oid, 'symbol': symbol, 'side': side, 'status': status,
+            'quantity': str(qty if qty is not None else filled), 'price': price,
+            'currency': 'KRW', 'orderedAt': at, 'execution': ex}
+
+
+@pytest.fixture
+def toss_session(monkeypatch):
+    monkeypatch.setattr(config.session, 'is_paper', False, raising=False)
+    monkeypatch.setattr(config.session, 'is_toss', True, raising=False)
+
+
+def test_toss_orders_become_kis_shaped_executions(toss_session, monkeypatch):
+    import api as api_mod
+    from api import account as acct
+
+    orders = [
+        _toss_order("T2", "SELL", 3, "2026-10-14T10:00:01.000+09:00", avg="250000"),
+        _toss_order("T1", "BUY", 8, "2026-10-13T09:05:55.987+09:00"),
+        # 부분 체결 후 취소 — 체결분만 담는다. 평균가가 비면 체결금액/수량으로 메운다.
+        _toss_order("T3", "BUY", 2, "2026-10-15T13:00:00.000+09:00", avg=None,
+                    qty=5, status="CANCELED", amount="490000"),
+        _toss_order("T4", "BUY", 0, "2026-10-15T14:00:00.000+09:00", status="CANCELED"),  # 미체결 취소
+        _toss_order("T5", "BUY", 1, "2026-10-15T14:00:00.000+09:00", symbol="000660"),    # 대상 밖
+    ]
+    monkeypatch.setattr(api_mod.toss_api, 'get_orders',
+                        lambda **k: {'orders': orders, 'hasNext': False})
+
+    got = acct.get_period_executions(["005930"])
+    assert [(t['odno'], t['date'], t['time'], t['is_buy'], t['qty'], t['price'])
+            for t in got["005930"]] == [
+        ("T1", "20261013", "090555", True, 8, 240500),
+        ("T2", "20261014", "100001", False, 3, 250000),
+        ("T3", "20261015", "130000", True, 2, 245000),
+    ], "시간 오름차순 KIS 체결 형식이 아니다"
+    assert got["005930"][0]['type_name'] == "매수"
+
+
+def test_toss_query_failure_is_not_no_fills(toss_session, monkeypatch):
+    """실패를 빈 dict 로 답하면 외부 매수를 못 찾아 제한 등록을 건너뛴다."""
+    import api as api_mod
+    from api import account as acct
+
+    monkeypatch.setattr(api_mod.toss_api, 'get_orders', lambda **k: None)
+    assert acct.get_period_executions(["005930"]) is None
+
+
+def test_paper_mode_never_reads_toss_history(monkeypatch):
+    """가상투자가 먼저다 — 실계좌 이력을 긁지 않는다."""
+    import api as api_mod
+    from api import account as acct
+
+    monkeypatch.setattr(config.session, 'is_paper', True, raising=False)
+    monkeypatch.setattr(config.session, 'is_toss', True, raising=False)
+    monkeypatch.setattr(api_mod.toss_api, 'get_orders',
+                        lambda **k: (_ for _ in ()).throw(AssertionError("실계좌 이력을 조회했다")))
+    assert acct.get_period_executions(["005930"]) == {}
+
+
+def test_toss_external_buy_is_recorded_and_restricted(toss_session, monkeypatch):
+    """[실사례 2026-10-13] 시스템이 꺼진 사이 토스로 산 삼성전자 8주 — 기동 동기화가
+    기록하고, 거래 계좌 = 자동매매 계좌이므로 제한 종목으로도 올려야 한다."""
+    import api as api_mod
+
+    monkeypatch.setattr(config.session, 'cano', "18901501685", raising=False)
+    monkeypatch.setattr(config.session, 'auto_cano', "18901501685", raising=False)
+    monkeypatch.setattr(api_mod.toss_api, 'get_orders', lambda **k: {
+        'orders': [_toss_order("Xi6UXg", "BUY", 8, "2026-10-13T09:05:55.987+09:00")],
+        'hasNext': False})
+    monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: False)
+    monkeypatch.setattr(hb.db_manager.db, 'get_trade_by_odno', lambda odno, **_k: None)
+    written = []
+    monkeypatch.setattr(hb.db_manager.db, 'insert_trade',
+                        lambda *a, **k: written.append((a, k)) or True)
+    restricted = []
+    monkeypatch.setattr(hb, '_restrict_external_buys',
+                        lambda codes, c, a: restricted.extend(sorted(codes)) or [x[0] for x in sorted(codes)])
+
+    res = hb.sync_account("18901501685", "", holdings=[_holding(qty=8)],
+                          register_restrictions=hb.is_system_account("18901501685"))
+    assert res['error'] is None and res['written'] == 1 and res['partial'] == []
+    args, kwargs = written[0]
+    assert args[:6] == ("매수(외부)", "005930", "삼성전자", 8, "240500", "Xi6UXg")
+    assert kwargs['custom_time'] == "2026-10-13 09:05:55"
+    assert res['restricted'] == ["005930"], "운용자가 산 종목을 시스템이 관리하게 된다"
+
+
+def test_restoring_first_does_not_hide_the_external_buy(monkeypatch):
+    """메뉴·CLI 로 먼저 기록하면 그 체결이 '이미 있음'이 된다 — 제한 판정은 기록 **전에** 해야 한다.
+
+    종전에는 메뉴·CLI 가 apply() 만 불러 제한을 걸지 않았고, 다음 기동 동기화는 이미
+    기록된 체결을 외부 매수로 보지 않아 영영 제한되지 않았다.
+    """
+    recorded = set()
+    monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: odno in recorded)
+    monkeypatch.setattr(hb.db_manager.db, 'get_trade_by_odno', lambda odno, **_k: None)
+    monkeypatch.setattr(hb.db_manager.db, 'insert_trade',
+                        lambda *a, **k: recorded.add(a[5]) or True)
+    monkeypatch.setattr(hb, '_restrict_external_buys',
+                        lambda codes, c, a: [x[0] for x in sorted(codes)])
+
+    written, skipped, restricted = hb.apply_and_restrict(
+        _plan_with_buy(), cano="1", register_restrictions=True)
+    assert (written, skipped, restricted) == (1, 0, ["005930"])
+
+    # 대조군 — 시스템 계좌가 아니면 기록만 한다.
+    recorded.clear()
+    assert hb.apply_and_restrict(_plan_with_buy(), cano="1", register_restrictions=False) == (1, 0, [])
+
+
+def test_system_account_is_the_auto_account(monkeypatch):
+    monkeypatch.setattr(config.session, 'auto_cano', "A1", raising=False)
+    assert hb.is_system_account("A1") is True
+    assert hb.is_system_account("M1") is False
+    assert hb.is_system_account("") is False
+
+
+# ─────────────────────────────────────────────
+# 8. 한투(mode 2) — 주문번호 당일 채번 · 100건 잘림 (2026-10-17)
+# ─────────────────────────────────────────────
+
+def _db_with_system_order_on(date, odno="0000006612"):
+    """그 날짜에만 시스템 접수 행이 있는 DB — 날짜를 주지 않으면 어느 날이든 잡힌다."""
+    def _get(o, on_date=None):
+        if o == odno and on_date in (None, date):
+            return {'type': '매수', 'stop_loss_rate': -9.5, 'strategy_score': 8.0}
+        return None
+    return _get
+
+
+def test_kis_external_buy_is_not_mistaken_for_another_days_system_order(monkeypatch):
+    """[실측 파이 원장] 0000006612 가 04-27·05-29 두 날짜에 있다.
+
+    05-29 에 운용자가 앱으로 산 주문이 같은 번호면, 날짜 없이 찾을 때 04-27 시스템 주문으로
+    잡혀 '우리 주문'이 된다 — 제한 등록이 빠지고 남의 손절률을 물려받는다.
+    """
+    monkeypatch.setattr(config.session, 'is_toss', False, raising=False)
+    monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: False)
+    monkeypatch.setattr(hb.db_manager.db, 'get_trade_by_odno', _db_with_system_order_on("2026-04-27"))
+    written = []
+    monkeypatch.setattr(hb.db_manager.db, 'insert_trade',
+                        lambda *a, **k: written.append((a, k)) or True)
+    monkeypatch.setattr(hb, '_restrict_external_buys',
+                        lambda codes, c, a: [x[0] for x in sorted(codes)])
+
+    plans = [{'code': '005930', 'name': '삼성전자', 'qty': 10, 'missing': 0, 'already': 0,
+              'records': hb.build_records([_tx("20260529", True, 10, odno="0000006612")])}]
+    _w, _s, restricted = hb.apply_and_restrict(plans, cano="1", register_restrictions=True)
+    assert restricted == ["005930"], "다른 날 같은 번호의 시스템 주문을 '우리 주문'으로 봤다"
+    args, kwargs = written[0]
+    assert "(외부)" in args[0] and kwargs['stop_loss_rate'] == 0.0, "남의 손절률을 물려받았다"
+
+
+def test_kis_own_order_on_the_same_day_is_still_ours(monkeypatch):
+    """[대조군] 같은 날 접수 행이 있으면 시스템 주문이다 — 제한하면 손절이 멈춘다."""
+    monkeypatch.setattr(config.session, 'is_toss', False, raising=False)
+    monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: False)
+    monkeypatch.setattr(hb.db_manager.db, 'get_trade_by_odno', _db_with_system_order_on("2026-05-29"))
+    monkeypatch.setattr(hb.db_manager.db, 'insert_trade', lambda *a, **k: True)
+    monkeypatch.setattr(hb, '_restrict_external_buys',
+                        lambda codes, c, a: [x[0] for x in sorted(codes)])
+
+    plans = [{'code': '005930', 'name': '삼성전자', 'qty': 10, 'missing': 0, 'already': 0,
+              'records': hb.build_records([_tx("20260529", True, 10, odno="0000006612")])}]
+    assert hb.apply_and_restrict(plans, cano="1", register_restrictions=True)[2] == []
+
+
+def test_toss_order_ids_are_not_scoped_by_date(monkeypatch):
+    """토스 orderId 는 전역 유일 — 날짜로 좁히면 날짜를 넘긴 체결의 접수 행을 놓친다."""
+    monkeypatch.setattr(config.session, 'is_toss', True, raising=False)
+    assert hb.odno_scope_date({'time': "2026-10-13 09:05:55"}) is None
+    monkeypatch.setattr(config.session, 'is_toss', False, raising=False)
+    assert hb.odno_scope_date({'time': "2026-10-13 09:05:55"}) == "2026-10-13"
+
+
+def _kis_rows(dates, code="005930"):
+    return [{'pdno': code, 'ord_dt': d, 'ord_tmd': "100000", 'tot_ccld_qty': "1",
+             'sll_buy_dvsn_cd': "02", 'avg_prvs': "1000", 'odno': f"{d}-{i}"}
+            for i, d in enumerate(dates)]
+
+
+def test_kis_full_page_is_split_until_nothing_is_cut(monkeypatch):
+    """한 번에 100건이 오면 잘렸을 수 있다 — 구간을 나눠 다시 물어 전부 모은다.
+
+    종전에는 최신 100건만 남아, 역산이 구멍을 건너 이미 청산된 과거 체결로 현재 보유를
+    '설명'했다(틀린 매수 기록·진입일).
+    """
+    import api as api_mod
+    from datetime import datetime, timedelta
+    from api import account as acct
+
+    monkeypatch.setattr(acct, "_paper_active", lambda: False)
+    today = datetime.now()
+    all_dates = [(today - timedelta(days=d)).strftime("%Y%m%d") for d in range(0, 75)
+                 for _ in range(2)]                     # 150건 — 한 번에는 100건만 온다
+    calls = []
+
+    def _fake(*a, params=None, **k):
+        calls.append((params['INQR_STRT_DT'], params['INQR_END_DT']))
+        hit = [d for d in all_dates if params['INQR_STRT_DT'] <= d <= params['INQR_END_DT']]
+        return {'rt_cd': '0', 'output1': _kis_rows(sorted(hit, reverse=True)[:acct._KIS_CCLD_PAGE_SIZE])}
+
+    monkeypatch.setattr(api_mod, "call_api", _fake)
+    rows, _win, ok = acct._fetch_period_executions(["005930"], cano="1", acnt_prdt_cd="01", months=3)
+    assert ok is True
+    assert len(rows["005930"]) == 150, f"{len(rows['005930'])}건만 모았다 — 잘린 이력으로 역산한다"
+    assert len(calls) > 1
+
+
+def test_kis_single_day_full_page_is_unknown_not_complete(monkeypatch):
+    """하루짜리 구간도 꽉 차면 더 나눌 수 없다 — '읽었다'로 답하지 않는다."""
+    import api as api_mod
+    from datetime import datetime
+    from api import account as acct
+
+    monkeypatch.setattr(acct, "_paper_active", lambda: False)
+    today = datetime.now().strftime("%Y%m%d")
+    monkeypatch.setattr(api_mod, "call_api", lambda *a, **k: {
+        'rt_cd': '0', 'output1': _kis_rows([today] * acct._KIS_CCLD_PAGE_SIZE)})
+    _rows, _win, ok = acct._fetch_period_executions(["005930"], cano="1", acnt_prdt_cd="01", months=3)
+    assert ok is False

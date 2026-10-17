@@ -68,7 +68,9 @@ def test_backfill_scopes_to_the_records_own_date():
     from modules import holdings_backfill
     src = inspect.getsource(holdings_backfill.apply)
     assert "on_date=" in src, "복원이 날짜 없이 중복 판정한다"
-    assert "r.get('time')" in src, "그 체결이 저장될 날짜로 좁혀야 한다"
+    assert "odno_scope_date(r)" in src, "그 체결이 저장될 날짜로 좁혀야 한다"
+    with patch.object(holdings_backfill.config.session, 'is_toss', False, create=True):
+        assert holdings_backfill.odno_scope_date({'time': "2026-05-29 10:00:00"}) == "2026-05-29"
 
     sig = inspect.signature(holdings_backfill._exists)
     assert 'on_date' in sig.parameters
