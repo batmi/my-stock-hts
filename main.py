@@ -895,21 +895,39 @@ def show_help():
     filter_status = "[green]ON[/green]" if getattr(config, 'USE_MARKET_FILTER', True) else "[red]OFF[/red]"
     ma_period = getattr(config, 'MARKET_FILTER_MA', 80)
     _band = getattr(config, 'MARKET_FILTER_BAND', 1.0)
-    _band_cond = f" -{_band:g}% 이탈 (회복은 +{_band:g}%)" if _band else ""
-    score_table.add_row(f"시장 필터링 ({filter_status})", f"KOSPI/KOSDAQ < SMA {ma_period}일{_band_cond}", "[blue]보류[/]", "하락장 감지 시 신규 매수 중단")
-    
+    #  '보류'만 적으면 무엇을 멈추는지(신규 매수? 증액? 매도?)와 언제 풀리는지를 알 수 없다 —
+    #   막는 범위·해제 조건·판정 지수를 각각 한 줄로 적는다. 범위는 실매매 게이트와 같은 설정에서 읽는다
+    #   (신규 매수: trader 후보 분석 market_skip, 증액: _try_pyramid_buy 의 PYRAMIDING_REQUIRE_HEALTHY_MARKET).
+    if _band:
+        _block_cond = f"지수 < 차단선(SMA{ma_period} -{_band:g}%) → 보류 시작"
+        _release_cond = f"지수 > 해제선(SMA{ma_period} +{_band:g}%) → 보류 해제"
+        _release_note = "두 선 사이에서는 직전 상태 유지"
+    else:
+        _block_cond = f"지수 < SMA{ma_period} → 보류 시작"
+        _release_cond = f"지수 > SMA{ma_period} → 보류 해제"
+        _release_note = "-"
+    if getattr(config, 'MARKET_FILTER_RELEASE_ON_BEAR', False):
+        _release_note += " · 확정 Bear 국면이면 해제"
+    _pyr_gated = config.ANALYSIS_THRESHOLDS.get("PYRAMIDING_REQUIRE_HEALTHY_MARKET", True)
+    _scope = ("신규 매수·피라미딩 증액 중지" if _pyr_gated
+              else "신규 매수 중지 (증액은 계속)")
+    score_table.add_row(f"시장 필터링 ({filter_status})", _block_cond, "[blue]매수 보류[/]", _scope)
+    score_table.add_row("", _release_cond, "[green]허용[/]", _release_note)
+    score_table.add_row("", "[dim]소속 시장(KOSPI/KOSDAQ) 지수로 판정[/dim]", "[dim]-[/dim]",
+                        "[dim]보유 종목 매도는 영향 없음[/dim]")
+
     if filter_info is None and getattr(config, 'USE_MARKET_FILTER', True):
         score_table.add_row("현재 시장 필터링 상태", "확인 불가", "-", "-")
     elif filter_info:
         def _filter_stat(det):
             # 판정 불가는 '허용'이 아니다 — 실매매가 fail-closed 로 막는 것과 같게 적는다.
             if not det or not det.get("ready"):
-                return "[red]보류(판정 불가)[/]"
-            return "[red]보류[/]" if det.get("blocked") else "[green]허용[/]"
+                return "[red]매수 보류(판정 불가)[/]"
+            return "[red]매수 보류[/]" if det.get("blocked") else "[green]허용[/]"
         k_det, q_det = filter_info.get("KOSPI"), filter_info.get("KOSDAQ")
         score_table.add_row("현재 시장 필터링 상태",
                             f"KOSPI: {_filter_stat(k_det)} / KOSDAQ: {_filter_stat(q_det)}",
-                            "-", "실시간 필터링 적용 여부")
+                            "-", "지금 신규 매수가 막혀 있는가")
         #  판정 근거 — 무엇과 무엇을 비교해 그 상태가 됐는지, 며칠째인지까지 적는다.
         for _name, _det in (("KOSPI", k_det), ("KOSDAQ", q_det)):
             if not _det:
@@ -925,7 +943,8 @@ def show_help():
             _src = {"TVDATAFEED": "TV"}.get(_det.get("source"), _det.get("source"))
             if _src:
                 _tail += f" [dim]{_src}[/dim]"
-            _days = (f"{_det['streak']}봉째" if _det.get("ready") else "-")
+            #  streak 는 일봉 기준 '현재 상태가 이어진 봉 수' — 화면에는 거래일로 적는다.
+            _days = (f"{_det['streak']}거래일째" if _det.get("ready") else "-")
             score_table.add_row("", f"└ {_name} {_lhs}{_tail}", _days, _det.get("reason", ""))
 
     # [추가] 상대강도(RS) 필터 섹션 (룩백: RS_FILTER_LOOKBACK>0 우선, 0이면 가격 모멘텀 룩백 연동 — trader RS 게이트와 동일 규칙)
