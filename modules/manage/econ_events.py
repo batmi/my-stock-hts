@@ -58,6 +58,15 @@ FED_TITLES = {
 }
 
 HTTP_TIMEOUT = 20   # FRED가 간헐적으로 10초를 넘겨 응답한다
+
+#  화면·텔레그램 줄 목록의 기본 표시 기간. [2026-10-17] 45일 → 90일(분기). 45일은 도입 때의
+#  기본값일 뿐 근거가 없었다. 90일 끝은 출처가 아직 공표하지 않은 구간에 걸치기 쉬워
+#  (실측 10-17: FRED 12-23·연준 12-30·한은 11-26 까지만 공표) 공표 범위를 함께 밝힌다.
+DEFAULT_DAYS = 90
+#  공표 범위를 재려고 수집은 이만큼 앞까지 한다. 출처마다 호출 수는 기간과 무관하다
+#  (FRED 릴리스당 1회·연준 1회·BOJ 1회·한은 연도당 1회 — 400일이면 길어야 2개 연도).
+COVERAGE_PROBE_DAYS = 400
+_NETWORK_SOURCES = ("FRED", "Fed", "BOJ", "BOK")
 HTTP_RETRIES = 2
 
 
@@ -414,7 +423,8 @@ def get_events(days=60, on_progress=None):
 
     Returns:
         (events, status) — status = {"stale_since": 'YYYY-MM-DD'|None, "complete": bool,
-                                     "backfilled": {소스: 'YYYY-MM-DD'}}
+                                     "backfilled": {소스: 'YYYY-MM-DD'},
+                                     "published_until": {소스: 'YYYY-MM-DD'|None}}
         stale_since가 있으면 그 날짜에 받아둔 저장분을 보여주고 있다는 뜻이다.
         backfilled 는 **일부** 소스만 실패해 그 소스의 일정을 저장분(받은 날짜)으로 메웠다는 뜻이다.
 
@@ -422,11 +432,24 @@ def get_events(days=60, on_progress=None):
     통째로 빠졌고, 그 불완전한 목록이 다시 캐시에 덮어써져 다음 전면 실패 때의 폴백마저
     비게 했다. 실패한 소스만 마지막 저장분으로 메운다 — 발표 일정은 몇 주 단위로 바뀌는
     자료라 하루 이틀 묵은 값이 '없음'보다 낫고, 어느 소스를 언제 것으로 메웠는지 밝힌다.
+
+    [공표 범위 · 2026-10-17] published_until 은 이번에 받은 각 네트워크 소스의 마지막 일정
+     날짜다(없으면 None = 앞으로 공표된 일정 없음). 그 날짜 뒤의 빈칸은 '일정 없음'이 아니라
+     '아직 공표 전'이다 — 그래서 수집은 COVERAGE_PROBE_DAYS 앞까지 하고 반환만 days 로 자른다.
+     실패한 소스·저장분 폴백·FRED 키 미설정은 재지 않는다(다른 문구가 이미 밝힌다).
     """
     today = datetime.now().date()
     end = today + timedelta(days=days)
+    probe_end = max(end, today + timedelta(days=COVERAGE_PROBE_DAYS))
 
-    events, complete, failed = _collect(today, end, on_progress)
+    events, complete, failed = _collect(today, probe_end, on_progress)
+    published_until = {}
+    if events:
+        for src in _NETWORK_SOURCES:
+            if src in failed or (src == "FRED" and not config.FRED_API_KEY):
+                continue
+            dates = [e["date"] for e in events if e.get("source") == src and e.get("date")]
+            published_until[src] = max(dates) if dates else None
     stale_since = None
     backfilled = {}
     if events:
@@ -438,7 +461,7 @@ def get_events(days=60, on_progress=None):
                 backfilled = {src: cache.get("fetched") for src in failed
                               if any(e.get("source") == src for e in prior)}
         jsonio.save_json(CACHE_FILE, {"fetched": today.strftime("%Y-%m-%d"),
-                                      "covers_until": end.strftime("%Y-%m-%d"),
+                                      "covers_until": probe_end.strftime("%Y-%m-%d"),
                                       "complete": complete,
                                       "events": events})
     else:
@@ -451,7 +474,8 @@ def get_events(days=60, on_progress=None):
     return ([e for e in events
              if (_parse_date(e.get("date")) or today) >= today
              and (_parse_date(e.get("date")) or today) <= end],
-            {"stale_since": stale_since, "complete": complete, "backfilled": backfilled})
+            {"stale_since": stale_since, "complete": complete, "backfilled": backfilled,
+             "published_until": published_until})
 
 
 def _partial_note(status):
@@ -463,10 +487,29 @@ def _partial_note(status):
     return "일부 소스 조회에 실패해 일정이 누락됐을 수 있습니다."
 
 
+def _coverage_note(status, days):
+    """표시 기간보다 먼저 공표가 끝난 소스를 밝히는 한 줄. 해당이 없으면 None.
+
+    예) 공표 범위: FRED 12-23 · Fed 12-30 · BOK 11-26까지 — 그 뒤 빈칸은 '일정 없음'이 아니라 아직 공표 전입니다.
+    """
+    today = datetime.now().date()
+    end = (today + timedelta(days=days)).strftime("%Y-%m-%d")
+    short = [(src, d) for src, d in (status.get("published_until") or {}).items()
+             if d is None or d < end]
+    if not short:
+        return None
+
+    def _fmt(d):
+        return d[5:] if d[:4] == str(today.year) else d
+
+    parts = " · ".join(f"{src} {_fmt(d)}" if d else f"{src} 미공표" for src, d in short)
+    return f"공표 범위: {parts}까지 — 그 뒤 빈칸은 '일정 없음'이 아니라 아직 공표 전입니다."
+
+
 _WEEKDAY_KR = ["월", "화", "수", "목", "금", "토", "일"]
 
 
-def build_lines(days=45):
+def build_lines(days=DEFAULT_DAYS):
     """경제 이벤트를 텍스트 줄 목록으로 (텔레그램 /calendar 용).
 
     화면(render)과 같은 자료·같은 경고를 쓰되 rich 테이블 대신 한 줄씩 만든다.
@@ -497,11 +540,14 @@ def build_lines(days=45):
         lines.append(f"• {d.strftime('%m-%d')}({_WEEKDAY_KR[d.weekday()]}) {dday} "
                      f"{ev['name']} [{ev.get('source', '')}]")
 
+    note = _coverage_note(status, days)
+    if note:
+        lines.append(f"  ※ {note}")
     lines.append("  ※ 미국 지표는 현지시각 기준 발표일입니다 (한국시각 대체로 익일 새벽). BOJ 는 회의 둘째 날 정오 무렵 발표.")
     return lines
 
 
-def render(days=45):
+def render(days=DEFAULT_DAYS):
     """경제 이벤트 일정 테이블 출력."""
     config.console.print("[bold]▸ 주요 경제 이벤트[/bold]")
 
@@ -553,6 +599,9 @@ def render(days=45):
         )
 
     config.console.print(table)
+    note = _coverage_note(status, days)
+    if note:
+        config.console.print(f"  [dim yellow]※ {note}[/dim yellow]")
     config.console.print("  [dim]※ 미국 지표는 현지시각 기준 발표일입니다 (한국시각으로는 대체로 익일 새벽). "
                          "BOJ 는 회의 둘째 날 정오 무렵(한국시각) 발표.[/dim]")
     config.console.print()

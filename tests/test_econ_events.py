@@ -142,7 +142,8 @@ def test_get_events_always_refetches(tmp_path):
 
     mock_collect.assert_called_once()
     assert [e["name"] for e in out] == ["미국 CPI"]     # 캐시가 아니라 새로 받은 값
-    assert status == {"stale_since": None, "complete": True, "backfilled": {}}
+    assert {k: status[k] for k in ("stale_since", "complete", "backfilled")} == \
+        {"stale_since": None, "complete": True, "backfilled": {}}
     assert mock_save.call_args.args[1]["complete"] is True
 
 
@@ -313,3 +314,66 @@ def test_a_failed_source_is_backfilled_from_the_last_saved_run_and_says_so(tmp_p
          patch.object(econ_events, "_collect", return_value=(partial, False, ["FRED"])):
         out, status = econ_events.get_events(days=30)
     assert status["backfilled"] == {} and "누락됐을 수" in econ_events._partial_note(status)
+
+
+# ─────────────────────────────────────────────
+# 기본 90일 · 공표 범위 (2026-10-17)
+#
+# 90일 끝은 출처가 아직 공표하지 않은 구간에 걸친다(실측 10-17: FRED 12-23·연준 12-30·
+# 한은 11-26 까지만). 그 빈칸이 '일정 없음'으로 읽히지 않게 공표 범위를 밝힌다.
+# ─────────────────────────────────────────────
+
+def _ev(days_ahead, source, name="x"):
+    d = (datetime.now().date() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+    return {"date": d, "name": name, "country": "US", "weight": 1, "source": source}
+
+
+def test_default_horizon_is_a_quarter():
+    import inspect
+    assert econ_events.DEFAULT_DAYS == 90
+    assert inspect.signature(econ_events.render).parameters["days"].default == 90
+    assert inspect.signature(econ_events.build_lines).parameters["days"].default == 90
+
+
+def test_collects_beyond_the_window_to_measure_publication(tmp_path):
+    """수집은 공표 범위를 잴 만큼 앞까지 하고, 반환은 표시 기간으로 자른다."""
+    collected = [_ev(10, "FRED"), _ev(67, "FRED"), _ev(200, "BOJ"), _ev(40, "BOK")]
+    with patch.object(econ_events, "CACHE_FILE", str(tmp_path / "c.json")), \
+         patch.object(econ_events.config, "FRED_API_KEY", "k"), \
+         patch.object(econ_events.jsonio, "save_json"), \
+         patch.object(econ_events, "_collect", return_value=(collected, True, [])) as mock_collect:
+        out, status = econ_events.get_events(days=90)
+
+    start, end = mock_collect.call_args.args[:2]
+    assert (end - start).days >= econ_events.COVERAGE_PROBE_DAYS
+    assert len(out) == 3, "표시 기간(90일) 밖 BOJ 일정까지 돌려줬다"
+    pub = status["published_until"]
+    assert pub["FRED"] == collected[1]["date"] and pub["BOJ"] == collected[2]["date"]
+    assert pub["Fed"] is None, "공표된 일정이 하나도 없는 소스는 None(미공표)이다"
+
+
+def test_coverage_note_names_only_sources_that_end_inside_the_window():
+    today = datetime.now().date()
+    within = (today + timedelta(days=67)).strftime("%Y-%m-%d")
+    beyond = (today + timedelta(days=200)).strftime("%Y-%m-%d")
+    note = econ_events._coverage_note(
+        {"published_until": {"FRED": within, "BOJ": beyond, "BOK": None}}, 90)
+    assert note and "FRED" in note and "BOK 미공표" in note and "BOJ" not in note
+    assert "아직 공표 전" in note
+
+    assert econ_events._coverage_note({"published_until": {"BOJ": beyond}}, 90) is None
+    assert econ_events._coverage_note({}, 90) is None, "저장분 폴백 등 범위를 모르면 밝히지 않는다"
+
+
+def test_failed_or_keyless_sources_are_not_measured(tmp_path):
+    """실패한 소스는 '공표 안 됨'이 아니라 '못 받음'이다 — 다른 문구가 이미 밝힌다."""
+    collected = [_ev(10, "Fed")]
+    with patch.object(econ_events, "CACHE_FILE", str(tmp_path / "c.json")), \
+         patch.object(econ_events.config, "FRED_API_KEY", ""), \
+         patch.object(econ_events.jsonio, "save_json"), \
+         patch.object(econ_events.jsonio, "load_json", return_value={}), \
+         patch.object(econ_events, "_collect", return_value=(collected, False, ["BOJ"])):
+        _out, status = econ_events.get_events(days=90)
+
+    assert "BOJ" not in status["published_until"] and "FRED" not in status["published_until"]
+    assert status["published_until"]["Fed"] == collected[0]["date"]
