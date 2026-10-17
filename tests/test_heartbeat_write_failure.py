@@ -45,7 +45,7 @@ def test_도장_실패는_운영_로그에_남는다(hb_path, monkeypatch, caplo
         hb.beat(interval_sec=60, mode="실전", path=hb_path)
     warns = [r for r in caplog.records if r.levelno >= logging.WARNING]
     assert warns, "debug 로만 남으면 기본 설정에서는 파일에도 안 남는다"
-    assert "사망으로 판정" in warns[0].message, "결과를 말하지 않으면 경고가 아니다"
+    assert "중단으로 판정" in warns[0].message, "결과를 말하지 않으면 경고가 아니다"
 
 
 def test_연속_실패_횟수를_센다(hb_path, monkeypatch):
@@ -63,7 +63,7 @@ def test_종료_표식_실패도_드러난다(hb_path, monkeypatch, caplog):
     with caplog.at_level(logging.DEBUG, logger="modules.heartbeat"):
         assert hb.stopped(reason="테스트", mode="실전", path=hb_path) is False
     warns = [r for r in caplog.records if r.levelno >= logging.WARNING]
-    assert warns and "사망으로 알릴 수 있습니다" in warns[0].message
+    assert warns and "중단으로 알릴 수 있습니다" in warns[0].message
 
 
 # ------------------------------------------------- 프로세스 안 하트비트 점검

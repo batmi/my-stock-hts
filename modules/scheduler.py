@@ -450,7 +450,7 @@ class SystemScheduler:
                 if streak >= self.BEAT_FAIL_ALERT_STREAK:
                     is_problem = True
                     msg = (f"생존 신호 파일을 {streak}회 연속 쓰지 못했습니다. 프로세스는 "
-                           f"살아 있지만 밖의 감시자는 곧 '사망'으로 알립니다 — 그 알림은 "
+                           f"살아 있지만 밖의 감시자는 곧 '중단'으로 알립니다 — 그 알림은 "
                            f"거짓입니다. 디스크 여유 공간과 logs/ 쓰기 권한을 확인하세요.")
             
             if self.trader.is_running and self.trader.thread and not self.trader.thread.is_alive():

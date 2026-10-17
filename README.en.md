@@ -98,7 +98,7 @@ Chosen at startup or via `--mode`. Each mode keeps a separate config profile, so
 - **Circuit breaker (CB) and VI alerts** based on exchange status flags. VI is monitored in both the KRX regular session and the after-market (16:00–20:00); CB exists only in the regular session and is checked there only.
 - Live settings changes applied instantly; restricted-symbol management
 - **Trading journal web sync** (outbox pattern plus a two-stage backfill)
-- **Process death detection** by an external cron watcher — it only notifies and never auto-restarts
+- **Process stop detection** by an external cron watcher — it only notifies and never auto-restarts
 - Memory caps and cache eviction for long unattended runs on a Raspberry Pi (1 GB)
 
 ---
@@ -629,7 +629,7 @@ my-stock-hts/
 - **Signal ledger** — live-only gates that daily bars cannot reproduce (volume strength, ask/bid ratio, same-day re-entry block) record their verdicts in the DB, **one row per (date, symbol)**, retained for 3 years by default. "Blocked all day" is distinguishable from "blocked on some cycles". Auto-trading logs are kept 120 days, separate from general logs (30 days). Analyze with `python3 tools/audit_signal_ledger.py`.
 - **Score boundary ledger** — only symbols that came near the MACD-expansion boundary shared by both synergy items (0.8× the previous histogram), flipped that condition, or received the price-momentum bonus fail-open are recorded, **one row per (date, symbol)** (kept 1 year by default; observation only, never used for decisions). Counterfactual states count both the cycles the boundary admitted and the ones it excluded. Analyze with `python3 tools/audit_score_boundary.py`.
 - **Audit run records** — running any `tools/audit_*.py` writes one file to `data/audit_runs/` with the commit and modified files, the full config and its fingerprint, scoring-rule version, trading costs, seeds, daily/flow data-source summary, conditions the backtest cannot reproduce, and the result table (output tail). Same commit and config but different data sources or dates count as a different experiment. Disable with `HTS_NO_RUN_MANIFEST=1`.
-- **Process death detection** — the live process stamps `logs/heartbeat.json` every minute together with a deadline for its next stamp; an external cron watcher (`tools/hts_watchdog.py`) only checks whether that promise expired. **It never auto-restarts** — restarting blind either dies the same way or comes back half-alive and places orders. Clean shutdowns do not alert.
+- **Process stop detection** — the live process stamps `logs/heartbeat.json` every minute together with a deadline for its next stamp; an external cron watcher (`tools/hts_watchdog.py`) only checks whether that promise expired. **It never auto-restarts** — restarting blind either dies the same way or comes back half-alive and places orders. Clean shutdowns do not alert.
 - **Per-mode config profiles** — live reads and writes only the baseline file; other modes layer their own profile on top, storing only the deltas. A safeguard disabled for observation cannot leak into live, and promotion is manual.
 - **Memory protection** — quote and chart caches have item caps with oldest-first eviction, so memory does not grow without bound on a 1 GB Raspberry Pi.
 

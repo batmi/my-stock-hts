@@ -1995,7 +1995,7 @@ class AutoTrader:
             from modules import heartbeat
             wd_state, wd_detail = heartbeat.watchdog_status()
             if wd_state == "unknown":
-                warnings.append("사망 감시자가 돈 기록이 없습니다 (cron 등록 확인 필요)")
+                warnings.append("프로세스 중단 감시(cron)가 실행된 기록이 없습니다 (crontab 등록 확인 필요)")
             elif wd_state == "stale":
                 warnings.append(wd_detail)
         except Exception as e:      # noqa: BLE001 - 관제 화면이 이것 때문에 죽지는 않는다

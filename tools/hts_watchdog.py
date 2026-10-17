@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""프로세스 사망 감시자 — 죽었으면 텔레그램으로 알린다. 되살리지는 않는다.
+"""프로세스 중단 감시 — 멈췄으면 텔레그램으로 알린다. 되살리지는 않는다.
 
 [왜 밖에 있나]
 프로그램 안의 감시는 프로그램이 살아 있을 때만 동작한다. 라즈베리파이 OOM 킬처럼
@@ -38,7 +38,7 @@ from modules import heartbeat   # noqa: E402
 
 
 def main():
-    ap = argparse.ArgumentParser(description="MyStock HTS 프로세스 사망 감시 (알림 전용)")
+    ap = argparse.ArgumentParser(description="MyStock HTS 프로세스 중단 감시 (알림 전용)")
     ap.add_argument("--status", action="store_true",
                     help="판정 결과만 출력하고 알림은 보내지 않는다")
     args = ap.parse_args()

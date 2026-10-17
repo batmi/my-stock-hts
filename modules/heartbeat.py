@@ -203,7 +203,7 @@ def beat(interval_sec=60, running=None, mode=None, instance=None, holdings=None,
         logger.warning(
             f"[Heartbeat] 생존 신호를 쓰지 못했습니다({streak}회 연속) — {path}: "
             f"{type(e).__name__}: {e}. 이대로면 밖의 감시자가 살아 있는 이 프로세스를 "
-            f"**사망으로 판정**합니다(디스크 가득참·IO 오류를 먼저 보십시오).")
+            f"**중단으로 판정**합니다(디스크 가득참·IO 오류를 먼저 보십시오).")
         return False
     _BEAT_FAILURES[path] = 0
     return True
@@ -234,7 +234,7 @@ def stopped(reason="정상 종료", path=None, mode=None):
         #  울리는 쪽이 안전하지만, 왜 울렸는지는 남아야 한다.
         logger.warning(f"[Heartbeat] 종료 표식을 쓰지 못했습니다 — {path}: "
                        f"{type(e).__name__}: {e}. 밖의 감시자가 이 정상 종료를 "
-                       f"사망으로 알릴 수 있습니다.")
+                       f"중단으로 알릴 수 있습니다.")
         return False
     return True
 
@@ -402,7 +402,7 @@ def check_and_notify(now=None, path=None, notify=True):
             ok, err = _send_telegram("\n".join(lines))
             sent = ok
             if not ok:
-                logger.warning(f"[Heartbeat] 사망 알림 전송 실패: {err}")
+                logger.warning(f"[Heartbeat] 중단 알림 전송 실패: {err}")
         # 전송에 실패해도 기록은 남긴다 — 실패를 재시도로 덮으면 텔레그램이 살아난
         #  순간 밀린 알림이 한꺼번에 쏟아진다. 실패는 로그로 드러낸다.
         _save_alert_state(_put_alert(alert, path, {
@@ -489,10 +489,10 @@ def watchdog_status(now=None, stale_after=1800):
     now = now if now is not None else time.time()
     ts = watchdog_last_check()
     if ts is None:
-        return "unknown", ("감시자가 돈 기록이 없습니다 — cron 등록(tools/hts_watchdog.py)을 "
+        return "unknown", ("중단 감시가 실행된 기록이 없습니다 — cron 등록(tools/hts_watchdog.py)을 "
                            "확인하세요. 이 상태에서는 프로세스가 죽어도 알림이 가지 않습니다.")
     age = now - ts
     if age > stale_after:
-        return "stale", (f"감시자가 {int(age // 60)}분째 돌지 않았습니다 — cron 이 멈췄거나 "
+        return "stale", (f"중단 감시가 {int(age // 60)}분째 실행되지 않았습니다 — cron 이 멈췄거나 "
                          f"환경변수(~/.htsrc)를 못 읽고 있을 수 있습니다.")
-    return "ok", f"감시자 정상({int(age // 60)}분 전 확인)."
+    return "ok", f"중단 감시 정상({int(age // 60)}분 전 확인)."
