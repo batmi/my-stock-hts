@@ -1745,7 +1745,7 @@ def get_deposit_balance():
 def export_trade_history_to_excel():
     """전체 거래 내역을 엑셀 파일로 저장"""
     try:
-        trades = db_manager.db.get_trades(is_sim=False, limit=None)
+        trades = db_manager.db.get_trades(is_sim=False, limit=None, order_by_time=True)
         if not trades:
             config.console.print("\n[yellow]저장할 거래 내역이 없습니다.[/yellow]")
             return
@@ -2060,7 +2060,7 @@ def view_trade_history():
         logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
         try:
             logger.debug("[HISTORY_DEBUG] DB 조회 요청 (limit=50)")
-            trades = db_manager.db.get_trades(is_sim=False, limit=50)
+            trades = db_manager.db.get_trades(is_sim=False, limit=50, order_by_time=True)
             logger.debug(f"[HISTORY_DEBUG] DB 조회 완료. 건수: {len(trades)}")
         except Exception as e:
             logger.error(f"[HISTORY_DEBUG] DB 조회 실패: {e}")
@@ -2071,7 +2071,7 @@ def view_trade_history():
         start_dt = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
         try:
             logger.debug(f"[HISTORY_DEBUG] DB 조회 요청 (start_date={start_dt})")
-            trades = db_manager.db.get_trades(is_sim=False, start_date=start_dt)
+            trades = db_manager.db.get_trades(is_sim=False, start_date=start_dt, order_by_time=True)
             logger.debug(f"[HISTORY_DEBUG] DB 조회 완료. 건수: {len(trades)}")
         except Exception as e:
             logger.error(f"[HISTORY_DEBUG] DB 조회 실패: {e}")
@@ -2086,7 +2086,7 @@ def view_trade_history():
         logger.info("운영자 실행: " + " - ".join(context.USER_ACTION_BREADCRUMB))
         try:
             logger.debug(f"[HISTORY_DEBUG] DB 조회 요청 (code={keyword})")
-            trades = db_manager.db.get_trades(is_sim=False, code=keyword)
+            trades = db_manager.db.get_trades(is_sim=False, code=keyword, order_by_time=True)
             logger.debug(f"[HISTORY_DEBUG] DB 조회 완료. 건수: {len(trades)}")
         except Exception as e:
             logger.error(f"[HISTORY_DEBUG] DB 조회 실패: {e}")

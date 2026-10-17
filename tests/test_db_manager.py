@@ -163,3 +163,23 @@ def test_trailing_stop_operations(db_manager):
     # 4. 삭제
     db_manager.delete_trailing_stop(code)
     assert db_manager.get_highest_price(code) is None
+
+def test_get_trades_can_order_by_trade_time_for_backfilled_rows(db_manager):
+    """보유분 복원은 과거 체결을 **지금** 적으므로 id 가 크다(2026-10-17 토스 실측).
+
+    id 순이면 4월 복원 기록이 10월 거래보다 위에 오고, LIMIT 이 진짜 최근 거래를 밀어낸다.
+    화면용 order_by_time=True 는 거래 시각 순으로 정렬·제한하고, 기본값은 종전 id 순이다.
+    """
+    for odno, t in [("NEW", "2026-10-13 09:05:55"),      # 먼저 기록된 최근 거래
+                    ("OLD1", "2026-04-17 09:07:24"),     # 나중에 복원된 과거 거래
+                    ("OLD2", "2026-05-20 08:04:34")]:
+        db_manager.insert_trade(type_str="매수(외부)", code="042660", name="한화오션", qty=1,
+                                price=100000, odno=odno, order_status="체결",
+                                reason="보유분 복원(증권사 체결내역)", custom_time=t)
+
+    by_time = db_manager.get_trades(order_by_time=True)
+    assert [r['odno'] for r in by_time] == ["NEW", "OLD2", "OLD1"]
+    assert [r['odno'] for r in db_manager.get_trades(limit=1, order_by_time=True)] == ["NEW"], \
+        "LIMIT 이 진짜 최근 거래를 밀어냈다"
+    assert [r['odno'] for r in db_manager.get_trades()] == ["OLD2", "OLD1", "NEW"], \
+        "기본 정렬(id 역순)이 바뀌었다 — 다른 호출부가 기대고 있다"

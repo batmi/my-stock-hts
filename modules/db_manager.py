@@ -914,8 +914,15 @@ class DBManager:
                     return False
             return False
 
-    def get_trades(self, limit=None, start_date=None, end_date=None, code=None, is_auto=False, is_sim=None, order_status=None, account=None, strict=False):
+    def get_trades(self, limit=None, start_date=None, end_date=None, code=None, is_auto=False, is_sim=None, order_status=None, account=None, strict=False,
+                   order_by_time=False):
         """거래 내역 조회
+
+        order_by_time=True 면 **거래 시각** 최신순(같은 시각은 id 역순)으로 정렬·제한한다.
+        기본(False)은 종전대로 기록 순서(id 역순)다 — 다른 호출부는 그 순서에 기대고 있다.
+        [왜 · 2026-10-17] 보유분 복원은 과거 체결을 **지금** 적어 넣으므로 id 가 크다. id 순
+         으로 보여 주면 4~5월 복원 기록이 10월 거래보다 위에 오고, LIMIT 50 이 진짜 최근
+         거래를 밀어낸다(토스 모드 거래 히스토리 실측). 화면·엑셀은 시각 순이어야 한다.
 
         strict=True 면 조회 실패를 **올린다**. 기본값(False)은 종전대로 빈 목록이다 —
         화면·리포트는 빈 목록으로 흘러도 손해가 없지만, **게이트의 입력**으로 쓰는 곳은
@@ -961,7 +968,7 @@ class DBManager:
                 query += " AND order_status = ?"
                 params.append(order_status)
             
-            query += " ORDER BY id DESC"
+            query += " ORDER BY time DESC, id DESC" if order_by_time else " ORDER BY id DESC"
             
             if limit:
                 query += " LIMIT ?"
