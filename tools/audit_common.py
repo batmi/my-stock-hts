@@ -230,3 +230,66 @@ def seeded_targets(args, seed):
     targets = rule_pool(args.pool, args.stocks, seed) + dead_targets(args.dead)
     _run_manifest.note_universe(seed, targets)      # 실행 기록에 씨드별 표본을 남긴다
     return targets
+
+
+# ── 대조군: 같은 종목 단순 보유 · 지수 ─────────────────────────────────────────────
+#  [2026-10-17] 그때까지 모든 감사는 팔끼리(설정 A vs B) 상대 비교였고, 지수나 '그냥 들고 있기'와
+#   견준 도구가 하나도 없었다. 첫 측정(재선별 워크포워드 12개월·10년): 전략 적합도 상위 +74%/MDD -30
+#   vs 같은 종목 보유 -2%/-60 vs 코스피 +169%/-39 — 낙폭 방어는 견고하지만 지수 대비 우위는 창에 따라
+#   뒤집혔다. 절대 수익을 말하는 도구는 이 두 줄을 함께 낸다.
+
+def buy_hold(frames, d0, d1, dates=None):
+    """동일가중 단순 보유 — d0 이후 첫 종가에 사서 d1 이전 마지막 종가에 판다. (수익%, MDD%) | (None, None).
+
+    frames: [DataFrame(date 'YYYYMMDD', close)] — 백테스트와 같은 수정 일봉을 넘긴다.
+    중도에 봉이 끊긴 종목(폐지)은 마지막 봉 값으로 남는다(전략 팔과 같은 규약). 왕복 비용은
+    core.trading_cost 로 뺀다. MDD 는 '산 뒤 방치' 일별 자산곡선(종목별 비중이 흘러간다)으로 잰다.
+    dates: 자산곡선의 날짜 축. 없으면 종목들 날짜의 합집합.
+    """
+    from core import trading_cost
+    paths = []
+    for df in frames:
+        if df is None or getattr(df, "empty", True):
+            continue
+        s = df[(df["date"].astype(str) >= d0) & (df["date"].astype(str) <= d1)]
+        if len(s) < 2:
+            continue
+        cl = s["close"].astype(float).to_numpy()
+        b, e = cl[0], cl[-1]
+        if b <= 0:
+            continue
+        cost = trading_cost.round_trip_cost(b, e, 1) / b
+        paths.append((dict(zip(s["date"].astype(str), cl / b)), e / b - cost))
+    if not paths:
+        return None, None
+    ret = (sum(p[1] for p in paths) / len(paths) - 1) * 100
+    axis = sorted(x for x in (dates or set().union(*(p[0] for p in paths))) if d0 <= x <= d1)
+    last = [1.0] * len(paths)
+    peak, mdd = 0.0, 0.0
+    for x in axis:
+        for i, (m, _r) in enumerate(paths):
+            if x in m:
+                last[i] = m[x]
+        v = sum(last) / len(last)
+        peak = max(peak, v)
+        mdd = min(mdd, (v / peak - 1) * 100)
+    return ret, mdd
+
+
+def index_return(name, d0, d1):
+    """KRX Open API 로컬 저장소의 지수('코스피'·'코스닥') 구간 수익%·MDD%. 없으면 (None, None). 읽기 전용."""
+    import sqlite3
+    from modules import krx_openapi
+    c = sqlite3.connect(f"file:{krx_openapi._db_path()}?mode=ro", uri=True)
+    try:
+        rows = [float(r[0]) for r in c.execute(
+            "SELECT close FROM index_daily WHERE name=? AND bas_dd BETWEEN ? AND ? ORDER BY bas_dd", (name, d0, d1))]
+    finally:
+        c.close()
+    if len(rows) < 2:
+        return None, None
+    peak, mdd = 0.0, 0.0
+    for v in rows:
+        peak = max(peak, v)
+        mdd = min(mdd, (v / peak - 1) * 100)
+    return (rows[-1] / rows[0] - 1) * 100, mdd

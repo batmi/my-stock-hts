@@ -21,6 +21,10 @@ audit_discover_fit 이 12개월 재선별을 쟀지만 **현재 상장 목록**�
  기간 승패에서 꾸준히 이기면 '계속 갈아 끼우는 과정'이 엣지다. 절대 수익은 폐지 종목이
  마지막 봉 종가로 청산되므로 여전히 낙관 쪽이다.
 
+[대조군 · 2026-10-17] 표 아래에 '같은 종목 동일가중 단순 보유(왕복 비용 차감)'·'후보 전체 보유'·
+ 코스피·코스닥을 같은 기간 분할로 붙인다(tools/audit_common.buy_hold·index_return). 팔끼리의 순위는
+ 위 표가, '매매가 그냥 들고 있기·지수보다 나은가'는 이 줄들이 답한다.
+
 [실행] python3 tools/audit_pit_walkforward.py --days 3650 --months 12 --k 25 --pool 300 --seeds 3
 """
 import argparse
@@ -32,7 +36,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tools.audit_common import exits, seed_notice  # noqa: E402
+from tools.audit_common import buy_hold, exits, index_return, seed_notice  # noqa: E402
 from tools.audit_universe import _hash_draw, _is_excluded_ticker, _pit_snapshot  # noqa: E402
 
 import config  # noqa: E402
@@ -60,6 +64,7 @@ def candidates(day, pool):
 
 
 _FIT_CACHE = {}
+_DAILY = {}         # code -> 전 구간 일봉(후보 전체 보유 대조군이 다시 쓴다 — 같은 조회를 두 번 하지 않는다)
 
 
 def fit_score_at(code, day, lookback_days):
@@ -71,7 +76,9 @@ def fit_score_at(code, day, lookback_days):
     from tools.audit_discover_fit import fit_at
     score = None
     try:
-        df = krx_daily.get_daily(code, lookback_days=lookback_days)
+        if code not in _DAILY:
+            _DAILY[code] = krx_daily.get_daily(code, lookback_days=lookback_days)
+        df = _DAILY[code]
         if df is not None and not df.empty:
             df = df[df["date"].astype(str) <= day].reset_index(drop=True)
             if len(df) >= 130:
@@ -142,7 +149,8 @@ def main():
                                                                   args.seed + si * 1009 + pi)]
         for v in arms.values():
             all_codes.update(v)
-        plan.append((pi, d, arms))
+        #  후보 전체는 보유 대조군에만 쓴다 — 전략 유니버스(all_codes)에 넣으면 지표 준비가 300×기간으로 커진다.
+        plan.append((pi, d, arms, [c for _s, c in scored]))
         print(f"  기간{pi + 1} {dates[i]}~{dates[j - 1]} 후보 {len(scored)} · 상위 {', '.join(top[:5])} …", flush=True)
 
     targets = [(c, c) for c in sorted(all_codes) if c not in live_dfs]
@@ -178,9 +186,20 @@ def main():
                              risk_scale_by_date=make_scale_fn(mkt, dd))
         return r
 
-    for pi, d, arms in plan:
+    bench_names = ["보유 · 적합도 상위", "보유 · 무작위 평균", "보유 · 후보 전체", "코스피", "코스닥"]
+    bench = {b: [] for b in bench_names}      # 기간별 (수익%, MDD%)
+    for pi, d, arms, pool_codes in plan:
         i, j = periods[pi]
         wdates = dates[i:j]
+        d0, d1 = wdates[0], wdates[-1]
+        bench["보유 · 적합도 상위"].append(buy_hold([dfs.get(c) for c in arms["적합도 상위"]], d0, d1, wdates))
+        rnd = [buy_hold([dfs.get(c) for c in arms[f"무작위#{si + 1}"]], d0, d1, wdates) for si in range(args.seeds)]
+        rnd = [x for x in rnd if x[0] is not None]
+        bench["보유 · 무작위 평균"].append((float(np.mean([x[0] for x in rnd])), float(np.mean([x[1] for x in rnd])))
+                                     if rnd else (None, None))
+        bench["보유 · 후보 전체"].append(buy_hold([_DAILY.get(c) for c in pool_codes], d0, d1, wdates))
+        bench["코스피"].append(index_return("코스피", d0, d1))
+        bench["코스닥"].append(index_return("코스닥", d0, d1))
         rng = random.Random(args.seed + pi)
         for a in arm_names:
             codes = live_codes if a.startswith("현행풀") else arms[a]
@@ -224,9 +243,29 @@ def main():
         print(f"{a:<18}{compound(rs):>10.1f}{mdd(a):>8.1f}{np.mean(rs):>10.1f}{np.median(rs):>10.1f}"
               f"{wins:>5}/{len(rs):<3}{np.mean([x[1] for x in per[a]]):>6.0f}{np.mean([x[2] for x in per[a]]):>7.1f}"
               f"  {'—' if a.startswith('무작위') else f'{vs}-{ls}'}")
-    print("\n기간별 수익% (적합도 상위 / 무작위 평균 / 현행풀):")
+    print(f"\n[대조군] 같은 기간 분할 — 단순 보유(동일가중·왕복 비용 차감)와 지수")
+    print(f"{'대조':<18}{'10y 복리%':>10}{'MDD%':>8}{'기간평균%':>10}{'기간중앙%':>10}{'승기간':>8}   전략 상위가 이긴 기간")
+    print("-" * W)
+    top_rs = [x[0] for x in per["적합도 상위"]]
+    for b in bench_names:
+        pts = [x for x in bench[b] if x[0] is not None]
+        if len(pts) != len(periods):
+            print(f"{b:<18}  (일부 기간 데이터 없음 — {len(pts)}/{len(periods)})")
+            continue
+        rs = [x[0] for x in pts]
+        peak, v, worst = 1.0, 1.0, 0.0
+        for r in rs:
+            v *= 1 + r / 100
+            peak = max(peak, v)
+            worst = min(worst, (v / peak - 1) * 100)
+        beat = sum(1 for pi in range(len(periods)) if top_rs[pi] > rs[pi])
+        print(f"{b:<18}{compound(rs):>10.1f}{min(worst, min(x[1] for x in pts)):>8.1f}{np.mean(rs):>10.1f}"
+              f"{np.median(rs):>10.1f}{sum(1 for r in rs if r > 0):>5}/{len(rs):<3}   {beat}/{len(rs)}")
+    print("\n기간별 수익% (적합도 상위 / 무작위 평균 / 현행풀 | 보유 상위 / 코스피):")
     for pi, (i, j) in enumerate(periods):
-        print(f"  {dates[i]}~{dates[j - 1]}  {per['적합도 상위'][pi][0]:>7.1f} / {rnd_avg[pi]:>7.1f} / {per['현행풀(hindsight)'][pi][0]:>7.1f}")
+        _bt, _kp = bench["보유 · 적합도 상위"][pi][0], bench["코스피"][pi][0]
+        print(f"  {dates[i]}~{dates[j - 1]}  {per['적합도 상위'][pi][0]:>7.1f} / {rnd_avg[pi]:>7.1f} / {per['현행풀(hindsight)'][pi][0]:>7.1f}"
+              f" | {'—' if _bt is None else f'{_bt:.1f}':>7} / {'—' if _kp is None else f'{_kp:.1f}':>7}")
     print("\n" + "-" * W)
     print("[읽는 법] '적합도 상위 − 무작위'가 재선별로 실제 얻는 선별 효과(ex-ante)다. 기간 승패가 꾸준하면 '계속 갈아 끼우는"
           " 과정'이 엣지다. 현행풀은 hindsight 눈금이지 비교 대상이 아니다. 폐지 종목은 마지막 봉 종가로 청산되므로 낙관 쪽.")

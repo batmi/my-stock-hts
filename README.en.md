@@ -640,7 +640,8 @@ my-stock-hts/
 - **Skips unneeded order-book calls**, and **worker count is matched to TPS**.
 
 **DB backup and restore**
-- On auto-trading start and **at each date change**, one `db/backups/trade_history_YYYYMMDD.db` per day is taken (SQLite backup API, consistent snapshot including WAL; last 7 kept). Average cost, trailing highs, stop levels and trade history live only in this file.
+- While the app is up — **whether or not auto trading runs** — one `db/backups/<ledger>_YYYYMMDD.db` per day is taken (right after start-up and at each date change; SQLite backup API, consistent snapshot including WAL; last 7 kept; on failure it retries every 10 minutes and alerts on Telegram once a day). Average cost, trailing highs, stop levels and trade history live only in this file.
+- `--no-bot` turns off bot command polling and the **scheduled notices** (holiday notice, morning briefing, disclosures, calendar, market halt) only. Immediate alerts, the liveness heartbeat, ledger backups and the CSAT-date refresh keep running — the option exists so two machines sharing one bot token do not send each scheduled notice twice.
 - If `PRAGMA integrity_check` fails at start-up, auto trading refuses to start. To restore: ① stop every instance → ② move `db/trade_history.db` and its `-wal`/`-shm` sidecars aside → ③ `cp db/backups/trade_history_<date>.db db/trade_history.db` → ④ restart (missing columns are added by the migrations) → ⑤ if you use the journal web app, **re-sync** (section 10). Restore rehearsal 2026-09-20: backup integrity ok, boot/read/write fine.
 
 ---

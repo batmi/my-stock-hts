@@ -18,9 +18,16 @@ def scheduler():
     s.last_briefing_date = None
     return s
 
-def test_scheduler_start_stop(scheduler):
-    """스케줄러 스레드 시작 및 중지 테스트"""
-    config.ENABLE_TELEGRAM = True
+def test_scheduler_start_stop(scheduler, monkeypatch):
+    """스케줄러 스레드 시작 및 중지 테스트
+
+    [격리 2026-10-17] 진짜 루프를 돌리지 않는다. 종전에는 실제 _run_loop 가 떠서 holidays 패키지
+     갱신 주기(7일)가 차 있으면 **프로젝트 venv 에 pip install --upgrade holidays** 를 돌리고 운영
+     json/holidays_update_state.json 에 도장을 찍었다(실측 10-17 18:12). 그 스레드가 갱신 잠금을
+     쥔 채 남아 test_holiday_calendar_update 가 순서에 따라 깨졌고, 수능일 재수집(KICE)도 돌았다.
+    """
+    monkeypatch.setattr(config, "ENABLE_TELEGRAM", True, raising=False)
+    monkeypatch.setattr(scheduler, "_run_loop", lambda: scheduler._wake.wait(5))
     scheduler.start()
     assert scheduler.is_running is True
     scheduler.stop()
@@ -174,10 +181,16 @@ def test_market_halt_gate_honours_both_switches(scheduler, monkeypatch, cb_on, v
     monkeypatch.setattr(config, 'MARKET_HALT_ALERT_USE', cb_on, raising=False)
     monkeypatch.setattr(config, 'MARKET_HALT_VI_USE', vi_on, raising=False)
     monkeypatch.setattr(config, 'AUTO_MORNING_BRIEFING_USE', False, raising=False)
+    #  [2026-10-17] 알림성 작업은 봇을 켠 인스턴스만 돈다(_notify_jobs_enabled) — conftest 는 끈다.
+    monkeypatch.setattr(config, 'ENABLE_TELEGRAM', True, raising=False)
 
     called = []
     monkeypatch.setattr(scheduler, '_check_holiday_notification', lambda: None)
     monkeypatch.setattr(scheduler, '_check_heartbeat', lambda: None)
+    monkeypatch.setattr(scheduler, '_check_db_backup', lambda: None)
+    #  유지보수 작업 중 둘은 실제 pip·네트워크 스레드를 띄운다(test_scheduler_start_stop 주석).
+    monkeypatch.setattr(scheduler, '_check_holidays_package', lambda: None)
+    monkeypatch.setattr(scheduler, '_check_csat_date', lambda: None)
     monkeypatch.setattr(scheduler, '_check_market_halt', lambda: called.append(True))
 
     #  루프를 한 바퀴만 돌린다 — 주기 대기가 곧 종료 신호다.

@@ -1291,7 +1291,8 @@ def main():
                              '지정하지 않으면 실행 시 모드 선택 화면이 출력됩니다.\n'
                              "('4'는 가상투자의 옛 번호입니다 — 받아 주되 경고 후 1로 처리합니다)")
     parser.add_argument('--auto', action='store_true', help='프로그램 시작 시 시스템 트레이딩 자동 실행 및 로그 뷰어 활성화')
-    parser.add_argument('--no-bot', action='store_true', help='텔레그램 봇 명령어 수신(폴링) 비활성화 (알림 전송 기능은 유지)')
+    parser.add_argument('--no-bot', action='store_true', help='텔레그램 봇 명령어 수신(폴링)과 정기 안내(휴장·브리핑·공시·일정·시장정지) 비활성화\n'
+                             '(즉시 알림·하트비트·원장 백업은 유지 — 같은 봇 토큰을 쓰는 두 번째 기기용)')
     parser.add_argument('--allow-duplicate', action='store_true',
                         help='같은 모드 중복 실행 차단을 해제 (조회 전용 인스턴스를 하나 더 띄울 때만 사용)')
     parser.add_argument('--webchart', action='store_true',
@@ -1409,22 +1410,20 @@ def main():
         telegram_cmd = telegram_bot.TelegramCommander()
         telegram_cmd.start()
 
-        # [프로세스 감시] 프로세스가 살아 있다는 도장(logs/heartbeat.json)은 스케줄러
-        #  스레드가 1분마다 찍는다. 그런데 그 스레드는 텔레그램이 켜져 있을 때만 뜬다.
-        #  꺼진 구성으로 기동하면 지난 기동의 도장이 그대로 남아, 밖에서 도는 감시자가
-        #  '죽었다'고 오해한다. 그래서 감시가 성립하지 않는 구성임을 파일에 명시해 둔다
-        #  (감시자는 이 표식을 보면 침묵한다). 어차피 알림 경로가 없으므로 손실은 없다.
-        try:
-            from modules import heartbeat as _heartbeat
-            from modules.scheduler import SystemScheduler as _SystemScheduler
-            _sched = _SystemScheduler()
-            if not _sched.is_running:
-                # 모드를 넘겨 **이 인스턴스의** 파일에만 표식을 남긴다 — 공용 파일에 쓰면
-                #  같은 기기에서 도는 다른 모드의 감시까지 함께 꺼진다.
-                _heartbeat.stopped(reason="하트비트 미가동(텔레그램 알림 비활성)",
-                                   mode=_sched._heartbeat_context().get("mode"))
-        except Exception as _hb_e:
-            logging.debug(f"[Heartbeat] 초기 상태 표시 실패(무시): {_hb_e}")
+        # [프로세스 감시·유지보수] 스케줄러는 봇 명령 수신과 무관하게 띄운다(봇이 켜졌으면
+        #  telegram_cmd.start() 가 이미 띄웠고 start() 는 중복 실행하지 않는다).
+        #  [2026-10-17] 종전에는 스케줄러가 텔레그램이 켜져 있을 때만 떠서, `--no-bot` 으로 뜬
+        #   맥북 실전 인스턴스는 생존 도장 대신 '하트비트 미가동' 표식을 남겼고 원장 일일 백업·
+        #   수능일 재수집도 함께 멈췄다(실측: 백업 09-15 정지). 알림성 작업은 스케줄러 안에서
+        #   ENABLE_TELEGRAM 으로 가른다(modules/scheduler._notify_jobs_enabled).
+        #  테스트 실행 중에는 띄우지 않는다 — main() 을 태우는 테스트는 봇 start 만 막고 있어,
+        #   여기서 띄우면 holidays 패키지 갱신(pip)·수능일 재수집(네트워크)이 테스트 안에서 돈다.
+        if "pytest" not in sys.modules and "PYTEST_CURRENT_TEST" not in os.environ:
+            try:
+                from modules.scheduler import SystemScheduler as _SystemScheduler
+                _SystemScheduler().start()
+            except Exception as _sc_e:
+                logging.warning(f"[Scheduler] 스케줄러 기동 실패: {_sc_e}")
 
     trader = auto_trade.AutoTrader()
     last_choice = "1"

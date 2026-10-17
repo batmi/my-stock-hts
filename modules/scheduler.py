@@ -60,13 +60,18 @@ class SystemScheduler:
             self.last_holiday_notified_date = None
             self.last_holidays_pkg_check = 0.0     # holidays 패키지 자동 갱신 점검(하루 1회 판정, 실제 갱신은 7일)
             self.last_csat_check = 0.0             # 수능일(KICE) 재수집 — 하루 1회
+            self.last_backup_date = None           # 원장 일일 백업을 끝낸 날짜
+            self.last_backup_attempt = 0.0         # 실패 시 재시도 간격 판정용
             self.last_briefing_date = None
             self.last_calendar_alert_date = None
             self.last_heartbeat_time = time.time()
             self.trader = AutoTrader()
 
     def start(self):
-        if not getattr(config, 'ENABLE_TELEGRAM', True): return
+        #  [2026-10-17] 텔레그램이 꺼져 있어도 뜬다. 종전에는 ENABLE_TELEGRAM 이 꺼지면 여기서
+        #   돌아갔고, `--no-bot`(파이와 같은 봇 토큰의 폴링 충돌 회피)이 그 값을 내리므로 맥북 실전
+        #   인스턴스는 하트비트·원장 백업·수능일 재수집까지 함께 멈췄다(실측: 백업 09-15 정지).
+        #   알림성 작업만 _notify_jobs_enabled() 로 가르고, 유지보수 작업은 항상 돈다.
         #  [Fix 2026-09-07] is_running 만 보면 **죽은 스레드도 '실행 중'**이라, 되살리려는
         #   start() 가 그 값을 보고 그대로 되돌아간다(실측: 루프가 예외로 죽은 뒤
         #   is_running=True 인 채 start() 가 아무것도 하지 않는다).
@@ -96,22 +101,27 @@ class SystemScheduler:
     def _run_loop(self):
         while self.is_running:
             try:
-                self._check_holiday_notification()
-                if getattr(config, 'AUTO_MORNING_BRIEFING_USE', False):
-                    self._check_morning_briefing()
-                if getattr(config.settings, 'AUTO_DISCLOSURE_ALERT_USE', True):
-                    self._check_disclosure_alerts()
-                if getattr(config.settings, 'AUTO_CALENDAR_ALERT_USE', True):
-                    self._check_calendar_alerts()
-                #  [Fix 2026-09-04] 종전에는 CB 스위치(MARKET_HALT_ALERT_USE) 하나로
-                #   check() 진입 자체를 막았다. market_halt 는 CB 와 VI 를 독립 스위치로
-                #   설계했는데(그 안에서 각각 다시 본다), 여기서 한꺼번에 막히니 CB 를 끈
-                #   사용자는 VI 를 켜도 아무 일도 일어나지 않았다 — 메뉴 토글이 거짓말을 했다.
-                #   둘 중 하나라도 켜져 있으면 넘기고, 무엇을 볼지는 check() 가 정한다.
-                if (getattr(config, 'MARKET_HALT_ALERT_USE', True)
-                        or getattr(config, 'MARKET_HALT_VI_USE', False)):
-                    self._check_market_halt()
+                #  알림성 작업 — 기기를 가리지 않는 같은 내용이라 봇을 켠 인스턴스만 보낸다
+                #   (`--no-bot` 인스턴스까지 보내면 파이·맥북이 같은 안내를 두 번 보낸다).
+                if self._notify_jobs_enabled():
+                    self._check_holiday_notification()
+                    if getattr(config, 'AUTO_MORNING_BRIEFING_USE', False):
+                        self._check_morning_briefing()
+                    if getattr(config.settings, 'AUTO_DISCLOSURE_ALERT_USE', True):
+                        self._check_disclosure_alerts()
+                    if getattr(config.settings, 'AUTO_CALENDAR_ALERT_USE', True):
+                        self._check_calendar_alerts()
+                    #  [Fix 2026-09-04] 종전에는 CB 스위치(MARKET_HALT_ALERT_USE) 하나로
+                    #   check() 진입 자체를 막았다. market_halt 는 CB 와 VI 를 독립 스위치로
+                    #   설계했는데(그 안에서 각각 다시 본다), 여기서 한꺼번에 막히니 CB 를 끈
+                    #   사용자는 VI 를 켜도 아무 일도 일어나지 않았다 — 메뉴 토글이 거짓말을 했다.
+                    #   둘 중 하나라도 켜져 있으면 넘기고, 무엇을 볼지는 check() 가 정한다.
+                    if (getattr(config, 'MARKET_HALT_ALERT_USE', True)
+                            or getattr(config, 'MARKET_HALT_VI_USE', False)):
+                        self._check_market_halt()
+                #  유지보수 작업 — 이 프로세스·이 기기의 일이라 봇 여부와 무관하게 돈다.
                 self._check_heartbeat()
+                self._check_db_backup()
                 self._check_holidays_package()
                 self._check_csat_date()
             except Exception as e:
@@ -330,6 +340,47 @@ class SystemScheduler:
             "running": bool(getattr(self.trader, 'is_running', False)),
             "holdings": getattr(self.trader, 'last_holdings_count', None),
         }
+
+    def _notify_jobs_enabled(self):
+        """알림성 작업(휴장 안내·브리핑·공시·일정·시장 정지)을 이 인스턴스가 보낼지.
+
+        `--no-bot` 과 메뉴의 '텔레그램 알림 사용 = n' 이 ENABLE_TELEGRAM 을 내린다.
+        """
+        return bool(getattr(config, 'ENABLE_TELEGRAM', True))
+
+    #  원장 백업이 실패했을 때 같은 날 다시 거는 간격(초).
+    BACKUP_RETRY_SEC = 600
+
+    def _check_db_backup(self):
+        """원장(현재 모드의 DB) 일일 백업 — 자동매매가 돌든 말든 하루 한 번.
+
+        [2026-10-17] 백업은 AutoTrader.start 와 자동매매 루프의 날짜 변경 두 곳에서만 떴다.
+         자동매매를 켜지 않는 인스턴스(맥북 실전 `--no-bot`)는 그 사이 수동 주문·예약 주문·
+         매매일지 전송함이 원장에 쌓이는데도 백업이 기동일에 멈췄다(실측: 마지막 09-15, 원장은
+         10-16 까지 쓰임). 같은 날 두 번째 호출은 db.backup() 이 건너뛰므로 자동매매 경로와
+         겹쳐도 사본은 하루 하나다(운영에서는 DB 큐가 호출을 직렬화한다).
+        """
+        today = datetime.now().strftime("%Y-%m-%d")
+        if self.last_backup_date == today:
+            return
+        now = time.time()
+        if now - self.last_backup_attempt < self.BACKUP_RETRY_SEC:
+            return
+        self.last_backup_attempt = now
+        from modules import db_manager
+        path = db_manager.db.backup()
+        if path:
+            self.last_backup_date = today
+            logger.info(f"[Scheduler] 원장 일일 백업: {path}")
+        else:
+            #  db.backup() 이 사유를 로그에 남긴다. 운용자에게는 하루 한 번만 알린다 —
+            #   로그로만 남으면 이번처럼 한 달 동안 아무도 모른다.
+            logger.error(f"[Scheduler] 원장 일일 백업 실패 — {self.BACKUP_RETRY_SEC}초 뒤 다시 시도합니다")
+            #  표식은 전달을 확인한 뒤에 찍는다 — 못 닿으면 다음 재시도에서 다시 보낸다.
+            if getattr(self, '_backup_fail_alerted', None) != today:
+                if alert_delivered("⚠️ [DB 백업 실패] 오늘 원장 백업을 뜨지 못했습니다. "
+                                   "디스크 여유 공간과 db/backups 쓰기 권한을 확인하세요(10분마다 재시도)."):
+                    self._backup_fail_alerted = today
 
     def _check_holidays_package(self):
         """holidays 패키지 자동 갱신 — 하루 한 번 주기(7일)를 보고, 됐으면 백그라운드에서 갱신·비교·알림.

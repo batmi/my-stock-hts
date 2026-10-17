@@ -186,6 +186,17 @@ def block_side_effects_for_whole_session():
     from modules import chart as _chart
     mp.setattr(_chart, "open_image_viewer", lambda *a, **k: True)
 
+    #  [격리 2026-10-17] holidays 자동 갱신은 프로젝트 venv 에 pip 를 돌린다. 진짜 스케줄러 루프를
+    #   띄운 테스트가 주기(7일)를 만나면 **실제 pip install --upgrade holidays** 가 나갔고, 그 스레드가
+    #   테스트 뒤까지 살아 원복된 JSON_DIR(운영 json/)에 갱신 도장을 찍었다(실측 10-17 18:12).
+    #   갱신 테스트는 각자 patch.object 로 이 둘을 갈아끼우므로 영향이 없다.
+    from modules import holiday_calendar_update as _hcu
+
+    def _no_pip(*_a, **_k):
+        raise RuntimeError("테스트 세션 — holidays pip 갱신 차단")
+    mp.setattr(_hcu, "_pip_upgrade", _no_pip)
+    mp.setattr(_hcu, "_snapshot_in_fresh_interpreter", _no_pip)
+
     import requests as _requests
 
     class _FakeTelegramResponse:
