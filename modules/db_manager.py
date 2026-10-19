@@ -1147,7 +1147,8 @@ class DBManager:
          원장에 남는다(실측: 2026-07-08 '매도' 행이 오늘 체결의 원 주문으로 잡혔다).
 
          체결 대사처럼 '오늘 것'을 찾는 경로는 반드시 날짜를 준다. 과거를 채워 넣는
-         경로(holdings_backfill)만 None 으로 전체를 본다 — 그쪽은 애초에 옛 행을 찾는다.
+         경로(holdings_backfill)도 그 체결 자신의 주문일(odno_scope_date)을 준다
+         [2026-10-17]. None(전체 이력)은 주문번호가 전역 유일한 토스뿐이다.
         """
         try:
             conn = self._get_conn()
