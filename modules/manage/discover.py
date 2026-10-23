@@ -19,7 +19,7 @@ import logging
 import random
 
 from rich import box
-from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeRemainingColumn
 from rich.prompt import Prompt
 from rich.table import Table
 
@@ -320,11 +320,15 @@ def _verify_data(cands, target, days=3650):
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeRemainingColumn(),
         console=config.console,
         transient=True
     ) as progress:
+        #  분모는 '확보할 종목 수'다 — 성공할 때만 올리므로, 종전 분모(목표×2)로는 다 끝나도 50%에서
+        #   멈춰 보였고 남은 시간도 두 배로 잡혔다(2026-10-23).
         task = progress.add_task("[cyan]일봉 데이터 확인 및 지표 계산 중...[/cyan]",
-                                 total=min(len(cands), max(target, 1) * 2))
+                                 total=min(len(cands), max(target, 1)))
         for c in cands:
             if len(ok) >= target:
                 break
@@ -494,6 +498,8 @@ def discover_candidates():
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeRemainingColumn(),
             console=console,
             transient=True
         ) as progress:

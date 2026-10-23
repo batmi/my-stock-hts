@@ -39,7 +39,7 @@ Quotes, orders, analysis, and automated trading all run in the terminal. Each me
 | `[1]` | Market Indices | Domestic/US/Europe/Asia indices, sector indices, commodities (gold, silver, copper, oil), FX, US Treasury yields, crypto, and **KRX spot gold**. Index name color encodes the regime (Bull / PendUp / PendDown / Bear). |
 | `[2]` | Stock Analysis | Combines real-time quotes and technical indicators for domestic/US stocks and ETFs into a state: **Buy / Wait / Rise / Interest / Neutral / Caution / Sell**. Per-index deep analysis included. |
 | `[3]` | Chart Analysis | Weekly/daily/hourly/intraday chart images, plus **AI chart image reading** (Gemini Vision). `[7] Batch` collects several stocks (watchlist, indices, direct input; `1,3,5-8`, `all` or search) and renders the same chart type for all of them at once (same quality as a single chart, up to `BATCH_CHART_MAX`=30). |
-| `[4]` | Backtesting | Single stock / **N-slot watchlist portfolio** / **Monte Carlo** (±1% price noise, slippage variance, fill misses, 1,000 runs → mean, VaR 95%, stdev) / **Walk-Forward** validation. Optimization over buy score, RSI cap, stop width, pyramiding depth, and scoring weights runs alongside. |
+| `[4]` | Backtesting | Single stock / **N-slot watchlist portfolio** / **Monte Carlo** (±1% price noise that persists for days, slippage variance, fill misses, 1,000 runs → mean, VaR 95%, stdev) / **Walk-Forward** validation. Optimization over buy score, RSI cap, stop width, pyramiding depth, and scoring weights runs alongside. |
 | `[5]` | System Trading | Start/stop/status/report/log for the auto-trader, **per-symbol trading rules**, and **restricted symbols**. |
 | `[6]` | Discovery & Financials | Naver theme ranking, **TradingView screener** (9 presets: top movers, gap-up, breakout, pullback, volume momentum, oversold rebound, value turnaround, high dividend, trend reversal — KR/US), AI theme analysis, AI stock diagnosis, investment calendar, disclosure monitoring, supply/overhang signals, financial snapshot. |
 | `[7]` | Watchlist | Add/remove/view/edit/memo for domestic & US stocks and ETFs, plus **candidate discovery** (rule-based screening with multi-select add). |
@@ -177,10 +177,12 @@ The order amount is the **smallest** of ① the base weight (concentration contr
 | Consecutive-error kill switch | Five consecutive API/system errors put the system into standby |
 | Alert for exempt positions | Restricted symbols and ETFs outside auto-trading are not auto-sold — breaching the stop raises a **Telegram alert** instead (24h throttle) |
 
-**Adaptive thresholds (market regime)**
-A dual-EMA rule: the fast EMA (9) crossing the slow EMA (41) counts as a confirmed trend only after the index advances **5% past the cross**. Reversals before confirmation are counted as whipsaws.
+**Market regime and adaptive thresholds**
+A dual-EMA rule: the fast EMA (9) crossing the slow EMA (41) counts as a confirmed trend only after the index advances **5% past the cross**. Reversals before confirmation are counted as whipsaws. The regime feeds the risk multiplier (PendDown ×0.6) and the whipsaw-rate scaling.
 
-| Regime | Definition | Buy threshold |
+> **Adaptive thresholds (±0.5 buy score per regime) are off by default** (`USE_ADAPTIVE_THRESHOLD=False`, 2026-08-16). In a 10-year backtest the fixed threshold won (lost 25 of 36 pairs), and moving the threshold in either direction hurt. The 'Buy threshold' column below describes the behavior when it is turned on.
+
+| Regime | Definition | Buy threshold (when adaptive is on) |
 |---|---|---|
 | Bull | Up-cross confirmed by +5% | Relaxed |
 | PendUp | Up-cross, below 5% | Unchanged |
@@ -202,7 +204,7 @@ A dual-EMA rule: the fast EMA (9) crossing the slow EMA (41) counts as a confirm
 | | `SAR_AF_START` / `STEP` / `MAX` | 0.02 / 0.02 / 0.2 | Parabolic SAR acceleration |
 | | `CCI_WINDOW` / `CCI_UPPER` / `CCI_LOWER` | 20 / +100 / −100 | CCI |
 | | `ADX_PERIOD` | 14 | ADX (≥20 means a trend is present) |
-| | `OBV_MA_PERIOD` | 10 | OBV moving average |
+| | `OBV_MA_PERIOD` | 5 | OBV moving average |
 | **Entry** | `BUY_SCORE` / `RISE_SCORE` | 7.0 / 6.0 | Buy and rise thresholds |
 | | `BUY_RSI_MAX` | 70 | RSI ceiling for entries |
 | | `BUY_VOL_STRENGTH` | 100.0 | Minimum volume strength (%) |
@@ -229,7 +231,8 @@ A dual-EMA rule: the fast EMA (9) crossing the slow EMA (41) counts as a confirm
 | | `SLIPPAGE_RATE` | 0.002 | Slippage |
 | **Scoring** | `TREND`/`MOMENTUM`/`STRENGTH`/`SYNERGY` | 4.0 / 2.5 / 1.5 / 2.0 | Factor weights |
 | **Regime** | `REGIME_EMA_FAST`/`SLOW`/`CONFIRM_PCT` | 9 / 41 / 5% | Regime detection |
-| | `BULL_SCORE_ADJ` / `PENDING_DOWN_SCORE_ADJ` | −0.5 / +0.5 | Per-regime threshold adjustment |
+| | `USE_ADAPTIVE_THRESHOLD` | False | Enable per-regime threshold adjustment (off by default) |
+| | `BULL_SCORE_ADJ` / `PENDING_DOWN_SCORE_ADJ` | −0.5 / +0.5 | Per-regime threshold adjustment (only when adaptive is on) |
 
 > Slot count follows the seed: ~2M KRW → 3 · 3M–10M → 4 · 15M–50M → 5 · 50M+ → 6. Sizing scales with equity, so a larger seed keeps the same exposure ratio and only raises the amounts.
 
@@ -535,6 +538,7 @@ my-stock-hts/
 │   ├── web_dashboard.py    #     Responsive web dashboard for chart galleries
 │   ├── backtest.py         # [4] Single-symbol backtesting
 │   ├── portfolio_backtest.py #   N-slot portfolio backtest (slot competition, cash, heat cap)
+│   ├── benchmark.py        #   Benchmarks — buy-and-hold of the same symbols, KOSPI, KOSDAQ (backtest screens and audits)
 │   ├── auto_trade/         # [5] System trading
 │   │   ├── engine.py       #     Trading engine (strategy, orders, risk)
 │   │   ├── trader.py       #     Main loop (analyze → buy/sell → report)

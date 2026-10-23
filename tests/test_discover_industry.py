@@ -152,3 +152,32 @@ def test_listing_does_not_fall_back_to_frozen_fdr(monkeypatch):
     else:
         raise AssertionError("상장목록이 없는데 후보를 만들었다")
     assert asked == []
+
+
+def test_일봉_확인_진행막대는_확보_목표를_분모로_퍼센트와_남은시간을_보인다(monkeypatch):
+    """[2026-10-23] 분모가 목표×2라 다 끝나도 50%에서 멈춰 보였고, 퍼센트·남은 시간 칸이 없었다."""
+    import pandas as pd
+    from rich.progress import TimeRemainingColumn
+    from modules import backtest
+    from modules.manage import discover
+    seen = {}
+    real_progress = discover.Progress
+
+    class SpyProgress(real_progress):
+        def __init__(self, *cols, **kw):
+            seen["cols"] = cols
+            super().__init__(*cols, **kw)
+
+        def add_task(self, *a, **kw):
+            seen["total"] = kw.get("total")
+            return super().add_task(*a, **kw)
+
+    df = pd.DataFrame({"date": [f"2020{i:04d}" for i in range(400)], "close": [1.0] * 400})
+    monkeypatch.setattr(discover, "Progress", SpyProgress)
+    monkeypatch.setattr(backtest, "get_backtest_data", lambda *a, **k: df)
+    monkeypatch.setattr(discover, "_enrich", lambda c, d: c)
+    cands = [{"code": f"{i:06d}", "name": f"N{i}"} for i in range(10)]
+    ok, cut = discover._verify_data(cands, 3)
+    assert len(ok) == 3 and seen["total"] == 3
+    assert any(isinstance(c, TimeRemainingColumn) for c in seen["cols"])
+    assert any("percentage" in str(getattr(c, "text_format", "")) for c in seen["cols"])

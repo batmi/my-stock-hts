@@ -1203,6 +1203,32 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
 
 MONTE_CARLO_RUNS = 1000
 MONTE_CARLO_SEED = 20260920     # 고정 — 설정을 바꾼 두 실행을 같은 노이즈 위에서 비교하기 위해
+MONTE_CARLO_NOISE_SIGMA = 0.01  # 가격 수준 노이즈의 정상 표준편차(±1%)
+MONTE_CARLO_NOISE_PHI = 0.95    # 노이즈의 하루 지속도(AR(1) 계수) — 반감기 약 13.5거래일
+
+
+def persistent_level_noise(rng, n, sigma=MONTE_CARLO_NOISE_SIGMA, phi=MONTE_CARLO_NOISE_PHI):
+    """몬테카를로 가격 노이즈 — 수준은 ±sigma 로 흔들되 봉끼리 이어지는 AR(1) 경로.
+
+    [2026-10-23 · 모형 교체] 종전엔 봉마다 독립인 ±1% 수준 노이즈였다. 일수익률에 ε_t−ε_{t−1}
+     이 더해져 변동성·ATR 이 부풀고 평균회귀가 주입됐다(추세추종에 체계적으로 불리). 맥북 Open API
+     일봉(2023~, 100회 평균) 실측 — 일변동성 σ·ATR14·lag-1 자기상관:
+       KT&G   독립 +30.4% · +17.1% · −0.20→−0.32  /  AR(1) +1.6% · +1.0% · −0.196
+       신한지주 독립 +20.2% · +11.3% · −0.08→−0.21  /  AR(1) +1.1% · +0.7% · −0.078
+       삼성전자 독립 +11.3% · +7.6%  · −0.06→−0.15  /  AR(1) +0.6% · +0.5% · −0.062
+     같은 ±1% 수준 이탈이라 이평선·문턱 근처 신호는 여전히 흔들리지만, 수익률 쪽 왜곡은 사라진다.
+     (일수익률에 더해지는 몫의 표준편차 = sigma·√(2(1−phi)) ≈ 0.32%, 자기상관 −(1−phi)/2 ≈ −0.025)
+    첫 값은 정상분포에서 뽑는다 — 워밍업 첫 봉부터 같은 크기로 흔든다.
+    """
+    n = int(n)
+    if n <= 0:
+        return np.zeros(0)
+    e = rng.normal(0, sigma * np.sqrt(1 - phi * phi), n)
+    u = np.empty(n)
+    u[0] = rng.normal(0, sigma)
+    for i in range(1, n):
+        u[i] = phi * u[i - 1] + e[i]
+    return u
 
 
 def run_monte_carlo_simulation(full_df, start_idx, initial_capital, buy_score, buy_rsi, is_overseas,
@@ -1215,19 +1241,18 @@ def run_monte_carlo_simulation(full_df, start_idx, initial_capital, buy_score, b
     각 시행마다 (워밍업 포함) 전체 가격 시계열에 노이즈를 주입한 뒤 보조지표를 재계산하므로,
     체결 노이즈뿐 아니라 매매 시그널(점수/상태) 자체의 견고성까지 검증한다.
 
-    [감사 · 2026-09-20] 노이즈 모형의 알려진 편향 — 봉마다 **독립**인 ±1% 수준(level) 노이즈라
-    일수익률에 ε_t−ε_{t−1} 이 더해진다. 실측(2025-06~, 100회 평균): 일수익률 σ가 KT&G +25% ·
-    신한지주 +17% · 삼성전자 +5%, ATR14 가 +19% · +9% · +4% 부풀고 lag-1 자기상관이 −0.18→−0.30
-    으로 깊어진다(평균회귀 주입). ATR 이 부풀면 손절폭이 넓어지고 포지션이 줄며, 평균회귀는
-    추세추종에 체계적으로 불리하다 — 이 화면의 수치는 '원본보다 노이즈가 많고 되돌림이 잦은
-    종목'에서의 성과다. 모형 교체(수익률 노이즈·거래 부트스트랩)는 운용자 결정으로 남긴다.
+    [감사 · 2026-09-20 → 2026-10-23 교체] 종전 노이즈는 봉마다 **독립**인 ±1% 수준 노이즈라
+    변동성·ATR 이 부풀고 평균회귀가 주입됐다(추세추종에 체계적으로 불리). 운용자 결정(10-23)으로
+    봉끼리 이어지는 AR(1) 수준 노이즈(persistent_level_noise)로 바꿨다 — 같은 ±1% 이탈로 신호를
+    흔들되 일변동성·ATR 왜곡은 +0.2~1.6%, 자기상관은 원본과 같다. 체결 노이즈(슬리피지 변동·
+    체결 누락)는 그대로다. 교체 전 실행의 수치와는 비교하지 말 것.
     seed 를 고정해 두 실행이 비교 가능하게 한다(종전엔 매 실행이 달랐다).
     """
     rng = np.random.default_rng(seed)
     config.console.print(f"\n[bold magenta]━━━ Monte Carlo Simulation ({runs:,} runs · seed {seed}) ━━━[/]")
-    config.console.print("[dim]가격 데이터 노이즈(±1%) 주입 후 지표를 재계산하고, 체결 노이즈(슬리피지 변동, 체결 누락)를 적용하여 전략 시그널의 견고성을 검증합니다.[/dim]")
-    config.console.print("[dim yellow]※ 봉마다 독립인 수준 노이즈라 일변동성이 5~25%·ATR 이 4~19% 부풀고 평균회귀가 섞입니다 — "
-                         "추세추종에는 보수적(불리) 방향의 편향이며, 원본 백테스트 수치와 직접 비교하지 마세요.[/dim yellow]\n")
+    config.console.print("[dim]가격 수준을 ±1% 안팎에서 흔든 경로(며칠씩 이어지는 노이즈)로 지표를 재계산하고, 체결 노이즈(슬리피지 변동, 체결 누락)를 적용하여 전략 시그널의 견고성을 검증합니다.[/dim]")
+    config.console.print("[dim]※ 노이즈가 봉끼리 이어지므로 일변동성·ATR 은 원본과 거의 같고(+2% 미만) 평균회귀를 섞지 않습니다. "
+                         "2026-10-23 이전 몬테카를로 수치(봉마다 독립 노이즈)와는 비교하지 마세요.[/dim]\n")
 
     # 날짜/표시는 노이즈와 무관하므로 깨끗한 원본 슬라이스를 참조용으로 보관
     sim_df = full_df.iloc[start_idx:]
@@ -1270,8 +1295,8 @@ def run_monte_carlo_simulation(full_df, start_idx, initial_capital, buy_score, b
         for _ in range(int(runs)):
             # 1. (워밍업 포함) 전체 시계열에 노이즈 주입 후 지표 재계산
             noisy_full = full_df.copy()
-            # 정규분포 노이즈 (평균 0, 표준편차 1%) — 동일 봉의 OHLC는 같은 비율로 이동시켜 봉 구조 보존
-            noise = rng.normal(0, 0.01, len(noisy_full))
+            # 이어지는 수준 노이즈(±1%, AR(1)) — 동일 봉의 OHLC는 같은 비율로 이동시켜 봉 구조 보존
+            noise = persistent_level_noise(rng, len(noisy_full))
             for col in ['close', 'open', 'high', 'low']:
                 if col in noisy_full.columns:
                     noisy_full[col] = noisy_full[col] * (1 + noise)
@@ -2571,7 +2596,20 @@ def run_backtest():
         
         color = "red" if total_return > 0 else "blue"
         summary_table.add_row("누적 수익률", f"[{color}]{total_return:+.2f}%[/]")
-        
+        # [대조군 · 2026-10-23] 같은 종목을 첫날 사서 끝까지 들고 있었다면 — 절대 수익만으로는
+        #  전략이 보유보다 나았는지 알 수 없다(modules.benchmark, 왕복 비용 차감).
+        try:
+            from modules import benchmark as _bench
+            bh_ret, bh_mdd = _bench.buy_hold([sim_df], str(sim_df.iloc[0]['date']), str(sim_df.iloc[-1]['date']),
+                                             is_overseas=is_overseas)
+        except Exception as e:      # noqa: BLE001 - 대조군 실패가 결과 리포트를 막으면 안 된다
+            logger.debug(f"[대조군] {code} 단순 보유 계산 실패: {type(e).__name__} — {e}")
+            bh_ret = bh_mdd = None
+        if bh_ret is not None:
+            bh_color = "red" if bh_ret > 0 else "blue"
+            summary_table.add_row("같은 기간 단순 보유", f"[{bh_color}]{bh_ret:+.2f}%[/] (MDD [blue]{bh_mdd:.2f}%[/]) "
+                                                    f"[dim]— 첫날 사서 끝까지 보유, 비용 차감[/dim]")
+
         summary_table.add_section()
         
         # [수정] 매매 횟수 상세 및 승률/MDD 출력

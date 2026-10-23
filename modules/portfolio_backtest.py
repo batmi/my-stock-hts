@@ -1824,6 +1824,54 @@ def prepare_universe(targets, days, progress_cb=None, is_overseas=False):
     return dfs, mf_dates, dates, failed
 
 
+SURVIVORSHIP_NOTE = ("※ 생존 편향: 지금 관심종목에 남아 있는 종목만으로 과거를 돌린 결과입니다. 그 시점에는 이 종목들을 "
+                     "고를 수 없었고 상장폐지·부진 종목은 빠져 있어 절대 수익이 부풀려집니다(폐지 종목을 섞은 감사에서 "
+                     "수익 약 3배). 설정끼리 비교하는 용도로 읽고, 기대 수익으로 읽지 마세요.")
+
+
+def benchmark_rows(dfs, dates):
+    """백테스트와 같은 기간의 대조군 — [(이름, 수익%|None, MDD%|None)].
+
+    같은 종목 동일가중 단순 보유(왕복 비용 차감)와 코스피·코스닥. 지수는 KRX Open API 저장소가
+    구간을 덮을 때만 값이 있다(modules.benchmark.index_return).
+    """
+    from modules import benchmark
+    if not dfs or not dates:
+        return []
+    d0, d1 = str(dates[0]), str(dates[-1])
+    rows = [("같은 종목 단순 보유", *benchmark.buy_hold(list(dfs.values()), d0, d1, dates))]
+    for name in ("코스피", "코스닥"):
+        try:
+            ret, mdd = benchmark.index_return(name, d0, d1)
+        except Exception as e:      # noqa: BLE001 - 대조군 실패가 백테스트 결과를 가리면 안 된다
+            logger.debug(f"[대조군] {name} 조회 실패: {type(e).__name__} — {e}")
+            ret, mdd = None, None
+        rows.append((name, ret, mdd))
+    return rows
+
+
+def print_benchmark(dfs, dates):
+    """결과표 아래에 대조군 표와 생존 편향 안내를 붙인다. 절대 수익만 보면 지수·보유 대비 위치를 모른다."""
+    rows = benchmark_rows(dfs, dates)
+    if rows:
+        t = Table(title=f"같은 기간 대조군 ({dates[0]}~{dates[-1]})", box=box.HORIZONTALS,
+                  header_style="dim", border_style="dim")
+        t.add_column("대조군")
+        t.add_column("총수익률", justify="right")
+        t.add_column("MDD", justify="right")
+        for name, ret, mdd in rows:
+            if ret is None:
+                t.add_row(name, "[dim]자료 없음[/dim]", "[dim]-[/dim]")
+                continue
+            color = "red" if ret > 0 else "blue"
+            t.add_row(name, f"[{color}]{ret:+.2f}%[/]", f"[blue]{mdd:.2f}%[/]")
+        config.console.print(t)
+        if any(r[1] is None for r in rows[1:]):
+            config.console.print("[dim]※ 지수 '자료 없음'은 KRX Open API 저장소가 이 기간을 덮지 못한 경우입니다 "
+                                 "(tools/krx_openapi_backfill.py --only index).[/dim]")
+    config.console.print(f"[dim yellow]{SURVIVORSHIP_NOTE}[/dim yellow]")
+
+
 # ==========================================================
 # CLI
 # ==========================================================
@@ -1988,6 +2036,7 @@ def run_portfolio_backtest():
                                  f"{' 외' if len(failed) > 5 else ''})[/dim]")
         config.console.print("[dim]※ 슬롯 경쟁·현금 제약·포트폴리오 히트 캡이 모두 반영된 단일 경로 결과입니다. "
                              "종목 구성이 바뀌면 값이 크게 달라질 수 있습니다.[/dim]")
+        print_benchmark(dfs, dates)
         if use_bars:
             same_day = sum(1 for r in [res] for t in r["trades"] if t.get("nth_today", 1) >= 2)
             config.console.print(f"[dim]※ 장중 스캔 모드 결과입니다(실매매와 같은 체결 시점). "

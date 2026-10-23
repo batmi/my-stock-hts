@@ -1,6 +1,7 @@
-"""몬테카를로 시뮬레이션 감사(2026-09-20) — 재현성·PF 센티널.
+"""몬테카를로 시뮬레이션 감사(2026-09-20) — 재현성·PF 센티널, 노이즈 모형(2026-10-23 교체).
 
-노이즈 모형(수준 노이즈)의 편향은 코드가 아니라 화면 문구와 독스트링에 적었다(운용자 결정 사항).
+종전 봉마다 독립인 수준 노이즈는 변동성·ATR 을 부풀리고 평균회귀를 주입했다 → 이어지는 AR(1)
+수준 노이즈(backtest.persistent_level_noise)로 바꿨다. 아래 테스트가 그 성질을 고정한다.
 """
 from unittest.mock import patch
 
@@ -55,3 +56,36 @@ def test_무손실_시행은_PF_평균을_오염시키지_않는다():
     joined = "\n".join(texts)
     assert "무손실 시행 5회 제외" in joined and "99.9" not in joined
     assert "seed 1" in joined
+
+
+def test_노이즈는_수준은_1퍼센트로_흔들되_수익률을_거의_부풀리지_않는다():
+    rng = np.random.default_rng(7)
+    u = np.concatenate([backtest.persistent_level_noise(rng, 2000) for _ in range(20)])
+    assert abs(u.std() - backtest.MONTE_CARLO_NOISE_SIGMA) < 0.002        # 수준 이탈은 ±1% 그대로
+    du = np.diff(u)
+    #  일수익률에 더해지는 몫 ≈ σ·√(2(1−φ)) ≈ 0.32% — 종전 독립 노이즈는 √2·1% ≈ 1.41%
+    assert du.std() < 0.004
+    #  자기상관 −(1−φ)/2 ≈ −0.025 — 종전 독립 노이즈는 −0.5(평균회귀 주입)
+    ac = np.corrcoef(du[1:], du[:-1])[0, 1]
+    assert -0.06 < ac < 0.01
+
+
+def test_노이즈_경로는_길이를_지키고_빈_길이도_받는다():
+    rng = np.random.default_rng(1)
+    assert len(backtest.persistent_level_noise(rng, 123)) == 123
+    assert len(backtest.persistent_level_noise(rng, 0)) == 0
+
+
+def test_추세_경로의_변동성과_자기상관을_보존한다():
+    """실측 대응 — 노이즈를 입힌 경로의 일수익률 σ 와 lag-1 자기상관이 원본에서 크게 벗어나지 않는다."""
+    rng = np.random.default_rng(3)
+    close = 10000 * np.exp(np.cumsum(rng.normal(0.0005, 0.02, 900)))
+    r0 = np.diff(np.log(close))
+    sig, acs = [], []
+    for _ in range(50):
+        r = np.diff(np.log(close * (1 + backtest.persistent_level_noise(rng, len(close)))))
+        sig.append(r.std() / r0.std())
+        acs.append(np.corrcoef(r[1:], r[:-1])[0, 1])
+    assert np.mean(sig) < 1.02                      # 종전 독립 노이즈는 약 1.12(σ 2% 기준)
+    ac0 = np.corrcoef(r0[1:], r0[:-1])[0, 1]
+    assert abs(np.mean(acs) - ac0) < 0.02

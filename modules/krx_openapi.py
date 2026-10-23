@@ -137,8 +137,12 @@ def status_text():
     if gap > _max_inline_calls():
         # [2026-10-02] 파이 저장소가 복사·백필 없이 비어 있어도 기동 점검은 '사용'만 찍었다 —
         #  그동안 일봉은 조용히 종전 소스였다. 결손을 보이게 한다(첫 조회가 백그라운드로 채운다).
-        msg += (f" — 저장소 결손 {gap:,}건(최근 {STATUS_GAP_DAYS}일 종목 일봉): 첫 조회 때 백그라운드로 "
-                f"채우며 그동안은 종전 소스. 한 번에 받으려면 tools/krx_openapi_backfill.py --days 1200")
+        #  [2026-10-22] 백그라운드 적재는 krx_daily.get_daily(토스 모드·백테스트)에서만 걸린다 — 한투 시세
+        #   모드(1·2)의 실매매 일봉은 KIS 경로라 이 저장소를 안 타, 파이 결손이 18일간 그대로였다.
+        msg += (f" — 저장소 결손 {gap:,}건(최근 {STATUS_GAP_DAYS}일 종목 일봉): 토스 모드·백테스트의 첫 조회 때 "
+                f"백그라운드로 채우며 그동안은 종전 소스(한투 시세 모드의 실매매 일봉은 이 저장소를 쓰지 않음). "
+                f"한 번에 받으려면 tools/krx_openapi_backfill.py --days 420 --only stocks "
+                f"(백테스트·감사용 장기 구간은 --days 1200)")
     return True, msg
 
 

@@ -54,3 +54,61 @@ def test_지수_구간_수익과_낙폭(tmp_path, monkeypatch):
     assert ret == pytest.approx(10.0)
     assert mdd == pytest.approx(-25.0)
     assert A.index_return("코스닥", "20260101", "20260104") == (None, None)
+
+
+# ── [2026-10-23] 메뉴 4 화면 대조군 · 지수 구간 덮음 가드 ──────────────────────────
+def _index_db(tmp_path, monkeypatch, rows):
+    db = tmp_path / "oa.db"
+    c = sqlite3.connect(db)
+    c.execute("CREATE TABLE index_daily (bas_dd TEXT, name TEXT, close REAL)")
+    c.executemany("INSERT INTO index_daily VALUES (?,?,?)", rows)
+    c.commit(); c.close()
+    from modules import krx_openapi
+    monkeypatch.setattr(krx_openapi, "_db_path", lambda: str(db))
+
+
+def test_감사_도구와_화면이_같은_산식을_쓴다():
+    from modules import benchmark
+    assert A.buy_hold is benchmark.buy_hold and A.index_return is benchmark.index_return
+
+
+def test_지수_저장분이_구간을_덮지_못하면_None(tmp_path, monkeypatch):
+    """파이처럼 저장소가 1년뿐인데 3년 백테스트를 돌리면, 있는 날만으로 계산한 1년 수익을 내면 안 된다."""
+    _index_db(tmp_path, monkeypatch, [("20250813", "코스피", 100.0), ("20261020", "코스피", 150.0)])
+    from modules import benchmark
+    assert benchmark.index_return("코스피", "20231020", "20261020") == (None, None)
+    #  끝도 마찬가지 — 저장분이 한참 전에 멈췄으면 None
+    assert benchmark.index_return("코스피", "20250813", "20261231") == (None, None)
+    #  연휴·게시 지연 정도(14일 이내)는 같은 구간으로 본다
+    ret, _ = benchmark.index_return("코스피", "20250806", "20261023")
+    assert ret == pytest.approx(50.0)
+
+
+def test_해외_단순_보유는_해외_비용으로_뺀다():
+    from modules import benchmark
+    a = _df([("20260101", 100.0), ("20260102", 120.0)])
+    ret_kr, _ = benchmark.buy_hold([a], "20260101", "20260102")
+    ret_us, _ = benchmark.buy_hold([a], "20260101", "20260102", is_overseas=True)
+    assert ret_us == pytest.approx((1.2 - trading_cost.round_trip_cost(100, 120, 1, True) / 100) * 100 - 100)
+    assert ret_kr != ret_us
+
+
+def test_포트폴리오_화면_대조군_행과_생존편향_안내(tmp_path, monkeypatch):
+    from unittest.mock import patch
+    from modules import portfolio_backtest as pb
+    _index_db(tmp_path, monkeypatch, [("20260101", "코스피", 100.0), ("20260103", "코스피", 110.0)])
+    dfs = {"A": _df([("20260101", 100.0), ("20260102", 90.0), ("20260103", 120.0)])}
+    dates = ["20260101", "20260102", "20260103"]
+    rows = pb.benchmark_rows(dfs, dates)
+    assert [r[0] for r in rows] == ["같은 종목 단순 보유", "코스피", "코스닥"]
+    assert rows[1][1] == pytest.approx(10.0) and rows[2][1] is None      # 코스닥 저장분 없음
+    assert pb.benchmark_rows({}, []) == []
+    with patch("config.console.print") as out:
+        pb.print_benchmark(dfs, dates)
+    args = [c.args[0] for c in out.call_args_list if c.args]
+    tables = [a for a in args if hasattr(a, "columns")]
+    assert len(tables) == 1
+    cells = [str(x) for col in tables[0].columns for x in col._cells]
+    assert "같은 종목 단순 보유" in cells and any("자료 없음" in x for x in cells)
+    texts = " ".join(str(a) for a in args if not hasattr(a, "columns"))
+    assert "생존 편향" in texts and "--only index" in texts
