@@ -486,6 +486,33 @@ def ensure(api_ids, start_dd, end_dd, max_calls=None, now=None, progress=None, w
         _ENSURE_LOCK.release()
 
 
+PREFETCH_PER_WORKER = 2     # 병렬 적재에서 저장 전 응답을 워커당 몇 건까지 들고 있을지
+
+
+def _bounded_map(pool, fn, items, window):
+    """pool.map 과 같은 순서로 결과를 내되, 제출했으나 아직 소비되지 않은 작업을 window 개로 묶는다.
+
+    [2026-10-22 · 파이 메모리 경고] pool.map 은 항목 전부를 한꺼번에 제출한다. 응답 한 건이
+     시장 전체 스냅샷(코스피 약 950행·코스닥 약 1,800행)인데 파이에선 저장(소비)이 받기보다 느려,
+     받아 두고 못 저장한 응답이 쌓였다 — 606건 백필(워커 3)이 앱(피크 521MB) 옆에서 가용 116MB
+     텔레그램 경고를 냈다. 앱 백그라운드 적재(워커 3, 최대 3,000건)도 같은 길이다.
+    다음 작업은 결과를 내주기 전에 제출해 워커가 저장을 기다리며 놀지 않게 한다.
+    """
+    from collections import deque
+    it = iter(items)
+    pending = deque()
+    for item in it:
+        pending.append(pool.submit(fn, item))
+        if len(pending) >= window:
+            break
+    while pending:
+        res = pending.popleft().result()
+        for item in it:
+            pending.append(pool.submit(fn, item))
+            break
+        yield res
+
+
 def _ensure_locked(api_ids, start_dd, end_dd, max_calls, now, progress, workers):
     todo = missing_days(api_ids, start_dd, end_dd, now=now)
     if not todo:
@@ -504,7 +531,7 @@ def _ensure_locked(api_ids, start_dd, end_dd, max_calls, now, progress, workers)
     else:
         from concurrent.futures import ThreadPoolExecutor
         pool = ThreadPoolExecutor(max_workers=int(workers))
-        results = pool.map(_one, batch)
+        results = _bounded_map(pool, _one, batch, int(workers) * PREFETCH_PER_WORKER)
     try:
         for api_id, dd, rows in results:      # 실패는 그대로 올린다(부분 적재는 무해 — fetched 에 안 적힌다)
             calls += 1
@@ -948,7 +975,7 @@ def refetch(items, max_calls, progress=None, workers=1):
     else:
         from concurrent.futures import ThreadPoolExecutor
         pool = ThreadPoolExecutor(max_workers=int(workers))
-        results = pool.map(_one, batch)
+        results = _bounded_map(pool, _one, batch, int(workers) * PREFETCH_PER_WORKER)
     try:
         for api_id, dd, rows in results:
             calls += 1

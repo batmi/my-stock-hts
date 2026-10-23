@@ -564,3 +564,59 @@ def test_ordinary_day_is_not_rebased(store, monkeypatch):
     df = krx_daily.get_daily("005930", lookback_days=4, use_cache=False)
     assert "seam_rebase" not in df.attrs
     assert float(df["close"].iloc[-2]) == 117.0
+
+
+# ---------------------------------------------------------------------------
+# [2026-10-22] 병렬 적재가 받아 두고 못 저장한 응답을 무한히 쌓지 않는다
+#  파이(1GB)에서 606건 백필(워커 3)이 앱 옆에서 가용 116MB 경고를 냈다 — pool.map 이 전부를
+#  한꺼번에 제출해 저장(소비)보다 빠른 수신분이 메모리에 쌓였다. 앱 백그라운드 적재도 같은 길.
+# ---------------------------------------------------------------------------
+def test_parallel_ensure_bounds_responses_held_before_store(tmp_path, monkeypatch):
+    import threading
+    import time as _t
+    monkeypatch.setattr(config, "KRX_OPENAPI_DB_PATH", str(tmp_path / "oa.db"), raising=False)
+    monkeypatch.setattr(oa, "api_key", lambda: "x")
+    lock = threading.Lock()
+    started = [0]
+
+    def fast_call(api_id, dd):              # 받기는 빠르고
+        with lock:
+            started[0] += 1
+        return []
+
+    peak = [0]
+
+    def slow_store(api_id, dd, n, calls, total):   # 저장(소비)은 느리다 — 파이 조건
+        with lock:
+            peak[0] = max(peak[0], started[0] - calls)
+        _t.sleep(0.005)
+
+    monkeypatch.setattr(oa, "_call", fast_call)
+    workers = 3
+    remaining, calls = oa.ensure(["stk_bydd_trd"], "20250101", "20250930", max_calls=150,
+                                 progress=slow_store, workers=workers)
+    assert calls == 150 and started[0] == 150
+    # 수정 전: 소비 1건째에 이미 거의 전부(≈150)가 받아져 있었다
+    assert peak[0] <= workers * oa.PREFETCH_PER_WORKER, f"저장 전 응답 {peak[0]}건이 쌓였다"
+
+
+def test_bounded_map_keeps_order_and_stops_submitting_on_error():
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        assert list(oa._bounded_map(pool, lambda x: x * 2, range(20), 4)) == [x * 2 for x in range(20)]
+        assert list(oa._bounded_map(pool, lambda x: x, [], 4)) == []
+
+    seen = []
+
+    def boom(x):
+        seen.append(x)
+        if x == 2:
+            raise RuntimeError("x")
+        return x
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        gen = oa._bounded_map(pool, boom, range(100), 3)
+        assert next(gen) == 0 and next(gen) == 1
+        with pytest.raises(RuntimeError):
+            next(gen)
+    assert max(seen) < 10, "실패 뒤에도 나머지를 다 제출했다"
