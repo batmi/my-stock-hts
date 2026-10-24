@@ -312,6 +312,7 @@ def test_고점_조회_실패는_하루치_캐시에_굳지_않는다(monkeypatc
     실패해도 **하루 종일** 드로다운 방어가 느슨한 채로 남았다."""
     from datetime import datetime
     from modules.auto_trade import trader as trader_mod
+    from modules.auto_trade import market_risk as market_risk_mod
 
     t = trader_mod.AutoTrader.__new__(trader_mod.AutoTrader)
     t.current_total_asset = 8_000_000
@@ -326,7 +327,8 @@ def test_고점_조회_실패는_하루치_캐시에_굳지_않는다(monkeypatc
         raise RuntimeError("database is locked")
 
     monkeypatch.setattr(trader_mod.db_manager.db, 'get_max_daily_asset', _fail)
-    monkeypatch.setattr(trader_mod, '_get_trade_account', lambda: ("11111111", "01"))
+    #  _get_account_drawdown_pct 는 C1 2단계(2026-10-24)로 market_risk 에 있다 — 그 모듈의 전역을 바꿔 끼운다.
+    monkeypatch.setattr(market_risk_mod, '_get_trade_account', lambda: ("11111111", "01"))
 
     t._get_account_drawdown_pct()
     assert getattr(t, '_hwm_cache_date', None) != datetime.now().strftime("%Y-%m-%d"), \
@@ -341,6 +343,7 @@ def test_이력이_없으면_그_결론은_캐시한다(monkeypatch):
     라즈베리파이에서 순수 낭비다."""
     from datetime import datetime
     from modules.auto_trade import trader as trader_mod
+    from modules.auto_trade import market_risk as market_risk_mod
 
     t = trader_mod.AutoTrader.__new__(trader_mod.AutoTrader)
     t.current_total_asset = 10_000_000
@@ -351,7 +354,8 @@ def test_이력이_없으면_그_결론은_캐시한다(monkeypatch):
     calls = []
     monkeypatch.setattr(trader_mod.db_manager.db, 'get_max_daily_asset',
                         lambda *a, **k: calls.append(1) or None)
-    monkeypatch.setattr(trader_mod, '_get_trade_account', lambda: ("11111111", "01"))
+    #  _get_account_drawdown_pct 는 C1 2단계(2026-10-24)로 market_risk 에 있다 — 그 모듈의 전역을 바꿔 끼운다.
+    monkeypatch.setattr(market_risk_mod, '_get_trade_account', lambda: ("11111111", "01"))
 
     t._get_account_drawdown_pct()
     t._get_account_drawdown_pct()

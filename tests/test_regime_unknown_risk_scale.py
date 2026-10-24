@@ -230,13 +230,16 @@ def test_no_screen_keeps_its_own_copy_of_the_regime_label():
     """국면 라벨을 직접 조립하는 화면이 남아 있으면 그 화면만 옛 글자를 계속 쓴다."""
     offenders = []
     checked = 0
-    #  [2026-10-24] 콘솔 상태표·텔레그램 상태 문구는 C1 분리로 reporting.py 에 있다(trader 에는 리스크 로그만).
-    for path in ("modules/auto_trade/trader.py", "modules/auto_trade/reporting.py", "modules/telegram_bot.py"):
+    #  [2026-10-24] 콘솔 상태표·텔레그램 상태 문구는 C1 1단계로 reporting.py 에, 리스크 사유 로그는 2단계로
+    #   market_risk.py 에 있다. trader.py 는 이제 국면을 그리지 않지만, 거기 다시 생기는 복제도 잡도록 함께 훑는다.
+    renders = ("modules/auto_trade/market_risk.py", "modules/auto_trade/reporting.py", "modules/telegram_bot.py")
+    for path in renders + ("modules/auto_trade/trader.py",):
         src = open(path, encoding='utf-8').read()
         #  [자기검사] 이 화면이 국면을 아예 안 그리게 되면 위 순회는 조용히 0곳을 보고
         #   테스트는 통과한다 — 그 침묵을 막는다.
-        assert "describe_regime" in src, f"{path}: 국면 표시가 사라졌다면 이 가드를 다시 짜라"
-        checked += 1
+        if path in renders:
+            assert "describe_regime" in src, f"{path}: 국면 표시가 사라졌다면 이 가드를 다시 짜라"
+            checked += 1
         for i, line in enumerate(src.splitlines(), 1):
             code = line.split("  #")[0]
             if line.strip().startswith("#"):

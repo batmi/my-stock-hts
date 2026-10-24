@@ -37,7 +37,8 @@ def test_no_duplicate_emoji_ladder_in_ui_layers():
     import pathlib
     root = pathlib.Path(__file__).resolve().parent.parent
     for rel in ("main.py", "modules/telegram_bot.py", "modules/auto_trade/trader.py",
-                "modules/auto_trade/reporting.py"):     # 상태 화면(2026-10-24 C1 분리)
+                "modules/auto_trade/reporting.py",      # 상태 화면(2026-10-24 C1 분리)
+                "modules/auto_trade/market_risk.py"):   # 리스크 사유 문구(2026-10-24 C1 2단계)
         src = (root / rel).read_text(encoding="utf-8")
         assert 'regime == \'Bull\'' not in src and '"Bull": "🔴"' not in src, \
             f"{rel} 에 국면→이모지 매핑이 복제돼 있다 — analysis.regime_emoji 를 쓴다"

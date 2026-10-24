@@ -50,7 +50,7 @@ def world(monkeypatch):
     monkeypatch.setattr(analysis, "get_market_regime_detail", lambda m: w.regime[m])
     monkeypatch.setattr(AutoTrader, "_get_account_drawdown_pct", lambda self, p=None: w.dd)
     monkeypatch.setattr(AutoTrader, "_risk_floor_day", staticmethod(lambda: w.day))
-    monkeypatch.setattr("modules.auto_trade.trader.trade_account_key", lambda: "50000000-29")
+    monkeypatch.setattr("modules.auto_trade.market_risk.trade_account_key", lambda: "50000000-29")
     monkeypatch.setattr("modules.auto_trade.alert_delivered", lambda *a, **k: True)   # 드로다운 10% 경보
     return w
 
@@ -223,7 +223,7 @@ def test_the_floor_does_not_clobber_the_daily_baseline(world, monkeypatch):
 
 
 def test_a_failed_save_warns_once_and_still_holds_in_session(world, monkeypatch, caplog):
-    monkeypatch.setattr("modules.auto_trade.trader.save_daily_risk_floor", lambda *a, **k: False)
+    monkeypatch.setattr("modules.auto_trade.market_risk.save_daily_risk_floor", lambda *a, **k: False)
     t = _trader()
     world.regime["KOSPI"] = PEND
     with caplog.at_level("WARNING"):
@@ -243,7 +243,7 @@ def test_an_unreadable_file_falls_back_to_the_plain_reading(world, monkeypatch):
     t = _trader()
     world.regime["KOSPI"] = PEND
     t._update_risk_scale()
-    monkeypatch.setattr("modules.auto_trade.trader.load_daily_risk_floor", lambda *a, **k: None)
+    monkeypatch.setattr("modules.auto_trade.market_risk.load_daily_risk_floor", lambda *a, **k: None)
     world.regime["KOSPI"] = CALM
     t2 = _trader()
     t2._update_risk_scale()

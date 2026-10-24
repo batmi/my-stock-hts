@@ -7,40 +7,72 @@
     화면을 고쳤는데 화면이 안 바뀌거나, 매매 메서드가 화면 메서드에 가려진다.
   · 두 모듈이 같은 이름(datetime·console·api …)을 서로 다른 객체로 들면, 한쪽만 바꿔 끼운 테스트나
     한쪽만 고친 import 가 화면과 매매를 다른 세계에서 돌게 한다.
- 바깥 동작의 동등성은 주기 재생 기록(tests/test_cycle_replay.py)이 본다.
+[2026-10-24 2단계] 시장·리스크 메서드 10개를 modules/auto_trade/market_risk.TraderMarketRiskMixin 으로 옮겼다
+ (같은 방법 — AST 동일, 전역 26개 동일 객체). 믹스인끼리도 같은 이름을 들면 먼저 상속한 쪽이 조용히 이긴다.
+ 바깥 동작의 동등성은 주기 재생 기록 두 시나리오(tests/test_cycle_replay.py — base·market_stress)가 본다.
 """
 import inspect
 
-from modules.auto_trade import reporting, trader
+import pytest
+
+from modules.auto_trade import market_risk, reporting, trader
+
+MIXINS = {
+    reporting: (reporting.TraderReportingMixin,
+                ("print_status", "get_status_message", "get_health_message", "print_report", "view_log_file",
+                 "get_performance_report", "get_recent_logs", "_get_holdings_message"),
+                {"config", "api", "console", "datetime", "db_manager", "utils", "logger"}),
+    market_risk: (market_risk.TraderMarketRiskMixin,
+                  ("_update_market_indices_status", "_format_market_filter_basis", "_notify_market_unknown",
+                   "_whipsaw_risk_scale", "_update_vol_regime", "_update_risk_scale", "_risk_floor_day",
+                   "_hold_intraday_floor", "_save_risk_floor", "_get_account_drawdown_pct"),
+                  {"config", "api", "analysis", "datetime", "timedelta", "db_manager", "logger",
+                   "_get_trade_account", "trade_account_key"}),
+}
+_IDS = [m.__name__.rsplit(".", 1)[-1] for m in MIXINS]
 
 
 def _own_methods(cls):
-    return {n for n, v in vars(cls).items() if inspect.isfunction(v) or isinstance(v, (staticmethod, classmethod))}
+    #  이중 밑줄 이름은 뺀다 — 파이썬 3.14 는 클래스 주석(믹스인의 상태 선언)마다 __annotate_func__ 함수를 만든다.
+    return {n for n, v in vars(cls).items()
+            if not n.startswith("__") and (inspect.isfunction(v) or isinstance(v, (staticmethod, classmethod)))}
 
 
-def test_AutoTrader_는_화면_보고_믹스인을_상속한다():
-    assert issubclass(trader.AutoTrader, reporting.TraderReportingMixin)
-    for name in ("print_status", "get_status_message", "get_health_message", "print_report", "view_log_file",
-                 "get_performance_report", "get_recent_logs", "_get_holdings_message"):
+@pytest.mark.parametrize("mod", MIXINS, ids=_IDS)
+def test_AutoTrader_는_믹스인을_상속한다(mod):
+    mixin, names, _ = MIXINS[mod]
+    assert issubclass(trader.AutoTrader, mixin)
+    for name in names:
         assert hasattr(trader.AutoTrader, name), name
-        assert name in vars(reporting.TraderReportingMixin), f"{name} 이 믹스인에 없다"
+        assert name in vars(mixin), f"{name} 이 {mixin.__name__} 에 없다"
 
 
-def test_같은_이름의_메서드가_양쪽에_없다():
-    both = _own_methods(trader.AutoTrader) & _own_methods(reporting.TraderReportingMixin)
-    assert not both, f"AutoTrader 가 믹스인 메서드를 가린다: {sorted(both)}"
+@pytest.mark.parametrize("mod", MIXINS, ids=_IDS)
+def test_같은_이름의_메서드가_양쪽에_없다(mod):
+    mixin = MIXINS[mod][0]
+    both = _own_methods(trader.AutoTrader) & _own_methods(mixin)
+    assert not both, f"AutoTrader 가 {mixin.__name__} 메서드를 가린다: {sorted(both)}"
 
 
-def test_두_모듈이_함께_쓰는_전역은_같은_객체다():
+def test_믹스인끼리_같은_이름의_메서드가_없다():
+    a, b = (MIXINS[m][0] for m in MIXINS)
+    both = _own_methods(a) & _own_methods(b)
+    assert not both, f"먼저 상속한 믹스인이 다른 믹스인의 메서드를 가린다: {sorted(both)}"
+
+
+@pytest.mark.parametrize("mod", MIXINS, ids=_IDS)
+def test_두_모듈이_함께_쓰는_전역은_같은_객체다(mod):
     #  _pkg 는 모듈마다 따로 두는 접근자다(결과가 같은 패키지인지는 아래에서 본다).
-    shared = (set(vars(trader)) & set(vars(reporting))) - {"_pkg"}
+    required = MIXINS[mod][2]
+    shared = (set(vars(trader)) & set(vars(mod))) - {"_pkg"}
     shared = {n for n in shared if not n.startswith("__")}
-    assert {"config", "api", "console", "datetime", "db_manager", "utils", "logger"} <= shared
-    diff = sorted(n for n in shared if vars(trader)[n] is not vars(reporting)[n])
-    assert not diff, f"trader 와 reporting 이 같은 이름을 다른 객체로 든다: {diff}"
-    assert reporting._pkg() is trader._pkg()
+    assert required <= shared, sorted(required - shared)
+    diff = sorted(n for n in shared if vars(trader)[n] is not vars(mod)[n])
+    assert not diff, f"trader 와 {mod.__name__} 가 같은 이름을 다른 객체로 든다: {diff}"
+    assert mod._pkg() is trader._pkg()
 
 
-def test_화면_보고_로그는_트레이더_로그로_남는다():
-    assert reporting.logger is trader.logger
-    assert reporting.logger.name == "modules.auto_trade.trader"
+@pytest.mark.parametrize("mod", MIXINS, ids=_IDS)
+def test_옮긴_코드의_로그는_트레이더_로그로_남는다(mod):
+    assert mod.logger is trader.logger
+    assert mod.logger.name == "modules.auto_trade.trader"

@@ -47,6 +47,7 @@ _SCANNED = (
     'modules/scheduler.py',
     'modules/auto_trade/trader.py',
     'modules/auto_trade/reporting.py',      # 상태·보고 화면(2026-10-24 C1 분리)
+    'modules/auto_trade/market_risk.py',    # 시장·리스크(2026-10-24 C1 2단계)
     'modules/auto_trade/engine.py',
     'modules/auto_trade/common.py',
     'modules/auto_trade/conclusion.py',
