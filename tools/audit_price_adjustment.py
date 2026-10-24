@@ -63,8 +63,8 @@ def steps(df_a, df_b, end=None):
         idx = idx[idx <= end]
     if len(idx) < 3:
         return []
-    ra = a.loc[idx].pct_change() * 100
-    rb = b.loc[idx].pct_change() * 100
+    ra = a.loc[idx].ffill().pct_change(fill_method=None) * 100
+    rb = b.loc[idx].ffill().pct_change(fill_method=None) * 100
     d = (ra - rb).dropna()
     return [(str(k), float(v)) for k, v in d.items() if abs(v) > STEP_PCT]
 

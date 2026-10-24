@@ -314,10 +314,12 @@ class DBManager:
                         time_stop_days INTEGER,
                         use_atr_stop INTEGER,
                         atr_stop_multiplier REAL,
-                        half_take_profit_use INTEGER
+                        half_take_profit_use INTEGER,
+                        buy_ask_bid_ratio REAL,
+                        auto_adjust_ask_bid_ratio INTEGER
                     )
                 ''')
-                
+
                 # [Fix: Point 2] 반익절(Half TP) 상태 추적 테이블 생성
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS half_tp_status (
@@ -665,7 +667,10 @@ class DBManager:
                     "buy_vol_strength": "REAL", "memo": "TEXT", "weights": "TEXT",
                     "invest_ratio": "REAL", "time_stop_days": "INTEGER",
                     "use_atr_stop": "INTEGER", "atr_stop_multiplier": "REAL",
-                    "half_take_profit_use": "INTEGER"
+                    "half_take_profit_use": "INTEGER",
+                    # [2026-10-24] 룰 입력 화면이 받던 두 값의 열이 없어 저장 때마다 버려졌다
+                    #  (엔진은 늘 전역값). 기존 행은 NULL = 전역값을 따른다(engine.rule_value).
+                    "buy_ask_bid_ratio": "REAL", "auto_adjust_ask_bid_ratio": "INTEGER",
                 }
                 for col, dtype in new_strat_columns.items():
                     if col not in strat_columns:
@@ -1800,17 +1805,23 @@ class DBManager:
             use_atr_stop = strategy.get('use_atr_stop')
             atr_stop_multiplier = strategy.get('atr_stop_multiplier')
             half_take_profit_use = strategy.get('half_take_profit_use', 1)
-            
+            #  [2026-10-24] 매도잔량비 두 값도 저장한다 — 종전엔 입력 화면이 받아 확인 표에 보여 주고
+            #   "저장되었습니다"라고 한 뒤 버렸다. 토스는 체결강도가 없어 이 값이 유일한 수급 게이트다.
+            #   없으면 NULL(= 전역값을 따른다).
+            buy_ask_bid_ratio = strategy.get('buy_ask_bid_ratio')
+            auto_adjust_ask_bid_ratio = strategy.get('auto_adjust_ask_bid_ratio')
+
             cursor.execute('''
-                INSERT OR REPLACE INTO stock_strategies 
-                (code, name, buy_score, buy_rsi, buy_vol_strength, sell_score, stop_loss, take_profit, take_profit_rsi, ts_activation, ts_callback, updated_at, memo, weights, invest_ratio, time_stop_days, use_atr_stop, atr_stop_multiplier, half_take_profit_use)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (code, name, 
+                INSERT OR REPLACE INTO stock_strategies
+                (code, name, buy_score, buy_rsi, buy_vol_strength, sell_score, stop_loss, take_profit, take_profit_rsi, ts_activation, ts_callback, updated_at, memo, weights, invest_ratio, time_stop_days, use_atr_stop, atr_stop_multiplier, half_take_profit_use, buy_ask_bid_ratio, auto_adjust_ask_bid_ratio)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (code, name,
                   strategy['buy_score'], strategy['buy_rsi'], buy_vol_strength,
-                  strategy['sell_score'], strategy['stop_loss'], 
-                  strategy['take_profit'], strategy['take_profit_rsi'], 
-                  strategy['ts_activation'], strategy['ts_callback'], 
-                  now, memo, weights_json, invest_ratio, time_stop_days, use_atr_stop, atr_stop_multiplier, half_take_profit_use))
+                  strategy['sell_score'], strategy['stop_loss'],
+                  strategy['take_profit'], strategy['take_profit_rsi'],
+                  strategy['ts_activation'], strategy['ts_callback'],
+                  now, memo, weights_json, invest_ratio, time_stop_days, use_atr_stop, atr_stop_multiplier, half_take_profit_use,
+                  buy_ask_bid_ratio, auto_adjust_ask_bid_ratio))
             conn.commit()
 
     def get_stock_strategy(self, code):

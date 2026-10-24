@@ -631,6 +631,95 @@ def pyramid_gate_ok(profit_rate, state, pyramid_count, max_count, trigger):
     return state in ("매수", "강매수")
 
 
+def flow_gate(state, vol_strength, ask_bid_ratio, thresholds=None, is_overseas=False, is_toss=None):
+    """[SSOT 2026-10-24] 매수 수급 게이트(체결강도·매도잔량비) — (통과, 사유, 체결강도 기준, 매도잔량비 기준).
+
+    [왜 함수인가] 실매매(analyze_buy)와 화면 두 곳(개별 종목 진단 analysis.diagnose_stock · 텔레그램 종목 분석)이
+     이 판정을 각자 옮겨 적고 있었고, 화면 쪽은 2026-07-27 의 fail-closed 전환을 따라오지 않았다 — 체결강도를
+     못 구하면 화면은 '매수 가능', 시스템은 '보류'였다. 토스에서 체결강도가 없으면 텔레그램은 매도잔량비 검사까지
+     건너뛰었다(시스템은 그것만으로 판정한다). 운용자가 '왜 안 샀나'를 보는 창구가 시스템과 다른 규칙을 쓴 셈이다.
+
+    사유 문자열은 종전 analyze_buy 형식 그대로다(로그·신호 원장·감사 도구가 `체결:…%<…%`·`매도비:…<…`를 읽는다).
+      · 체결강도가 있으면: 기준 미달 → 차단, 통과했으면 매도잔량비(가짜 체결강도 방어)
+      · 토스(체결강도 미제공): 매도잔량비만. 호가 조회도 실패하면 상태 게이트만으로 진입(거래 중단 방지)
+      · KIS 국내에서 체결강도를 못 구함: 기준이 켜져 있으면 보류(fail-closed — '확인 못 함'은 '충족'이 아니다)
+      · 기준 0(게이트 끔)·해외 종목(KIS 미제공): 통과
+    """
+    if is_toss is None:
+        is_toss = config.session.is_toss
+    t = thresholds or {}
+    at = config.ANALYSIS_THRESHOLDS
+    if state == "역매수":
+        min_vol = t.get("MR_VOL_STRENGTH", at.get("MR_VOL_STRENGTH", 120.0))
+    else:
+        min_vol = t.get("BUY_VOL_STRENGTH", at.get("BUY_VOL_STRENGTH", 100.0))
+    min_ask_bid_ratio = t.get("BUY_ASK_BID_RATIO", at.get("BUY_ASK_BID_RATIO", 1.0))
+    # [추가] 체결강도 100% 기준으로 매도잔량비 자동 비례 계산
+    auto_adjust = t.get("AUTO_ADJUST_ASK_BID_RATIO", at.get("AUTO_ADJUST_ASK_BID_RATIO", True))
+    if auto_adjust and min_ask_bid_ratio > 0 and min_vol > 0:
+        min_ask_bid_ratio = round(min_ask_bid_ratio * (min_vol / 100.0), 2)
+
+    if vol_strength is not None:
+        if vol_strength < min_vol:
+            return False, f"체결:{vol_strength:.1f}%<{min_vol}%", min_vol, min_ask_bid_ratio
+        # [핵심] 가짜 체결강도 방어 (호가창 매도잔량 비대칭성 확인)
+        # 매도 잔량이 매수 잔량보다 최소 기준치 이상 많아야 진짜 상승 에너지로 판단
+        if ask_bid_ratio is not None and min_ask_bid_ratio > 0 and ask_bid_ratio < min_ask_bid_ratio:
+            return False, f"매도비:{ask_bid_ratio:.2f}<{min_ask_bid_ratio}", min_vol, min_ask_bid_ratio
+        return True, "", min_vol, min_ask_bid_ratio
+    if is_toss:
+        # 토스: 체결강도 미제공 → 호가창 매도잔량비(ask_bid_ratio)만으로 수급 게이트 대체.
+        #   호가 조회가 실패해 ratio가 없으면 상태(state) 게이트만으로 진입(거래 중단 방지)
+        if ask_bid_ratio is not None and min_ask_bid_ratio > 0 and ask_bid_ratio < min_ask_bid_ratio:
+            return False, f"매도비:{ask_bid_ratio:.2f}<{min_ask_bid_ratio}", min_vol, min_ask_bid_ratio
+        return True, "", min_vol, min_ask_bid_ratio
+    if min_vol > 0 and not is_overseas:
+        # [Fix 2026-07-27 / fail-closed] KIS 국내 종목에서 체결강도를 못 구한 경우(정규장 J 무효·EGW00201
+        #  스로틀 실패 등)는 보류한다. 값은 캐시되지 않아 다음 분석 주기에 다시 조회된다.
+        return False, "체결강도 미확인(보류)", min_vol, min_ask_bid_ratio
+    return True, "", min_vol, min_ask_bid_ratio
+
+
+def market_filter_status(market_name, df=None):
+    """[SSOT 2026-10-24] 한 시장(KOSPI·KOSDAQ)의 신규 매수 필터 판정 — 매매 루프와 화면이 같이 쓴다.
+
+    반환: {"is_healthy", "unknown", "current", "source", "filter"(판정 근거 — unknown 이면 없음)}.
+    지수를 못 받았거나 이평 기간만큼 쌓이지 않았으면 unknown=True·is_healthy=False(fail-closed — 시장 방향을
+    모르면 신규 매수를 보류한다). df 를 넘기면 그것으로 판정한다(매매 루프는 받은 지수로 변동성 배율도 갱신한다).
+    알림·로그는 하지 않는다 — 부르는 쪽 몫이다.
+    """
+    ma_period = getattr(config, 'MARKET_FILTER_MA', 80)
+    band_pct = getattr(config, 'MARKET_FILTER_BAND', 1.0)
+    if df is None:
+        df = analysis.get_domestic_index_data(market_name)
+    #  길이만 세면 모자란다 — SMA 창 안의 결측 하나로 판정이 성립하지 않는데
+    #  len 검사는 통과한다(indicators.market_filter_ready 주석).
+    if (df is None or df.empty or len(df) < ma_period
+            or not indicators.market_filter_ready(df['close'], ma_period)):
+        return {"is_healthy": False, "unknown": True, "current": 0, "source": analysis.index_source(df)}
+    # [이탈 확인 밴드] 상태 기계는 가격 이력만의 함수라 전 구간에서 재계산한다.
+    #  재기동해도 상태가 유실되지 않고, 백테스트(prepare_market_filter)와 같은 값을 본다.
+    #  판정과 그 근거를 한 번에 받는다 — 근거를 따로 계산하면 알림·상태 보고가
+    #  판정과 갈라진다(지수/SMA/차단·해제선/지속 봉 수는 모두 같은 상태 기계의 산물).
+    det = indicators.get_market_filter_detail(df['close'], ma_period, band_pct)
+    #  [Fix 2026-09-04] 판단에 쓴 지수가 **어디서 온 값인지** 함께 남긴다.
+    #   지수는 KRX 확정 봉 위에 KIS/토스/tvDatafeed/yfinance 중 하나를 얹어
+    #   만드는데(analysis._fetch_domestic_index_data), 종전에는 그 출처가
+    #   attrs 에만 있고 아무도 읽지 않았다. 최후 폴백(yfinance)은 최신 종가를
+    #   결측으로 주는 일이 잦아, 매수 중단·재개가 어긋났을 때 무엇으로 판단한
+    #   것인지 되짚을 수 없었다. 근거(det)에도 같은 것을 실어 보낸다.
+    if 'date' in df.columns:
+        det['asof'] = str(df['date'].iloc[-1])
+    det['source'] = analysis.index_source(df)
+    return {
+        "is_healthy": not bool(det['blocked']),
+        "unknown": False,
+        "current": df['close'].iloc[-1],
+        "source": analysis.index_source(df),
+        "filter": det,   # 판정 근거(지수/SMA/차단·해제선/지속 봉 수/사유)
+    }
+
+
 def rule_value(rule, key, default):
     """개별 룰의 값을 읽되, NULL이면 전역 기본값으로 되돌린다.
 
@@ -1302,49 +1391,10 @@ class DefaultStrategy:
             _score_details, thresholds, state,
             dict(df=df, ind=ind, prev_rsi=prev_rsi, thresholds=thresholds, w52_pos=w52_pos, smart_money=sm_flag))
 
-        # [수정] 역매수 상태에 따른 체결강도 분기
-        if state == "역매수":
-            min_vol = thresholds.get("MR_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)
-        else:
-            min_vol = thresholds.get("BUY_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
-        
-        # [수정] 체결강도 미달 및 가짜 체결강도(호가창 비대칭성) 필터링
-        is_vol_ok = True
-        vol_reject_reason = ""
-        min_ask_bid_ratio = thresholds.get("BUY_ASK_BID_RATIO", config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0)
-
-        # [추가] 체결강도 100% 기준으로 매도잔량비 자동 비례 계산
-        auto_adjust = thresholds.get("AUTO_ADJUST_ASK_BID_RATIO", config.ANALYSIS_THRESHOLDS.get("AUTO_ADJUST_ASK_BID_RATIO", True)) if thresholds else config.ANALYSIS_THRESHOLDS.get("AUTO_ADJUST_ASK_BID_RATIO", True)
-        
-        if auto_adjust and min_ask_bid_ratio > 0 and min_vol > 0:
-            ratio_multiplier = min_vol / 100.0
-            min_ask_bid_ratio = round(min_ask_bid_ratio * ratio_multiplier, 2)
-        
-        if vol_strength is not None:
-            if vol_strength < min_vol:
-                is_vol_ok = False
-                vol_reject_reason = f"체결:{vol_strength:.1f}%<{min_vol}%"
-            elif ask_bid_ratio is not None and min_ask_bid_ratio > 0:
-                # [핵심] 가짜 체결강도 방어 (호가창 매도잔량 비대칭성 확인)
-                # 매도 잔량이 매수 잔량보다 최소 기준치 이상 많아야 진짜 상승 에너지로 판단
-                if ask_bid_ratio < min_ask_bid_ratio:
-                    is_vol_ok = False
-                    vol_reject_reason = f"매도비:{ask_bid_ratio:.2f}<{min_ask_bid_ratio}"
-        elif config.session.is_toss:
-            # [추가] 토스: 체결강도 미제공 → 호가창 매도잔량비(ask_bid_ratio)만으로 수급 게이트 대체
-            #   호가 조회가 실패해 ratio가 없으면 상태(state) 게이트만으로 진입(거래 중단 방지)
-            if ask_bid_ratio is not None and min_ask_bid_ratio > 0 and ask_bid_ratio < min_ask_bid_ratio:
-                is_vol_ok = False
-                vol_reject_reason = f"매도비:{ask_bid_ratio:.2f}<{min_ask_bid_ratio}"
-        elif min_vol > 0 and not is_overseas:
-            # [Fix 2026-07-27 / fail-closed] KIS 국내 종목에서 체결강도를 못 구한 경우(정규장
-            #  J 무효·EGW00201 스로틀 실패 등)는 수급 게이트를 '통과'시키던 종전 동작이 fail-open이었다.
-            #  체결강도 기준(min_vol>0)을 켜 둔 이상 '확인 못 함'은 '충족'이 아니므로 보류한다.
-            #  값은 캐시되지 않아 다음 분석 주기에 다시 조회된다.
-            #  (min_vol==0은 사용자가 게이트를 끈 것, 해외 종목은 KIS가 체결강도를 제공하지 않아
-            #   애초에 이 게이트의 대상이 아니므로 종전대로 통과시킨다)
-            is_vol_ok = False
-            vol_reject_reason = "체결강도 미확인(보류)"
+        # [SSOT 2026-10-24] 수급 게이트(체결강도·매도잔량비)는 flow_gate 하나다 — 화면(개별 종목 진단·
+        #  텔레그램 종목 분석)도 같은 함수로 판정한다. 분기·사유 형식·fail-closed 근거는 그 독스트링에 있다.
+        is_vol_ok, vol_reject_reason, min_vol, min_ask_bid_ratio = flow_gate(
+            state, vol_strength, ask_bid_ratio, thresholds, is_overseas)
 
         return {
             'action': 'buy' if (state in ["매수", "강매수", "역매수"] and is_vol_ok) else 'wait',

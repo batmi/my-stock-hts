@@ -165,7 +165,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
 
             # 등락폭/등락률 계산
             df['diff'] = df['close'].diff()
-            df['rate'] = df['close'].pct_change() * 100
+            df['rate'] = df['close'].ffill().pct_change(fill_method=None) * 100
 
             # OBV 및 OBV_MA 계산
             df['OBV'] = indicators.get_obv_full_series(df)
@@ -369,7 +369,7 @@ def show_extended_info(code, is_overseas, basic_output=None):
 
             # 등락폭/등락률 계산
             df['diff'] = df['close'].diff()
-            df['rate'] = df['close'].pct_change() * 100
+            df['rate'] = df['close'].ffill().pct_change(fill_method=None) * 100
 
             # OBV 및 OBV_MA 계산
             df['OBV'] = indicators.get_obv_full_series(df)

@@ -968,14 +968,10 @@ class ConclusionMonitor:
                                                     thresholds = None
                                                     rule_tag = ""
                                                     if rule:
-                                                        thresholds = {
-                                                            "BUY_SCORE": rule['buy_score'],
-                                                            "BUY_RSI_MAX": rule['buy_rsi'],
-                                                            "BUY_VOL_STRENGTH": rule.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)),
-                                                            "BUY_ASK_BID_RATIO": rule.get('buy_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0)),
-                                                            "AUTO_ADJUST_ASK_BID_RATIO": bool(rule.get('auto_adjust_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get("AUTO_ADJUST_ASK_BID_RATIO", True))),
-                                                            "WEIGHTS": rule.get('weights')
-                                                        }
+                                                        #  [2026-10-24] 매수 판정과 같은 조립 함수를 쓴다 — 손으로 다시 쓴
+                                                        #   사본은 rule.get(키, 기본값)이라 NULL 열(지정 안 한 항목)에
+                                                        #   None 을 넣었다(engine.rule_value 독스트링의 함정).
+                                                        thresholds = _pkg().build_buy_thresholds(rule=rule)
                                                         rule_tag = " [개별 룰 적용]"
                                                     
                                                     w52_pos = 0.0

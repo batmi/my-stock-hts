@@ -3444,24 +3444,14 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         buy_score_limit = buy_score
         
         is_mr_state = (state == "역매수")
-        if is_mr_state:
-            buy_vol_limit = thresholds.get("MR_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0))
-        else:
-            buy_vol_limit = config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
-            if rule_applied and custom_rule.get('buy_vol_strength'):
-                buy_vol_limit = custom_rule['buy_vol_strength']
-                
-        min_ask_bid_ratio = config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0)
-        if rule_applied and custom_rule.get('buy_ask_bid_ratio') is not None:
-            min_ask_bid_ratio = custom_rule['buy_ask_bid_ratio']
-            
-        auto_adjust = config.ANALYSIS_THRESHOLDS.get("AUTO_ADJUST_ASK_BID_RATIO", True)
-        if rule_applied and custom_rule.get('auto_adjust_ask_bid_ratio') is not None:
-            auto_adjust = bool(custom_rule['auto_adjust_ask_bid_ratio'])
-
-        if auto_adjust and min_ask_bid_ratio > 0 and buy_vol_limit > 0:
-            ratio_multiplier = buy_vol_limit / 100.0
-            min_ask_bid_ratio = round(min_ask_bid_ratio * ratio_multiplier, 2)
+        # [SSOT 2026-10-24] 수급 게이트(체결강도·매도잔량비)는 실매매 analyze_buy 와 같은 함수(engine.flow_gate)로,
+        #  같은 문턱 조립(engine.build_buy_thresholds — 개별 룰의 NULL 은 전역값)으로 판정한다. 종전 사본은
+        #  체결강도를 못 구하면 '통과'로 보았고(실매매는 07-27 부터 보류), 개별 룰의 체결강도 0(게이트 끔)을
+        #  무시하고 전역 100% 로 판정했다 — 화면이 '매수 가능'인데 시스템은 사지 않는 자리였다.
+        from modules.auto_trade import engine as _eng
+        _gate_thr = _eng.build_buy_thresholds(rule=custom_rule if rule_applied else None)
+        is_flow_ok, flow_reason, buy_vol_limit, min_ask_bid_ratio = _eng.flow_gate(
+            state, vol_strength, ask_bid_ratio, _gate_thr, is_overseas)
                 
         use_super = thresholds.get("SUPER_MOMENTUM_USE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_USE", True))
         super_score = thresholds.get("SUPER_MOMENTUM_SCORE", config.ANALYSIS_THRESHOLDS.get("SUPER_MOMENTUM_SCORE", 8.0))
@@ -3474,17 +3464,28 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
         is_buy_score = score >= buy_score_limit
         is_buy_rsi = (ind['rsi'] is not None) and (ind['rsi'] < buy_rsi_limit)
         is_safe_state = state not in ["매도", "주의", "-"]
-        is_buy_vol = True
-        is_ask_bid_ok = True
-        if vol_strength is not None:
-            is_buy_vol = vol_strength >= buy_vol_limit
-        if ask_bid_ratio is not None and min_ask_bid_ratio > 0:
-            is_ask_bid_ok = ask_bid_ratio >= min_ask_bid_ratio
-            
-        is_buy_all_ok = is_buy_score and is_buy_rsi and is_safe_state and is_buy_vol and is_ask_bid_ok
+        #  행 표시용(양호/미달) — 판정은 위 flow_gate 다.
+        is_buy_vol = vol_strength is None or vol_strength >= buy_vol_limit
+        is_ask_bid_ok = ask_bid_ratio is None or min_ask_bid_ratio <= 0 or ask_bid_ratio >= min_ask_bid_ratio
+
+        # [2026-10-24] 시장 필터 — 이 시장의 신규 매수가 지금 막혀 있으면 종목 조건이 다 맞아도 시스템은 사지 않는다.
+        #  매매 루프와 같은 판정(engine.market_filter_status · 시장 구분은 common.resolve_market_type)을 보인다.
+        market_gate = None
+        if not is_overseas and getattr(config, 'USE_MARKET_FILTER', True):
+            try:
+                from modules import auto_trade as _at
+                _m_type = _at.resolve_market_type(code)
+                market_gate = (_m_type, _eng.market_filter_status(_m_type) if _m_type in ("KOSPI", "KOSDAQ") else None)
+            except Exception as e:      # noqa: BLE001 - 진단 화면은 끝까지 그린다(판정 불가로 표시)
+                logger.debug(f"[진단] 시장 필터 판정 실패: {e}")
+                market_gate = (None, None)
+        is_market_ok = market_gate is None or bool(market_gate[1] and market_gate[1].get('is_healthy'))
+
+        is_buy_all_ok = is_buy_score and is_buy_rsi and is_safe_state and is_flow_ok and is_market_ok
         
         if is_mr_state:
-            buy_result = "[bold magenta]매수 가능 (역추세)[/]" if (is_buy_vol and is_ask_bid_ok) else "[bold blue]매수 불가 (체결/잔량 미달)[/]"
+            buy_result = ("[bold magenta]매수 가능 (역추세)[/]" if (is_flow_ok and is_market_ok)
+                          else "[bold blue]매수 불가 (체결/잔량 미달)[/]" if not is_flow_ok else "[bold blue]매수 불가 (시장 필터)[/]")
         else:
             if state == "강매수":
                 buy_result = "[bold magenta]매수 가능 (슈퍼모멘텀)[/]" if is_buy_all_ok else "[bold blue]매수 불가[/]"
@@ -3505,24 +3506,44 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                 rsi_reason = f"RSI 과열 (기준: {buy_rsi_limit} 미만)"
                 if is_super: rsi_reason += " [슈퍼모멘텀 완화 적용됨]"
                 buy_reason_list.append(rsi_reason)
-        if not is_buy_vol: buy_reason_list.append(f"체결강도 미달 ({vol_strength:.1f}% < {buy_vol_limit}%)")
-        if not is_ask_bid_ok: buy_reason_list.append(f"매도잔량비 미달 ({ask_bid_ratio:.2f}배 < {min_ask_bid_ratio}배)")
+        if not is_flow_ok:
+            if flow_reason.startswith("체결:"):
+                buy_reason_list.append(f"체결강도 미달 ({vol_strength:.1f}% < {buy_vol_limit}%)")
+            elif flow_reason.startswith("매도비:"):
+                buy_reason_list.append(f"매도잔량비 미달 ({ask_bid_ratio:.2f}배 < {min_ask_bid_ratio}배)")
+            else:
+                buy_reason_list.append("체결강도 미확인 — 시스템은 이 주기 매수를 보류하고 다음 주기에 다시 조회합니다")
+        if not is_market_ok:
+            _m_type, _mstat = market_gate
+            if _mstat is None:
+                buy_reason_list.append("시장 판정 불가 — 시스템은 신규 매수를 보류합니다")
+            elif _mstat.get('unknown'):
+                buy_reason_list.append(f"{_m_type} 지수 판단 불가 — 시스템은 신규 매수를 보류합니다")
+            else:
+                buy_reason_list.append(f"시장 필터: {_m_type} 지수가 {getattr(config, 'MARKET_FILTER_MA', 80)}일선 아래 — "
+                                       f"이 시장의 신규 매수 보류 중")
         
         buy_reason = ", ".join(buy_reason_list) if buy_reason_list else ("역추세 반등 확인" if is_mr_state else "모든 매수 조건 충족")
         
         table_logic.add_row("매수 판단", buy_result, buy_reason)
         
-        sell_score_limit = config.SELL_STRATEGY["SELL_SCORE"]
-        # [추세추종] 점수 하락 매도는 추세 구조 훼손(현재가<60일선) 동반 시에만 발동 (실매매 analyze_sell과 동일 기준)
+        # [SSOT 2026-10-24] 보유 판단은 실매매 청산 체인의 6) 절(exit_rules.trend_exit_fires)로, 실매매 규약으로 본다 —
+        #  판정 불가('-') 상태는 점수매도를 내지 않고(2026-09-06), 개별 룰의 매도 점수를 쓰며, 점수는 실매매처럼
+        #  소수 한 자리로 반올림한다. 종전 사본은 '-' 상태도 '매도(추세이탈)'로 보였다.
+        from modules import exit_rules as _xr
+        sell_score_limit = _eng.rule_value(custom_rule if rule_applied else None, 'sell_score',
+                                           config.SELL_STRATEGY["SELL_SCORE"])
         ema60_now = ind.get('ema_60')
         structure_broken = ema60_now is None or current_price < ema60_now
-        is_sell_signal = (state == "매도") or (score < sell_score_limit and structure_broken)
+        is_sell_signal, _ = _xr.trend_exit_fires(state, round(score, 1), ema60_now, current_price, sell_score_limit)
 
         sell_result = "[bold blue]매도(추세이탈)[/]" if is_sell_signal else "[bold green]보유(추세유지)[/]"
 
         if state == "매도":
             sell_reason = "매도 상태 진입 (필터링 조건)"
-        elif score < sell_score_limit and structure_broken:
+        elif state in ("", "-"):
+            sell_reason = "판정 불가(데이터 부족) — 시스템은 점수매도를 내지 않고 가격 손절·트레일링 스탑만 봅니다"
+        elif is_sell_signal:
             sell_reason = f"점수 하락 (기준: {sell_score_limit}점 미만) + 60일선 이탈"
         elif score < sell_score_limit:
             sell_reason = f"점수 미달이나 60일선 위 추세 구조 유지 (주청산은 트레일링 스탑에 위임)"
@@ -3539,6 +3560,8 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                 v_color = "[red]" if is_buy_vol else "[blue]"
                 vol_str = f"{v_color}{vol_strength:.1f}%[/]"
                 vol_eval = "[bold red]양호[/]" if is_buy_vol else "[bold blue]미달[/]"
+            elif not is_flow_ok:
+                vol_eval = "[bold blue]미확인[/] — 매수 보류"
             table_logic.add_row("체결강도", vol_str, f"{vol_eval} (기준: {buy_vol_limit}% 이상)")
 
         if not is_overseas and not is_index:
@@ -3553,6 +3576,18 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                 table_logic.add_row("매도잔량 비율", "[dim]미사용[/]", "-")
             else:
                 table_logic.add_row("매도잔량 비율", "-", "데이터 확인 불가")
+
+        if market_gate is not None:
+            _m_type, _mstat = market_gate
+            if _mstat is None:
+                table_logic.add_row("시장 필터", "[bold blue]판정 불가[/]", "시장 구분을 못 해 신규 매수 보류")
+            elif _mstat.get('unknown'):
+                table_logic.add_row("시장 필터", "[bold blue]판정 불가[/]", f"{_m_type} 지수 데이터 부족 — 신규 매수 보류")
+            elif _mstat.get('is_healthy'):
+                table_logic.add_row("시장 필터", "[green]허용[/]", f"{_m_type} 지수 {getattr(config, 'MARKET_FILTER_MA', 80)}일선 위")
+            else:
+                table_logic.add_row("시장 필터", "[bold blue]보류[/]",
+                                    f"{_m_type} 지수 {getattr(config, 'MARKET_FILTER_MA', 80)}일선 아래 — 이 시장 신규 매수 중단")
 
         rule_res = "[bold magenta]적용[/]" if rule_applied else "[dim]미적용[/]"
         rule_desc = f"[dim]{changes_summary}[/dim]" if changes_summary else "-"
@@ -6330,7 +6365,7 @@ def _print_period_price_common(code, is_overseas, limit=20):
 
     # 등락폭/등락률 계산 (get_chart_data는 기본 제공하지 않음)
     df['diff'] = df['close'].diff()
-    df['rate'] = df['close'].pct_change() * 100
+    df['rate'] = df['close'].ffill().pct_change(fill_method=None) * 100   # pandas 판 무관(결측은 앞 값)
 
     # OBV 및 OBV_MA 계산
     df['OBV'] = indicators.get_obv_full_series(df)

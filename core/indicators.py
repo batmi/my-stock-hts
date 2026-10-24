@@ -514,7 +514,10 @@ def vol_regime_ratio(close, window=None, ref_min=None):
         ref_min = int(config.SELL_STRATEGY.get("ATR_CAP_VOL_REF_MIN", 250))
 
     s = pd.Series(close, dtype='float64').reset_index(drop=True)
-    ret = s.pct_change()
+    #  [pandas 3 · 2026-10-24] fill_method 기본값이 'pad' → None 으로 바뀌었다. 결측 봉이 있으면 pandas 3 는
+    #   그 자리와 다음 자리를 NaN 으로 두고, rolling std 가 창 하나 내내 NaN → 배율 1.0(고정 캡)이 된다.
+    #   검증·감사는 pandas 2 의미(앞 값으로 채움)로 이뤄졌으므로 그 의미를 명시해 판과 무관하게 같게 한다.
+    ret = s.ffill().pct_change(fill_method=None)
     vol = ret.rolling(int(window)).std()
     ref = vol.expanding(min_periods=int(ref_min)).median().shift(1)
     lo = float(config.SELL_STRATEGY.get("ATR_CAP_RATIO_MIN", 0.4))

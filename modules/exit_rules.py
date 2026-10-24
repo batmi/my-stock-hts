@@ -238,16 +238,9 @@ def evaluate_exit(inp: ExitInputs, rules: ExitRules) -> ExitDecision:
     #   판정 가능 여부는 classify_stock_state 가 단독으로 안다(입력이 없으면 '-'). 그 값을 쓴다.
     #   [백테스트] 그쪽 EMA60 은 ewm(adjust=False)라 0번 봉부터 값이 있고 결측이면 NaN(None 아님)이라
     #   이 팔은 백테스트에서 죽은 코드다 — 그래서 decide_sell 은 종전대로 False 로 부른다.
-    judged = inp.state not in ("", "-")
-    structure_broken = inp.ema60 is None or price < inp.ema60
-    if inp.state == "매도":
-        #  백테스트는 '매도' 상태의 점수를 0 으로 넘긴다(sell_check) — 같은 비교로 재현된다
-        fire = rules.state_sell_always or inp.score < rules.sell_score_limit
-        code = STATE_SELL
-    else:
-        fire = ((judged or not rules.require_judged) and inp.score < rules.sell_score_limit
-                and structure_broken)
-        code = TREND_EXIT
+    fire, code = trend_exit_fires(inp.state, inp.score, inp.ema60, price, rules.sell_score_limit,
+                                  require_judged=rules.require_judged,
+                                  state_sell_always=rules.state_sell_always)
     if fire:
         if (inp.is_mr_holding and inp.holding_days <= rules.time_stop_days
                 and pr > rules.mr_grace_loss_rate):
@@ -255,3 +248,20 @@ def evaluate_exit(inp: ExitInputs, rules: ExitRules) -> ExitDecision:
             return d
         return _sell(code)
     return d
+
+
+def trend_exit_fires(state, score, ema60, price, sell_score_limit, require_judged=True, state_sell_always=True):
+    """6) '매도' 상태 / 점수하락 + 60일선 이탈 — (발동, 사유 코드). evaluate_exit 와 화면이 같이 쓴다.
+
+    [2026-10-24] 개별 종목 진단 화면(analysis.diagnose_stock)의 '보유 판단'이 이 식을 따로 들고 있었고,
+     2026-09-06 의 require_judged(판정 불가 '-' 상태에서는 점수매도를 내지 않는다)를 따라오지 않아
+     상장 초기·결측 종목을 '매도(추세이탈)'로 보였다 — 시스템은 그 종목을 팔지 않는다.
+    기본 인자는 실매매 규약(require_judged·state_sell_always 둘 다 True)이다. 백테스트는 False 로 부른다
+    (모듈 독스트링의 '남아 있는 규칙 차이'). 백테스트는 '매도' 상태의 점수를 0 으로 넘긴다(sell_check) —
+    state_sell_always=False 여도 같은 비교로 재현된다.
+    """
+    judged = state not in ("", "-")
+    structure_broken = ema60 is None or price < ema60
+    if state == "매도":
+        return bool(state_sell_always or score < sell_score_limit), STATE_SELL
+    return bool((judged or not require_judged) and score < sell_score_limit and structure_broken), TREND_EXIT

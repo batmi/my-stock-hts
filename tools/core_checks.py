@@ -1,13 +1,13 @@
 """빠른 핵심 검사 — 커밋 전·CI 에서 매번 돌리는 작은 묶음(전체 회귀 검사와 구분한다).
 
 [무엇을 담나] 판단·주문·기록의 핵심 불변식과, 재발한 적 있는 결함을 막는 가드만 넣는다.
- 시각·장 상태에 기대지 않고 네트워크 없이 도는 것만 고른다 — 전체 스위트에는 요일·시각에
- 따라 갈리는 테스트가 있어 CI 신호로 쓰기 어렵다([[test-suite-open-delay-clock]]).
+ 시각·장 상태에 기대지 않고 네트워크 없이 도는 것만 고른다. 전체 스위트는 CI 가 매일 장 밖·장중
+ 두 시각에 따로 돌린다(.github/workflows/checks.yml — 시각 의존이 되살아났는지 보는 대조).
    · 채점: 구조화 결과·만점·가중치 범위·경계 원장
-   · 판단 공통화: 청산 체인·청산 패리티·사이징 패리티·52주 창 패리티
-   · 설정: 전역 임시 변경 금지·주기 스냅샷·폴백 리터럴·그룹 딕셔너리 대입
+   · 판단 공통화: 청산 체인·청산 패리티·사이징 패리티·52주 창 패리티·단일 종목 엔진·화면 판정
+   · 설정: 전역 임시 변경 금지·주기 스냅샷·폴백 리터럴·그룹 딕셔너리 대입·개별 룰 저장 왕복
    · 주문 상태: 결과 불명·중복 체결·재시작 미체결·부분체결 정책·DB 결과 불명·가상투자 가로채기·시험 모델
-   · 구조: pyflakes 기준선·README 트리·import 부작용·계층 패키지 규약·Python 3.10 호환·실행 기록
+   · 구조: pyflakes 기준선·README 트리·import 부작용·계층 패키지 규약·Python 3.10 호환·pandas 판 의미·실행 기록
 
 [실행]
   python tools/core_checks.py            # 핵심 묶음
@@ -31,12 +31,15 @@ CORE_TESTS = (
     "tests/test_exit_parity.py",
     "tests/test_sizing_parity.py",
     "tests/test_w52_window_parity.py",
+    "tests/test_single_engine_parity.py",
+    "tests/test_screen_judgment_parity.py",
     # 설정
     "tests/test_config_no_global_override.py",
     "tests/test_config_cycle_snapshot.py",
     "tests/test_config_fallback_literals.py",
     "tests/test_config_dict_fallback_literals.py",
     "tests/test_config_group_aliasing.py",
+    "tests/test_rule_persistence.py",
     # 주문 상태
     "tests/test_order_outcome_unclear.py",
     "tests/test_order_outcome_unknown.py",
@@ -53,6 +56,7 @@ CORE_TESTS = (
     "tests/test_import_side_effects.py",
     "tests/test_layer_packages.py",
     "tests/test_python310_compat.py",
+    "tests/test_pandas_version_semantics.py",
     "tests/test_run_manifest.py",
     # 감사 도구 규약(씨드 안내·공통 구간 분할)과 경계 실험 도구
     "tests/test_audit_seed_notice.py",

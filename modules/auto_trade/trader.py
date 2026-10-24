@@ -2601,7 +2601,7 @@ class AutoTrader:
 
                 rule_table.add_row(
                     name_disp,
-                    f"{r['buy_score']}점 / {r.get('buy_rsi', 65.0)} / {r.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0))}% / {r.get('buy_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0))}배",
+                    f"{r['buy_score']}점 / {r.get('buy_rsi', 65.0)} / {r.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0))}% / {_pkg().rule_value(r, 'buy_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0))}배",
                     f"+{r['take_profit']}% / TS(+{r['ts_activation']}/-{r['ts_callback']}) / {r.get('take_profit_rsi', 75.0)} / {r.get('time_stop_days', 10)}일",
                     f"{ratio_str} / {sl_str}",
                     w_str,
@@ -6393,8 +6393,9 @@ class AutoTrader:
             # 임계값(BUY_ASK_BID_RATIO; 개별 룰 우선)이 0이면 게이트가 꺼져 있어 호가 조회가 무의미하므로
             # 생략한다. 토스는 체결강도 미제공으로 호가비가 유일한 수급지표이므로 항상 조회한다.
             _ab_rule = rules_map.get(code)
-            _ab_thr = (_ab_rule.get('buy_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0))
-                       if _ab_rule else config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0))
+            #  룰의 NULL(지정 안 함)은 전역값 — rule.get(키, 기본값)은 NULL 에 None 을 준다.
+            _ab_thr = _pkg().rule_value(_ab_rule, 'buy_ask_bid_ratio',
+                                        config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0))
             _need_ob = config.session.is_toss or (_ab_thr or 0) > 0
 
             # 5. [최적화] 차트, 체결강도, 호가(수급비율) 데이터 병렬(동시) 조회
@@ -6456,7 +6457,7 @@ class AutoTrader:
             correlation_skip_msg = None
             if getattr(config, 'USE_CORRELATION_FILTER', True) and holdings_dfs:
                 corr_threshold = getattr(config, 'CORRELATION_THRESHOLD', 0.7)
-                cand_ret = df.set_index('date')['close'].astype(float).pct_change().dropna()
+                cand_ret = df.set_index('date')['close'].astype(float).ffill().pct_change(fill_method=None).dropna()
                 cand_group = item.get('group', 'stocks_kr') # 후보 종목의 그룹
                 
                 for hold_code, hold_info in holdings_dfs.items():
@@ -6473,7 +6474,7 @@ class AutoTrader:
                     if hold_ret is None:
                         hold_df = hold_info.get('df')
                         if hold_df is None or hold_df.empty: continue
-                        hold_ret = hold_df.set_index('date')['close'].astype(float).pct_change().dropna()
+                        hold_ret = hold_df.set_index('date')['close'].astype(float).ffill().pct_change(fill_method=None).dropna()
                         hold_info['ret'] = hold_ret
                     if hold_ret.empty: continue
 
@@ -6816,7 +6817,7 @@ class AutoTrader:
                     name = holding_names_map.get(code, code)
                     # [최적화] 수익률 시리즈를 주기당 1회만 계산 (워커에서 후보×보유 조합마다 재계산 방지)
                     try:
-                        ret = df.set_index('date')['close'].astype(float).pct_change().dropna()
+                        ret = df.set_index('date')['close'].astype(float).ffill().pct_change(fill_method=None).dropna()
                     except Exception:
                         ret = None
                     holdings_dfs[code] = {'name': name, 'df': df, 'ret': ret}
@@ -7307,43 +7308,19 @@ class AutoTrader:
             try:
                 # [수정] analysis 모듈의 공통 함수 사용 (Fallback 포함)
                 df = analysis.get_domestic_index_data(market_name)
-
-                #  길이만 세면 모자란다 — SMA 창 안의 결측 하나로 판정이 성립하지 않는데
-                #  len 검사는 통과한다(indicators.market_filter_ready 주석).
-                if (df is None or df.empty or len(df) < ma_period
-                        or not indicators.market_filter_ready(df['close'], ma_period)):
+                #  [SSOT 2026-10-24] 판정은 engine.market_filter_status 하나다(결측 검사·이탈 확인 밴드·출처
+                #   기록의 근거 주석도 그쪽에 있다). 개별 종목 진단·텔레그램 종목 분석이 같은 함수로
+                #   '이 시장의 신규 매수가 지금 막혀 있는가'를 보인다. 알림·로그·변동성 배율은 여기 몫이다.
+                stat = _pkg().market_filter_status(market_name, df=df)
+                if stat["unknown"]:
                     self.log(f"{market_name} 지수 데이터 부족/조회 실패 → 시장 방향 판단 불가로 신규 매수를 보류합니다. (매도·손절은 정상 동작)")
-                    self.market_index_status[market_name] = {"is_healthy": False, "unknown": True, "current": 0,
-                                                             "source": analysis.index_source(df)}
+                    self.market_index_status[market_name] = stat
                     self._notify_market_unknown(market_name, notify)
                     continue
 
-                # [이탈 확인 밴드] 상태 기계는 가격 이력만의 함수라 전 구간에서 재계산한다.
-                #  재기동해도 상태가 유실되지 않고, 백테스트(prepare_market_filter)와 같은 값을 본다.
-                #  판정과 그 근거를 한 번에 받는다 — 근거를 따로 계산하면 알림·상태 보고가
-                #  판정과 갈라진다(지수/SMA/차단·해제선/지속 봉 수는 모두 같은 상태 기계의 산물).
-                det = indicators.get_market_filter_detail(df['close'], ma_period, band_pct)
-                current_idx = df['close'].iloc[-1]
-                is_healthy = not bool(det['blocked'])
-
-                #  [Fix 2026-09-04] 판단에 쓴 지수가 **어디서 온 값인지** 함께 남긴다.
-                #   지수는 KRX 확정 봉 위에 KIS/토스/tvDatafeed/yfinance 중 하나를 얹어
-                #   만드는데(analysis._fetch_domestic_index_data), 종전에는 그 출처가
-                #   attrs 에만 있고 아무도 읽지 않았다. 최후 폴백(yfinance)은 최신 종가를
-                #   결측으로 주는 일이 잦아, 매수 중단·재개가 어긋났을 때 무엇으로 판단한
-                #   것인지 되짚을 수 없었다.
-                #   근거(det)에도 같은 것을 실어 보낸다 — 알림·상태 보고가 '무엇으로 언제 찍은
-                #   값인지'까지 한 줄에 말할 수 있어야 한다.
-                if 'date' in df.columns:
-                    det['asof'] = str(df['date'].iloc[-1])
-                det['source'] = analysis.index_source(df)
-                self.market_index_status[market_name] = {
-                    "is_healthy": is_healthy,
-                    "unknown": False,
-                    "current": current_idx,
-                    "source": analysis.index_source(df),
-                    "filter": det,   # 판정 근거(지수/SMA/차단·해제선/지속 봉 수/사유)
-                }
+                det = stat["filter"]
+                is_healthy = stat["is_healthy"]
+                self.market_index_status[market_name] = stat
 
                 # [동적 손절 캡] KOSPI 실현변동성의 장기 대비 배율을 갱신한다. 이 값이
                 #  engine.effective_atr_stop_cap을 통해 손절 캡을 국면에 맞춰 넓힌다.

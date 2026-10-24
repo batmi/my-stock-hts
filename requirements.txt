@@ -39,7 +39,7 @@ numpy>=1.26
 # --- 시세·데이터 소스 ------------------------------------------------------
 # requests: KIS REST·토스·DART·텔레그램·네이버 등 모든 HTTP 호출.
 requests>=2.28
-# urllib3: 재시도(Retry)·풀 설정을 api.py 가 직접 만진다.
+# urllib3: 재시도(Retry)·풀 설정을 api/http.py 가 직접 만진다.
 urllib3>=2.0
 # websockets: KIS 실시간 시세/체결통보 + 토스 주문 이벤트 피드(realtime.py).
 #  없으면 두 모드 모두 REST 폴백으로 퇴화한다(기능은 살아 있고 지연만 늘어난다).
@@ -70,7 +70,8 @@ tvdatafeed @ git+https://github.com/rongardF/tvdatafeed.git
 #  쓴다 — 구버전은 해당 달력이 없어 지수 개장 표기가 조용히 '휴장 없음'으로 퇴화한다.
 #  [주의] 임시공휴일 반영을 위해 갱신이 필요하지만, 기동 경로에서 자동 업그레이드하지
 #  않는다(휴장 판정 라이브러리가 기동 때마다 조용히 바뀌면 매매 시간 판단이 바뀐다).
-#  갱신은 tools/update_holidays.sh 를 주기 작업(주 1회 등)으로 돌려 분리한다.
+#  갱신은 앱이 7일마다 백그라운드에서 하고(modules/holiday_calendar_update — 전후 휴장일을 비교해
+#  달라진 날짜를 알리고 다음 기동부터 적용), tools/update_holidays.sh 는 수동 실행용으로만 남았다.
 holidays>=0.103
 
 # --- 리포트·차트 -----------------------------------------------------------
@@ -102,4 +103,12 @@ gnureadline>=8.0; sys_platform == "darwin"
 #   tradingview-screener 3.2.0 · tvdatafeed 2.1.0
 #   google-genai 2.19.0 · websockets 16.0 · cryptography 49.0.0
 #   gnureadline 8.3.3
+#
+# [검증 조합 · 2026-10-24] 새로 설치한 Python 3.13(운영 라즈베리파이와 같은 판) — 하한만 걸린 이 파일로
+#  설치하면 pandas 3.x 가 들어온다(3.10 은 2.x). 전체 테스트 5,919 통과(위 조합과 같은 수).
+#   rich 15.0.0 · pandas 3.1.0 · numpy 2.5.4 · yfinance 1.7.0 · requests 2.34.2
+#   urllib3 2.8.0 · matplotlib 3.11.2 · openpyxl 3.1.5
+#   python-dotenv 1.2.4 · pydantic 2.14.1 · holidays 0.107
+#   tradingview-screener 3.2.2 · tvdatafeed 2.1.0
+#   google-genai 2.33.0 · websockets 17.3 · cryptography 50.0.2
 # ============================================================================

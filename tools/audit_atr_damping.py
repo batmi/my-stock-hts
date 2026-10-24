@@ -149,7 +149,7 @@ def build_index_ratio(days, window=60):
     from datetime import datetime, timedelta
     start = (datetime.now() - timedelta(days=days + 400)).strftime("%Y-%m-%d")
     idx, close = load_index("KS11", start)
-    ret = pd.Series(close).pct_change()
+    ret = pd.Series(close).ffill().pct_change(fill_method=None)
     vol = ret.rolling(window).std()
     ref = vol.expanding(min_periods=250).median().shift(1)
     ratio = (vol / ref).clip(0.4, 3.0)

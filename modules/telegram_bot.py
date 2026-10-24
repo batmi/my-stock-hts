@@ -1093,7 +1093,7 @@ class TelegramCommander:
             from modules.auto_trade import common as _at_common
 
             msg += (f"\n• {name}({code})\n"
-                    f"   매수: {r['buy_score']}점 / RSI {r.get('buy_rsi', 65.0)}↓ / 체결 {r.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0))}% / 비대칭 {r.get('buy_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0))}배↑\n"
+                    f"   매수: {r['buy_score']}점 / RSI {r.get('buy_rsi', 65.0)}↓ / 체결 {r.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0))}% / 비대칭 {auto_trade.rule_value(r, 'buy_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0))}배↑\n"
                     f"   청산: 익절 +{r['take_profit']}% / 과열 RSI {r.get('take_profit_rsi', 75.0)}↑ / TS +{r['ts_activation']}%(-{r['ts_callback']}%) / 기한 {_at_common.effective_time_stop_days(rule=r)}일\n"
                     f"   리스크: 비중 {config.format_invest_ratio(r.get('invest_ratio'))} / 손절 {sl_str}\n"
                     f"   가중치: {w_str}\n"
@@ -2151,30 +2151,39 @@ class TelegramCommander:
             
             is_buy_score = score >= buy_score_limit
             is_buy_rsi = (ind['rsi'] is not None) and (ind['rsi'] < buy_rsi_limit)
-            is_safe_state = state not in ["매도", "주의"]
+            is_safe_state = state not in ["매도", "주의", "-"]
             
-            # 자동매매와 동일한 수급 필터링 기준 산출
-            min_vol = thresholds.get("BUY_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("BUY_VOL_STRENGTH", 100.0)
-            if state == "역매수":
-                min_vol = thresholds.get("MR_VOL_STRENGTH", config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("MR_VOL_STRENGTH", 120.0)
-            
-            min_ask_bid_ratio = thresholds.get("BUY_ASK_BID_RATIO", config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0)) if thresholds else config.ANALYSIS_THRESHOLDS.get("BUY_ASK_BID_RATIO", 1.0)
-            auto_adjust = thresholds.get("AUTO_ADJUST_ASK_BID_RATIO", config.ANALYSIS_THRESHOLDS.get("AUTO_ADJUST_ASK_BID_RATIO", True)) if thresholds else config.ANALYSIS_THRESHOLDS.get("AUTO_ADJUST_ASK_BID_RATIO", True)
-            if auto_adjust and min_ask_bid_ratio > 0 and min_vol > 0:
-                min_ask_bid_ratio = round(min_ask_bid_ratio * (min_vol / 100.0), 2)
-                
-            is_vol_ok = True
+            # [SSOT 2026-10-24] 수급 게이트는 실매매 analyze_buy 와 같은 함수(engine.flow_gate)·같은 문턱 조립
+            #  (engine.build_buy_thresholds)으로 판정한다. 종전 사본(주석은 '자동매매와 동일')은 체결강도를 못
+            #  구하면 통과로 보았고(실매매는 07-27 부터 보류), 토스에서 체결강도가 없으면 매도잔량비 검사까지
+            #  건너뛰었다(실매매 토스는 그것만으로 판정). '-'(판정 불가) 상태도 안전으로 보았다.
+            from modules.auto_trade import engine as _eng
+            is_vol_ok, _flow_reason, min_vol, min_ask_bid_ratio = _eng.flow_gate(
+                state, vol_strength, ask_bid_ratio, _eng.build_buy_thresholds(rule=custom_rule), is_overseas)
             vol_reason = ""
-            if vol_strength is not None:
-                if vol_strength < min_vol:
-                    is_vol_ok = False
+            if not is_vol_ok:
+                if _flow_reason.startswith("체결:"):
                     vol_reason = f"체결미달({vol_strength:.1f}%<{min_vol}%)"
-                elif ask_bid_ratio is not None and min_ask_bid_ratio > 0:
-                    if ask_bid_ratio < min_ask_bid_ratio:
-                        is_vol_ok = False
-                        vol_reason = f"매도잔량부족(비율 {ask_bid_ratio:.2f}<{min_ask_bid_ratio})"
+                elif _flow_reason.startswith("매도비:"):
+                    vol_reason = f"매도잔량부족(비율 {ask_bid_ratio:.2f}<{min_ask_bid_ratio})"
+                else:
+                    vol_reason = "체결강도 미확인(시스템은 보류)"
+
+            # [2026-10-24] 시장 필터 — 이 시장의 신규 매수가 막혀 있으면 시스템은 사지 않는다(매매 루프와 같은 판정).
+            market_reason = ""
+            if not is_overseas and getattr(config, 'USE_MARKET_FILTER', True):
+                try:
+                    _m_type = auto_trade.resolve_market_type(code)
+                    _mstat = _eng.market_filter_status(_m_type) if _m_type in ("KOSPI", "KOSDAQ") else None
+                    if _mstat is None or _mstat.get('unknown'):
+                        market_reason = "시장필터 판단불가(보류)"
+                    elif not _mstat.get('is_healthy'):
+                        market_reason = f"시장필터:{_m_type} {getattr(config, 'MARKET_FILTER_MA', 80)}일선 아래"
+                except Exception as e:      # noqa: BLE001 - 분석 응답은 끝까지 보낸다
+                    logger.debug(f"[분석] 시장 필터 판정 실패: {e}")
+                    market_reason = "시장필터 판단불가(보류)"
             
-            if is_buy_score and is_buy_rsi and is_safe_state and is_vol_ok:
+            if is_buy_score and is_buy_rsi and is_safe_state and is_vol_ok and not market_reason:
                 buy_result = f"🔴 매수 가능 (조건 충족{regime_msg})"
             else:
                 reasons = []
@@ -2185,6 +2194,8 @@ class TelegramCommander:
                     reasons.append(f"RSI과열({rsi_val}>={buy_rsi_limit})")
                 if not is_vol_ok:
                     reasons.append(vol_reason)
+                if market_reason:
+                    reasons.append(market_reason)
                 buy_result = f"🔵 매수 불가 ({', '.join(reasons)})"
 
             # [추가] TradingView 종합 기술적 평가 (Technical Rating) 조회

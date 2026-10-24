@@ -160,7 +160,7 @@ def _view_stock_rules():
 
         table.add_row(
             f"{r['name']}({r['code']})",
-            f"{r['buy_score']}점 / {r.get('buy_rsi', 65.0)} / {r.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0))}% / {r.get('buy_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0))}배",
+            f"{r['buy_score']}점 / {r.get('buy_rsi', 65.0)} / {r.get('buy_vol_strength', config.ANALYSIS_THRESHOLDS.get('BUY_VOL_STRENGTH', 100.0))}% / {_pkg().rule_value(r, 'buy_ask_bid_ratio', config.ANALYSIS_THRESHOLDS.get('BUY_ASK_BID_RATIO', 1.0))}배",
             f"+{r['take_profit']}%{half_tp_str} / TS(+{r['ts_activation']}/-{r['ts_callback']}) / {r.get('take_profit_rsi', 75.0)} / {r.get('time_stop_days', 10)}일",
             f"{ratio_str} / {sl_str}",
             w_str,
@@ -288,8 +288,11 @@ def _input_and_save_rule(code, name):
     current = existing if existing else defaults.copy()
     
     # [추가] 기존 데이터에 신규 필드가 누락된 경우 기본값으로 채움 (DB 스키마 변경 대응)
+    #  [2026-10-24] 열은 있어도 값이 NULL(지정 안 함)이면 똑같이 채운다 — 종전엔 '현재: None'이
+    #   기본값으로 떠서 Enter 가 float("None") 으로 거부되고 입력을 빠져나갈 수 없었다.
+    #   NULL 은 판정에서도 전역값을 따르므로(engine.rule_value) 화면도 전역값을 보인다.
     for key, val in defaults.items():
-        if key not in current:
+        if current.get(key) is None:
             current[key] = val
             
     # DB에서 가져온 값이 None일 경우 빈 문자열로 처리
@@ -332,7 +335,7 @@ def _input_and_save_rule(code, name):
         else:
             new_strategy['buy_vol_strength'] = ask_val('buy_vol_strength', "매수 체결강도 기준(%) (기본: 100.0, 0: 미사용)", "수급 확인 (이 값 이상이어야 매수)", float)
 
-            curr_auto = "y" if current.get('auto_adjust_ask_bid_ratio', defaults['auto_adjust_ask_bid_ratio']) else "n"
+            curr_auto = "y" if current['auto_adjust_ask_bid_ratio'] else "n"   # NULL 은 위에서 기본값으로 채웠다
             val_auto = Prompt.ask(f"매도잔량비 자동 연동 (y: 사용 / n: 미사용) [dim](현재: {curr_auto})\n[dim]체결강도 설정값에 비례하여 최저 1.0배 자동 조정[/dim]", choices=["y", "n", "b", "q"], default=curr_auto)
             if val_auto.lower() in ['b', 'q']: raise QuitInput()
             new_strategy['auto_adjust_ask_bid_ratio'] = 1 if val_auto.lower() == 'y' else 0

@@ -1,4 +1,5 @@
 # modules/backtest.py
+import dataclasses
 import pandas as pd
 import numpy as np
 import math
@@ -665,6 +666,15 @@ def prepare_vol_regime(days, is_overseas=False):
     return _VOL_REGIME_STATE["by_date"]
 
 
+# 공통 청산 체인(exit_rules)의 사유 코드 → 단일 종목 리포트의 매도 사유 어휘(종전 화면·집계와 같은 말)
+_SINGLE_EXIT_REASON = {
+    "half_take_profit": "반익절", "take_profit": "익절", "profit_preserve": "수익보존",
+    "profit_lock": "이익보호", "bep_stop": "본전청산", "atr_stop": "ATR손절", "stop_loss": "손절",
+    "time_stop": "시간청산", "trailing_stop": "트레일링스탑", "rsi_take_profit": "RSI과열",
+    "defensive_half": "방어적 반매도", "state_sell": "점수하락", "trend_exit": "점수하락",
+}
+
+
 def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, buy_rsi_limit, is_overseas,
                       stop_loss_rate=None, take_profit_rate=None,
                       take_profit_rsi=None, sell_score=None,
@@ -673,8 +683,16 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
                       use_atr_stop_limit=None, atr_stop_multiplier_limit=None, half_tp_use_limit=None,
                       weights=None,
                       execution_noise=False,
-                      pyramiding_max_count_limit=None):
-    """주어진 설정으로 백테스팅 시뮬레이션을 수행하고 결과를 반환"""
+                      pyramiding_max_count_limit=None,
+                      pyr_reset_time_stop=False):
+    """주어진 설정으로 백테스팅 시뮬레이션을 수행하고 결과를 반환
+
+    pyr_reset_time_stop: 증액할 때 시간청산 시계를 0으로 되돌리는가. **기본 False = 실매매와 같음**
+        (실매매는 진입일 기준 — engine.resolve_entry_date). True 는 2026-10-24 이전 단일 종목 수치를
+        재현할 때만 쓴다(포트폴리오 엔진 run_portfolio 의 같은 이름 인자와 같은 뜻).
+    """
+    from modules import exit_rules as _xr
+    from modules.auto_trade import engine as _eng
     
     # 시뮬레이션 변수
     balance = initial_capital
@@ -731,6 +749,38 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
     use_atr_stop = use_atr_stop_limit if use_atr_stop_limit is not None else config.SELL_STRATEGY.get("USE_ATR_STOP", True)
     atr_mult = atr_stop_multiplier_limit if atr_stop_multiplier_limit is not None else config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
     use_vol_target = getattr(config, 'USE_VOLATILITY_TARGETING', True)
+
+    # [청산 규칙] 실행 동안 바뀌지 않는 값은 한 번만 조립한다(종전엔 봉마다 다시 읽었다). 체인은
+    #  exit_rules.evaluate_exit 이고, 규칙 차이 두 개(판정 불가 상태의 점수매도·SELL_SCORE ≤ 0 일 때
+    #  '매도' 상태)는 포트폴리오 엔진(decide_sell)과 같은 백테스트 규약으로 둔다.
+    ss = config.SELL_STRATEGY
+    at = config.ANALYSIS_THRESHOLDS
+    time_stop_days = time_stop_days_limit if time_stop_days_limit is not None else ss["TIME_STOP_DAYS"]
+    exit_base_rules = _xr.ExitRules(
+        use_atr=use_atr_stop,
+        use_time_stop=ss.get("TIME_STOP_USE", True) and time_stop_days > 0,
+        time_stop_days=time_stop_days,
+        time_stop_min=ss.get("TIME_STOP_MIN_PROFIT_RATE", 0.0),
+        ts_act=ts_activation, ts_callback=ts_callback, ts_atr_mult=ts_atr_mult,
+        ts_breakeven=str(ss.get("TS_ACTIVATION_MODE", "breakeven")).lower() == "breakeven",
+        sell_score_limit=sell_score_limit,
+        profit_lock_use=ss.get("PROFIT_LOCK_USE", False),
+        profit_lock_min_mfe=ss.get("PROFIT_LOCK_MIN_MFE"),
+        profit_lock_giveback=ss.get("PROFIT_LOCK_GIVEBACK"),
+        bep_use=ss.get("USE_BREAK_EVEN_STOP", False),
+        bep_activation=ss.get("BREAK_EVEN_PROFIT_RATE", 5.0),
+        bep_stop=ss.get("BREAK_EVEN_STOP_RATE", 0.5),
+        tp_rate=take_profit_limit,
+        half_tp_use=half_tp_use_limit if half_tp_use_limit is not None else ss.get("HALF_TAKE_PROFIT_USE", False),
+        tp_rsi=take_profit_rsi_limit,
+        super_use=at.get("SUPER_MOMENTUM_USE", True),
+        super_score=at.get("SUPER_MOMENTUM_SCORE", 8.0),
+        super_w52=at.get("SUPER_MOMENTUM_W52_POS", 90.0),
+        super_tp_rsi=ss.get("SUPER_TAKE_PROFIT_RSI", 90.0),
+        defensive_half_use=ss.get("DEFENSIVE_HALF_SELL_USE", False),
+        mr_grace_loss_rate=ss.get("MR_GRACE_LOSS_RATE", -7.0),
+        require_judged=False, state_sell_always=False,
+    )
 
     peak_asset = initial_capital
     mdd = 0.0
@@ -853,121 +903,33 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             loss_rate = (price - position['avg_price']) / position['avg_price'] * 100
             if high_price > ts_highest_price: ts_highest_price = high_price
 
-            max_profit_rate = ((ts_highest_price - position['avg_price']) / position['avg_price']) * 100 if position['avg_price'] > 0 else 0
-
-            # [추가] 본전 청산(BEP) 로직 적용
-            bep_activation = config.SELL_STRATEGY.get("BREAK_EVEN_PROFIT_RATE", 5.0)
-            # [동기화] ATR 동적 손절 적용 시 BEP 발동 기준을 손절폭(절대값)과 1:1 동기화 (실매매와 동일)
-            if atr_sl_applied and sl_rate_to_use < 0:
-                bep_activation = abs(sl_rate_to_use)
-            bep_stop = config.SELL_STRATEGY.get("BREAK_EVEN_STOP_RATE", 0.5)
-            is_bep_applied = False
-            # [2026-08-04] BEP 기본 OFF — 실매매(engine.analyze_sell)와 같은 토글을 쓴다.
-            if config.SELL_STRATEGY.get("USE_BREAK_EVEN_STOP", False) and max_profit_rate >= bep_activation:
-                if sl_rate_to_use < bep_stop:
-                    sl_rate_to_use = bep_stop
-                    is_bep_applied = True
-                    
             # [추가] 현재 보유 기간(일수) 계산
             current_holding_days = (current_date_dt - buy_date_dt).days if buy_date_dt and pd.notna(current_date_dt) else 0
 
-            sell_signal = False
-            reason = ""
-            sell_ratio = 1.0 # 기본 전량 매도
-            
-            use_half_tp = half_tp_use_limit if half_tp_use_limit is not None else config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_USE", False)
-            half_tp_limit = config.SELL_STRATEGY.get("HALF_TAKE_PROFIT_RATE", take_profit_limit / 2.0)
-            
-            use_time_stop = config.SELL_STRATEGY.get("TIME_STOP_USE", True)
-            time_stop_days = time_stop_days_limit if time_stop_days_limit is not None else config.SELL_STRATEGY["TIME_STOP_DAYS"]
-            time_stop_min_profit = config.SELL_STRATEGY.get("TIME_STOP_MIN_PROFIT_RATE", 0.0)
-            
-            if time_stop_days <= 0:
-                use_time_stop = False
+            # [2026-10-24] 청산 판정 체인은 modules/exit_rules.evaluate_exit 하나다 — 실매매
+            #  (engine.analyze_sell)·포트폴리오 엔진(portfolio_backtest.decide_sell)과 같은 함수.
+            #  종전에는 여기에 세 번째 사본이 손으로 적혀 있었고(10-16 공통화가 이 엔진을 빠뜨렸다),
+            #  다른 두 곳에서 이미 고친 결함을 들고 있었다 — 시간청산 '유예'가 elif 를 소비해 그날
+            #  트레일링 스탑 판정을 건너뛰었고(2026-09-01 수정분), 이익보호선은 아예 없어 켜도 무시됐다.
+            #  익절·반익절·RSI 익절·방어적 반매도도 같은 체인이라 최적화 화면이 켜면 실매매와 같게 돈다.
+            #  [BEP] ATR 손절이 걸리면 발동 기준을 손절폭(절대값)과 1:1 로 맞춘다(실매매 thresholds 와 같다).
+            rules = exit_base_rules
+            if exit_base_rules.bep_use and atr_sl_applied and sl_rate_to_use < 0:
+                rules = dataclasses.replace(exit_base_rules, bep_activation=abs(sl_rate_to_use))
+            decision = _xr.evaluate_exit(_xr.ExitInputs(
+                price=price, avg=position['avg_price'], high=ts_highest_price, profit_rate=loss_rate,
+                holding_days=current_holding_days, sl_rate=sl_rate_to_use, atr_applied=atr_sl_applied,
+                atr=row.get('ATR', 0), state=state, state_reason=state_reason,
+                # 점수매도는 sell_check(=그날 점수, '매도' 상태면 0)로 판정한다(decide_sell 과 같다)
+                score=sell_check_score, ema60=row.get('EMA60'),
+                roll_high_5=row.get('roll_high_5'), roll_high_10=row.get('roll_high_10'), has_bars=True,
+                rsi=row.get('RSI'), psar=row.get('SAR'), ema_5=row.get('EMA5'), w52_pos=row.get('w52_pos', 0) or 0,
+                already_half_sold=half_tp_executed, is_mr_holding=(buy_reason_str == "역매수"),
+            ), rules)
+            sell_signal = decision.sell
+            sell_ratio = decision.sell_ratio if decision.sell else 1.0
+            reason = _SINGLE_EXIT_REASON[decision.code] if decision.sell else ""
 
-            mr_grace_loss_limit = config.SELL_STRATEGY.get("MR_GRACE_LOSS_RATE", -7.0)
-
-            # [동기화] 익절/반익절/수익보존 체인 - 실매매(engine.analyze_sell)와 동일 순서·조건
-            #  (기본 설정은 TAKE_PROFIT_RATE=0으로 모두 비활성이나, 옵션을 켜면 실매매와 동일하게 재현)
-            if take_profit_limit > 0 and use_half_tp and not half_tp_executed and loss_rate >= half_tp_limit:
-                sell_signal = True; reason = "반익절"; sell_ratio = 0.5
-            elif take_profit_limit > 0 and loss_rate >= take_profit_limit and not (use_half_tp and half_tp_executed):
-                # 반익절 후 잔여 물량은 천장 해제 (Let profit run) — 해당 케이스는 체인을 소비하지 않아
-                # 아래 손절/시간청산/트레일링 스탑 판정이 계속 동작한다 (실매매 engine.analyze_sell과 동일)
-                sell_signal = True; reason = "익절"
-            elif take_profit_limit > 0 and use_half_tp and half_tp_executed and max_profit_rate >= take_profit_limit and loss_rate <= max(take_profit_limit - 3.0, 0.5):
-                # [동기화] 수익보존 (Profit Lock-in): 목표 돌파 후 목표-3% 아래로 되돌리면 잔량 매도
-                # (하한 +0.5%: 익절 목표 3% 이하 설정 시 손실 매도 방지 — 실매매 engine.analyze_sell과 동일)
-                sell_signal = True; reason = "수익보존"
-            elif sl_rate_to_use != 0 and loss_rate <= sl_rate_to_use: # [수정] 가중 평균 손절률 사용
-                sell_signal = True
-                if is_bep_applied:
-                    reason = "본전청산"
-                elif use_atr_stop and sl_rate_to_use != stop_loss_limit:
-                    reason = "ATR손절" # [수정] ATR 손절 사유
-                else:
-                    reason = "손절"
-            elif use_time_stop and current_holding_days >= time_stop_days and loss_rate < time_stop_min_profit:
-                # [동기화] 시간청산 유예: 실매매와 동일하게 '매수/상승 상태 유지 + 상방 모멘텀(최근 5일 고점 >= 10일 고점)'
-                #  이중 확인을 모두 통과해야 유예 (기존에는 상태만 확인해 실매매보다 관대했음)
-                time_stop_triggered = True
-                if state in ["매수", "강매수", "역매수", "상승", "대기"]:
-                    if row.get('roll_high_5', 0) >= row.get('roll_high_10', 0):
-                        time_stop_triggered = False # 상방 모멘텀 유지 → 유예
-                if time_stop_triggered:
-                    sell_signal = True; reason = "시간청산"
-            elif ts_highest_price > 0:
-                # [SSOT] 발동 기준은 실매매(engine.compute_trailing_stop)와 같은 모드를 따른다.
-                #  두 경로가 다른 식을 쓰면 백테스트 수치가 실매매를 설명하지 못한다.
-                if str(config.SELL_STRATEGY.get("TS_ACTIVATION_MODE", "breakeven")).lower() == "breakeven":
-                    from modules.auto_trade.engine import (breakeven_activation_rate,
-                                                           ts_activation_atr_mult)
-                    ts_act_eff = breakeven_activation_rate(row.get('ATR', 0), position['avg_price'],
-                                                           ts_callback, ts_activation_atr_mult(),
-                                                           use_atr_stop)
-                else:
-                    ts_act_eff = ts_activation
-                if max_profit_rate >= ts_act_eff:
-                    drop_rate = ((ts_highest_price - price) / ts_highest_price) * 100
-                    
-                    actual_ts_callback = ts_callback
-                    atr_val = row.get('ATR', 0)
-                    if use_atr_stop and atr_val > 0:
-                        dynamic_callback = (atr_val * ts_atr_mult / ts_highest_price) * 100
-                        # [SSOT] 하한·상한을 포함한 실효 콜백 산식은 engine.effective_callback이
-                        #  단독 보유한다. 백테스트가 실거래와 다른 식을 쓰면 튜닝 결과가 무의미해진다.
-                        from modules.auto_trade.engine import effective_callback
-                        actual_ts_callback = effective_callback(
-                            ts_callback, dynamic_callback, max_profit_rate)
-
-                    if drop_rate >= actual_ts_callback: sell_signal = True; reason = "트레일링스탑"
-                    
-            # [추가] 방어적 반매도 로직 동기화
-            defensive_half_tp = config.SELL_STRATEGY.get("DEFENSIVE_HALF_SELL_USE", False)
-            if not sell_signal and defensive_half_tp and not half_tp_executed:
-                psar_val = row.get('SAR')
-                ema5_val = row.get('EMA5')
-                if psar_val is not None and ema5_val is not None:
-                    if loss_rate >= time_stop_min_profit and price < psar_val and price < ema5_val:
-                        sell_signal = True; reason = "방어적 반매도"; sell_ratio = 0.5
-
-            # [추가] 슈퍼 모멘텀 기반 동적 RSI 매도 로직 반영
-            actual_tp_rsi = take_profit_rsi_limit
-            if is_super:
-                actual_tp_rsi = config.SELL_STRATEGY.get("SUPER_TAKE_PROFIT_RSI", 90.0)
-            
-            if not sell_signal and take_profit_rsi_limit > 0 and row['RSI'] > actual_tp_rsi: sell_signal = True; reason = "RSI과열"
-            # [동기화] 점수 매도는 추세 구조 훼손(주가<60일선) 동시 충족 시에만 발동 (실매매 engine.analyze_sell과 동일).
-            #   '매도' 상태(sell_check_score=0 처리)는 자체 조건이 엄격하므로 구조 확인 없이 즉시 발동.
-            ema60_val = row.get('EMA60')
-            structure_broken = (state == "매도") or ema60_val is None or price < ema60_val
-            if not sell_signal and sell_check_score < sell_score_limit and structure_broken:
-                # [추가] 역추세 매수 종목은 지정된 유예 기간(TIME_STOP_DAYS)간 점수 하락으로 팔지 않고 기회를 줌
-                if buy_reason_str == "역매수" and current_holding_days <= time_stop_days and loss_rate > mr_grace_loss_limit:
-                    pass
-                else:
-                    sell_signal = True; reason = "점수하락"
-            
             if sell_signal:
                 # [수정] 슬리피지 비율 적용 및 호가 정렬 (노이즈 포함)
                 slippage_mult = 1.0
@@ -1027,36 +989,44 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
 
             # [동기화] 피라미딩 (수익 포지션 증액) - 실매매 trader._try_pyramid_buy와 동일 조건
             #  매도 신호가 없고, 수익률이 트리거 이상이며, 매수 신호(추세)가 유지 중일 때만 증액 (손실 종목 발동 불가)
+            #  [SSOT 2026-10-24] 판정식(차수·수익률·추세)은 engine.pyramid_gate_ok 가 단독 보유한다 —
+            #   실매매와 포트폴리오 엔진은 08-19 부터 그 함수를 불렀고 이 엔진만 옮겨 적고 있었다.
             pyr_market_blocked = (pyr_require_healthy and mf_dates is not None and str(date) in mf_dates)
-            if (not sell_signal) and pyr_use and position['qty'] > 0 and pyramid_count < pyr_max \
-                    and loss_rate >= pyr_trigger and state in ("매수", "강매수") and not pyr_market_blocked:
+            if (not sell_signal) and pyr_use and position['qty'] > 0 and not pyr_market_blocked \
+                    and _eng.pyramid_gate_ok(loss_rate, state, pyramid_count, pyr_max, pyr_trigger):
                 add_qty = int(position['qty'] * pyr_ratio)
                 if add_qty >= 1:
                     slippage_mult = random.uniform(0.5, 1.5) if execution_noise else 1.0
                     raw_add_price = price * (1 + (config.SLIPPAGE_RATE * slippage_mult))
                     add_price = utils.adjust_to_tick(raw_add_price, is_overseas)
                     if add_price > 0:
-                        add_qty = min(add_qty, int(balance / add_price)) # 예수금 한도 내 증액
+                        # 예수금 한도 내 증액 — 신규 매수와 같이 매수 수수료까지 감당할 수량으로 잡는다
+                        add_qty = min(add_qty, int(balance / (add_price * (1 + config.BUY_FEE_RATE))))
                     if add_price > 0 and add_qty >= 1:
                         # 증액분 손절률: 증액 시점 ATR로 재계산 (가중평균 손절선에 반영)
                         atr_sl_rate = 0.0
                         atr_val = row.get('ATR', 0)
                         if use_atr_stop and atr_val and atr_val > 0:
                             # [SSOT] 실매매와 같은 함수 — 캡을 바꿔도 두 경로가 갈라지지 않는다.
-                            from modules.auto_trade import engine as _eng
                             atr_sl_rate = _eng.atr_stop_rate(
                                 atr_val, add_price, atr_mult=atr_mult,
                                 vol_ratio=_VOL_REGIME_STATE["by_date"].get(str(row.get('date')))) or 0.0
 
                         cost = add_qty * add_price
-                        balance -= cost
+                        #  [비용 · 2026-10-24] 증액분도 매수 수수료를 잔고에서 뺀다 — 종전엔 신규 매수만 뺐다
+                        #   (보고 손익은 net_realized_profit 이 평단 기준으로 이미 빼고 있어 잔고만 부풀었다).
+                        balance -= cost + trading_cost.buy_fee(cost, is_overseas)
                         total_cost = (position['qty'] * position['avg_price']) + cost
                         position['qty'] += add_qty
                         position['avg_price'] = total_cost / position['qty']
                         position['buy_trades'].append({'qty': add_qty, 'price': add_price, 'atr_sl_rate': atr_sl_rate})
                         pyramid_count += 1
-                        # 실매매는 최근 매수 시점부터 시간청산을 재계산하므로 동일하게 기준일 갱신
-                        buy_date_dt = current_date_dt
+                        # [패리티 · 2026-10-24] 시간청산 시계는 리셋하지 않는다 — 실매매는 2026-07-29 부터
+                        #  진입일(보유수량 0→1) 기준이다(engine.resolve_entry_date: 리셋하면 증액할 때마다
+                        #  시계가 무한히 미뤄진다). 종전 주석 "실매매는 최근 매수 시점부터"는 그 뒤로 사실이
+                        #  아니었고, 포트폴리오 엔진은 08-16 에 같은 결함을 고쳤다(pyr_reset_time_stop).
+                        if pyr_reset_time_stop:
+                            buy_date_dt = current_date_dt      # 옛 수치 재현 전용
 
                         trades.append({
                             "date": date, "type": f"매수(피라미딩 {pyramid_count}차)", "price": add_price, "qty": add_qty, "balance": balance,
@@ -1094,7 +1064,6 @@ def simulate_strategy(sim_df, prev_row_init, initial_capital, buy_score_limit, b
             atr_val = row.get('ATR', 0)
             if use_atr_stop and atr_val > 0:
                 # [SSOT] 실매매와 같은 함수 — 캡을 바꿔도 두 경로가 갈라지지 않는다.
-                from modules.auto_trade import engine as _eng
                 atr_sl_rate = _eng.atr_stop_rate(
                     atr_val, buy_price, atr_mult=atr_mult,
                     vol_ratio=_VOL_REGIME_STATE["by_date"].get(str(row.get('date')))) or 0.0
@@ -1358,7 +1327,7 @@ def run_monte_carlo_simulation(full_df, start_idx, initial_capital, buy_score, b
             daily_assets = res['daily_assets']
             sr = 0.0
             if len(daily_assets) > 1:
-                s = pd.Series(daily_assets).pct_change().dropna()
+                s = pd.Series(daily_assets).pct_change(fill_method=None).dropna()
                 if not s.empty and s.std() > 0:
                     sr = (s.mean() / s.std()) * np.sqrt(252)
             sharpe_ratios.append(sr)
@@ -1715,7 +1684,7 @@ def run_walk_forward(full_df, start_idx, initial_capital, is_overseas, base_para
     def _sharpe(res):
         da = res.get('daily_assets', [])
         if len(da) > 1:
-            r = pd.Series(da).pct_change().dropna()
+            r = pd.Series(da).pct_change(fill_method=None).dropna()
             if len(r) > 0 and r.std() > 0:
                 return (r.mean() / r.std()) * np.sqrt(252)
         return 0.0
@@ -2566,7 +2535,7 @@ def run_backtest():
         # [추가] 샤프 지수 계산 (연율화: 252일 기준)
         sharpe_ratio = 0.0
         if len(daily_assets) > 1:
-            returns = pd.Series(daily_assets).pct_change().dropna()
+            returns = pd.Series(daily_assets).pct_change(fill_method=None).dropna()
             if not returns.empty and returns.std() > 0:
                 sharpe_ratio = (returns.mean() / returns.std()) * np.sqrt(252)
 

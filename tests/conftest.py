@@ -197,6 +197,8 @@ def block_side_effects_for_whole_session():
     mp.setattr(_hcu, "_pip_upgrade", _no_pip)
     mp.setattr(_hcu, "_snapshot_in_fresh_interpreter", _no_pip)
 
+    #  [격리 2026-10-24] 네트워크 차단은 세션이 끝나도 풀지 않는다(아래 yield 뒤 주석).
+    net = pytest.MonkeyPatch()
     import requests as _requests
 
     class _FakeTelegramResponse:
@@ -297,7 +299,7 @@ def block_side_effects_for_whole_session():
             return _blocked_for(u)
         return _orig_request(self, method, url, *args, **kwargs)
 
-    mp.setattr(_requests.Session, "request", _guarded_request)
+    net.setattr(_requests.Session, "request", _guarded_request)
 
     #  [Fix 2026-09-24] **urllib 도 requests 를 비켜 간다.** KIS 종목 마스터(kospi/kosdaq_code.mst.zip)는
     #   analysis._get_master_stock_list 가 urllib.request.urlretrieve 로 받는다. 위 차단은 requests 만 보므로
@@ -324,8 +326,8 @@ def block_side_effects_for_whole_session():
             return _orig_urlopen(url, *a, **k)
         raise OSError(f"{_BLOCKED_MSG} (urllib: {u})")
 
-    mp.setattr(_urlreq, "urlretrieve", _blocked_urlretrieve)
-    mp.setattr(_urlreq, "urlopen", _blocked_urlopen)
+    net.setattr(_urlreq, "urlretrieve", _blocked_urlretrieve)
+    net.setattr(_urlreq, "urlopen", _blocked_urlopen)
 
     #  [Fix 2026-09-06] **yfinance 는 requests.Session 을 쓰지 않는다.**
     #   위 _LIVE_HOSTS 에 finance.yahoo.com 이 있어 막힌다고 믿었지만, yfinance 는
@@ -342,13 +344,18 @@ def block_side_effects_for_whole_session():
         def _yf_blocked(*a, **k):
             raise RuntimeError(f"{_BLOCKED_MSG} (yfinance)")
 
-        mp.setattr(_yf, "download", _yf_blocked, raising=False)
-        mp.setattr(_yf, "Ticker", _yf_blocked, raising=False)
-        mp.setattr(_yf, "Tickers", _yf_blocked, raising=False)
+        net.setattr(_yf, "download", _yf_blocked, raising=False)
+        net.setattr(_yf, "Ticker", _yf_blocked, raising=False)
+        net.setattr(_yf, "Tickers", _yf_blocked, raising=False)
     except Exception:       # noqa: BLE001 - yfinance 미설치 환경
         pass
 
     yield
+    #  [2026-10-24] 네트워크 차단(net)은 되돌리지 않는다 — 테스트가 남긴 데몬 스레드가 세션 종료와
+    #   프로세스 종료 사이에 살아 있으면, 되돌린 직후 **실서버로 나간다**. 실측: 체결 감시 테스트 20파일을
+    #   병렬로 돌리면 작업자 2개가 RestrictionCheck 스레드 4개를 남긴 채 끝났고, 그 스레드들이 가짜 앱키로
+    #   한투 토큰 발급(403)·잔고 조회(500)를 실제로 보냈다(실행마다 12줄). 프로세스가 끝나는 자리라
+    #   되돌릴 이유가 없다. 그 스레드는 reset_all_singletons 가 테스트마다 퇴역시킨다(세대 번호).
     mp.undo()
 
 
@@ -743,11 +750,14 @@ def reset_all_singletons():
         try:
             _monitor.is_running = False
             _monitor.shutdown.set()
-            #  신호를 못 보고 자고 있는 보조 스레드까지 퇴역시킨다 — 다음 테스트가
-            #  start() 로 그 신호를 지워도 세대는 되돌릴 수 없다.
-            _conclusion_mod._bump_aux_epoch()
         except Exception:
             pass
+    #  신호를 못 보고 자고 있는 보조 스레드까지 퇴역시킨다 — 다음 테스트가
+    #  start() 로 그 신호를 지워도 세대는 되돌릴 수 없다.
+    #  [2026-10-24] 인스턴스가 없어도 올린다. 종전엔 위 if 안에 있어, 인스턴스를 스스로 지운 테스트나
+    #   싱글톤이 아닌 객체로 체결 감시를 돌린 테스트의 스레드가 살아남았다 — 체결 감시 20파일 병렬
+    #   실행에서 작업자 2개가 RestrictionCheck 4개를 남긴 채 끝나 실서버로 나갔다(세션 픽스처 yield 뒤 주석).
+    _conclusion_mod._bump_aux_epoch()
 
     #  [격리 2026-09-07] 매매일지 워커도 같은 이유로 **먼저 세운다.** 참조만 끊으면
     #   이미 떠 있는 스레드는 계속 돌고, 그 스레드는 옛 self 를 붙들고 있다 — monkeypatch 가

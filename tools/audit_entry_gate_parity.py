@@ -58,7 +58,7 @@ class CorrGate:
         close = pd.DataFrame({c: pd.Series(
             {str(r["date"]): float(r["close"]) for r in df.to_dict("records")})
             for c, df in dfs.items()}).reindex(dates)
-        ret = close.pct_change()
+        ret = close.ffill().pct_change(fill_method=None)
         codes = list(dfs.keys())
         self.blocked = {}
         for i, a in enumerate(codes):
