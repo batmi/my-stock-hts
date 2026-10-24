@@ -1752,6 +1752,10 @@ class AutoTrader(TraderReportingMixin):
                         # [리스크 스케일링] 약세 국면·계좌 드로다운 반영 리스크 한도 배수 갱신 (주기당 1회)
                         self._update_risk_scale()
 
+                        # [동적 손절 캡] 지수 변동성 배율 — 시장 필터 설정과 무관하게 갱신한다(값은 하루 한 번
+                        #  바뀐다). 매도·매수 검사보다 먼저 — 신규 진입·증액의 손절률이 이 캡을 본다.
+                        self._update_vol_regime()
+
                         # [관찰 모드] 가상 자산 일별 스냅샷 — 자산곡선·MDD 산출의 유일한 소스다.
                         #  같은 날 재호출은 덮어쓰므로 주기마다 불러도 하루 1행만 남는다.
                         if getattr(config.session, 'is_paper', False):
@@ -5193,19 +5197,7 @@ class AutoTrader(TraderReportingMixin):
                 det = stat["filter"]
                 is_healthy = stat["is_healthy"]
                 self.market_index_status[market_name] = stat
-
-                # [동적 손절 캡] KOSPI 실현변동성의 장기 대비 배율을 갱신한다. 이 값이
-                #  engine.effective_atr_stop_cap을 통해 손절 캡을 국면에 맞춰 넓힌다.
-                #  [기준 지수는 KOSPI 하나] 코스닥 종목도 KOSPI를 쓴다 — 캡은 '시장 전체가
-                #  지금 얼마나 거친가'를 재는 장치이고, 무엇보다 이 설정을 정한 검증이
-                #  KOSPI 단일 기준으로 수행됐다. 실매매가 다른 기준을 쓰면 그 검증이
-                #  실거래에 옮겨가지 않는다(백테스트 backtest.prepare_vol_regime과 동일 규약).
-                if market_name == "KOSPI":
-                    try:
-                        _pkg().set_vol_regime_ratio(
-                            float(indicators.vol_regime_ratio(df['close']).iloc[-1]))
-                    except Exception as e:
-                        logger.debug(f"[동적 손절 캡] 변동성 배율 갱신 실패(고정 캡 유지): {e}")
+                #  [2026-10-24] 동적 손절 캡의 변동성 배율은 여기서 갱신하지 않는다 — _update_vol_regime 주석.
 
                 # 상태 변경 알림
                 if not notify:
@@ -5299,6 +5291,41 @@ class AutoTrader(TraderReportingMixin):
         if whipsaw >= hi:
             return min_scale
         return 1.0 - (whipsaw - lo) / (hi - lo) * (1.0 - min_scale)
+
+    def _update_vol_regime(self):
+        """[동적 손절 캡] 지수 변동성 배율을 갱신한다 — 시장 필터 설정과 무관하게 매 주기(값은 하루 한 번 바뀐다).
+
+        이 배율이 engine.effective_atr_stop_cap 을 통해 ATR 손절 캡을 국면에 맞춰 넓힌다.
+        [기준 지수는 KOSPI 하나] 코스닥 종목도 KOSPI 를 쓴다 — 캡은 '시장 전체가 지금 얼마나 거친가'를
+         재는 장치이고, 이 설정을 정한 검증이 KOSPI 단일 기준으로 수행됐다(backtest.prepare_vol_regime 과 같은 규약).
+        [2026-10-24 · 도입 이후 한 번도 작동하지 않던 자리] 종전에는 _update_market_indices_status 가 판단용
+         지수 창(약 260봉)으로 배율을 쟀다. 배율의 워밍업은 311봉이라 값이 늘 1.0 이었고, 그 함수는 시장 필터를
+         켰을 때만 돌았다. 지금은 analysis.get_live_vol_regime 이 백테스트와 같은 식을 긴 확정 종가 이력에 적용한다.
+        이력을 못 받으면 고정 캡(배율 1.0)으로 두고 하루 한 번 알린다 — 백테스트 쪽 실패 규약과 같다.
+        """
+        ss = config.SELL_STRATEGY
+        if not ss.get("MAX_ATR_STOP_LOSS_RATE", -15.0) or not ss.get("ATR_CAP_DYNAMIC", True):
+            return              # 캡 미사용·고정 캡 설정이면 배율을 읽지 않는다
+        self._vol_regime_tried = True
+        info = analysis.get_live_vol_regime()
+        prev = getattr(self, 'vol_regime_info', None)
+        self.vol_regime_info = info
+        if not info:
+            _pkg().set_vol_regime_ratio(1.0)
+            today = datetime.now().strftime("%Y-%m-%d")
+            if getattr(self, '_vol_regime_warned_on', None) != today:
+                self._vol_regime_warned_on = today
+                msg = ("[동적 손절 캡] 지수 장기 이력을 받지 못해 ATR 손절 캡을 고정값"
+                       f"({_pkg().effective_atr_stop_cap():.1f}%)으로 둡니다 — 다음 주기에 다시 시도합니다.")
+                self.log(msg)
+                logger.warning(msg)
+            return
+        _pkg().set_vol_regime_ratio(info["ratio"])
+        if not prev or prev.get("asof") != info["asof"] or abs(prev.get("ratio", 0.0) - info["ratio"]) > 1e-9:
+            asof = info["asof"]
+            self.log(f"[동적 손절 캡] 지수 변동성 배율 x{info['ratio']:.2f} → ATR 손절 캡 "
+                     f"{_pkg().effective_atr_stop_cap():.1f}% (기준 {asof[4:6]}/{asof[6:8]} 확정 종가, "
+                     f"{info['source']} {info['bars']:,}봉)")
 
     def _update_risk_scale(self):
         """[리스크 스케일링] 시장 국면·휩소율·계좌 드로다운에 따른 신규 진입 리스크 한도 배수 갱신

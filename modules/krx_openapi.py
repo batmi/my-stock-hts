@@ -847,6 +847,29 @@ def index_daily(market_type, lookback_days, max_calls=None, now=None):
     return _finish(rows, "OPENAPI")
 
 
+def index_history_stored(market_type, start_dd="00000000", end_dd="99999999"):
+    """저장소에 **이미 받아 둔** 지수 일봉만 읽는다 — API 를 부르지 않는다. 없으면 None.
+
+    [왜 따로 있나 · 2026-10-24] index_daily 는 요청 구간의 빈 날을 채우려고 API 를 부른다. 동적 손절 캡의
+     지수 변동성 배율처럼 10년 넘는 이력이 필요한 자리에서 그 함수를 부르면 하루 한 콜씩 수천 콜이 나간다
+     (파이 1GB·일일 한도). 장기 통계는 있는 만큼만 읽고, 모자라면 호출부가 다른 출처로 간다.
+    """
+    spec = INDEX_KEYS.get(str(market_type or "").upper())
+    if not spec:
+        return None
+    api_id, name = spec
+    try:
+        with _DB_LOCK, _connect() as conn:
+            rows = conn.execute(
+                "SELECT bas_dd, open, high, low, close, volume FROM index_daily "
+                "WHERE api_id=? AND name=? AND bas_dd BETWEEN ? AND ? ORDER BY bas_dd",
+                (api_id, name, str(start_dd), str(end_dd))).fetchall()
+    except Exception as e:      # noqa: BLE001 - 읽기 실패는 '없음'과 같게 다른 출처로 넘긴다(호출부가 사유를 남긴다)
+        logger.debug(f"[KRX-OPENAPI] 지수 '{name}' 저장분 읽기 실패: {e}")
+        return None
+    return _finish(rows, "OPENAPI")
+
+
 def k200_futures_daily(session="F", lookback_days=400, max_calls=None, now=None):
     """코스피200 선물 근월물 일봉. session='F'(정규/주간) | 'CM'(야간).
 

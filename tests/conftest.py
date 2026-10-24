@@ -724,6 +724,8 @@ def reset_all_singletons():
     #  실제로 test_failclosed_chaos 가 0.7296을 남겨 test_settings_guardrails 의
     #  SSOT 검증이 xdist 워커 배치에 따라 간헐 실패했다. 전역이므로 여기서 막는다.
     _atr_engine.set_vol_regime_ratio(1.0)
+    #  [2026-10-24] 그 배율의 실매매 입력(긴 지수 이력의 하루 캐시)도 같은 이유로 비운다.
+    analysis.reset_live_vol_regime()
     # [격리 2026-08-24] 개장 직후 진입 보류 게이트. `_check_buy_conditions` 는 맨 앞에서
     #  이 게이트를 보고 **곧바로 return** 한다. 게이트는 벽시계(datetime.now())를 보므로,
     #  테스트를 평일 09:00~09:30 사이에 돌리면 매수 경로 테스트가 아래 예수금·슬롯 로그에
@@ -899,6 +901,7 @@ def reset_all_singletons():
     analysis._MARKET_REGIME_CACHE.clear()
     analysis.reset_tvdatafeed_circuit()
     _atr_engine.set_vol_regime_ratio(1.0)
+    analysis.reset_live_vol_regime()
 
 def create_mock_df(trend='up', periods=100, start_price=10000, seed=20260830):
     """가상의 주가 데이터프레임 생성 헬퍼 함수.

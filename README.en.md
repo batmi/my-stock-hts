@@ -125,7 +125,7 @@ Chosen at startup or via `--mode`. Each mode keeps a separate config profile, so
 
 ### Exit — evaluated in priority order
 
-1. **Stop loss** — ATR-based dynamic stop (`USE_ATR_STOP`, ON). **Break-even stop**: once peak profit clears the threshold, the stop is raised to +0.5%.
+1. **Stop loss** — ATR-based dynamic stop (`USE_ATR_STOP`, ON). The stop-width cap (default -15%) widens when KOSPI volatility runs above its long-run median (dynamic cap, up to about -26%). Live trading measures that ratio once a day from 15 years of confirmed index closes, independent of the market-filter setting; the current value appears in the risk line of `/health`. The **break-even stop** (raising the stop to +0.5% once peak profit clears the threshold) is off by default after measurement (`USE_BREAK_EVEN_STOP`).
 2. **Time stop** — after `TIME_STOP_DAYS` (15), only names still **at a loss** with no upside momentum are cleared (winners are never sold on time alone).
 3. **Trailing stop (primary exit · Chandelier)** — arming is set by the symbol's own volatility (break-even linked), then it sells on a dynamic callback from the high. **The arming multiplier and the callback multiplier are separate**, so arming earlier never narrows the exit line.
 4. **Trend break** — full exit when the score falls below `SELL_SCORE` (4.0) **and** price loses the 60-day line (structural damage). A score drop alone does not sell, so ordinary pullbacks inside an aligned trend do not trigger early exits.

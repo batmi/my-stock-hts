@@ -254,6 +254,15 @@ class Market:
         df.attrs["source"] = "REPLAY"
         return df
 
+    @staticmethod
+    def kospi_long(settled_dd):
+        """동적 손절 캡의 지수 변동성 배율 입력 — 15년 KOSPI 확정 종가(끝 60일만 변동성을 키워 배율이 1.0 을 벗어난다)."""
+        n = 3700
+        rs = np.random.RandomState(7)
+        sd = np.r_[np.full(n - 60, 0.010), np.full(60, 0.018)]
+        close = 1000.0 * np.cumprod(1 + rs.normal(0.0003, sd))
+        return pd.Series(close), settled_dd, "REPLAY"
+
 
 # ── 실행 ───────────────────────────────────────────────────────────────────────────────────
 _MASKS = (
@@ -359,6 +368,9 @@ def run(tmp_path, cycles=CYCLES):
         P(api, "is_nxt_tradeable", lambda *a, **k: False)
         P(api, "send_telegram_message", _send_telegram)
         P(analysis, "get_domestic_index_data", lambda market_name, *a, **k: market.index(market_name))
+        P(analysis, "_live_vol_history", Market.kospi_long)
+        analysis.reset_live_vol_regime()
+        st.callback(analysis.reset_live_vol_regime)
 
         AutoTrader = _trader_mod.AutoTrader     # 패키지가 재수출하는 것과 같은 클래스
         AutoTrader._instance = None

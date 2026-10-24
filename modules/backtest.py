@@ -625,8 +625,8 @@ _VOL_REGIME_STATE = {"key": None, "by_date": {}}
 def prepare_vol_regime(days, is_overseas=False):
     """[동적 손절 캡] 날짜별 지수 변동성 배율 {YYYYMMDD: ratio} 를 준비한다.
 
-    실매매(trader)는 같은 산식(indicators.vol_regime_ratio)을 그날의 지수 종가에 적용해
-    한 개의 값을 얻는다. 백테스트는 과거 각 시점의 값이 필요하므로 시계열로 만든다.
+    실매매는 같은 산식(indicators.vol_regime_ratio)을 같은 출처의 긴 이력에 적용해 마지막 확정일의
+    값 하나를 쓴다(analysis.get_live_vol_regime). 백테스트는 과거 각 시점의 값이 필요하므로 시계열로 만든다.
 
     [기준 지수는 KOSPI 하나] 종목이 코스닥이어도 KOSPI를 쓴다. 캡은 '시장 전체가 지금
     얼마나 거친가'를 재는 장치이고, 무엇보다 이 설정을 정한 검증이 KOSPI 단일 기준으로

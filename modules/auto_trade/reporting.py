@@ -689,6 +689,23 @@ class TraderReportingMixin:
             if risk_scale_reason:
                 risk_parts.append(f"축소 사유: {risk_scale_reason[:60]}")
 
+        # [동적 손절 캡 · 2026-10-24] 지금 적용 중인 ATR 손절 캡과 그 근거. 도입(08-09) 이후 실매매 캡이 한 번도
+        #  움직이지 않았는데 어디에도 보이지 않아 두 달 넘게 몰랐다 — 고정값으로 도는 것도 그렇다고 적는다.
+        try:
+            _ss = config.SELL_STRATEGY
+            if _ss.get("MAX_ATR_STOP_LOSS_RATE", -15.0) and _ss.get("ATR_CAP_DYNAMIC", True):
+                _cap = _pkg().effective_atr_stop_cap()
+                _vi = getattr(self, 'vol_regime_info', None)
+                if _vi:
+                    risk_parts.append(f"ATR 손절 캡 {_cap:.1f}% (지수 변동성 x{_vi['ratio']:.2f}, "
+                                      f"{_vi['asof'][4:6]}/{_vi['asof'][6:8]} 확정 종가 기준)")
+                elif getattr(self, '_vol_regime_tried', False):
+                    risk_parts.append(f"ATR 손절 캡 {_cap:.1f}% 고정 (지수 장기 이력 미확보)")
+                else:
+                    risk_parts.append(f"ATR 손절 캡 {_cap:.1f}% (루프 실행 후 지수 변동성 반영)")
+        except Exception:
+            pass
+
         # [표시 정직성] SYSTEM_RISK_PER_TRADE(명목 한도)는 변동성 타겟팅이 켜져 있는 한
         #  사이징 min 결합에서 한 번도 구속되지 않는다(config.py의 2026-07-27 실측 주석 참조).
         #  명목값만 보이면 "1회 4% 리스크로 돌고 있다"는 오해를 부르므로, 실제로 금액을 결정하는

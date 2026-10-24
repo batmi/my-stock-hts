@@ -507,6 +507,8 @@ def vol_regime_ratio(close, window=None, ref_min=None):
     정보만 쓴다. 워밍업 구간(ref_min 미만)은 1.0을 돌려준다 = 캡이 고정값 그대로 동작.
 
     실매매(trader)와 백테스트(backtest.prepare_vol_regime)가 이 함수 하나를 공유한다.
+    [입력 길이 · 2026-10-24] 워밍업은 window+ref_min+1(기본 311)봉이다. 실매매의 판단용 지수 창(약 260봉)을
+     넣으면 값이 늘 1.0 이라, 실매매 입력은 analysis.get_live_vol_regime 의 긴 확정 종가 이력이다.
     """
     if window is None:
         window = int(config.SELL_STRATEGY.get("ATR_CAP_VOL_WINDOW", 60))

@@ -2097,6 +2097,12 @@ def get_market_regime_detail(market_type="KOSPI"):
     자동매매는 매 주기(매도검사·매수스캔 각각) 시장별로 호출하므로, 짧은 TTL 캐시로
     지수 차트 조회 + 지표 재계산 중복을 제거한다. (국면은 초 단위로 변하지 않음)
     데이터 부족/오류 폴백은 일시 장애일 수 있어 캐시하지 않는다.
+
+    [휩소율은 판단용 지수 창 안에서 센다 — 긴 이력으로 바꾸지 말 것 · 2026-10-24 확인] 이 창(KRX 확정 봉
+     400일 ≈ 264봉)으로 세면 2026년 KOSPI 휩소율이 62~75%, 전체 이력으로 세면 25~50% 로 갈린다. 그러나 현행
+     휩소율 설정을 정한 감사(tools/audit_axis_combination·audit_drawdown_axis — audit_market_axes.regime_series)가
+     같은 길이의 창(LIVE_WINDOW=260)으로 계산했다. 창 길이가 검증된 규칙의 일부다. (동적 손절 캡의 변동성
+     배율은 반대로 백테스트가 긴 이력으로 검증했다 — get_live_vol_regime.)
     """
     cached = _MARKET_REGIME_CACHE.get(market_type, ttl=_MARKET_REGIME_TTL_SEC)
     if cached is not None:
@@ -2136,6 +2142,108 @@ def get_market_regime(market_type="KOSPI"):
     """
     info = get_market_regime_detail(market_type)
     return info['regime'], info['score_adj']
+
+
+# ── [동적 손절 캡] 실매매용 지수 변동성 배율 ──────────────────────────────────────────────
+#  [왜 · 2026-10-24] 배율(indicators.vol_regime_ratio)은 60일 변동성 ÷ 250표본 이상의 확장 중앙값이라
+#   311봉 이상이 있어야 1.0 이 아닌 값을 낸다. 실매매가 판단용으로 들고 있는 지수 창은 KRX 264봉·KIS 300봉·
+#   tvDatafeed 260봉이라 **늘 워밍업 안**이었다 — 손절 캡은 도입(2026-08-09) 이후 실매매에서 한 번도
+#   움직이지 않고 -15% 였다(같은 기간 백테스트 배율 3.0·캡 -26%). 그 갱신이 시장 필터 갱신 안에만 있어
+#   필터를 끈 운용(파이 가상)은 계산조차 하지 않았다. 백테스트(backtest.prepare_vol_regime)와 같은 식을
+#   같은 출처(yfinance ^KS11)의 긴 이력에 적용해 하루 한 번 잰다.
+#  [확정 종가만] 장중 봉을 섞으면 배율이 분마다 흔들린다. 백테스트도 날짜별 한 값이다 — 실매매는 마지막
+#   확정 거래일까지의 값을 쓴다(장중에는 하루 늦은 값).
+#  ※ 휩소율(국면 배수)은 이렇게 하지 않는다 — get_market_regime_detail 주석 참조.
+_LIVE_VOL_HISTORY_DAYS = 15 * 365       # 기준 중앙값을 잡는 이력. 10년 백테스트가 쓰는 창(기간+800일)보다 길게
+_LIVE_VOL_MIN_STORED_BARS = 2500        # 로컬 Open API 저장분으로 대신하려면 약 10년은 있어야 한다
+_LIVE_VOL_RETRY_SEC = 1800              # 못 받았거나 확정일보다 낡았을 때 다시 묻는 간격
+_LIVE_VOL_MAX_STALE_DAYS = 7            # 이보다 낡은 값은 버리고 고정 캡으로 돌아간다
+_LIVE_VOL = {"key": None, "info": None, "tried_at": 0.0}
+_LIVE_VOL_LOCK = threading.Lock()
+
+
+def reset_live_vol_regime():
+    """실매매 변동성 배율 캐시를 비운다(테스트 격리·재생 하네스용)."""
+    with _LIVE_VOL_LOCK:
+        _LIVE_VOL.update(key=None, info=None, tried_at=0.0)
+
+
+def _live_vol_history(settled_dd):
+    """긴 KOSPI 확정 종가 이력 → (close Series, 마지막 확정일 'YYYYMMDD', 출처). 못 구하면 (None, None, None).
+
+    settled_dd(마지막 확정 거래일)보다 뒤의 봉은 버린다 — yfinance 일봉은 장중에 오늘 봉을 현재가로 준다.
+    """
+    start = (datetime.now() - timedelta(days=_LIVE_VOL_HISTORY_DAYS)).strftime("%Y-%m-%d")
+    # 1) 백테스트와 같은 출처 — 기준 중앙값을 같은 자료로 잡는다
+    try:
+        df = api.fetch_yfinance_data("^KS11", start=start)
+        if df is not None and not df.empty:
+            if isinstance(df.columns, pd.MultiIndex):
+                try:
+                    df = df.xs("^KS11", axis=1, level=1)
+                except Exception:   # noqa: BLE001 - 단일 티커 응답 모양이 판마다 다르다
+                    pass
+            df = df.copy()
+            df.columns = [str(c).lower() for c in df.columns]
+            dates = pd.to_datetime(df.index).strftime("%Y%m%d")
+            close = pd.Series(np.asarray(pd.to_numeric(df["close"], errors="coerce"), dtype=float),
+                              index=dates).dropna()
+            close = close[close.index <= settled_dd]
+            if len(close) >= _LIVE_VOL_MIN_STORED_BARS:
+                return close.reset_index(drop=True), str(close.index[-1]), "YF"
+    except Exception as e:      # noqa: BLE001 - 다음 출처로 넘어간다
+        logger.debug(f"[동적 손절 캡] yfinance 지수 이력 조회 실패: {e}")
+    # 2) 로컬 Open API 저장분 — 이미 받아 둔 것만 읽는다(조회하지 않는다)
+    try:
+        from modules import krx_openapi
+        h = krx_openapi.index_history_stored("KOSPI", start.replace("-", ""), settled_dd)
+        if h is not None and len(h) >= _LIVE_VOL_MIN_STORED_BARS:
+            return (pd.Series(np.asarray(pd.to_numeric(h["close"], errors="coerce"), dtype=float)).dropna()
+                    .reset_index(drop=True), str(h["date"].iloc[-1]), "OPENAPI")
+    except Exception as e:      # noqa: BLE001
+        logger.debug(f"[동적 손절 캡] Open API 저장분 읽기 실패: {e}")
+    return None, None, None
+
+
+def get_live_vol_regime():
+    """실매매 손절 캡용 지수 변동성 배율 — {'ratio', 'asof', 'source', 'bars'} 또는 None(이력 없음).
+
+    하루 한 번 받는다(마지막 확정 거래일이 바뀌면 다시). 못 받으면 직전에 알던 값을 쓰되
+    _LIVE_VOL_MAX_STALE_DAYS 보다 낡았으면 None — 호출부는 고정 캡(배율 1.0)으로 돌아간다.
+    """
+    try:
+        settled = api.krx_last_settled_day()
+    except Exception:           # noqa: BLE001
+        settled = datetime.now().strftime("%Y%m%d")
+    now = time.time()
+    with _LIVE_VOL_LOCK:
+        info, key, tried = _LIVE_VOL["info"], _LIVE_VOL["key"], _LIVE_VOL["tried_at"]
+        up_to_date = info is not None and key == settled and info["asof"] >= settled
+        if up_to_date or (key == settled and now - tried < _LIVE_VOL_RETRY_SEC):
+            return _fresh_enough(info, settled)
+        _LIVE_VOL["key"], _LIVE_VOL["tried_at"] = settled, now
+
+    close, asof, source = _live_vol_history(settled)
+    new = None
+    if close is not None:
+        ratio = float(indicators.vol_regime_ratio(close).iloc[-1])
+        if ratio > 0 and math.isfinite(ratio):
+            new = {"ratio": ratio, "asof": asof, "source": source, "bars": int(len(close))}
+    with _LIVE_VOL_LOCK:
+        if new is not None:
+            _LIVE_VOL["info"] = new
+        return _fresh_enough(_LIVE_VOL["info"], settled)
+
+
+def _fresh_enough(info, settled_dd):
+    if not info:
+        return None
+    try:
+        age = (datetime.strptime(settled_dd, "%Y%m%d") - datetime.strptime(info["asof"], "%Y%m%d")).days
+    except (TypeError, ValueError):
+        return None
+    return info if age <= _LIVE_VOL_MAX_STALE_DAYS else None
+
 
 def get_index_momentum(market_type="KOSPI", lookback=None):
     """[추세추종] 지수 모멘텀(%) — 최근 lookback 거래일 지수 수익률 (상대강도 RS 필터 기준선).
