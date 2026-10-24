@@ -9,13 +9,16 @@
     한쪽만 고친 import 가 화면과 매매를 다른 세계에서 돌게 한다.
 [2026-10-24 2단계] 시장·리스크 메서드 10개를 modules/auto_trade/market_risk.TraderMarketRiskMixin 으로 옮겼다
  (같은 방법 — AST 동일, 전역 26개 동일 객체). 믹스인끼리도 같은 이름을 들면 먼저 상속한 쪽이 조용히 이긴다.
- 바깥 동작의 동등성은 주기 재생 기록 두 시나리오(tests/test_cycle_replay.py — base·market_stress)가 본다.
+[2026-10-25 3단계] 계좌 동기화 메서드 12개를 modules/auto_trade/account_sync.TraderAccountSyncMixin 으로 옮겼다
+ (같은 방법 — AST 동일, 전역 36개 중 남는 이름 동일 객체, 그 메서드들만 쓰던 상수 4개도 함께).
+ 바깥 동작의 동등성은 주기 재생 기록 세 시나리오(tests/test_cycle_replay.py — base·market_stress·account_sync)가 본다.
 """
 import inspect
+import itertools
 
 import pytest
 
-from modules.auto_trade import market_risk, reporting, trader
+from modules.auto_trade import account_sync, market_risk, reporting, trader
 
 MIXINS = {
     reporting: (reporting.TraderReportingMixin,
@@ -26,8 +29,15 @@ MIXINS = {
                   ("_update_market_indices_status", "_format_market_filter_basis", "_notify_market_unknown",
                    "_whipsaw_risk_scale", "_update_vol_regime", "_update_risk_scale", "_risk_floor_day",
                    "_hold_intraday_floor", "_save_risk_floor", "_get_account_drawdown_pct"),
-                  {"config", "api", "analysis", "datetime", "timedelta", "db_manager", "logger",
-                   "_get_trade_account", "trade_account_key"}),
+                  {"config", "api", "analysis", "datetime", "db_manager", "logger",
+                   "_get_trade_account", "trade_account_key"}),     # timedelta 는 3단계로 trader 가 안 쓴다
+    account_sync: (account_sync.TraderAccountSyncMixin,
+                   ("effective_baseline", "daily_pnl_base", "transfer_note", "_offline_transfer_threshold",
+                    "_realized_matches_broker", "_reconcile_offline_transfer", "_reevaluate_buy_halt_after_transfer",
+                    "_sync_external_fills", "_run_account_circuit_breaker", "_monitor_account_status",
+                    "_get_toss_open_buy_reserved", "_get_total_estimated_asset"),
+                   {"config", "api", "account", "datetime", "db_manager", "logger", "time", "_get_trade_account",
+                    "is_plausible_baseline", "load_daily_initial_asset", "save_daily_initial_asset"}),
 }
 _IDS = [m.__name__.rsplit(".", 1)[-1] for m in MIXINS]
 
@@ -55,9 +65,9 @@ def test_같은_이름의_메서드가_양쪽에_없다(mod):
 
 
 def test_믹스인끼리_같은_이름의_메서드가_없다():
-    a, b = (MIXINS[m][0] for m in MIXINS)
-    both = _own_methods(a) & _own_methods(b)
-    assert not both, f"먼저 상속한 믹스인이 다른 믹스인의 메서드를 가린다: {sorted(both)}"
+    for (a, *_), (b, *_) in itertools.combinations(MIXINS.values(), 2):
+        both = _own_methods(a) & _own_methods(b)
+        assert not both, f"먼저 상속한 {a.__name__} 가 {b.__name__} 의 메서드를 가린다: {sorted(both)}"
 
 
 @pytest.mark.parametrize("mod", MIXINS, ids=_IDS)

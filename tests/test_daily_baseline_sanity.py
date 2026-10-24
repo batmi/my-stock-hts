@@ -137,16 +137,19 @@ def test_호출부가_실패를_사용자에게_알린다(monkeypatch, tmp_path)
     import os
 
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    src = open(os.path.join(root, "modules/auto_trade/trader.py"), encoding="utf-8").read()
-    tree = ast.parse(src)
-    bare = []
-    for n in ast.walk(tree):
-        if (isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)
-                and ast.unparse(n.value.func).endswith("save_daily_initial_asset")):
-            bare.append(n.lineno)
+    bare, seen = [], 0
+    #  [2026-10-25] 계좌 감시(첫 주기 기준선 저장)는 C1 3단계로 account_sync.py 에 있다 — 두 파일을 다 본다.
+    for rel in ("modules/auto_trade/trader.py", "modules/auto_trade/account_sync.py"):
+        tree = ast.parse(open(os.path.join(root, rel), encoding="utf-8").read())
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Call) and ast.unparse(n.func).endswith("save_daily_initial_asset"):
+                seen += 1
+            if (isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)
+                    and ast.unparse(n.value.func).endswith("save_daily_initial_asset")):
+                bare.append(f"{rel.rsplit('/', 1)[-1]}:{n.lineno}")
+    assert seen >= 3, f"기준선 저장 호출을 {seen}곳만 찾았다 — 코드가 옮겨졌다면 이 가드의 파일 목록을 고쳐라"
     assert not bare, (
-        "기준선 저장 결과를 버리는 호출이 남아 있다 — 실패해도 '저장됨'으로 보인다: "
-        + ", ".join(f"trader.py:{ln}" for ln in bare))
+        "기준선 저장 결과를 버리는 호출이 남아 있다 — 실패해도 '저장됨'으로 보인다: " + ", ".join(bare))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

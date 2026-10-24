@@ -544,6 +544,7 @@ my-stock-hts/
 │   │   ├── trader.py       #     Main loop (analyze → buy/sell → report)
 │   │   ├── reporting.py    #     Trader screens and reports (status, ops health, performance report, log viewer)
 │   │   ├── market_risk.py  #     Trader market and risk state (market filter, judgement on hold, risk multiplier, stop-cap ratio)
+│   │   ├── account_sync.py #     Trader account sync (equity baseline, transfer detection, account circuit breaker, external-fill sync)
 │   │   ├── conclusion.py   #     Fill monitoring and confirmation
 │   │   ├── performance.py  #     Performance-report math (record cleanup, statistics; pure functions)
 │   │   ├── common.py       #     Shared helpers (restrictions, hours, order status)

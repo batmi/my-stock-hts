@@ -33,10 +33,11 @@ _ALLOWED: dict[str, str] = {
     #   `except Exception: pass` 자체가 사라졌기 때문이다(취소 예외를 '취소 실패'로
     #   세도록 고치면서). 탐지되지 않으므로 예외도 필요 없다. 낡음 자기점검이
     #   이 사실을 알려 줬다.
-    'modules/auto_trade/trader.py::_reconcile_offline_transfer':
+    #  [2026-10-25] 두 자리는 C1 3단계로 account_sync.py 에 있다(본문 그대로).
+    'modules/auto_trade/account_sync.py::_reconcile_offline_transfer':
         "정지 중 입출금 자동 반영 통지 — 본문이 '조치할 것은 없습니다'라고 적는다. "
         "반영은 이미 DB 에 끝났고 리스크 기준은 파생 보정된다.",
-    'modules/auto_trade/trader.py::_monitor_account_status':
+    'modules/auto_trade/account_sync.py::_monitor_account_status':
         "외부 예수금 입출금 자동 감지 통지 — 위와 같은 이유. 기준선을 옮기지 않고 "
         "알리기만 하는 자리다.",
 }
@@ -45,6 +46,10 @@ _ALLOWED: dict[str, str] = {
 _CRITICAL_FILES = (
     'modules/auto_trade/engine.py',
     'modules/auto_trade/trader.py',
+    #  AutoTrader 에서 나눈 조각(C1). 판단 보류·계좌 드로다운(시장·리스크), 시작 자산 이상·외부 매수 제한
+    #  안내(계좌 동기화)가 여기서 나간다. [2026-10-25] market_risk 는 2단계(10-24)에서 이 목록에 넣는 것을 빠뜨렸다.
+    'modules/auto_trade/market_risk.py',
+    'modules/auto_trade/account_sync.py',
     'modules/reserved_order_monitor.py',
     'modules/market_halt.py',
 )

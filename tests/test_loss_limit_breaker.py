@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 
 import config
 from modules.auto_trade import AutoTrader
-from modules.auto_trade.trader import CIRCUIT_BREAKER_ALERT_FAILS
+from modules.auto_trade.account_sync import CIRCUIT_BREAKER_ALERT_FAILS   # C1 3단계(2026-10-25)로 옮겼다
 
 
 @pytest.fixture

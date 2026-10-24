@@ -130,7 +130,7 @@ def test_a_stale_correction_does_not_survive_a_failed_measurement():
 
 def test_rounding_noise_is_not_a_transfer():
     """실측값 77원은 입출금이 아니다."""
-    from modules.auto_trade.trader import OFFLINE_TRANSFER_FLOOR
+    from modules.auto_trade.account_sync import OFFLINE_TRANSFER_FLOOR   # C1 3단계(2026-10-25)로 옮겼다
 
     assert abs(77) < OFFLINE_TRANSFER_FLOOR, \
         "잡음 바닥이 실측 잔차(77원)를 못 거른다"
@@ -142,7 +142,7 @@ def test_the_floor_is_low_enough_for_a_small_account():
     운영 DB에 10,027원 계좌의 1만원 출금 사례가 있다 — 그 계좌엔 전 재산이다.
     이 값은 사이징·차단기의 보정에 쓰이므로 알림 문턱과 같으면 안 된다.
     """
-    from modules.auto_trade.trader import OFFLINE_TRANSFER_FLOOR
+    from modules.auto_trade.account_sync import OFFLINE_TRANSFER_FLOOR   # C1 3단계(2026-10-25)로 옮겼다
 
     assert OFFLINE_TRANSFER_FLOOR <= 10_000
 
@@ -156,9 +156,9 @@ def test_the_recording_path_actually_applies_the_floor():
     써야 한다 — 같은 판정이면 같은 문턱.
     """
     import inspect
-    from modules.auto_trade import trader as tr
+    from modules.auto_trade import account_sync    # 기록 경로(_monitor_account_status)는 C1 3단계(2026-10-25)로 여기 있다
 
-    src = inspect.getsource(tr)
+    src = inspect.getsource(account_sync)
     i = src.index("_net = int(current_principal - self.baseline_principal)")
     window = src[i:i + 2200]
     assert "abs(_net) < self._offline_transfer_threshold(self.baseline_principal)" in window, \
