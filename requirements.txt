@@ -111,4 +111,8 @@ gnureadline>=8.0; sys_platform == "darwin"
 #   python-dotenv 1.2.4 · pydantic 2.14.1 · holidays 0.107
 #   tradingview-screener 3.2.2 · tvdatafeed 2.1.0
 #   google-genai 2.33.0 · websockets 17.3 · cryptography 50.0.2
+#
+# [운영 조합 · 2026-10-24 파이 실측] Python 3.13 · pandas 2.3.3 · numpy 2.2.4 (나머지는 미확인).
+#  최저 지원 판은 Python 3.12(run.sh 가드) — 3.12 이상은 이 파일로 새로 설치하면 pandas 3.x 를 받으므로,
+#  CI 는 위 운영 조합을 판 고정으로 따로 돌린다(.github/workflows/checks.yml). 파이 판이 바뀌면 둘 다 고친다.
 # ============================================================================

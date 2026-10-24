@@ -7,8 +7,12 @@
 #    세 구간은 2026-09-20 에 모두 해소됐고(conftest 자동 고정 2개 + order_age_seconds) 수동 실행은 한 번도
 #    돌지 않았다. 장중 실행은 시각 의존이 다시 생겼는지 드러내는 대조다 — 03:00 만 깨지거나 10:30 만
 #    깨지면 코드가 아니라 실행 시각을 먼저 의심한다.
-#  · 파이썬 판: 최저 지원판(3.10) · 운영 라즈베리파이(3.13) · 개발기(3.14). 3.11+ 에서는 pip 가 pandas 3.x 를
-#    받는다(3.10 은 2.x) — 개발기 venv 와 판이 다를 수 있다는 것을 이 매트릭스가 대신 본다.
+#  · 파이썬 판: 최저 지원판(3.12) · 운영 라즈베리파이(3.13) · 개발기(3.14).
+#    [2026-10-24] 최저 판 3.10 → 3.12. 3.12 이상은 하한만 걸린 requirements 로 pandas 3.x 를 받는데,
+#    운영 파이와 개발기 venv 는 pandas 2.3.3 이다 — 그래서 '운영 파이와 같은 조합'을 판 고정(pins)으로
+#    따로 둔다(파이 실측 10-24: Python 3.13 · pandas 2.3.3 · numpy 2.2.4). 파이 판이 바뀌면 여기도 바꾼다:
+#      python3 -c "import pandas, numpy; print(pandas.__version__, numpy.__version__)"
+#    나머지 두 판은 '지금 새로 설치하면 받는 최신'(pandas 3)을 본다.
 #  · 실계좌·외부 서비스 호출 없음: tests/conftest.py 가 네트워크 호스트와 운영 파일을 막는다.
 name: checks
 
@@ -32,7 +36,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.10", "3.13", "3.14"]
+        include:
+          - python: "3.12"     # 최저 지원판 — 새로 설치하면 받는 최신 의존성(pandas 3)
+            pins: ""
+          - python: "3.13"     # 운영 라즈베리파이와 같은 조합
+            pins: "pandas==2.3.3 numpy==2.2.4"
+          - python: "3.14"     # 개발기 판 — 새로 설치하면 받는 최신 의존성(pandas 3)
+            pins: ""
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -43,7 +53,9 @@ jobs:
             requirements.txt
             requirements-dev.txt
       - name: 의존성 설치
-        run: python -m pip install -r requirements-dev.txt
+        run: python -m pip install -r requirements-dev.txt ${{ matrix.pins }}
+      - name: 설치된 판
+        run: python -c "import sys, pandas, numpy; print(sys.version.split()[0], 'pandas', pandas.__version__, 'numpy', numpy.__version__)"
       - name: 핵심 검사
         env:
           TZ: Asia/Seoul
@@ -64,7 +76,8 @@ jobs:
             requirements.txt
             requirements-dev.txt
       - name: 의존성 설치
-        run: python -m pip install -r requirements-dev.txt
+        #  전체 회귀는 운영 파이와 같은 조합으로 돈다(core 매트릭스의 3.13 항목과 같은 판 고정)
+        run: python -m pip install -r requirements-dev.txt pandas==2.3.3 numpy==2.2.4
       - name: 설치된 판
         run: python -c "import sys, pandas, numpy; print(sys.version.split()[0], 'pandas', pandas.__version__, 'numpy', numpy.__version__)"
       - name: 전체 회귀 검사

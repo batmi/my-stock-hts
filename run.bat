@@ -19,12 +19,12 @@ if exist ".venv\Scripts\python.exe" (
 echo --- 환경 확인 ---
 %PYTHON_PATH% --version
 
-:: 2-1. 파이썬 최소 버전(3.10) 확인 — run.sh 3-1 과 같은 가드(2026-09-26).
-::  3.9 이하로 만든 가상환경이면 holidays(>=0.103) 설치가 실패해 목록 전체가 설치되지 않고,
+:: 2-1. 파이썬 최소 버전(3.12) 확인 — run.sh 3-1 과 같은 가드(2026-09-26, 3.10 → 3.12 는 2026-10-24).
+::  구버전으로 만든 가상환경이면 holidays(>=0.103) 설치가 실패해 목록 전체가 설치되지 않고,
 ::  설치를 우회해도 기동 도중 문법 오류로 죽는다. 원인이 버전이라는 것을 여기서 바로 알린다.
-%PYTHON_PATH% -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>&1
+%PYTHON_PATH% -c "import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)" >nul 2>&1
 if errorlevel 1 (
-    echo [중단] Python 3.10 이상이 필요합니다. 경로: %PYTHON_PATH%
+    echo [중단] Python 3.12 이상이 필요합니다. 경로: %PYTHON_PATH%
     echo   가상환경이 구버전으로 만들어졌다면 지우고 새 파이썬으로 다시 만드세요:
     echo     rmdir /s /q .venv ^&^& py -3.12 -m venv .venv ^&^& run.bat
     exit /b 1

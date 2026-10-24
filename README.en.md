@@ -240,7 +240,7 @@ A dual-EMA rule: the fast EMA (9) crossing the slow EMA (41) counts as a confirm
 
 ## 5. Installation & Execution
 
-**Requirements**: Python 3.10+, a brokerage account and API keys.
+**Requirements**: Python 3.12+, a brokerage account and API keys.
 
 ```bash
 # 1) Get the source

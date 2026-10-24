@@ -7,7 +7,7 @@
    · 판단 공통화: 청산 체인·청산 패리티·사이징 패리티·52주 창 패리티·단일 종목 엔진·화면 판정
    · 설정: 전역 임시 변경 금지·주기 스냅샷·폴백 리터럴·그룹 딕셔너리 대입·개별 룰 저장 왕복
    · 주문 상태: 결과 불명·중복 체결·재시작 미체결·부분체결 정책·DB 결과 불명·가상투자 가로채기·시험 모델
-   · 구조: pyflakes 기준선·README 트리·import 부작용·계층 패키지 규약·Python 3.10 호환·pandas 판 의미·실행 기록
+   · 구조: pyflakes 기준선·README 트리·import 부작용·계층 패키지 규약·최저 Python 판(3.12) 호환·pandas 판 의미·실행 기록
 
 [실행]
   python tools/core_checks.py            # 핵심 묶음
@@ -55,7 +55,7 @@ CORE_TESTS = (
     "tests/test_readme_tree_sync.py",
     "tests/test_import_side_effects.py",
     "tests/test_layer_packages.py",
-    "tests/test_python310_compat.py",
+    "tests/test_python_min_compat.py",
     "tests/test_pandas_version_semantics.py",
     "tests/test_run_manifest.py",
     # 감사 도구 규약(씨드 안내·공통 구간 분할)과 경계 실험 도구

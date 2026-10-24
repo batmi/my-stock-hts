@@ -151,12 +151,15 @@ fi
 
 echo "--- 환경 확인: $($PYTHON_PATH --version) ---"
 
-# 3-1. 파이썬 최소 버전(3.10) 확인
+# 3-1. 파이썬 최소 버전(3.12) 확인
 #  macOS 기본 /usr/bin/python3 는 3.9 다. 그걸로 .venv 를 만들면 holidays(>=0.103,
 #  3.10 이상 전용)가 "No matching distribution" 으로 설치되지 않고, 설치를 우회해도
-#  3.10 문법에서 기동 도중 죽는다. 원인이 버전이라는 걸 여기서 바로 알린다.
-if ! $PYTHON_PATH -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' > /dev/null 2>&1; then
-    _boot_log "Python 3.10 이상이 필요합니다(현재: $($PYTHON_PATH --version 2>&1), 경로: $PYTHON_PATH) — 기동을 중단합니다."
+#  기동 도중 문법 오류로 죽는다. 원인이 버전이라는 걸 여기서 바로 알린다.
+#  [2026-10-24] 최저 판 3.10 → 3.12. 3.10 은 2026-10 에 보안 지원이 끝났고 3.11 은 2027-10 에 끝난다.
+#   운영 라즈베리파이는 3.13·개발기는 3.14 다. 3.12 부터는 f-string 안에 같은 따옴표를 쓸 수 있어
+#   (PEP 701) 3.10/3.11 에서만 기동이 죽던 종류의 결함(65a47c1)이 사라진다.
+if ! $PYTHON_PATH -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' > /dev/null 2>&1; then
+    _boot_log "Python 3.12 이상이 필요합니다(현재: $($PYTHON_PATH --version 2>&1), 경로: $PYTHON_PATH) — 기동을 중단합니다."
     if [[ "$PYTHON_PATH" == *"venv"* ]]; then
         echo "  가상환경이 구버전 파이썬으로 만들어졌습니다. 새 파이썬으로 다시 만드세요:"
         echo "    brew install python@3.12   # 또는 3.13/3.14"
