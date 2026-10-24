@@ -20,6 +20,9 @@
 [의도한 변경일 때] 로그 문구를 고치는 등 동작을 일부러 바꿨다면 기준 기록을 다시 만든다:
     CYCLE_REPLAY_UPDATE=1 python -m pytest tests/test_cycle_replay.py -o addopts=
  그리고 커밋 메시지에 기록이 왜 바뀌었는지 적는다. 구조만 바꾸는 커밋(C1 분리)에서는 바뀌면 안 된다.
+
+[시나리오] cycle_replay.SCENARIOS 마다 기준 기록이 따로 있다 — base(매매 경로)·market_stress(시장·리스크 경로,
+ 2026-10-24). 시나리오마다 '실제로 그 경로를 지났는가'를 먼저 보고 나서 기록을 비교한다.
 """
 import difflib
 import json
@@ -32,6 +35,7 @@ import pytest
 from tests import cycle_replay
 
 _OUT_ENV = "CYCLE_REPLAY_OUT"
+_SCENARIO_ENV = "CYCLE_REPLAY_SCENARIO"
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -41,18 +45,28 @@ def test_재생_기록_만들기(tmp_path):
     if not out:
         pytest.skip("비교 테스트가 새 프로세스로 부르는 내부용 테스트")
     with open(out, "w", encoding="utf-8") as f:
-        f.write(cycle_replay.dump(cycle_replay.run(tmp_path)))
+        f.write(cycle_replay.dump(cycle_replay.run(tmp_path, scenario=os.environ.get(_SCENARIO_ENV, "base"))))
 
 
-@pytest.fixture(scope="module")
-def fresh_trace(tmp_path_factory):
-    out = tmp_path_factory.mktemp("replay") / "trace.json"
-    env = dict(os.environ, **{_OUT_ENV: str(out), "TZ": "Asia/Seoul"})     # 운용 기기와 같은 KST 전제(위 [시간대])
+def _fresh(tmp_path_factory, scenario):
+    out = tmp_path_factory.mktemp(f"replay_{scenario}") / "trace.json"
+    env = dict(os.environ, **{_OUT_ENV: str(out), _SCENARIO_ENV: scenario,
+                              "TZ": "Asia/Seoul"})     # 운용 기기와 같은 KST 전제(위 [시간대])
     res = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-o", "addopts=",
                           f"{os.path.relpath(__file__, _ROOT)}::test_재생_기록_만들기"],
                          cwd=_ROOT, env=env, capture_output=True, text=True, timeout=300)
     assert res.returncode == 0 and out.exists(), (res.stdout[-3000:] + res.stderr[-2000:])
     return json.loads(out.read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def fresh_trace(tmp_path_factory):
+    return _fresh(tmp_path_factory, "base")
+
+
+@pytest.fixture(scope="module")
+def stress_trace(tmp_path_factory):
+    return _fresh(tmp_path_factory, "market_stress")
 
 
 def test_재생은_매매_경로를_실제로_지난다(fresh_trace):
@@ -69,14 +83,44 @@ def test_재생은_매매_경로를_실제로_지난다(fresh_trace):
         assert not any(x.startswith("<") and "Error" in x for x in lines), f"{name}: 화면 출력 중 예외 {lines[:3]}"
 
 
-def test_재생_기록이_기준과_같다(fresh_trace):
-    got = {"env": cycle_replay.env_signature(), "trace": fresh_trace}
+def test_압박_재생은_시장_리스크_경로를_실제로_지난다(stress_trace):
+    """market_stress 가 노리는 경로 — 하나라도 빠지면 그 경로의 분리는 기준 없이 옮겨진다."""
+    logs = "\n".join(stress_trace["logs"])
+    tg = "\n".join(stress_trace["telegram"])
+    alerts = "\n".join(a["message"] for a in stress_trace["alerts"])
+    for marker, where in (("[시장 감지] KOSDAQ", tg), ("[시장 회복] KOSDAQ", tg),     # 필터 차단·해제 알림(근거 줄 포함)
+                          ("└ 지수 ", tg),
+                          ("[시장 필터링] 하락장 매수 보류", logs),                  # 차단된 시장의 후보를 건너뜀
+                          ("[판단 보류] KOSPI", alerts), ("KOSPI 지수 데이터 부족/조회 실패", logs),
+                          ("[시장 필터링] 지수 판단 불가(KOSPI, KOSDAQ)", logs),
+                          ("[계좌 드로다운", alerts), ("[리스크 스케일링] 계좌 드로다운", logs),
+                          ("하락 미확정 x0.6 휩소율", logs),                     # 국면·휩소율 배수
+                          ("축소 사유가 장중에 풀렸지만 오늘은 유지합니다", logs),    # 장중 래칫
+                          ("리스크스케일 x", logs),                              # 그 배수로 사이징한 매수
+                          ("KOSDAQ 지수 조회 실패: 재생", logs), ("[판단 보류] KOSDAQ", alerts),   # 조회 중 예외
+                          ("지수 장기 이력을 받지 못해 ATR 손절 캡을 고정값", logs)):            # 동적 손절 캡 고정
+        assert marker in where, f"압박 재생이 '{marker}' 경로를 지나지 않았다"
+    assert any(a["urgent"] for a in stress_trace["alerts"] if "[계좌 드로다운" in a["message"])
+    state = stress_trace["state"]
+    assert state["risk_scale"] < 1.0 and state["risk_floor"]["scale"] == pytest.approx(state["risk_scale"])
+    assert state["risk_scale_reason_by_market"]["KOSPI"].startswith("[장중 유지]")
+    assert state["market_status_notified"].get("KOSPI") is True        # 판단 보류 알림 래치
+    for name, lines in stress_trace["screens"].items():
+        assert lines, f"{name}: 화면이 비어 있다"
+        assert not any(x.startswith("<") and "Error" in x for x in lines), f"{name}: 화면 출력 중 예외 {lines[:3]}"
+
+
+@pytest.mark.parametrize("scenario", sorted(cycle_replay.SCENARIOS))
+def test_재생_기록이_기준과_같다(scenario, request):
+    trace = request.getfixturevalue("fresh_trace" if scenario == "base" else "stress_trace")
+    golden = cycle_replay.SCENARIOS[scenario]
+    got = {"env": cycle_replay.env_signature(), "trace": trace}
     if os.environ.get("CYCLE_REPLAY_UPDATE") == "1":
-        os.makedirs(os.path.dirname(cycle_replay.GOLDEN), exist_ok=True)
-        with open(cycle_replay.GOLDEN, "w", encoding="utf-8") as f:
+        os.makedirs(os.path.dirname(golden), exist_ok=True)
+        with open(golden, "w", encoding="utf-8") as f:
             f.write(cycle_replay.dump(got) + "\n")
         pytest.skip("기준 기록을 새로 썼다")
-    with open(cycle_replay.GOLDEN, encoding="utf-8") as f:
+    with open(golden, encoding="utf-8") as f:
         want = json.load(f)
     a, b = cycle_replay.dump(want["trace"]), cycle_replay.dump(got["trace"])
     if a != b:
@@ -84,11 +128,12 @@ def test_재생_기록이_기준과_같다(fresh_trace):
         env_note = "" if want["env"] == got["env"] else (
             f"\n\n[판 차이] 기준 기록 환경 {want['env']} · 지금 {got['env']} — 코드 변경 없이 난 차이라면"
             " 의존성 판이 동작을 바꾼 것이다. 차이를 읽고 판단한 뒤 기준 기록을 다시 만든다.")
-        pytest.fail("주기 재생 기록이 기준과 다르다:\n" + diff[:8000] + env_note)
+        pytest.fail(f"주기 재생 기록({scenario})이 기준과 다르다:\n" + diff[:8000] + env_note)
 
 
-def test_같은_조건이면_두_번_돌려도_같다(tmp_path):
+@pytest.mark.parametrize("scenario", sorted(cycle_replay.SCENARIOS))
+def test_같은_조건이면_두_번_돌려도_같다(tmp_path, scenario):
     """결정성 — 이게 깨지면 위 비교의 실패가 코드 변경 탓인지 알 수 없다(같은 프로세스에서 연달아 두 번)."""
-    a = cycle_replay.dump(cycle_replay.run(tmp_path / "a"))
-    b = cycle_replay.dump(cycle_replay.run(tmp_path / "b"))
+    a = cycle_replay.dump(cycle_replay.run(tmp_path / "a", scenario=scenario))
+    b = cycle_replay.dump(cycle_replay.run(tmp_path / "b", scenario=scenario))
     assert a == b

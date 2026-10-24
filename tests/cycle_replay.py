@@ -13,9 +13,18 @@
     시각은 운용 기기처럼 로컬 = KST 로 읽힌다 — 비교 테스트는 새 프로세스를 TZ=Asia/Seoul 로 띄운다
   · 스레드: AutoTrader 스레드는 띄우지 않고 _run_loop 를 이 스레드에서 돌린다. 스레드 풀은 순차 실행
     (실행 순서를 고정해 로그·알림 순서까지 결정적으로 만든다)
-  · 알림: 텔레그램 발송을 가로채 기록한다
+  · 알림: 텔레그램 발송을 가로채 기록한다. 경보(alert_delivered — 전달을 확인하고 스로틀을 거는 알림)도 따로
+    기록한다 — 토큰이 없는 테스트 환경에서는 진짜 함수가 보내지 않고 True 만 돌려줘 기록에 남지 않았다
+    (판단 보류·계좌 드로다운 경보가 그렇다). 대역도 같은 True 를 돌려준다.
 [무엇을 기록하나] 주문·체결(가상 원장), 거래 기록 표, 알림, 트레이더 로그, 화면 출력(상태·보고·건강),
  그리고 트레이더 상태 요약. 결정적이지 않은 값(임시 경로·메모리 사용량)은 가린다.
+[시나리오 · SCENARIOS] 시나리오마다 기준 기록 파일이 따로 있다.
+  · base — 매매 경로(피라미딩·손절·시간청산·추세이탈·트레일링·슬롯 가득·신규 매수). 지수는 판정이 서지 않는
+    단조 상승이라 시장·리스크 경로는 거의 지나지 않는다.
+  · market_stress — 같은 종목·보유에 시장·리스크 압박을 얹는다(C1 2단계 '시장·리스크' 분리의 기준, 2026-10-24).
+    KOSPI 하락 미확정·휩소율 → 장중 반등(장중 래칫 유지) → 조회 실패(판단 보류), KOSDAQ 이평선 이탈(필터 차단)
+    → 회복 → 조회 중 예외, 자산 고점 대비 10% 넘는 계좌 드로다운(2단계 감속·경보), 지수 장기 이력 수신 실패
+    (동적 손절 캡 고정·경고).
 """
 import concurrent.futures
 import datetime as _dt
@@ -41,7 +50,9 @@ KST = ZoneInfo("Asia/Seoul")
 START = _dt.datetime(2026, 10, 21, 10, 0, 0)     # 수요일 정규장, 개장 30분 진입 보류가 끝난 뒤
 SEED_CAPITAL = 10_000_000
 CYCLES = 4
-GOLDEN = os.path.join(os.path.dirname(__file__), "fixtures", "cycle_replay_golden.json")
+_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
+GOLDEN = os.path.join(_FIXTURES, "cycle_replay_golden.json")
+SCENARIOS = {"base": GOLDEN, "market_stress": os.path.join(_FIXTURES, "cycle_replay_golden_market.json")}
 
 
 # ── 시계 ───────────────────────────────────────────────────────────────────────────────────
@@ -186,6 +197,20 @@ SEEDED_HOLDINGS = [
     {"code": "100060", "qty": 40, "rel": 1.005, "days_ago": 20},
     {"code": "100070", "qty": 20, "rel": 0.735, "days_ago": 8},
 ]
+#  [market_stress] 지수 — 주기마다의 오늘 봉(전일 종가 대비). None = 그 주기에 지수 조회 실패(빈 표),
+#   "error" = 조회 중 예외.
+#   값은 실제 판정 함수(analysis.classify_regime_from_df·indicators.get_market_filter_detail)로 찾았다:
+#   KOSPI  하락 미확정·휩소율 50% · 필터 통과 → 3주기 +1.5% 반등에 상승 미확정 → 4주기 조회 실패
+#   KOSDAQ 하락 미확정·휩소율 75% · 이평선 -2.6% 이탈(차단) → 3주기 +4% 에 +1.7% 회복(해제) → 4주기 예외
+STRESS_INDEX = {
+    "KOSPI": {"seed": 1, "amp": 0.04, "period": 50, "trend": 0.0008, "tail": [-0.004] * 6,
+              "path": [0.000, -0.002, 0.015, None]},
+    "KOSDAQ": {"seed": 3, "amp": 0.03, "period": 30, "trend": 0.0004, "tail": [-0.008] * 8,
+               "path": [-0.004, -0.004, 0.040, "error"]},
+}
+#  [market_stress] 기동 전 자산 이력(일일 시작 자산) — 15영업일 전 고점 1,190만, 어제 1,070만.
+#   기동 자산(약 1,060만)이 고점 대비 10% 넘게 빠져 있어 드로다운 2단계(감속·경보)가 걸린다.
+STRESS_ASSET_HISTORY = [11_000_000 + 60_000 * i for i in range(16)] + [11_900_000 - 120_000 * i for i in range(1, 11)]
 
 
 def _daily(kind, seed, base, n=260, end=None):
@@ -208,6 +233,30 @@ def _daily(kind, seed, base, n=260, end=None):
                          "low": lo.round(), "close": close.round(), "volume": vol})
 
 
+def _stress_index(market_name, cycle):
+    """[market_stress] 지수 일봉 — 확정 299봉(진동 + 끝의 하락) + 오늘 봉. 경로 칸이 None 이면 빈 표(조회 실패)."""
+    spec = STRESS_INDEX[market_name]
+    today = spec["path"][min(cycle, len(spec["path"]) - 1)]
+    if today is None:
+        return pd.DataFrame()
+    if today == "error":
+        raise ConnectionError(f"재생: {market_name} 지수 조회 실패")
+    n = 299
+    rs = np.random.RandomState(spec["seed"])
+    t = np.arange(n)
+    r = (spec["trend"] + spec["amp"] * 2 * np.pi / spec["period"] * np.cos(2 * np.pi * t / spec["period"])
+         + rs.normal(0, 0.004, n))
+    r[-len(spec["tail"]):] += np.array(spec["tail"])
+    close = 2500.0 * np.cumprod(1 + r)
+    close = np.r_[close, close[-1] * (1 + today)]
+    dates = list(pd.bdate_range(end=START.date() - _dt.timedelta(days=1), periods=n).strftime("%Y%m%d"))
+    dates.append(START.strftime("%Y%m%d"))
+    df = pd.DataFrame({"date": dates, "open": close, "high": close * 1.003, "low": close * 0.997,
+                       "close": close, "volume": np.full(n + 1, 1_000_000)})
+    df.attrs["source"] = "REPLAY"
+    return df
+
+
 def _tick_floor(price):
     """호가 단위로 내린다(코스피·코스닥 공통 2023 개편 표)."""
     p = float(price)
@@ -218,10 +267,11 @@ def _tick_floor(price):
 
 
 class Market:
-    def __init__(self, universe):
+    def __init__(self, universe, scenario="base"):
         self.items = {u["code"]: u for u in universe}
         self.daily = {u["code"]: _daily(u["kind"], u["seed"], u["base"]) for u in universe}
         self.cycle = 0          # 하네스가 주기마다 올린다(가격 경로의 칸)
+        self.scenario = scenario
 
     def prev_close(self, code):
         return float(self.daily[code].iloc[-1]["close"])
@@ -246,6 +296,8 @@ class Market:
         return pd.concat([df, pd.DataFrame([today])], ignore_index=True)
 
     def index(self, market_name):
+        if self.scenario == "market_stress":
+            return _stress_index(market_name, self.cycle)
         n = 200
         closes = 2500.0 * np.cumprod(np.full(n, 1.0015))
         dates = pd.bdate_range(end=START.date(), periods=n).strftime("%Y%m%d")
@@ -288,11 +340,13 @@ def _project_modules():
             yield mod
 
 
-def run(tmp_path, cycles=CYCLES):
+def run(tmp_path, cycles=CYCLES, scenario="base"):
     """하네스를 한 번 돌리고 기록(dict)을 돌려준다. tmp_path 는 가상 원장 DB 자리."""
+    if scenario not in SCENARIOS:
+        raise ValueError(f"모르는 시나리오: {scenario}")
     CLOCK.now = START
     os.makedirs(str(tmp_path), exist_ok=True)
-    market = Market(UNIVERSE)
+    market = Market(UNIVERSE, scenario)
     telegrams = []
     trader_box = {}
 
@@ -306,6 +360,12 @@ def run(tmp_path, cycles=CYCLES):
     def _send_telegram(msg, *a, **k):
         telegrams.append(_mask(msg))
         return True
+
+    alerts = []
+
+    def _alert_delivered(message, urgent=False):
+        alerts.append({"urgent": bool(urgent), "message": _mask(message)})
+        return True             # 토큰 없는 진짜 함수와 같은 값(알림 수단 없음 = 전달로 본다)
 
     with ExitStack() as st:
         P = lambda *a, **k: st.enter_context(patch.object(*a, **k))     # noqa: E731
@@ -352,6 +412,8 @@ def run(tmp_path, cycles=CYCLES):
         paper_broker.reset_price_cache()
         P(paper_broker, "_odno_seq", 0)
         _seed_holdings(market)
+        if scenario == "market_stress":
+            _seed_asset_history()
 
         # 합성 시장
         P(paper_broker, "_current_price", lambda code, fallback=0.0: market.price(code) or fallback)
@@ -367,10 +429,17 @@ def run(tmp_path, cycles=CYCLES):
         P(api, "is_holiday_today", lambda *a, **k: False)
         P(api, "is_nxt_tradeable", lambda *a, **k: False)
         P(api, "send_telegram_message", _send_telegram)
+        from modules import auto_trade as _pkg_mod
+        P(_pkg_mod, "alert_delivered", _alert_delivered)     # 트레이더는 _pkg().alert_delivered 로 부른다
         P(analysis, "get_domestic_index_data", lambda market_name, *a, **k: market.index(market_name))
-        P(analysis, "_live_vol_history", Market.kospi_long)
+        P(analysis, "_live_vol_history", Market.kospi_long if scenario == "base"
+          else (lambda settled_dd: (None, None, None)))      # market_stress: 장기 이력을 못 받는다
         analysis.reset_live_vol_regime()
         st.callback(analysis.reset_live_vol_regime)
+        #  국면 판정은 프로세스 전역 캐시(TTL 60초)와 판정 불가 경고 표시를 든다 — 앞 실행의 값을 물려받지 않게.
+        for cache in (analysis._MARKET_REGIME_CACHE, analysis._REGIME_UNKNOWN_WARNED):
+            cache.clear()
+            st.callback(cache.clear)
 
         AutoTrader = _trader_mod.AutoTrader     # 패키지가 재수출하는 것과 같은 클래스
         AutoTrader._instance = None
@@ -383,12 +452,14 @@ def run(tmp_path, cycles=CYCLES):
             _cycle_hook(t, market)
             t._run_loop()
         t.is_running = True                 # 화면은 '실행 중' 상태로 그린다(운용자가 보는 모양)
-        trace.update(_collect(t, telegrams))
+        trace.update(_collect(t, telegrams, scenario))
+        trace["alerts"] = list(alerts)
         #  종료 경로 — 실제 정지(stop)로 잠금을 풀고 정지 알림을 남긴다(다음 재생이 '중복 실행'에 걸리지 않게)
-        n_logs, n_tg = len(t.logs), len(telegrams)
+        n_logs, n_tg, n_al = len(t.logs), len(telegrams), len(alerts)
         t.thread = _NoStartThread()         # 루프 스레드가 끝난 상태(실제 정지와 같은 경로)
         t.stop(use_status=False)
-        trace["stop"] = {"logs": [_mask(x) for x in t.logs[n_logs:]], "telegram": telegrams[n_tg:]}
+        trace["stop"] = {"logs": [_mask(x) for x in t.logs[n_logs:]], "telegram": telegrams[n_tg:],
+                         "alerts": alerts[n_al:]}
         t.is_running = False
         AutoTrader._instance = None
     return trace
@@ -428,7 +499,15 @@ def _seed_holdings(market):
                                    buy_price=avg)
 
 
-def _collect(t, telegrams):
+def _seed_asset_history():
+    """[market_stress] 기동 전 영업일들의 일일 시작 자산(자산 고점 → 드로다운)."""
+    days = pd.bdate_range(end=START.date() - _dt.timedelta(days=1), periods=len(STRESS_ASSET_HISTORY))
+    key = paper_broker._account_key()
+    for d, v in zip(days, STRESS_ASSET_HISTORY):
+        assert db_manager.db.save_daily_asset(d.strftime("%Y-%m-%d"), key, v)
+
+
+def _collect(t, telegrams, scenario="base"):
     out = {"logs": [_mask(x) for x in t.logs], "telegram": list(telegrams)}
     out["fills"] = [{k: r.get(k) for k in ("time", "type", "code", "qty", "price", "amount", "fee", "profit_amt")}
                     for r in paper_broker.get_fills()]
@@ -441,6 +520,13 @@ def _collect(t, telegrams):
         "buy_halted", "buy_halt_reason", "risk_scale", "risk_scale_by_market", "initial_asset",
         "baseline_principal", "current_total_asset", "consecutive_errors", "last_holdings_count",
         "portfolio_heat_amt", "skipped_by_market_filter_count")}
+    if scenario == "market_stress":
+        out["state"].update({k: _jsonable(getattr(t, k, None)) for k in (
+            "risk_scale_reason", "risk_scale_reason_by_market", "risk_scale_regime_by_market",
+            "market_status_notified")})
+        floor = dict(getattr(t, "_risk_floor", None) or {})
+        floor.pop("params", None)       # 설정 서명(repr) — 길고, 설정 기본값이 바뀔 때마다 흔들린다
+        out["state"]["risk_floor"] = _jsonable(floor)
     out["screens"] = _screens(t)
     return out
 
