@@ -36,6 +36,10 @@ console = config.console
 
 logger = logging.getLogger(__name__)
 
+#  디스크 여유가 이보다 적으면 경고한다. DB·백업·차트 캐시·로그가 같은 SD카드를 쓰므로
+#  여유가 이 정도로 줄면 곧 쓰기가 실패한다.
+DISK_FREE_WARN_MB = 200.0
+
 
 def _pkg():
     """패키지(modules.auto_trade) 네임스페이스 접근자.

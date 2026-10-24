@@ -254,7 +254,7 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 # 3) Dependencies
 pip install -r requirements.txt
 pip install -r requirements-dev.txt   # for development and tests
-python tools/core_checks.py           # fast core checks (decision/order/config invariants, ~20s) — CI runs these on every push
+python tools/core_checks.py           # fast core checks (decision/order/config invariants, auto-trading cycle replay, ~20s) — CI runs these on every push
 python -m pytest                      # full regression suite (includes clock-dependent tests; run when needed)
 
 # 4) Run
@@ -542,6 +542,7 @@ my-stock-hts/
 │   ├── auto_trade/         # [5] System trading
 │   │   ├── engine.py       #     Trading engine (strategy, orders, risk)
 │   │   ├── trader.py       #     Main loop (analyze → buy/sell → report)
+│   │   ├── reporting.py    #     Trader screens and reports (status, ops health, performance report, log viewer)
 │   │   ├── conclusion.py   #     Fill monitoring and confirmation
 │   │   ├── performance.py  #     Performance-report math (record cleanup, statistics; pure functions)
 │   │   ├── common.py       #     Shared helpers (restrictions, hours, order status)
@@ -591,7 +592,7 @@ my-stock-hts/
 │   ├── audit_common.py     #   Shared audit contract (exit sample, metrics)
 │   └── audit_*.py          #   Strategy-dial backtest audits (~80 scripts)
 │
-├── tests/                  # pytest unit and integration tests (3,400+)
+├── tests/                  # pytest unit and integration tests (5,900+)
 │
 ├── json/                   # [auto] settings and state
 │   ├── stock.json                 # Watchlist
@@ -633,6 +634,7 @@ my-stock-hts/
 - **Signal ledger** — live-only gates that daily bars cannot reproduce (volume strength, ask/bid ratio, same-day re-entry block) record their verdicts in the DB, **one row per (date, symbol)**, retained for 3 years by default. "Blocked all day" is distinguishable from "blocked on some cycles". Auto-trading logs are kept 120 days, separate from general logs (30 days). Analyze with `python3 tools/audit_signal_ledger.py`.
 - **Score boundary ledger** — only symbols that came near the MACD-expansion boundary shared by both synergy items (0.8× the previous histogram), flipped that condition, or received the price-momentum bonus fail-open are recorded, **one row per (date, symbol)** (kept 1 year by default; observation only, never used for decisions). Counterfactual states count both the cycles the boundary admitted and the ones it excluded. Analyze with `python3 tools/audit_score_boundary.py`.
 - **Audit run records** — running any `tools/audit_*.py` writes one file to `data/audit_runs/` with the commit and modified files, the full config and its fingerprint, scoring-rule version, trading costs, seeds, daily/flow data-source summary, conditions the backtest cannot reproduce, and the result table (output tail). Same commit and config but different data sources or dates count as a different experiment. Disable with `HTS_NO_RUN_MANIFEST=1`.
+- **Auto-trading cycle replay** — runs auto-trading through its real startup path (start → 4 trading-loop cycles → screens → stop), records orders, fills, trade history, alerts, logs and screens to one file, and compares it character by character with a golden record (`tests/fixtures/cycle_replay_golden.json`). The account is the paper broker, quotes come from 7 synthetic symbols and the clock is fixed, so it runs offline and gives the same result every time. It is the yardstick that structural work (such as splitting AutoTrader) did not change outward behaviour; it is part of the core checks, so CI runs it on every push. After an intentional behaviour change, regenerate the record with `CYCLE_REPLAY_UPDATE=1 python -m pytest tests/test_cycle_replay.py -o addopts=`.
 - **Process stop detection** — the live process stamps `logs/heartbeat.json` every minute together with a deadline for its next stamp; an external cron watcher (`tools/hts_watchdog.py`) only checks whether that promise expired. **It never auto-restarts** — restarting blind either dies the same way or comes back half-alive and places orders. Clean shutdowns do not alert.
 - **Per-mode config profiles** — live reads and writes only the baseline file; other modes layer their own profile on top, storing only the deltas. A safeguard disabled for observation cannot leak into live, and promotion is manual.
 - **Memory protection** — quote and chart caches have item caps with oldest-first eviction, so memory does not grow without bound on a 1 GB Raspberry Pi.

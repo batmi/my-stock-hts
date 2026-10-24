@@ -6,6 +6,7 @@
   - engine.py     : DefaultStrategy · OrderManager · RiskManager
   - conclusion.py : ConclusionMonitor (체결 감시/확정)
   - trader.py     : AutoTrader (메인 루프)
+  - reporting.py  : AutoTrader 의 화면·보고 믹스인(재수출 대상 아님 — AutoTrader 가 상속한다)
   - performance.py: 성과 보고 계산(순수 함수, 재수출 대상 아님 — trader 가 위임해 쓴다)
   - menu.py       : 터미널 메뉴 UI
 

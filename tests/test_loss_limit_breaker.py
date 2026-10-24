@@ -187,6 +187,17 @@ def test_health_panel_exposes_a_dead_breaker(trader):
     assert "연속 실패 4회" in text and "감시되지 않는다" in text, f"상태창이 침묵한다: {text}"
 
 
+def test_health_panel_shows_the_last_check_as_a_clock_time(trader):
+    """[2026-10-24] 점검 시각은 time.time() 실수다 — 원시 타임스탬프(1761290000.12)가 아니라 시:분:초로 보인다."""
+    from datetime import datetime
+    ran = datetime(2026, 10, 21, 10, 3, 4).timestamp()
+    trader.circuit_breaker_ran_at = ran
+    with patch.object(config, 'SYSTEM_DAILY_LOSS_LIMIT', 10.0):
+        text = trader._health_circuit_breaker_text()
+    assert "최근 점검 10:03:04" in text, text
+    assert str(int(ran)) not in text, f"원시 타임스탬프가 찍힌다: {text}"
+
+
 def test_health_panel_shows_active_defense_mode(trader):
     trader.buy_halted = True
     trader.buy_halt_reason = "일일 손실 한도 초과 (-11.2%)"

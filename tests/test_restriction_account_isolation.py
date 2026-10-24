@@ -119,7 +119,9 @@ def test_trader_never_looks_up_restrictions_without_an_account():
     2026-08-09: 표시 경로 4곳이 이 폴백을 타고 있어 계좌를 명시하도록 고쳤다.
     """
     import re
-    src = open('modules/auto_trade/trader.py', encoding='utf-8').read()
+    #  표시 경로(상태 화면·텔레그램 상태)는 2026-10-24 C1 분리로 reporting.py 에 있다 — 둘 다 본다.
+    src = (open('modules/auto_trade/trader.py', encoding='utf-8').read()
+           + open('modules/auto_trade/reporting.py', encoding='utf-8').read())
     bare = re.findall(r'get_restricted_stocks\(\s*\)', src)
     assert not bare, (
         f"계좌를 지정하지 않은 get_restricted_stocks() 호출이 {len(bare)}곳 남아 있다 — "

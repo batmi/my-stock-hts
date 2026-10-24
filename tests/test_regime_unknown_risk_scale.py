@@ -220,7 +220,8 @@ def test_no_screen_keeps_its_own_copy_of_the_regime_label():
     """국면 라벨을 직접 조립하는 화면이 남아 있으면 그 화면만 옛 글자를 계속 쓴다."""
     offenders = []
     checked = 0
-    for path in ("modules/auto_trade/trader.py", "modules/telegram_bot.py"):
+    #  [2026-10-24] 콘솔 상태표·텔레그램 상태 문구는 C1 분리로 reporting.py 에 있다(trader 에는 리스크 로그만).
+    for path in ("modules/auto_trade/trader.py", "modules/auto_trade/reporting.py", "modules/telegram_bot.py"):
         src = open(path, encoding='utf-8').read()
         #  [자기검사] 이 화면이 국면을 아예 안 그리게 되면 위 순회는 조용히 0곳을 보고
         #   테스트는 통과한다 — 그 침묵을 막는다.
@@ -240,4 +241,4 @@ def test_no_screen_keeps_its_own_copy_of_the_regime_label():
     assert not offenders, (
         "국면 이모지·라벨을 describe_regime 을 거치지 않고 직접 만든다 — "
         f"판정 불가가 다시 '판정 보류'로 접힌다: {offenders}")
-    assert checked == 2
+    assert checked == 3
