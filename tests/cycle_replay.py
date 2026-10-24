@@ -25,6 +25,11 @@
     KOSPI 하락 미확정·휩소율 → 장중 반등(장중 래칫 유지) → 조회 실패(판단 보류), KOSDAQ 이평선 이탈(필터 차단)
     → 회복 → 조회 중 예외, 자산 고점 대비 10% 넘는 계좌 드로다운(2단계 감속·경보), 지수 장기 이력 수신 실패
     (동적 손절 캡 고정·경고).
+  · account_sync — base 시장에 계좌 사건을 얹는다(C1 3단계 '계좌 동기화' 분리의 기준, 2026-10-25).
+    꺼져 있던 사이의 출금 30만(첫 주기 원금 대조로 되찾음) → 1주기 뒤 장중 출금 150만(그 주기 일일 손실 한도로
+    방어 모드 → 다음 주기 순입출금 반영으로 스스로 해제 → 3주기 연속 확인으로 입출금 알림), 기동 시 외부 체결
+    동기화 결과(외부 매수 제한·부분 복원 안내), 기동~첫 주기의 자산 집계 일부 실패(시작 자산 보류 → 첫 주기에
+    대안 계산으로 기준선을 잡는다).
 """
 import concurrent.futures
 import datetime as _dt
@@ -52,7 +57,8 @@ SEED_CAPITAL = 10_000_000
 CYCLES = 4
 _FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 GOLDEN = os.path.join(_FIXTURES, "cycle_replay_golden.json")
-SCENARIOS = {"base": GOLDEN, "market_stress": os.path.join(_FIXTURES, "cycle_replay_golden_market.json")}
+SCENARIOS = {"base": GOLDEN, "market_stress": os.path.join(_FIXTURES, "cycle_replay_golden_market.json"),
+             "account_sync": os.path.join(_FIXTURES, "cycle_replay_golden_account.json")}
 
 
 # ── 시계 ───────────────────────────────────────────────────────────────────────────────────
@@ -211,6 +217,17 @@ STRESS_INDEX = {
 #  [market_stress] 기동 전 자산 이력(일일 시작 자산) — 15영업일 전 고점 1,190만, 어제 1,070만.
 #   기동 자산(약 1,060만)이 고점 대비 10% 넘게 빠져 있어 드로다운 2단계(감속·경보)가 걸린다.
 STRESS_ASSET_HISTORY = [11_000_000 + 60_000 * i for i in range(16)] + [11_900_000 - 120_000 * i for i in range(1, 11)]
+#  [account_sync] 계좌 사건.
+#   · 어제 시작 자산 1,090만과 그때의 기준 원금(오늘 원금 + 30만)을 남겨 둔다 — 꺼져 있던 사이 30만이 빠졌다.
+#   · 1주기가 끝난 뒤 가상 계좌에서 150만을 출금한다(장중 입출금).
+#   · 기동 시 외부 체결 동기화는 가상투자에서 꺼진다(holdings_backfill.supports_broker_history) — 증권사 체결 이력을
+#     대조한 결과 요약을 대역으로 준다. 복원·제한 등록 자체는 holdings_backfill 테스트가 본다.
+ACCOUNT_OFFLINE_WITHDRAWAL = 300_000
+ACCOUNT_YESTERDAY_ASSET = 10_900_000
+ACCOUNT_INTRADAY = {1: -1_500_000}          # 주기 번호(그 주기가 시작되기 직전) → 가상 입출금액
+ACCOUNT_BACKFILL = {"written": 2, "skipped": 0, "restricted": ["재생외부(100090)"],
+                    "partial": [("100060", "재생정체", 10)], "error": None}
+ACCOUNT_DEGRADED_CYCLES = {0}               # 이 주기(0 = 기동 포함)의 자산 집계는 해외잔고 구간이 실패한다
 
 
 def _daily(kind, seed, base, n=260, end=None):
@@ -414,6 +431,8 @@ def run(tmp_path, cycles=CYCLES, scenario="base"):
         _seed_holdings(market)
         if scenario == "market_stress":
             _seed_asset_history()
+        if scenario == "account_sync":
+            _seed_principal_snapshot()
 
         # 합성 시장
         P(paper_broker, "_current_price", lambda code, fallback=0.0: market.price(code) or fallback)
@@ -432,8 +451,24 @@ def run(tmp_path, cycles=CYCLES, scenario="base"):
         from modules import auto_trade as _pkg_mod
         P(_pkg_mod, "alert_delivered", _alert_delivered)     # 트레이더는 _pkg().alert_delivered 로 부른다
         P(analysis, "get_domestic_index_data", lambda market_name, *a, **k: market.index(market_name))
-        P(analysis, "_live_vol_history", Market.kospi_long if scenario == "base"
+        P(analysis, "_live_vol_history", Market.kospi_long if scenario != "market_stress"
           else (lambda settled_dd: (None, None, None)))      # market_stress: 장기 이력을 못 받는다
+        #  일일 손실 한도 경보는 프로세스 로그 파일(mystock.log)의 꼬리를 붙인다 — 실행 기기의 파일이라 고정한다.
+        from modules.auto_trade import engine as _engine_mod
+        for mod in (_engine_mod, _trader_mod):
+            P(mod, "get_mystock_log_tail", lambda n=20: "<로그 꼬리>\n")
+        if scenario == "account_sync":
+            from modules import account as _account_mod, holdings_backfill
+            P(holdings_backfill, "sync_account", lambda *a, **k: json.loads(json.dumps(ACCOUNT_BACKFILL)))
+            P(_account_mod, "fetch_period_realized", lambda *a, **k: {"realized": 0, "cost": 0})   # 장부 대조: 일치
+            _asset_status = _account_mod.get_asset_status_data
+
+            def _asset_status_degraded(*a, **k):
+                data = _asset_status(*a, **k)
+                if data is not None and market.cycle in ACCOUNT_DEGRADED_CYCLES:
+                    data = dict(data, degraded=list(data.get("degraded") or []) + ["해외잔고"])
+                return data
+            P(_account_mod, "get_asset_status_data", _asset_status_degraded)
         analysis.reset_live_vol_regime()
         st.callback(analysis.reset_live_vol_regime)
         #  국면 판정은 프로세스 전역 캐시(TTL 60초)와 판정 불가 경고 표시를 든다 — 앞 실행의 값을 물려받지 않게.
@@ -466,12 +501,16 @@ def run(tmp_path, cycles=CYCLES, scenario="base"):
 
 
 def _cycle_hook(t, market):
-    """주기마다 가격 경로를 한 칸 넘긴다 — _record_cycle_duration 이 주기 끝 표식이다."""
+    """주기마다 가격 경로를 한 칸 넘긴다 — _record_cycle_duration 이 주기 끝 표식이다.
+    account_sync 는 그 자리에서 다음 주기 전에 일어날 가상 입출금도 넣는다."""
     orig = t._record_cycle_duration
 
     def _wrapped(*a, **k):
         r = orig(*a, **k)
         market.cycle += 1
+        if market.scenario == "account_sync" and market.cycle in ACCOUNT_INTRADAY:
+            ok, msg = paper_broker.adjust_seed(ACCOUNT_INTRADAY[market.cycle])
+            assert ok, msg
         return r
     t._record_cycle_duration = _wrapped
 
@@ -507,6 +546,17 @@ def _seed_asset_history():
         assert db_manager.db.save_daily_asset(d.strftime("%Y-%m-%d"), key, v)
 
 
+def _seed_principal_snapshot():
+    """[account_sync] 어제의 시작 자산과 기준 원금 — 오늘 원금보다 ACCOUNT_OFFLINE_WITHDRAWAL 만큼 많다.
+
+    원금 = 현금 + 매입원가 − 실현손익. 기동 전 보유는 매수만 있어 실현손익이 0 이다.
+    """
+    principal = paper_broker.get_cash() + sum(p["qty"] * p["avg_price"] for p in paper_broker.get_positions())
+    day = pd.bdate_range(end=START.date() - _dt.timedelta(days=1), periods=1)[0].strftime("%Y-%m-%d")
+    assert db_manager.db.save_daily_asset(day, paper_broker._account_key(), ACCOUNT_YESTERDAY_ASSET,
+                                          principal=int(round(principal)) + ACCOUNT_OFFLINE_WITHDRAWAL)
+
+
 def _collect(t, telegrams, scenario="base"):
     out = {"logs": [_mask(x) for x in t.logs], "telegram": list(telegrams)}
     out["fills"] = [{k: r.get(k) for k in ("time", "type", "code", "qty", "price", "amount", "fee", "profit_amt")}
@@ -527,6 +577,13 @@ def _collect(t, telegrams, scenario="base"):
         floor = dict(getattr(t, "_risk_floor", None) or {})
         floor.pop("params", None)       # 설정 서명(repr) — 길고, 설정 기본값이 바뀔 때마다 흔들린다
         out["state"]["risk_floor"] = _jsonable(floor)
+    if scenario == "account_sync":
+        out["state"].update({k: _jsonable(getattr(t, k, None)) for k in (
+            "net_transfer_today", "buy_halt_kind", "_net_transfer_saved", "_pending_transfer_amt",
+            "_pending_transfer_count", "_offline_reconcile_date")})
+        out["asset_history"] = [list(r) for r in db_manager.db.execute_query(
+            "SELECT date, asset, net_transfer, principal FROM daily_asset_history WHERE account = ? ORDER BY date",
+            (paper_broker._account_key(),), fetch="all") or []]
     out["screens"] = _screens(t)
     return out
 
