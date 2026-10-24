@@ -4,7 +4,7 @@
  시각·장 상태에 기대지 않고 네트워크 없이 도는 것만 고른다. 전체 스위트는 CI 가 매일 장 밖·장중
  두 시각에 따로 돌린다(.github/workflows/checks.yml — 시각 의존이 되살아났는지 보는 대조).
    · 채점: 구조화 결과·만점·가중치 범위·경계 원장
-   · 판단 공통화: 청산 체인·청산 패리티·사이징 패리티·52주 창 패리티·단일 종목 엔진·화면 판정·동적 손절 캡 입력
+   · 판단 공통화: 청산 체인·청산 패리티·사이징 패리티·52주 창 패리티·단일 종목 엔진·화면 판정·동적 손절 캡 입력·리스크 배수 장중 래칫
    · 설정: 전역 임시 변경 금지·주기 스냅샷·폴백 리터럴·그룹 딕셔너리 대입·개별 룰 저장 왕복
    · 주문 상태: 결과 불명·중복 체결·재시작 미체결·부분체결 정책·DB 결과 불명·가상투자 가로채기·시험 모델
    · 구조: pyflakes 기준선·README 트리·import 부작용·계층 패키지 규약·AutoTrader 분리 연결부·주기 재생 기록·최저 Python 판(3.12) 호환·pandas 판 의미·실행 기록
@@ -34,6 +34,7 @@ CORE_TESTS = (
     "tests/test_single_engine_parity.py",
     "tests/test_screen_judgment_parity.py",
     "tests/test_live_vol_regime.py",
+    "tests/test_risk_scale_intraday_floor.py",
     # 설정
     "tests/test_config_no_global_override.py",
     "tests/test_config_cycle_snapshot.py",

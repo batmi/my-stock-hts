@@ -42,7 +42,8 @@ from modules.auto_trade.engine import (ANCHOR_RESTORE_INTERVAL_SEC, DefaultStrat
                                        UNMANAGED_NO_SELLABLE, UNMANAGED_RESTRICTED,
                                        UNMANAGED_STALE_PRICE, UNMANAGED_STUCK_PENDING)
 from modules.auto_trade.common import (DISK_FREE_WARN_MB, _enrich_rules_with_weights, _get_trade_account, entry_open_delay_remaining,
-    trade_account_key, get_mystock_log_tail, get_restricted_stocks, is_plausible_baseline, is_single_price_break, is_system_market_open, load_daily_initial_asset, load_daily_principal, save_daily_initial_asset)
+    trade_account_key, get_mystock_log_tail, get_restricted_stocks, is_plausible_baseline, is_single_price_break, is_system_market_open, load_daily_initial_asset, load_daily_principal, load_daily_risk_floor,
+    save_daily_initial_asset, save_daily_risk_floor)
 
 console = config.console
 
@@ -5335,6 +5336,7 @@ class AutoTrader(TraderReportingMixin):
         결과는 RiskManager가 종목당 리스크(SYSTEM_RISK_PER_TRADE)와
         히트 캡(SYSTEM_MAX_PORTFOLIO_RISK)에 곱해 사용한다. 청산 로직에는 관여하지 않는다.
         (국면 배수 × 휩소율 배수) × 드로다운 배수가 곱으로 결합된다.
+        그 결과는 같은 날 안에서 조이기만 한다 — 푸는 것은 다음 날 첫 주기다(_hold_intraday_floor).
 
         [시장별 분리 2026-07-27] 국면·휩소율은 KOSPI/KOSDAQ이 서로 다른 시장이므로 각각 산출해
         self.risk_scale_by_market에 담고, 종목 사이징에는 **그 종목이 속한 시장의 배수**를 쓴다.
@@ -5481,9 +5483,13 @@ class AutoTrader(TraderReportingMixin):
             logger.debug(f"[리스크 스케일링] 배수 계산 실패 (기존값 유지): {e}")
             return
 
+        # 3) 같은 날 안에서는 조이기만 한다 — 푸는 것은 다음 날 첫 주기(_hold_intraday_floor 주석).
+        scale, reason, market_scales, market_reasons = self._hold_intraday_floor(
+            params, scale, ", ".join(reasons), market_scales, market_reasons)
+
         prev = getattr(self, 'risk_scale', 1.0)
         self.risk_scale = scale
-        self.risk_scale_reason = ", ".join(reasons)
+        self.risk_scale_reason = reason
         self.risk_scale_by_market = market_scales
         self.risk_scale_reason_by_market = market_reasons
         if abs(scale - prev) > 1e-9:
@@ -5498,6 +5504,93 @@ class AutoTrader(TraderReportingMixin):
                          f"({self.risk_scale_reason}) (청산 로직 영향 없음)")
             else:
                 self.log("[리스크 스케일링] 리스크 한도 정상 복원 (x1.00)")
+
+    @staticmethod
+    def _risk_floor_day():
+        """장중 래칫의 '하루' — 일일 시작 자산과 같은 달력일. 날짜가 바뀐 뒤 첫 주기에 새로 잰다."""
+        return datetime.now().strftime("%Y-%m-%d")
+
+    def _hold_intraday_floor(self, params, scale, reason, market_scales, market_reasons):
+        """[리스크 스케일링 · 장중 래칫 2026-10-24] 같은 날 안에서는 배수를 **조이기만** 한다.
+
+        그날 첫 주기에 잰 값에서 시작한다. 장중에 더 나빠지면(배수가 작아지면) 그 주기에 바로 따르고,
+        좋아져도 그날은 유지한다. 푸는 것은 날짜가 바뀐 뒤 첫 주기다. 그래서 돌려주는 값은 언제나
+        이번 주기 계산값 이하다 — 종전보다 느슨해지는 경우는 없다.
+
+        [왜] 배수를 주기(약 1분)마다 새로 재면, 드로다운이 5%·10% 문턱 근처에 있거나 지수가 '하락 미확정'
+         경계에 있을 때 1~2분 간격으로 오르내린다. 파이 가상투자(08-21~10-23)에서 배수 변경 로그가
+         하루 최대 21줄(09-08)이었다. 09-14 에는 히트 캡(x0.49 → 4.9%)이 45분간 막고 있던 삼성E&A 진입이,
+         배수가 x0.90 으로 풀린 6분 사이에 16주로 들어갔다(09-29 시간청산 -5.3%). 이 배수를 검증한
+         감사(audit_market_axes·audit_drawdown_axis)는 일봉 종가로 하루 한 값을 썼다 — 분 단위로
+         풀렸다 조였다 하는 것은 검증된 동작이 아니다.
+        [하루 한 번 고정이 아닌 이유] 장중 급락에는 그날 바로 반응해야 한다. 시장 필터를 끈 운용에서는
+         이 배수가 유일한 시장 브레이크다.
+        [재기동] 당일 최저값을 일일 상태 파일(common.save_daily_risk_floor)에 남긴다 — 장중에 재기동해도
+         풀리지 않는다. 못 읽거나 못 쓰면 이번 주기 계산값을 쓴다(종전 동작이고, 그보다 느슨해지지 않는다).
+        [설정 변경] RISK_SCALING_PARAMS 가 바뀌면 그 자리에서 새로 잰다 — 축을 끄거나 문턱을 바꾸면
+         곧바로 반영돼야 한다.
+        """
+        day = self._risk_floor_day()
+        sig = repr(sorted((str(k), repr(v)) for k, v in (params or {}).items()))
+        try:
+            account_key = trade_account_key()
+        except Exception:
+            account_key = ""
+        floor = getattr(self, '_risk_floor', None)
+        if not floor or floor.get("date") != day:
+            floor = load_daily_risk_floor(account_key, day)     # 장중 재기동 — 오늘 남긴 최저값을 이어 쓴다
+        if not floor or floor.get("params") != sig:
+            #  그날 첫 주기(또는 설정 변경) — 이번 계산값에서 시작한다.
+            self._risk_floor = {"date": day, "params": sig, "scale": scale, "reason": reason,
+                                "by_market": dict(market_scales), "reason_by_market": dict(market_reasons)}
+            self._save_risk_floor(account_key, day)
+            return scale, reason, market_scales, market_reasons
+
+        tightened, held = False, []
+
+        def pick(label, raw_v, raw_r, floor_v, floor_r):
+            """(적용값, 적용 사유, 새 최저값, 그 사유) — 계산값이 최저 이하면 계산값, 아니면 최저를 유지."""
+            nonlocal tightened
+            try:
+                floor_v = float(floor_v)
+            except (TypeError, ValueError):
+                floor_v = None
+            if floor_v is None or not (0 < floor_v <= 1.0) or raw_v < floor_v - 1e-9:
+                tightened = True
+                return raw_v, raw_r, raw_v, raw_r
+            if raw_v <= floor_v + 1e-9:
+                return raw_v, raw_r, raw_v, raw_r       # 같은 값 — 사유는 지금 것으로
+            if label:
+                held.append(f"{label} 계산 x{raw_v:.2f} → 유지 x{floor_v:.2f}")
+            return floor_v, f"[장중 유지] {floor_r}".rstrip(), floor_v, floor_r
+
+        a_scale, a_reason, f_scale, f_reason = pick(None, scale, reason, floor.get("scale"), floor.get("reason", ""))
+        fb, fr = floor.get("by_market") or {}, floor.get("reason_by_market") or {}
+        a_ms, a_mr, f_ms, f_mr = {}, {}, {}, {}
+        for m in market_scales:
+            a_ms[m], a_mr[m], f_ms[m], f_mr[m] = pick(
+                m, market_scales[m], market_reasons.get(m, ""), fb.get(m), fr.get(m, ""))
+        self._risk_floor = {"date": day, "params": sig, "scale": f_scale, "reason": f_reason,
+                            "by_market": f_ms, "reason_by_market": f_mr}
+        if tightened:
+            self._save_risk_floor(account_key, day)
+        if held and getattr(self, '_risk_floor_held_noted', None) != day:
+            self._risk_floor_held_noted = day
+            self.log(f"[리스크 스케일링] 축소 사유가 장중에 풀렸지만 오늘은 유지합니다 — {', '.join(held)} "
+                     f"(장중에는 조이기만 하고, 푸는 것은 다음 날 첫 주기다 · 하루 1회 안내)")
+        return a_scale, a_reason, a_ms, a_mr
+
+    def _save_risk_floor(self, account_key, day):
+        """당일 최저 배수를 파일에 남긴다. 실패하면 하루 한 번 경고한다(이 세션의 래칫은 그대로 지킨다)."""
+        try:
+            ok = save_daily_risk_floor(account_key, day, self._risk_floor)
+        except Exception as e:
+            logger.debug(f"[리스크 스케일링] 당일 최저 배수 저장 예외: {e}")
+            ok = False
+        if not ok and getattr(self, '_risk_floor_save_warned', None) != day:
+            self._risk_floor_save_warned = day
+            logger.warning("[리스크 스케일링] 오늘의 최저 배수를 파일에 남기지 못했습니다 — 이 세션은 그대로 "
+                           "지키지만, 재기동하면 그 시점 계산값에서 다시 시작합니다.")
 
     def _get_account_drawdown_pct(self, params=None):
         """계좌 드로다운(%) — 최근 DD_LOOKBACK_DAYS 일간 자산 고점(HWM) 대비 현재 평가자산 하락률

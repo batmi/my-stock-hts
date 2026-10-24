@@ -161,7 +161,7 @@ The order amount is the **smallest** of ① the base weight (concentration contr
 - **Risk-based sizing** — caps single-trade loss against account equity (4% default); wider stops automatically get smaller positions.
 - **Portfolio heat cap** — limits the summed loss if every holding fell to its effective stop simultaneously, to 10% of equity (`SYSTEM_MAX_PORTFOLIO_RISK`).
 - **Volatility targeting** — normalizes annualized volatility to a 25% target via ATR, clamped so the scale-up never exceeds the base weight.
-- **Dynamic risk scaling** — ① regime-linked (×0.6 in PendDown) ② whipsaw-rate linked (smaller in choppy markets) ③ stepped drawdown deceleration (−5% ×0.75, −10% ×0.5) ④ gap-risk buffer (stop width ×1.2). It only shrinks entry size and never touches exit logic.
+- **Dynamic risk scaling** — ① regime-linked (×0.6 in PendDown) ② whipsaw-rate linked (smaller in choppy markets) ③ stepped drawdown deceleration (−5% ×0.90, −10% ×0.80) ④ gap-risk buffer (stop width ×1.2). The multiplier is re-measured every cycle but only tightens within a day; it loosens at the next day's first cycle (and survives an intraday restart). It only shrinks entry size and never touches exit logic.
 
 **Entry blocks & defenses**
 

@@ -111,13 +111,23 @@ def test_a_blind_cycle_does_not_reopen_the_entry_limit(monkeypatch):
 
 
 def test_the_limit_is_released_only_when_the_market_is_actually_seen(monkeypatch):
-    """유지가 고착이 되면 안 된다 — 실제로 강세로 판정되면 배수는 풀린다."""
+    """유지가 고착이 되면 안 된다 — 실제로 강세로 판정되면 배수는 풀린다.
+
+    [2026-10-24 장중 래칫] 푸는 것은 다음 날 첫 주기다(trader._hold_intraday_floor). 그날 안에서는
+     강세가 보여도 유지하고, 날짜가 바뀐 뒤 실제로 강세로 판정되면 그때 풀린다.
+    """
+    from modules.auto_trade.trader import AutoTrader
     t = _trader(monkeypatch)
+    monkeypatch.setattr(AutoTrader, '_risk_floor_day', staticmethod(lambda: "2026-10-23"))
     _regime(monkeypatch, **BAD)
     t._update_risk_scale()
     _regime(monkeypatch)
     t._update_risk_scale()
     _regime(monkeypatch, regime="Bull", whipsaw_ratio=0.05, segments=6, unknown=False)
+    t._update_risk_scale()
+    assert t.risk_scale < 1.0, "같은 날 안에서 풀렸다 — 장중에는 조이기만 해야 한다"
+
+    monkeypatch.setattr(AutoTrader, '_risk_floor_day', staticmethod(lambda: "2026-10-24"))
     t._update_risk_scale()
     assert t.risk_scale == pytest.approx(1.0), t.risk_scale_reason
 

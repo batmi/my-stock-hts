@@ -766,6 +766,39 @@ def save_daily_initial_asset(account_key, asset_value, principal=None):
             f"(일일 손실 한도·드로다운 기준이 현재 자산으로 다시 잡힙니다).")
     return ok
 
+
+def load_daily_risk_floor(account_key, day):
+    """그날의 리스크 배수 최저값(장중 래칫 — trader._hold_intraday_floor)을 읽는다. 없거나 못 읽으면 None.
+
+    day 는 호출자가 준다 — 래칫의 '하루'는 트레이더가 정하고, 파일은 그 날짜의 기록만 돌려준다.
+    """
+    try:
+        data = jsonio.load_json(DAILY_STATE_FILE, default={}) or {}
+    except Exception as e:
+        logger.debug(f"[리스크 스케일링] 당일 최저 배수를 읽지 못했습니다: {e}")
+        return None
+    if data.get("date") != day:
+        return None
+    entry = (data.get("accounts") or {}).get(account_key)
+    floor = entry.get("risk_floor") if isinstance(entry, dict) else None
+    return floor if isinstance(floor, dict) else None
+
+
+def save_daily_risk_floor(account_key, day, floor):
+    """그날의 리스크 배수 최저값을 남긴다 — 장중에 재기동해도 풀리지 않게. 성공 여부를 돌려준다.
+
+    같은 계좌 항목의 시작 자산·기준 원금은 건드리지 않는다(save_daily_initial_asset 과 같은 병합 규약).
+    """
+    data = {"date": day, "accounts": {}}
+    old_data = jsonio.load_json(DAILY_STATE_FILE, default={}) or {}
+    if old_data.get("date") == day:
+        data["accounts"] = old_data.get("accounts", {})
+    prev = data["accounts"].get(account_key)
+    entry = dict(prev) if isinstance(prev, dict) else ({"asset": prev} if isinstance(prev, (int, float)) else {})
+    entry["risk_floor"] = floor
+    data["accounts"][account_key] = entry
+    return jsonio.save_json(DAILY_STATE_FILE, data)
+
 # [리팩토링] 시스템 트레이딩 운영 시간 판단 (단일 진입점)
 #  - ConclusionMonitor._is_market_open / AutoTrader.is_market_open 이 동일 로직을
 #    각자 들고 있던 중복을 제거하고 이 함수로 위임한다.
