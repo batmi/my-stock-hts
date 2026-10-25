@@ -233,8 +233,10 @@ def test_no_screen_keeps_its_own_copy_of_the_regime_label():
     #  [2026-10-24] 콘솔 상태표·텔레그램 상태 문구는 C1 1단계로 reporting.py 에, 리스크 사유 로그는 2단계로
     #   market_risk.py 에 있다. trader.py 는 이제 국면을 그리지 않지만, 거기 다시 생기는 복제도 잡도록 함께 훑는다.
     renders = ("modules/auto_trade/market_risk.py", "modules/auto_trade/reporting.py", "modules/telegram_bot.py")
-    #  매도 판정(selling.py · C1 4단계)도 국면을 그리지 않지만 같은 이유로 훑는다.
-    for path in renders + ("modules/auto_trade/trader.py", "modules/auto_trade/selling.py"):
+    #  매도 판정(selling.py · C1 4단계)도 국면을 그리지 않지만 같은 이유로 훑는다. 매수 후보 분석(buying.py ·
+    #   5단계)은 적응형 임계값이 켜지면 국면을 로그에 적는다.
+    for path in renders + ("modules/auto_trade/trader.py", "modules/auto_trade/selling.py",
+                           "modules/auto_trade/buying.py"):
         src = open(path, encoding='utf-8').read()
         #  [자기검사] 이 화면이 국면을 아예 안 그리게 되면 위 순회는 조용히 0곳을 보고
         #   테스트는 통과한다 — 그 침묵을 막는다.

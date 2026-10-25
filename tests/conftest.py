@@ -17,7 +17,7 @@ from modules import analysis # [추가] 지수 조회 차단용
 from modules.auto_trade import AutoTrader, ConclusionMonitor
 from modules.auto_trade import conclusion as _conclusion_mod
 from modules.auto_trade import engine as _atr_engine  # [추가] 지수 변동성 배율 전역 격리
-from modules.auto_trade import trader as _atr_trader  # [추가] 개장 보류 게이트 전역 격리
+from modules.auto_trade import buying as _atr_buying  # [추가] 개장 보류 게이트 전역 격리(게이트는 매수 판정에 있다)
 from modules.telegram_bot import TelegramCommander
 from modules.reserved_order_monitor import ReservedOrderMonitor as _ReservedOrderMonitor
 from modules.journal_sync import JournalSyncWorker as _JournalSyncWorker
@@ -732,15 +732,17 @@ def reset_all_singletons():
     #  도달하지 못해 실패한다 — 코드가 아니라 **실행 시각**이 만드는 실패다(2026-08-24
     #  09:07 실측 8건). 시각에 따라 답이 달라지는 스위트는 신뢰할 수 없으므로 여기서 끈다.
     #  [무엇을 잃지 않는가] 게이트의 산식은 test_entry_open_delay 가 common 쪽 함수에
-    #  now 를 직접 넘겨 검증하고(이 patch는 trader 쪽 이름만 건드린다), '매수 경로에는
+    #  now 를 직접 넘겨 검증하고(이 patch는 buying 쪽 이름만 건드린다), '매수 경로에는
     #  있고 청산 경로에는 없다'는 배치는 같은 파일의 소스 검사 테스트가 지킨다. 게이트가
     #  실제로 매수를 막는지도 그 파일이 런타임으로 따로 확인한다.
-    _open_delay_orig = _atr_trader.entry_open_delay_remaining
-    _atr_trader.entry_open_delay_remaining = lambda *a, **k: 0
+    #  [2026-10-25 C1 5단계] 매수 판정이 trader 에서 buying 으로 옮겨 갔다 — 바꿔 끼울 이름도 그쪽이다.
+    #   trader 에 걸면 실패 없이 빗나가, 평일 09:00~09:30 에 돌린 스위트만 다시 시각 때문에 깨진다.
+    _open_delay_orig = _atr_buying.entry_open_delay_remaining
+    _atr_buying.entry_open_delay_remaining = lambda *a, **k: 0
 
     yield
 
-    _atr_trader.entry_open_delay_remaining = _open_delay_orig
+    _atr_buying.entry_open_delay_remaining = _open_delay_orig
 
     # [격리 2026-08-19] 인스턴스를 None으로 만들어도 **이미 떠 있는 스레드는 안 죽는다** —
     #  그 스레드는 옛 self를 참조로 붙들고 있다. 체결 감시가 매도 체결마다 띄우는

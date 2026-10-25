@@ -117,8 +117,10 @@ def test_the_pre_registration_is_cleaned_up_even_when_unclear():
 # ---------------------------------------------------------------------------
 
 def _order_src():
-    """주문을 내는 트레이더 코드 — 신규매수·피라미딩은 trader.py, 매도는 selling.py(2026-10-25 C1 4단계)."""
-    return "\n".join(open(f"modules/auto_trade/{f}", encoding="utf-8").read() for f in ("trader.py", "selling.py"))
+    """주문을 내는 트레이더 코드 — 매도는 selling.py(2026-10-25 C1 4단계), 신규매수·피라미딩은 buying.py
+    (같은 날 5단계). trader.py(주기 제어)도 함께 본다 — 거기에 새 주문 호출이 생기면 이 검사들에 걸려야 한다."""
+    return "\n".join(open(f"modules/auto_trade/{f}", encoding="utf-8").read()
+                     for f in ("trader.py", "selling.py", "buying.py"))
 
 
 @pytest.mark.parametrize("marker", [
@@ -137,7 +139,7 @@ def test_every_send_order_call_site_handles_the_unclear_outcome(marker):
 
 
 def _unclear_handlers():
-    """trader.py·selling.py 의 `except ... OrderOutcomeUnclear` 처리 블록들을 구문으로 뽑는다.
+    """trader.py·selling.py·buying.py 의 `except ... OrderOutcomeUnclear` 처리 블록들을 구문으로 뽑는다.
 
     소스를 글자로 잘라 보지 않는다 — 처음에 그렇게 짰다가 잘못된 구간을 봤다.
     """

@@ -157,10 +157,11 @@ def test_buy_candidate_skips_are_logged():
 
     대기 주문·차트 없음으로 빠지면 그 종목은 [분석] 줄도 [분석스킵] 줄도 없이 사라져,
     왜 후보에서 빠졌는지 운영자가 알 수 없다(2026-08-05 NAVER).
+    매수 후보 분석은 2026-10-25 C1 5단계로 modules/auto_trade/buying.py 에 있다.
     """
     import os
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    src = open(os.path.join(root, "modules/auto_trade/trader.py"), encoding="utf-8").read()
+    src = open(os.path.join(root, "modules/auto_trade/buying.py"), encoding="utf-8").read()
 
     start = src.find("def _analyze_candidate_worker")
     end = src.find("def _analyze_candidates", start)

@@ -123,7 +123,7 @@ def _run_buy_cycle(trader, holdings, cash):
          patch.object(config.settings, 'SYSTEM_MAX_HOLDINGS', 4), \
          patch.object(trader, '_analyze_candidates', side_effect=_capture), \
          patch.object(trader, 'log'), \
-         patch('modules.auto_trade.trader.entry_open_delay_remaining', return_value=0), \
+         patch('modules.auto_trade.buying.entry_open_delay_remaining', return_value=0), \
          patch('modules.auto_trade.db_manager.db.get_trades', return_value=[]), \
          patch('modules.auto_trade.db_manager.db.get_latest_buy_trades', return_value={}), \
          patch('modules.auto_trade.db_manager.db.get_all_stock_strategies', return_value=[]):

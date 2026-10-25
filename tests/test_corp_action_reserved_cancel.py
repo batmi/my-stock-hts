@@ -55,12 +55,13 @@ def test_감시기는_취소_내역을_기록하고_알리며_실패는_긴급_�
 
 
 def test_매수_사유문의_체결강도_표기와_재진입_허들_정규식은_같은_계약이다():
-    """trader._execute_buy_orders 가 적는 '체결강도:{v:.1f}%' 를 _check_buy_conditions 가
-    r'체결강도:\\s*([0-9.]+)%' 로 되읽는다 — 어느 한쪽만 바뀌면 허들이 조용히 사라진다."""
+    """_execute_buy_orders 가 적는 '체결강도:{v:.1f}%' 를 _check_buy_conditions 가
+    r'체결강도:\\s*([0-9.]+)%' 로 되읽는다 — 어느 한쪽만 바뀌면 허들이 조용히 사라진다.
+    (둘 다 modules/auto_trade/buying.py 에 있다 — 2026-10-25 C1 5단계로 trader 에서 옮겼다.)"""
     import re
     vol_val = f"{127.34:.1f}%"
     reason = f"매수 [점수:8.5, RSI:55.0, 체결강도:{vol_val}]"
     m = re.search(r'체결강도:\s*([0-9.]+)%', reason)
     assert m and float(m.group(1)) == 127.3
-    src = open("modules/auto_trade/trader.py", encoding="utf-8").read()
+    src = open("modules/auto_trade/buying.py", encoding="utf-8").read()
     assert "체결강도:{vol_val}]" in src and "r'체결강도:\\s*([0-9.]+)%'" in src

@@ -18,6 +18,7 @@ import pytest
 from modules.auto_trade import trader as trader_mod
 from modules.auto_trade import engine as engine_mod
 from modules.auto_trade import selling as selling_mod
+from modules.auto_trade import buying as buying_mod
 
 
 # --------------------------------------------------------- 실패의 가시성
@@ -150,9 +151,10 @@ def test_먼저_고쳐진_풀들이_되돌아가지_않았다():
     2026-08~09 에 각각 고쳐졌다. 이들은 컨텍스트를 함수 인자·상위 프레임에서 받으므로
     구문만으로는 위 검사에 잡히지 않는다.
     """
-    #  매도 풀(at_sell)은 C1 4단계(2026-10-25)로 selling.py 에 있다 — trader 와 함께 본다.
+    #  매도 풀(at_sell)은 C1 4단계(2026-10-25)로 selling.py, 후보 풀(at_cand·cand_io)은 5단계로 buying.py 에 있다
+    #   — trader 와 함께 본다.
     trader_src = "\n".join(open(m.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
-                           for m in (trader_mod, selling_mod))
+                           for m in (trader_mod, selling_mod, buying_mod))
     engine_src = open(engine_mod.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
     for needle in ("_sell_task = utils.inherit_account_context(_sell_worker_guarded)",
                    "_cand_task = utils.inherit_account_context(self._analyze_candidate_worker)",

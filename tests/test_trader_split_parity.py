@@ -15,13 +15,16 @@
 [2026-10-25 4단계] 매도 메서드 12개를 modules/auto_trade/selling.TraderSellingMixin 으로 옮겼다(같은 방법 — AST 동일,
  전역 40개 중 남는 이름 동일 객체, engine 의 미관리 사유·경보 횟수 상수는 engine 에서 그대로 import). 동등성은
  네 시나리오(sell_paths 추가)가 본다.
+[2026-10-25 5단계] 매수 메서드 9개와 클래스 속성 2개를 modules/auto_trade/buying.TraderBuyingMixin 으로 옮겼다(같은
+ 방법 — AST 동일, 바꾼 곳은 정적 메서드의 클래스 이름 한 곳, 전역 18개 동일 객체). 매수만 쓰던 모듈 함수 둘(후보
+ 정렬 키·오염 일봉 판정)도 함께 옮겼고 trader 가 다시 import 한다. 동등성은 다섯 시나리오(buy_paths 추가)가 본다.
 """
 import inspect
 import itertools
 
 import pytest
 
-from modules.auto_trade import account_sync, market_risk, reporting, selling, trader
+from modules.auto_trade import account_sync, buying, market_risk, reporting, selling, trader
 
 MIXINS = {
     reporting: (reporting.TraderReportingMixin,
@@ -32,8 +35,8 @@ MIXINS = {
                   ("_update_market_indices_status", "_format_market_filter_basis", "_notify_market_unknown",
                    "_whipsaw_risk_scale", "_update_vol_regime", "_update_risk_scale", "_risk_floor_day",
                    "_hold_intraday_floor", "_save_risk_floor", "_get_account_drawdown_pct"),
-                  {"config", "api", "analysis", "datetime", "db_manager", "logger",
-                   "_get_trade_account", "trade_account_key"}),     # timedelta 는 3단계로 trader 가 안 쓴다
+                  {"config", "api", "datetime", "db_manager", "logger",
+                   "_get_trade_account", "trade_account_key"}),     # timedelta 는 3단계, analysis 는 5단계로 trader 가 안 쓴다
     account_sync: (account_sync.TraderAccountSyncMixin,
                    ("effective_baseline", "daily_pnl_base", "transfer_note", "_offline_transfer_threshold",
                     "_realized_matches_broker", "_reconcile_offline_transfer", "_reevaluate_buy_halt_after_transfer",
@@ -46,8 +49,16 @@ MIXINS = {
                "_apply_corporate_action", "_already_half_sold", "_cached_anchor", "_restore_trailing_anchor",
                "_alert_unmanaged_stop", "_scan_after_hours_sell_signals", "_alert_after_hours_sell",
                "_check_sell_conditions"),
-              {"config", "api", "analysis", "concurrent", "datetime", "db_manager", "indicators", "logger", "time",
+              {"config", "api", "concurrent", "datetime", "db_manager", "logger", "time",
                "utils", "_enrich_rules_with_weights", "_get_trade_account", "get_restricted_stocks"}),
+    #  ↑ analysis·indicators 는 5단계로 trader 가 안 쓴다(buying 이 가져갔다)
+    buying: (buying.TraderBuyingMixin,
+             ("_try_pyramid_buy", "occupied_slot_codes", "_check_buy_conditions", "_collect_stop_exit_prices",
+              "_analyze_candidate_worker", "_note_score_boundary", "_drain_boundary_rows", "_analyze_candidates",
+              "_execute_buy_orders"),
+             {"config", "api", "concurrent", "context", "datetime", "db_manager", "logger", "time", "utils",
+              "_enrich_rules_with_weights", "_get_trade_account", "get_restricted_stocks",
+              "candidate_priority_key", "contaminated_chart_reason"}),     # 둘은 trader 가 다시 import 한다
 }
 _IDS = [m.__name__.rsplit(".", 1)[-1] for m in MIXINS]
 

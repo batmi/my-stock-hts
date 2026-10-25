@@ -35,7 +35,7 @@ def restore_risk_params():
 # =========================================================
 def _patch_regime(regime, whipsaw=None, score_adj=0.0):
     """국면 상세(get_market_regime_detail) 모킹 헬퍼."""
-    return patch('modules.auto_trade.trader.analysis.get_market_regime_detail',
+    return patch('modules.auto_trade.market_risk.analysis.get_market_regime_detail',
                  return_value={'regime': regime, 'score_adj': score_adj,
                                'moved_pct': 0.0, 'whipsaw_ratio': whipsaw, 'segments': 10})
 
@@ -136,7 +136,7 @@ def test_worst_of_two_markets_is_used(trader):
         "KOSDAQ": {'regime': "PendDown", 'score_adj': 0.5, 'moved_pct': -2.0,
                    'whipsaw_ratio': None, 'segments': 10},
     }
-    with patch('modules.auto_trade.trader.analysis.get_market_regime_detail',
+    with patch('modules.auto_trade.market_risk.analysis.get_market_regime_detail',
                side_effect=lambda m: per_market[m]):
         trader._update_risk_scale()
     assert trader.risk_scale == pytest.approx(0.6)
@@ -243,7 +243,7 @@ def _patch_regime_per_market(mapping):
         regime, whipsaw = mapping[m_type]
         return {'regime': regime, 'score_adj': 0.0, 'moved_pct': 0.0,
                 'whipsaw_ratio': whipsaw, 'segments': 10}
-    return patch('modules.auto_trade.trader.analysis.get_market_regime_detail',
+    return patch('modules.auto_trade.market_risk.analysis.get_market_regime_detail',
                  side_effect=_detail)
 
 

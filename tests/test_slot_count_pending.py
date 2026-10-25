@@ -90,8 +90,10 @@ def test_counting_failure_falls_back_to_holdings_and_says_so():
 # ---------------------------------------------------------------------------
 
 def test_the_gate_and_the_executor_use_the_same_count():
-    """게이트만 고치고 실행부를 두면, 게이트는 막는데 실행부는 자리가 있다고 믿는다."""
-    src = open("modules/auto_trade/trader.py", encoding="utf-8").read()
+    """게이트만 고치고 실행부를 두면, 게이트는 막는데 실행부는 자리가 있다고 믿는다.
+
+    (매수 판정은 2026-10-25 C1 5단계로 modules/auto_trade/buying.py 에 있다.)"""
+    src = open("modules/auto_trade/buying.py", encoding="utf-8").read()
     assert "len(slot_codes) >= max_holdings" in src, "슬롯 게이트가 잔고만 센다"
     assert "len(self.occupied_slot_codes(holding_codes)), max_holdings" in src, \
         "_execute_buy_orders 에 넘기는 수가 잔고 기준이다"
@@ -104,10 +106,16 @@ def test_the_heat_comment_no_longer_claims_a_single_order_bound():
 
     한 주기에 빈 슬롯 수만큼 주문이 나가므로 폭은 그 합이다. 주석이 실제보다 작은
     상한을 말하면, 읽는 사람이 그 값을 믿고 캡을 설계한다.
+
+    [2026-10-25] 이 주석(매도 판정의 오픈 리스크 재계산)은 C1 4단계로 selling.py 에 있다. 그 뒤로 이 검사는
+     trader.py 를 읽어, 부정 단언은 아무것도 보지 않았고 긍정 단언은 무관한 문구('보류한 주기에')에 우연히
+     걸려 통과했다. 주석이 있는 파일을 읽고, 그 주석을 찾았는지부터 본다.
     """
-    src = open("modules/auto_trade/trader.py", encoding="utf-8").read()
+    src = open("modules/auto_trade/selling.py", encoding="utf-8").read()
+    assert "종전 주석은 과소평가 폭을 '그 한 주문분'이라고 적었다" in src, \
+        "히트 과소평가 정정 주석을 찾지 못했다 — 이 검사가 볼 파일을 고쳐라"
     assert "과소평가 폭은 그 한 주문분이라" not in src
-    assert "한 주기에\n        #   나간 주문분" in src or "한 주기에" in src
+    assert "과소평가 폭은 **한 주기에\n        #   나간 주문분**" in src
 
 
 # ---------------------------------------------------------------------------
@@ -119,8 +127,9 @@ def test_the_correlation_filter_compares_against_pending_orders_too():
     (portfolio_backtest 의 entry_gate(day, code, tuple(positions))).
     실매매에서만 체결 전까지 보이지 않으면, 이 필터를 검증한 모델보다 실매매가
     더 허용적이 된다 — 미체결 종목과 같은 테마를 그 사이에 살 수 있다.
+    (매수 후보 분석은 2026-10-25 C1 5단계로 modules/auto_trade/buying.py 에 있다.)
     """
-    src = open("modules/auto_trade/trader.py", encoding="utf-8").read()
+    src = open("modules/auto_trade/buying.py", encoding="utf-8").read()
     assert "corr_ref_codes = self.occupied_slot_codes(holding_codes)" in src, \
         "상관 비교 대상이 잔고 기준이다"
     assert "if use_corr_filter and holding_codes:" not in src, \

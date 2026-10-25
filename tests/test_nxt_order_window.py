@@ -85,6 +85,7 @@ def test_the_market_order_notice_matches_the_window():
     "modules/reserved_order_monitor.py",
     "modules/auto_trade/trader.py",
     "modules/auto_trade/selling.py",      # 매도 판정의 NXT 창 분기(2026-10-25 C1 4단계)
+    "modules/auto_trade/buying.py",       # 매수 후보의 연장거래 창 분기(같은 날 5단계)
 ])
 def test_no_one_keeps_a_private_copy_of_the_window(path):
     """같은 구간이 네 벌 복사돼 있었다. 한 벌만 고치면 화면마다 다르게 동작한다."""

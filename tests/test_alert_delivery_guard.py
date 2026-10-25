@@ -51,6 +51,7 @@ _CRITICAL_FILES = (
     'modules/auto_trade/market_risk.py',
     'modules/auto_trade/account_sync.py',
     'modules/auto_trade/selling.py',        # 손절선 이탈·권리 조정·장 마감 뒤 매도 신호(매도, 2026-10-25 C1 4단계)
+    'modules/auto_trade/buying.py',         # 예약 매수 취소 실패·결과 불명(매수, 2026-10-25 C1 5단계)
     'modules/reserved_order_monitor.py',
     'modules/market_halt.py',
 )

@@ -84,12 +84,14 @@ def test_시작시간이_더_늦으면_그_시각_기준(dials):
 def test_청산_경로는_이_게이트를_보지_않는다():
     """게이트가 매수 경로에만 걸려 있는지 소스로 고정한다.
 
-    [2026-10-25] 매도 판정(_check_sell_conditions)과 그 안전망은 C1 4단계로 selling.py 에 있다 —
-     매수 경로는 trader.py 에 남았다. 매도 모듈은 이 게이트를 아예 부르지 않아야 한다.
+    [2026-10-25] 매도 판정(_check_sell_conditions)과 그 안전망은 C1 4단계로 selling.py, 매수 판정
+     (_check_buy_conditions)은 C1 5단계로 buying.py 에 있다. 매도 모듈은 이 게이트를 아예 부르지 않아야 하고,
+     주기 제어(trader.py)도 부르지 않는다 — 부르는 곳은 매수 판정 하나다.
     """
     pkg = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "modules", "auto_trade")
-    src = open(os.path.join(pkg, "trader.py"), encoding="utf-8").read()
+    src = open(os.path.join(pkg, "buying.py"), encoding="utf-8").read()
     sell_src = open(os.path.join(pkg, "selling.py"), encoding="utf-8").read()
+    trader_src = open(os.path.join(pkg, "trader.py"), encoding="utf-8").read()
     buy_at = src.index("def _check_buy_conditions")
 
     calls = [i for i in range(len(src))
@@ -100,6 +102,8 @@ def test_청산_경로는_이_게이트를_보지_않는다():
     assert "def _check_sell_conditions" in sell_src, "매도 판정이 selling.py 에 없다 — 이 가드의 파일을 고쳐라"
     assert "entry_open_delay_remaining(" not in sell_src, \
         "청산 경로가 진입 보류 게이트를 보고 있다 — 손절이 함께 멈춘다"
+    assert "entry_open_delay_remaining(" not in trader_src, \
+        "주기 제어가 진입 보류 게이트를 직접 본다 — 매도까지 함께 멈출 수 있다"
 
 
 def test_시장시간_설정은_건드리지_않았다():
@@ -167,14 +171,15 @@ def test_보류중이면_매수_경로가_실제로_멈춘다(monkeypatch):
     유일한 런타임 근거까지 지워 버리지 않도록** 여기서 명시적으로 되살려 확인한다.
     """
     from unittest.mock import patch
-    from modules.auto_trade import trader as trader_mod
+    from modules.auto_trade import buying as buying_mod, trader as trader_mod
 
     trader = trader_mod.AutoTrader()
     trader.is_running = True
     trader.consecutive_errors = 0
     config.session.stock_data = {"stocks_kr": [{"code": "005930", "name": "Samsung"}]}
 
-    monkeypatch.setattr(trader_mod, "entry_open_delay_remaining", lambda *a, **k: 12 * 60 + 5)
+    #  게이트는 매수 판정(buying)이 읽는다 — trader 에 걸면 빗나간다(2026-10-25 C1 5단계).
+    monkeypatch.setattr(buying_mod, "entry_open_delay_remaining", lambda *a, **k: 12 * 60 + 5)
     monkeypatch.setattr(trader_mod, "is_system_market_open", lambda *a, **k: True)
 
     with patch.object(trader, 'log') as mock_log:
@@ -189,14 +194,15 @@ def test_보류중이면_매수_경로가_실제로_멈춘다(monkeypatch):
 def test_보류가_풀리면_매수_판정으로_내려간다(monkeypatch):
     """대조군 — 위 테스트가 '무조건 아무것도 안 한다'로 통과하지 않게 한다."""
     from unittest.mock import patch
-    from modules.auto_trade import trader as trader_mod
+    from modules.auto_trade import buying as buying_mod, trader as trader_mod
 
     trader = trader_mod.AutoTrader()
     trader.is_running = True
     trader.consecutive_errors = 0
     config.session.stock_data = {"stocks_kr": [{"code": "005930", "name": "Samsung"}]}
 
-    monkeypatch.setattr(trader_mod, "entry_open_delay_remaining", lambda *a, **k: 0)
+    #  게이트는 매수 판정(buying)이 읽는다 — trader 에 걸면 빗나간다(2026-10-25 C1 5단계).
+    monkeypatch.setattr(buying_mod, "entry_open_delay_remaining", lambda *a, **k: 0)
     monkeypatch.setattr(trader_mod, "is_system_market_open", lambda *a, **k: True)
 
     with patch.object(trader, 'log') as mock_log:
