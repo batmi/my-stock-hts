@@ -42,6 +42,13 @@
     초과·손절 기준 없음·ATR 손절률 상한·보유 한도), 예약 매수 자동 취소, 미체결이 슬롯을 차지하는 주기, D+2 예수금 부족,
     옛 고점·반익절 기록 삭제 실패, 매수·증액 응답 유실(결과 불명), 증액 보류 사유들, 마지막 주기는 장 마감 뒤(증액 신호).
     바깥 사건은 모두 api·가상 브로커·DB·전략 클래스에 건다 — 트레이더 모듈 전역에 걸면 옮긴 뒤 빗나간다.
+  · lifecycle — base 시장·보유로 기동·정지·주 루프의 수명주기를 지난다(C1 6단계 '주기 제어' 분리의 기준, 2026-10-25).
+    8주기다. 기동 차단 셋(같은 계좌 중복 실행·DB 무결성 실패·기동 잔고 조회 실패로 초기화 예외 — 셋 다 잠금을 되돌린다),
+    정상 기동의 DB 백업 실패·디스크 부족·앵커/반익절 캐시 적재 실패, 장 시작 전 기동(단일가 대기) → 개장 전환(세션
+    전환 알림), 루프 예외(체결 감시 불안정·잔고 조회 실패)가 연속 에러 한도에 닿을 때 서버 정상이면 대기하지 않고
+    (코드 오류 알림), 서버 장애면 복구 대기(응답 없음·점검 예외 → 복구 알림), DB 쓰기 실패 알림과 억제, 메모리
+    경고·위험, 잔고 0건 재확인, 단일가 휴게 전환, 마감 스냅샷, 자정 날짜 변경(백업·시작 자산 재측정), 정지 둘(루프
+    스레드 무응답 · 예수금 조회 실패). 루프 안의 사건은 (주기, 시도)로 건다 — 예외 주기는 주기 번호를 올리지 않는다.
 """
 import concurrent.futures
 import datetime as _dt
@@ -72,7 +79,8 @@ GOLDEN = os.path.join(_FIXTURES, "cycle_replay_golden.json")
 SCENARIOS = {"base": GOLDEN, "market_stress": os.path.join(_FIXTURES, "cycle_replay_golden_market.json"),
              "account_sync": os.path.join(_FIXTURES, "cycle_replay_golden_account.json"),
              "sell_paths": os.path.join(_FIXTURES, "cycle_replay_golden_sell.json"),
-             "buy_paths": os.path.join(_FIXTURES, "cycle_replay_golden_buy.json")}
+             "buy_paths": os.path.join(_FIXTURES, "cycle_replay_golden_buy.json"),
+             "lifecycle": os.path.join(_FIXTURES, "cycle_replay_golden_lifecycle.json")}
 
 
 # ── 시계 ───────────────────────────────────────────────────────────────────────────────────
@@ -209,11 +217,18 @@ class _NoStartThread(threading.Thread):
     def start(self):
         pass
 
-    def is_alive(self):
+    def is_alive(self) -> bool:
         return False
 
     def join(self, timeout=None):
         pass
+
+
+class _StuckThread(_NoStartThread):
+    """[lifecycle] 정지 요청에 응답하지 않는 루프 스레드 — join 시한이 지나도 살아 있다."""
+
+    def is_alive(self) -> bool:
+        return True
 
 
 # ── 합성 시장 ──────────────────────────────────────────────────────────────────────────────
@@ -270,7 +285,7 @@ ACCOUNT_BACKFILL = {"written": 2, "skipped": 0, "restricted": ["재생외부(100
                     "partial": [("100060", "재생정체", 10)], "error": None}
 ACCOUNT_DEGRADED_CYCLES = {0}               # 이 주기(0 = 기동 포함)의 자산 집계는 해외잔고 구간이 실패한다
 #  시나리오마다 돌리는 주기 수. account_sync 는 장중 출금(2주기 직전) 뒤 3주기 연속 확인까지 지나야 해서 5주기다.
-SCENARIO_CYCLES = {"account_sync": 5, "sell_paths": 5, "buy_paths": 7}
+SCENARIO_CYCLES = {"account_sync": 5, "sell_paths": 5, "buy_paths": 7, "lifecycle": 8}
 #  [sell_paths] 기동 전 보유로만 심고 관심목록에는 넣지 않는다(매수 경로는 base 가 본다). 손절 쪽은 base 의
 #   재생하락(100050)과 같은 일봉이고, 반익절·분할·시세 쪽은 재생상승A(100010)·재생정체(100060)와 같은 일봉이다.
 SELL_UNIVERSE = [
@@ -392,6 +407,25 @@ BUY_UNKNOWN_ORDER = {"101010": {3}, "101180": {5}}    # 이 주기의 매수 주
 BUY_INDEX_UNKNOWN = {"KOSDAQ": {1}}                   # 이 주기에 지수 조회가 빈 표를 준다(판단 불가)
 BUY_D2_DEPOSIT = {3: 500}                             # 이 주기의 D+2 예수금(미결제 매수 대금으로 묶였다)
 BUY_CLOSE_AT = {6: (15, 41)}                          # 이 주기가 시작되기 직전에 시계를 정규장 마감 뒤로 옮긴다
+
+#  [lifecycle] base 시장·보유로 기동·정지·주 루프의 수명주기를 지난다. 시계는 장 시작 전(08:50)에서 출발한다.
+#   주 루프의 예외 주기는 주기 끝(_record_cycle_duration)에 닿지 않아 주기 번호가 그대로다 — 그래서 루프 안의
+#   사건은 (주기, 시도) 로 건다. 시도는 그 주기 번호로 루프 머리(체결 감시 건강 확인)를 지난 횟수다(0부터).
+LIFE_START = START.replace(hour=8, minute=50)
+LIFE_LOCK_HOLDER = "pid=4242 account=PAPER started=2026-10-21 08:40:00"   # 1번째 기동: 같은 계좌로 다른 프로세스가 매매 중
+LIFE_DB_CORRUPT = "*** in database main ***\nPage 7: btreeInitPage() returns error code 11"   # 2번째 기동: DB 무결성 실패
+#  3번째 기동은 기동 잔고 조회가 실패한다(초기화 예외). 4번째가 정상 기동이다 — 그때 DB 백업 실패·디스크 부족(전 구간)·
+#   트레일링 앵커 캐시와 반익절 이력 적재 실패가 함께 난다.
+LIFE_DISK_FREE_MB = 150.0
+LIFE_CLOCK_AT = {1: (8, 59, 30), 5: (15, 19, 30), 6: (15, 40, 0), 7: (23, 59, 20)}   # 이 주기 직전 대기를 시작하는 시각
+LIFE_MONITOR_UNHEALTHY = {(2, 0)}                     # 체결 감시가 연속 에러 한도에 닿아 있다
+LIFE_BALANCE_NONE = {(2, 1), (2, 2), (2, 3), (2, 4), (3, 0), (3, 1), (3, 2), (3, 3), (3, 4)}   # 잔고 조회 실패
+#  서버 점검(api.check_server_health) 응답 차례 — 2주기는 서버 정상(코드 쪽 오류로 보고 대기하지 않는다), 3주기는
+#   장애(대기) → 복구 점검 응답 없음 → 점검 중 예외 → 복구. 그 뒤는 정상.
+LIFE_SERVER_HEALTH = [True, False, False, "error", True]
+LIFE_DB_WRITE_FAILS = {2: 1, 3: 2}                   # 이 주기부터의 누적 DB 쓰기 실패 수(3주기 것은 알림 억제 시간 안)
+LIFE_MEMORY_AVAIL_MB = {2: 100.0, 3: 50.0, 4: 100.0}  # 주기 끝 가용 메모리(경고 120·위험 60 문턱), 나머지 주기는 800
+LIFE_EMPTY_HOLDINGS = {4}                             # 이 주기 첫 잔고 조회가 '보유 0건'으로 온다(직전 주기에는 보유가 있었다)
 
 
 def _daily(kind, seed, base, n=260, end=None, noise=0.012):
@@ -529,7 +563,7 @@ def run(tmp_path, cycles=None, scenario="base"):
     if scenario not in SCENARIOS:
         raise ValueError(f"모르는 시나리오: {scenario}")
     cycles = cycles or SCENARIO_CYCLES.get(scenario, CYCLES)
-    CLOCK.now = START
+    CLOCK.now = LIFE_START if scenario == "lifecycle" else START
     os.makedirs(str(tmp_path), exist_ok=True)
     watchlist = BUY_UNIVERSE if scenario == "buy_paths" else UNIVERSE
     market = Market(watchlist + (SELL_UNIVERSE if scenario == "sell_paths" else []), scenario)
@@ -612,7 +646,7 @@ def run(tmp_path, cycles=None, scenario="base"):
         P(paper_broker, "_current_price", lambda code, fallback=0.0: market.price(code) or fallback)
         #  정규장 중 — 확정 종가 평가 없음. sell_paths 의 마지막 주기는 확정 뒤라 그때의 가격이 종가다.
         P(paper_broker, "_krx_settled_close",
-          lambda code: market.price(code) if (scenario in ("sell_paths", "buy_paths")
+          lambda code: market.price(code) if (scenario in ("sell_paths", "buy_paths", "lifecycle")
                                               and CLOCK.now.strftime("%H%M") >= "1540") else 0.0)
         P(api, "get_chart_data", lambda code, *a, **k: market.chart(code))
         P(api, "get_current_price", lambda code, *a, **k: market.price(code))
@@ -630,10 +664,13 @@ def run(tmp_path, cycles=None, scenario="base"):
         P(analysis, "get_domestic_index_data", lambda market_name, *a, **k: market.index(market_name))
         P(analysis, "_live_vol_history", Market.kospi_long if scenario != "market_stress"
           else (lambda settled_dd: (None, None, None)))      # market_stress: 장기 이력을 못 받는다
-        #  일일 손실 한도 경보는 프로세스 로그 파일(mystock.log)의 꼬리를 붙인다 — 실행 기기의 파일이라 고정한다.
-        from modules.auto_trade import engine as _engine_mod
-        for mod in (_engine_mod, _trader_mod):
-            P(mod, "get_mystock_log_tail", lambda n=20: "<로그 꼬리>\n")
+        #  일일 손실 한도·서버 장애 경보는 프로세스 로그 파일(mystock.log)의 꼬리를 붙인다 — 실행 기기의 파일이라 고정한다.
+        #   그 함수를 이름으로 import 해 둔 모듈을 모두 찾아 바꾼다(모듈 이름을 적어 두면 부르는 코드를 옮긴 뒤 빗나간다).
+        from modules.auto_trade import common as _common_mod, engine as _engine_mod
+        _log_tail = _common_mod.get_mystock_log_tail
+        for mod in list(_project_modules()):
+            if getattr(mod, "get_mystock_log_tail", None) is _log_tail:
+                P(mod, "get_mystock_log_tail", lambda n=20: "<로그 꼬리>\n")
         if scenario == "account_sync":
             from modules import account as _account_mod, holdings_backfill
             P(holdings_backfill, "sync_account", lambda *a, **k: json.loads(json.dumps(ACCOUNT_BACKFILL)))
@@ -679,6 +716,10 @@ def run(tmp_path, cycles=None, scenario="base"):
             P(_scheduler_mod.SystemScheduler, "_instance", None)
         if scenario == "buy_paths":
             _patch_buy_events(P, market, _engine_mod)
+        life = {"starts": 0, "cycle": None, "attempt": -1, "health": list(LIFE_SERVER_HEALTH),
+                "emptied": set(), "deposit_none": False}
+        if scenario == "lifecycle":
+            _patch_life_events(P, market, trader_box, life, _trader_mod)
         analysis.reset_live_vol_regime()
         st.callback(analysis.reset_live_vol_regime)
         #  국면 판정은 프로세스 전역 캐시(TTL 60초)와 판정 불가 경고 표시를 든다 — 앞 실행의 값을 물려받지 않게.
@@ -691,6 +732,11 @@ def run(tmp_path, cycles=None, scenario="base"):
         t = AutoTrader()
         t.logs = _LogTape(t.logs)
         trader_box["t"] = t
+        if scenario == "lifecycle":
+            #  기동 차단 셋 — 중복 실행·DB 무결성 실패·초기화 예외. 셋 다 잠금을 되돌려 다음 기동이 잠금을 잡는다.
+            for _ in range(3):
+                t.start(interactive=False)
+                assert not t.is_running
         t.start(interactive=False)
         trace: dict = {"start_logs": [_mask(x) for x in t.logs]}
         if t.is_running:
@@ -702,6 +748,13 @@ def run(tmp_path, cycles=None, scenario="base"):
         trace["alerts"] = list(alerts)
         #  종료 경로 — 실제 정지(stop)로 잠금을 풀고 정지 알림을 남긴다(다음 재생이 '중복 실행'에 걸리지 않게)
         n_logs, n_tg, n_al = len(_all_logs(t)), len(telegrams), len(alerts)
+        if scenario == "lifecycle":
+            #  루프 스레드가 정지 요청에 응답하지 않는 정지 — 최종 자산 조회를 건너뛴다. 이어서 다시 정지하되 그때는
+            #   예수금 조회가 실패한다(서버 응답 없음).
+            t.thread = _StuckThread()
+            t.stop(use_status=False)
+            t.is_running = True
+            life["deposit_none"] = True
         t.thread = _NoStartThread()         # 루프 스레드가 끝난 상태(실제 정지와 같은 경로)
         t.stop(use_status=False)
         trace["stop"] = {"logs": [_mask(x) for x in _all_logs(t)[n_logs:]], "telegram": telegrams[n_tg:],
@@ -732,6 +785,9 @@ def _cycle_hook(t, market):
         if market.scenario == "buy_paths" and market.cycle in BUY_CLOSE_AT:
             hh, mm = BUY_CLOSE_AT[market.cycle]
             CLOCK.now = CLOCK.now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if market.scenario == "lifecycle" and market.cycle in LIFE_CLOCK_AT:
+            hh, mm, ss = LIFE_CLOCK_AT[market.cycle]
+            CLOCK.now = CLOCK.now.replace(hour=hh, minute=mm, second=ss, microsecond=0)
         return r
     t._record_cycle_duration = _wrapped
 
@@ -877,6 +933,84 @@ def _patch_buy_events(P, market, engine_mod):
     P(_scheduler_mod.SystemScheduler, "_instance", None)
 
 
+def _patch_life_events(P, market, trader_box, life, trader_mod):
+    """[lifecycle] 바깥 세계의 사건 — 잠금 장치·DB·api·체결 감시기에 건다(트레이더 모듈 전역에는 걸지 않는다).
+
+    가용 메모리만 트레이더 클래스의 _health_memory 를 바꾼다. 진짜 값은 /proc 를 읽어 기기마다 다르고(맥은 0 이라
+    경보가 아예 돌지 않는다), 클래스 속성은 메서드를 다른 모듈로 옮겨도 같은 자리에서 찾아진다(MRO).
+    """
+    from modules import instance_lock
+    from modules.auto_trade.conclusion import ConclusionMonitor
+    db = db_manager.db
+    _acquire = instance_lock.InstanceLock.acquire
+
+    def _acquire_life(self_):
+        life["starts"] += 1             # 기동 시도마다 한 번 잡는다 — 기동 차례를 센다
+        if life["starts"] == 1:
+            self_.holder = LIFE_LOCK_HOLDER
+            return False
+        return _acquire(self_)
+    P(instance_lock.InstanceLock, "acquire", _acquire_life)
+    _integrity, _backup = db.check_integrity, db.backup
+    P(db, "check_integrity", lambda: (False, LIFE_DB_CORRUPT) if life["starts"] == 2 else _integrity())
+    P(db, "backup", lambda *a, **k: None if life["starts"] == 4 and not trader_box["t"].is_running
+      else _backup(*a, **k))
+    P(db, "disk_free_mb", lambda: LIFE_DISK_FREE_MB)
+    _all_ts, _all_half = db.get_all_trailing_stops, db.get_all_half_tp
+
+    def _boot_fail(orig, what):
+        def _f(*a, **k):
+            if life["starts"] == 4 and not trader_box["t"].is_running:
+                raise RuntimeError(f"재생: {what} 읽기 실패(database is locked)")
+            return orig(*a, **k)
+        return _f
+    P(db, "get_all_trailing_stops", _boot_fail(_all_ts, "트레일링 앵커"))
+    P(db, "get_all_half_tp", _boot_fail(_all_half, "반익절 이력"))
+
+    def _write_failures():
+        n = max([v for c, v in LIFE_DB_WRITE_FAILS.items() if c <= market.cycle] or [0])
+        return {"count": n, "last_op": "save_trailing_stop" if n else "",
+                "last_error": "database or disk is full" if n else "", "last_at": None, "recent": []}
+    P(db, "get_write_failures", _write_failures)
+    _healthy = ConclusionMonitor.is_healthy
+    max_err = getattr(config, "SYSTEM_MAX_CONSECUTIVE_ERRORS", 5)
+
+    def _is_healthy(self_):
+        if life["cycle"] != market.cycle:
+            life["cycle"], life["attempt"] = market.cycle, 0
+        else:
+            life["attempt"] += 1
+        #  감시기가 스스로 센 연속 에러다 — 다음 시도에서는 회복해 있다(실제로는 감시 스레드가 0 으로 되돌린다).
+        self_.consecutive_errors = max_err if (market.cycle, life["attempt"]) in LIFE_MONITOR_UNHEALTHY else 0
+        return _healthy(self_)
+    P(ConclusionMonitor, "is_healthy", _is_healthy)
+    _balance = api.get_domestic_balance
+
+    def _balance_life(*a, **k):
+        t = trader_box["t"]
+        if life["starts"] == 3 and not t.is_running:
+            return None, None           # 3번째 기동: 기동 잔고 조회 실패
+        if t.is_running and (market.cycle, life["attempt"]) in LIFE_BALANCE_NONE:
+            return None, None
+        holdings, summary = _balance(*a, **k)
+        if t.is_running and market.cycle in LIFE_EMPTY_HOLDINGS and market.cycle not in life["emptied"]:
+            life["emptied"].add(market.cycle)
+            return [], summary
+        return holdings, summary
+    P(api, "get_domestic_balance", _balance_life)
+
+    def _server_health(*a, **k):
+        ans = life["health"].pop(0) if life["health"] else True
+        if ans == "error":
+            raise ConnectionError("재생: 서버 점검 요청 시간 초과")
+        return ans
+    P(api, "check_server_health", _server_health)
+    _deposit = api.get_deposit_balance
+    P(api, "get_deposit_balance", lambda *a, **k: None if life["deposit_none"] else _deposit(*a, **k))
+    P(trader_mod.AutoTrader, "_health_memory",
+      staticmethod(lambda: (300.0, LIFE_MEMORY_AVAIL_MB.get(market.cycle, 800.0), 420.0)))
+
+
 def _paper_order_history():
     """[sell_paths] 가상 시험 모델 주문 행을 KIS 당일 주문체결 조회(output1) 모양으로."""
     rows = []
@@ -978,6 +1112,19 @@ def _collect(t, telegrams, scenario="base"):
             "SELECT code, cycles, passed, blocked_vol, blocked_abr, blocked_hold, blocked_corr, blocked_rs, blocked_tq, "
             "blocked_reentry, blocked_other, blocked_slot, blocked_cash, blocked_market, max_score, last_state "
             "FROM signal_ledger ORDER BY code", fetch="all") or []]
+    if scenario == "lifecycle":
+        out["state"].update({k: _jsonable(getattr(t, k, None)) for k in (
+            "start_block_reason", "pending_restore_ok", "half_tp_cache_loaded", "code_error_streaks",
+            "waiting_for_server", "_wait_alert_sent", "_db_write_fail_seen", "_mem_alert_key", "was_market_open",
+            "last_session_phase", "last_error_message")})
+        out["state"]["last_log_date"] = str(t.last_log_date)
+        #  주기 소요(가짜 시계의 sleep 합)와 정체 감시(스케줄러가 부른다 — 마지막 정상 주기 이후 흐른 초와 문턱).
+        #   실수 합이라 끝자리 표기가 흔들리지 않게 반올림한다.
+        out["state"]["cycle_secs"] = [round(x, 3) for x in t.cycle_secs_history] + [round(t.cycle_secs_peak, 3)]
+        out["state"]["loop_stall"] = [round(t.loop_stall_seconds(), 3), round(t.loop_stall_threshold(), 3)]
+        out["asset_history"] = [list(r) for r in db_manager.db.execute_query(
+            "SELECT date, asset, net_transfer, principal FROM daily_asset_history WHERE account = ? ORDER BY date",
+            (paper_broker._account_key(),), fetch="all") or []]
     out["screens"] = _screens(t)
     return out
 

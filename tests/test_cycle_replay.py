@@ -23,7 +23,8 @@
 
 [시나리오] cycle_replay.SCENARIOS 마다 기준 기록이 따로 있다 — base(매매 경로)·market_stress(시장·리스크 경로,
  2026-10-24)·account_sync(계좌 동기화 경로, 2026-10-25)·sell_paths(매도 경로, 2026-10-25)·buy_paths(매수 경로,
- 2026-10-25). 시나리오마다 '실제로 그 경로를 지났는가'를 먼저 보고 나서 기록을 비교한다.
+ 2026-10-25)·lifecycle(기동·정지·주 루프 수명주기, 2026-10-25). 시나리오마다 '실제로 그 경로를 지났는가'를 먼저 보고
+ 나서 기록을 비교한다.
 """
 import difflib
 import json
@@ -85,8 +86,13 @@ def buy_trace(tmp_path_factory):
     return _fresh(tmp_path_factory, "buy_paths")
 
 
+@pytest.fixture(scope="module")
+def life_trace(tmp_path_factory):
+    return _fresh(tmp_path_factory, "lifecycle")
+
+
 _TRACE_FIXTURE = {"base": "fresh_trace", "market_stress": "stress_trace", "account_sync": "account_trace",
-                  "sell_paths": "sell_trace", "buy_paths": "buy_trace"}
+                  "sell_paths": "sell_trace", "buy_paths": "buy_trace", "lifecycle": "life_trace"}
 
 
 def test_재생은_매매_경로를_실제로_지난다(fresh_trace):
@@ -264,6 +270,52 @@ def test_매수_재생은_매수_경로를_실제로_지난다(buy_trace):
     state = buy_trace["state"]
     assert state["pending_restore_ok"] is True and state["pending_orders"] == []
     for name, lines in buy_trace["screens"].items():
+        assert lines, f"{name}: 화면이 비어 있다"
+        assert not any(x.startswith("<") and "Error" in x for x in lines), f"{name}: 화면 출력 중 예외 {lines[:3]}"
+
+
+def test_수명주기_재생은_기동_정지_주_루프_경로를_실제로_지난다(life_trace):
+    """lifecycle 이 노린 경로 — 하나라도 빠지면 그 경로의 분리(C1 6단계 주기 제어)는 기준 없이 옮겨진다."""
+    start = "\n".join(life_trace["start_logs"])
+    logs = "\n".join(life_trace["logs"])
+    tg = "\n".join(life_trace["telegram"])
+    alerts = "\n".join(a["message"] for a in life_trace["alerts"])
+    stop_tg = "\n".join(life_trace["stop"]["telegram"])
+    assert start.count("━━━ 자동매매 시스템 시작 프로세스 진입 ━━━") == 4, start      # 차단 셋 + 정상 기동
+    for marker, where in (("[중복 실행 차단] 자동매매를 시작할 수 없습니다", tg),               # 기동 차단
+                          ("[DB 이상] DB 무결성 검사 실패", tg),
+                          ("[DB 백업] 실패 — 백업 없이 진행합니다", start), ("[디스크 경고]", tg),
+                          ("[기동] 반익절 이력을 읽지 못했습니다", start),
+                          ("⏸️ [휴게 시간 대기]", start), ("[반익절] 이력을 다시 읽었습니다.", logs),
+                          ("📢 [정규장 시작]", logs), ("🔔 [시장 상태 변경]", tg),                  # 세션 전환
+                          ("에러 발생(1/5): 체결 감시 시스템 불안정", logs),                       # 루프 예외
+                          ("에러 발생(5/5): 잔고 조회 실패", logs),
+                          ("[장애 판정 정정]", logs), ("⚠️ [반복 오류]", alerts),                   # 서버 정상 → 대기 않음
+                          ("[장애 감지] 연속 에러 5회", logs), ("🚨 [시스템 긴급 대기]", alerts),     # 서버 장애 → 대기
+                          ("[장애 대기] 서버 여전히 응답 없음.", logs), ("[장애 대기] 점검 중 오류:", logs),
+                          ("[서버 복구] 서버 정상화 확인", logs), ("✅ [서버 복구]", alerts),
+                          ("⚠️ [DB 쓰기 실패] DB 쓰기 실패 누적 1건", alerts),
+                          ("⚠️ [메모리 경고]", alerts), ("⚠️ [메모리 위험]", alerts),
+                          ("[잔고 확인] 보유 2건 → 0건", logs),
+                          ("⏸️ [휴게 시간] 거래소 단일가 매매 동기화", tg),
+                          ("[관찰 모드] 마감 자산 스냅샷 기록", logs),
+                          ("📅 날짜 변경 감지: 2026-10-21 -> 2026-10-22", logs),
+                          ("[초기화 완료] 새로운 당일 시작 자산 갱신", logs),
+                          ("(시스템 응답 지연으로 최종 자산 정보 생략)", stop_tg),                  # 정지
+                          ("(⚠️ 종료 시 자산 정보 조회 실패 - 서버 응답 없음)", stop_tg)):
+        assert marker in where, f"수명주기 재생이 '{marker}' 경로를 지나지 않았다"
+    #  같은 원인의 DB 쓰기 실패는 억제 시간 안에 다시 알리지 않는다 — 누적 2건째는 알림이 없다.
+    assert "누적 2건" not in alerts and life_trace["state"]["_db_write_fail_seen"] == 2
+    #  같은 등급의 메모리 경보는 하루 한 번 — 경고(2주기) → 위험(3주기) → 경고(4주기)는 등급이 바뀌어 셋 다 나간다.
+    assert [a["message"].split("]")[0] for a in life_trace["alerts"] if "[메모리" in a["message"]] == \
+        ["⚠️ [메모리 경고", "⚠️ [메모리 위험", "⚠️ [메모리 경고"]
+    state = life_trace["state"]
+    assert state["code_error_streaks"] == 1 and state["waiting_for_server"] is False
+    assert state["_wait_alert_sent"] is False             # 진입 알림과 복구 알림이 짝을 이뤘다
+    assert state["last_log_date"] == "2026-10-22" and len(state["cycle_secs"]) == 9
+    assert [r[0] for r in life_trace["asset_history"]] == ["2026-10-21", "2026-10-22"]
+    assert len(life_trace["stop"]["telegram"]) == 2
+    for name, lines in life_trace["screens"].items():
         assert lines, f"{name}: 화면이 비어 있다"
         assert not any(x.startswith("<") and "Error" in x for x in lines), f"{name}: 화면 출력 중 예외 {lines[:3]}"
 
