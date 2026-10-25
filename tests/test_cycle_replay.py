@@ -196,6 +196,9 @@ def test_매도_재생은_매도_경로를_실제로_지난다(sell_trace):
     assert ["100150", 9694.5] in sell_trace["anchors"], "분할 뒤 앵커가 환산되지 않았다"
     held = {p["code"]: p["qty"] for p in sell_trace["positions"]}
     assert held.get("100150") == 20 and "100130" not in held and "100160" not in held and "100190" not in held, held
+    #  손절 보호가 낸 취소는 원장에 취소 이력이 있어야 체결 감시가 '외부 취소'로 읽지 않는다(2026-10-25).
+    assert [(t["type"], t["qty"]) for t in sell_trace["trades"]
+            if t["code"] == "100130" and "손절 보호" in str(t["reason"])] == [("매수취소(자동)", "5")]
     for name, lines in sell_trace["screens"].items():
         assert lines, f"{name}: 화면이 비어 있다"
         assert not any(x.startswith("<") and "Error" in x for x in lines), f"{name}: 화면 출력 중 예외 {lines[:3]}"

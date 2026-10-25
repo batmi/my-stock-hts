@@ -717,11 +717,15 @@ class ConclusionMonitor:
                                     try:
                                         cancel_record = db_manager.db.get_cancel_record_by_org_odno(
                                             odno, on_date=_scope)
+                                        #  [Fix 2026-10-25] 그날 이 주문에 취소 이력이 있으면 우리가 낸(또는
+                                        #   이미 알린) 취소다. 종전에는 사유 문구의 낱말('수동'·'초과'·
+                                        #   '타임아웃'·'외부')로 다시 걸렀는데, 메뉴 수동 취소의 사유는
+                                        #   '사용자 취소'라 걸리지 않았다 — 2026-06-23 실측: 메뉴로 취소한
+                                        #   매도 3건이 저마다 '외부 취소' 알림과 `매도취소(외부)` 행을 하나씩
+                                        #   더 남겼다. 이 행을 쓰는 곳은 모두 시스템 경로다(미체결 시간 초과
+                                        #   ·메뉴 수동 취소·손절 보호·이 감시의 외부 취소 기록).
                                         if cancel_record:
-                                            rec_reason = cancel_record.get('reason') or ""
-                                            if "수동" in rec_reason or "초과" in rec_reason or "타임아웃" in rec_reason or "외부" in rec_reason:
-                                                # 이미 시스템에서 의도했거나 알림을 보낸 취소면 중복 알림 생략
-                                                is_external_cancel = False
+                                            is_external_cancel = False
                                     except Exception as _e:
                                         #  [Fix 2026-09-06] 종전에는 `except Exception: pass` 라
                                         #   조회가 실패해도 is_external_cancel 이 True 로 남았다.

@@ -169,6 +169,7 @@ class TraderSellingMixin:
                 return
 
             buy_odnos = []
+            buy_qty = {}
             unknown_odnos = []
             for odno in odnos:
                 t_type = ""
@@ -190,6 +191,7 @@ class TraderSellingMixin:
                 is_sell = "매도" in t_type or "sell" in t_type.lower()
                 if not is_sell and ("매수" in t_type or "buy" in t_type.lower()):
                     buy_odnos.append(odno)
+                    buy_qty[odno] = api.safe_int((tr or {}).get('qty'))
 
             if unknown_odnos:
                 self.log(f"[손절 보호] {name}({code}) 미체결 주문 {len(unknown_odnos)}건의 "
@@ -201,6 +203,20 @@ class TraderSellingMixin:
                 # qty=0 은 '잔량 전부 취소'(QTY_ALL_ORD_YN=Y) — 잔량을 몰라도 안전하다.
                 res = api.revise_cancel_order("domestic", "cancel", odno, code, 0, "0", "02", "00")
                 if isinstance(res, dict) and res.get('rt_cd') == '0':
+                    #  [취소 이력 · 2026-10-25] 시간 초과 자동 취소(engine)와 같은 모양의 행을
+                    #   남긴다 — 알림보다 먼저다(체결 감시는 다른 스레드다). 종전에는 남기지 않아
+                    #   실계좌의 체결 감시가 이 취소를 '앱(MTS)/HTS 외부 취소'로 알리고 원장에
+                    #   `매수취소(외부)` 행을 따로 만들었다. 수량은 주문 수량이다 — 잔량 전부
+                    #   취소(qty=0)라 거래소가 확정한 잔량을 여기서는 모른다.
+                    try:
+                        cancel_odno = (str((res.get('output') or {}).get('ODNO') or '').strip()
+                                       or f"CANCEL_{odno}")
+                        db_manager.db.insert_trade("매수취소(자동)", code, name, buy_qty.get(odno, 0), 0,
+                                                   cancel_odno, org_odno=odno,
+                                                   reason="손절 보호 (자동 취소)", order_status="취소")
+                    except Exception as _ie:
+                        logger.warning(f"[손절 보호] {code} 주문 {odno} 취소 이력 기록 실패 — 체결 감시가 "
+                                       f"이 취소를 외부 취소로 알릴 수 있다: {type(_ie).__name__}: {_ie}")
                     self.log(f"[손절 보호] {name}({code}) 수익률 {profit_rate:.2f}% ≤ 손절 {sl_rate:.2f}% "
                              f"→ 미체결 매수(No.{odno})를 즉시 취소했습니다. 다음 주기에 청산합니다.")
                     api.send_telegram_message(
