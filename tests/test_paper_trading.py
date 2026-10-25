@@ -616,3 +616,54 @@ def test_초기화가_반쯤_된_계좌를_남기지_않는다(paper, monkeypatc
 
     assert paper.get_cash() == cash_before, "예수금이 사라졌다"
     assert [p for p in paper.get_positions() if p['code'] == '005930'], "포지션이 지워졌다"
+
+
+# ─────────────────────────────────────────────
+# 주문 종목명 — 관심목록 밖 보유의 이름이 코드로 덮이지 않는가 (2026-10-25)
+# ─────────────────────────────────────────────
+#  api.place_order 는 이름을 넘기지 않아 가상 브로커가 스스로 찾는다. 종전에는 관심목록에
+#  없으면 곧장 코드를 이름으로 썼다 — 유니버스 재선정으로 빠진 보유 종목을 추가 매수하면
+#  원장의 이름이 코드로 덮였고(화면 '000660(000660)'), 매도 체결 기록의 이름도 코드였다.
+
+def _watchlist(monkeypatch, *items):
+    monkeypatch.setattr(config.session, 'stock_data',
+                        {'stocks_kr': [{'code': c, 'name': n} for c, n in items], 'etfs_kr': []},
+                        raising=False)
+
+
+def _position_name(paper, code):
+    return next(p['name'] for p in paper.get_positions() if p['code'] == code)
+
+
+def test_관심목록_밖_보유를_추가_매수해도_이름이_남는다(paper, monkeypatch):
+    _watchlist(monkeypatch, ('000660', 'SK하이닉스'))
+    assert paper.place_order('buy', '000660', 5, 180000)['rt_cd'] == '0'
+    _watchlist(monkeypatch)                                   # 재선정으로 관심목록에서 빠졌다
+
+    assert paper.place_order('buy', '000660', 3, 180000)['rt_cd'] == '0'
+    assert _position_name(paper, '000660') == 'SK하이닉스', "추가 매수가 원장의 이름을 코드로 덮었다"
+    assert paper.get_fills()[-1]['name'] == 'SK하이닉스'
+
+
+def test_관심목록_밖_보유를_팔아도_체결_기록에_이름이_남는다(paper, monkeypatch):
+    _watchlist(monkeypatch, ('000660', 'SK하이닉스'))
+    assert paper.place_order('buy', '000660', 5, 180000)['rt_cd'] == '0'
+    _watchlist(monkeypatch)
+
+    assert paper.place_order('sell', '000660', 5, 180000)['rt_cd'] == '0'
+    fill = paper.get_fills()[-1]
+    assert fill['type'] == '매도' and fill['name'] == 'SK하이닉스', "매도 체결 기록의 이름이 코드다"
+
+
+def test_관심목록의_이름이_먼저다(paper, monkeypatch):
+    """대조군 — 관심목록에 있으면 종전대로 그 이름을 쓴다(원장 이름보다 먼저)."""
+    _watchlist(monkeypatch, ('005930', '삼성전자'))
+    assert paper.place_order('buy', '005930', 1, 70000)['rt_cd'] == '0'
+    assert _position_name(paper, '005930') == '삼성전자'
+
+
+def test_어디에도_없으면_종전대로_코드다(paper, monkeypatch):
+    """대조군 — 관심목록에도 원장에도 없으면 코드밖에 없다."""
+    _watchlist(monkeypatch)
+    assert paper.place_order('buy', '005930', 1, 70000)['rt_cd'] == '0'
+    assert _position_name(paper, '005930') == '005930'

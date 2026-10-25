@@ -561,13 +561,27 @@ def _fail(msg):
 
 
 def _lookup_name(code):
+    """주문 종목의 이름 — 관심목록, 가상 원장의 보유 종목명, 코드 순으로 찾는다.
+
+    [2026-10-25] 종전에는 관심목록에 없으면 곧장 코드를 이름으로 돌려줬다. 관심목록 밖
+     보유(유니버스 재선정으로 빠진 종목·HTS 직접 매수)는 원장에 이름이 있는데도, 추가
+     매수하면 그 이름이 코드로 덮였고(화면 '100140(100140)') 매도 체결 기록의 이름도
+     코드로 남았다. ETF/ETN 판정(호가 격자)도 이름 대신 코드를 받았다.
+    """
     try:
         for key in ("stocks_kr", "etfs_kr"):
             for item in config.session.stock_data.get(key, []):
-                if item.get('code') == code:
-                    return item.get('name', code)
+                if item.get('code') == code and item.get('name'):
+                    return item['name']
     except Exception:
         pass
+    try:
+        row = _db().execute_query("SELECT name FROM paper_positions WHERE code=?",
+                                  (code,), fetch='one')
+        if row and row[0]:
+            return row[0]
+    except Exception as e:      # noqa: BLE001
+        logger.debug(f"[PAPER] 보유 종목명 조회 실패({code}): {e}")
     return code
 
 
