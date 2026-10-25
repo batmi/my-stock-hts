@@ -131,7 +131,7 @@ def test_압박_재생은_시장_리스크_경로를_실제로_지난다(stress_
     state = stress_trace["state"]
     assert state["risk_scale"] < 1.0 and state["risk_floor"]["scale"] == pytest.approx(state["risk_scale"])
     assert state["risk_scale_reason_by_market"]["KOSPI"].startswith("[장중 유지]")
-    assert state["market_status_notified"].get("KOSPI") is True        # 판단 보류 알림 래치
+    assert state["market_status_notified"].get("KOSPI") == "unknown"   # 판단 보류 알림 래치(무엇을 알렸는지)
     for name, lines in stress_trace["screens"].items():
         assert lines, f"{name}: 화면이 비어 있다"
         assert not any(x.startswith("<") and "Error" in x for x in lines), f"{name}: 화면 출력 중 예외 {lines[:3]}"

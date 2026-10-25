@@ -585,8 +585,8 @@
    "initial_asset": 10604588,
    "last_holdings_count": 2,
    "market_status_notified": {
-    "KOSDAQ": true,
-    "KOSPI": true
+    "KOSDAQ": "unknown",
+    "KOSPI": "unknown"
    },
    "portfolio_heat_amt": 35139.6648,
    "risk_floor": {

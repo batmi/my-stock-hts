@@ -100,13 +100,19 @@ class TraderMarketRiskMixin:
                 #  '어떤 수치로 그렇게 판정했는지'를 알림에도 싣는다 — 받는 사람이 차트를
                 #  열지 않고도 얼마나 벌어졌는지, 어디까지 올라와야 풀리는지 알 수 있어야 한다.
                 basis = "".join(f"\n{line}" for line in self._format_market_filter_basis(det))
+                #  [2026-10-25] 무엇을 알렸는지 남긴다 — "down"(약세 판정) / "unknown"(판단 보류, _notify_market_unknown).
+                #   종전에는 둘이 참/거짓 하나를 함께 써서, 판단 보류 뒤 데이터가 돌아와 이평선 아래면 하락 알림이
+                #   빠졌고, 이평선 위면 떨어진 적이 없는데 '회복했습니다'가 나갔다.
                 notified = self.market_status_notified.get(market_name, False)
-                if not is_healthy and not notified:
+                if not is_healthy and notified != "down":
                     api.send_telegram_message(f"📉 [시장 감지] {market_name} 지수가 {ma_period}일 이평선{band_txt} 아래로 하락했습니다.{basis}\n해당 시장 종목의 신규 매수를 일시 중단합니다.")
-                    self.market_status_notified[market_name] = True
+                    self.market_status_notified[market_name] = "down"
                 elif is_healthy and notified:
                     band_up = f" +{band_pct:g}%" if band_pct else ""
-                    api.send_telegram_message(f"📈 [시장 회복] {market_name} 지수가 {ma_period}일 이평선{band_up}을 회복했습니다.{basis}\n매수를 재개합니다.")
+                    if notified == "unknown":
+                        api.send_telegram_message(f"✅ [판단 재개] {market_name} 지수 데이터를 다시 확인했습니다 — {ma_period}일 이평선{band_up} 위입니다.{basis}\n신규 매수를 재개합니다.")
+                    else:
+                        api.send_telegram_message(f"📈 [시장 회복] {market_name} 지수가 {ma_period}일 이평선{band_up}을 회복했습니다.{basis}\n매수를 재개합니다.")
                     self.market_status_notified[market_name] = False
             except Exception as e:
                 self.log(f"{market_name} 지수 조회 실패: {e} → 시장 방향 판단 불가로 신규 매수를 보류합니다. (매도·손절은 정상 동작)")
@@ -147,8 +153,10 @@ class TraderMarketRiskMixin:
     def _notify_market_unknown(self, market_name, notify=True):
         """지수 판단 불가(데이터 장애)로 매수를 보류할 때 1회만 알린다.
 
-        '약세 판정'과 원인이 다르므로 문구를 분리하되, 스로틀 플래그는
-        market_status_notified를 공유해 회복 시 '매수 재개' 알림이 정상적으로 나가게 한다.
+        '약세 판정'과 원인이 다르므로 문구를 분리하고, 스로틀 표시에도 무엇을 알렸는지("unknown")를 남긴다 —
+        회복 때 '판단 재개'로 알리고, 데이터가 돌아와 이평선 아래면 하락 알림이 따로 나간다(_update_market_indices_status).
+        이미 약세로 알렸으면("down") 다시 알리지 않는다 — 매수는 이미 막혀 있고, 데이터가 오락가락할 때 알림이
+        쏟아지지 않게 한다.
         """
         if not notify:
             return
@@ -160,7 +168,7 @@ class TraderMarketRiskMixin:
                 f"⚠️ [판단 보류] {market_name} 지수 데이터를 확인할 수 없습니다.\n"
                 f"시장 방향을 알 수 없으므로 해당 시장 종목의 신규 매수를 보류합니다.\n"
                 f"(보유 종목의 손절·트레일링 스탑 감시는 계속됩니다)"):
-            self.market_status_notified[market_name] = True
+            self.market_status_notified[market_name] = "unknown"
 
     @staticmethod
     def _whipsaw_risk_scale(whipsaw, params=None):

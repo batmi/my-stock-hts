@@ -122,11 +122,51 @@ def test_market_unknown_latch_waits_for_delivery(trader):
     """래치는 회복 때만 풀린다 — 전송 실패로 걸리면 운영자가 끝까지 모른다."""
     with patch('modules.auto_trade.alert_delivered', return_value=False):
         trader._notify_market_unknown("KOSDAQ")
-    assert trader.market_status_notified.get("KOSDAQ") is not True
+    assert not trader.market_status_notified.get("KOSDAQ")
 
     with patch('modules.auto_trade.alert_delivered', return_value=True):
         trader._notify_market_unknown("KOSDAQ")
-    assert trader.market_status_notified["KOSDAQ"] is True
+    #  [2026-10-25] 무엇을 알렸는지 남긴다 — 약세 판정("down")과 구분해야 회복 문구·하락 알림이 맞게 나간다.
+    assert trader.market_status_notified["KOSDAQ"] == "unknown"
+
+
+def _index_status(trader, monkeypatch, healthy):
+    """지수 판정만 바꿔 _update_market_indices_status 한 바퀴 — 알림 문구를 모은다."""
+    sent = []
+    det = {"ready": False}
+    monkeypatch.setattr("modules.auto_trade.market_risk.analysis.get_domestic_index_data", lambda m: object())
+    monkeypatch.setattr("modules.auto_trade.market_filter_status",
+                        lambda m, df=None: {"unknown": False, "is_healthy": healthy, "filter": det})
+    monkeypatch.setattr("modules.auto_trade.market_risk.api.send_telegram_message", lambda m, *a, **k: sent.append(m))
+    monkeypatch.setattr(type(trader), 'log', lambda self, *a, **k: None, raising=False)
+    trader._update_market_indices_status()
+    return sent
+
+
+def test_판단_보류_뒤_이평선_아래로_돌아오면_하락을_알린다(trader, monkeypatch):
+    """종전에는 판단 보류 표시가 하락 알림을 막아, 실제로 약세인데 운용자는 '데이터 장애'로만 알고 있었다."""
+    trader.market_status_notified = {"KOSPI": "unknown", "KOSDAQ": "unknown"}
+    sent = _index_status(trader, monkeypatch, healthy=False)
+    assert sum("📉 [시장 감지]" in m for m in sent) == 2, sent
+    assert trader.market_status_notified == {"KOSPI": "down", "KOSDAQ": "down"}
+
+
+def test_판단_보류_뒤_이평선_위로_돌아오면_회복이_아니라_판단_재개다(trader, monkeypatch):
+    """떨어진 적이 없는데 '이평선을 회복했습니다'가 나갔다."""
+    trader.market_status_notified = {"KOSPI": "unknown", "KOSDAQ": "down"}
+    sent = _index_status(trader, monkeypatch, healthy=True)
+    assert any(m.startswith("✅ [판단 재개] KOSPI") for m in sent), sent
+    assert any(m.startswith("📈 [시장 회복] KOSDAQ") for m in sent), sent
+    assert not any("KOSPI" in m and "회복했습니다" in m for m in sent)
+    assert trader.market_status_notified == {"KOSPI": False, "KOSDAQ": False}
+
+
+def test_약세로_알린_뒤의_판단_보류는_다시_알리지_않는다(trader):
+    """매수는 이미 막혀 있다 — 데이터가 오락가락할 때 알림이 쏟아지지 않게 한다."""
+    trader.market_status_notified = {"KOSDAQ": "down"}
+    with patch('modules.auto_trade.alert_delivered', return_value=True) as sent:
+        trader._notify_market_unknown("KOSDAQ")
+    assert not sent.called and trader.market_status_notified["KOSDAQ"] == "down"
 
 
 # --------------------------------------------------------------------------
