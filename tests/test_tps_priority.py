@@ -78,7 +78,8 @@ def test_system_thread_prefixes_cover_trading_executors():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     prefixes = []
     for rel in ("modules/auto_trade/trader.py", "modules/auto_trade/engine.py",
-                "modules/auto_trade/conclusion.py", "modules/auto_trade/reporting.py"):
+                "modules/auto_trade/conclusion.py", "modules/auto_trade/reporting.py",
+                "modules/auto_trade/selling.py"):       # 매도 풀 at_sell(2026-10-25 C1 4단계)
         src = open(os.path.join(root, rel), encoding="utf-8").read()
         prefixes += re.findall(r'thread_name_prefix="([^"]+)"', src)
 

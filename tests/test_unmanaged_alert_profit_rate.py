@@ -73,9 +73,9 @@ def _fn_source(name):
     import ast
     import inspect
 
-    from modules.auto_trade import trader as _trader
+    from modules.auto_trade import selling as _selling     # 판정 함수 넷은 C1 4단계(2026-10-25)로 여기 있다
 
-    tree = ast.parse(inspect.getsource(_trader))
+    tree = ast.parse(inspect.getsource(_selling))
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == name:
             return node

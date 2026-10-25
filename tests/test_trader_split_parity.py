@@ -12,13 +12,16 @@
 [2026-10-25 3단계] 계좌 동기화 메서드 12개를 modules/auto_trade/account_sync.TraderAccountSyncMixin 으로 옮겼다
  (같은 방법 — AST 동일, 전역 36개 중 남는 이름 동일 객체, 그 메서드들만 쓰던 상수 4개도 함께).
  바깥 동작의 동등성은 주기 재생 기록 세 시나리오(tests/test_cycle_replay.py — base·market_stress·account_sync)가 본다.
+[2026-10-25 4단계] 매도 메서드 12개를 modules/auto_trade/selling.TraderSellingMixin 으로 옮겼다(같은 방법 — AST 동일,
+ 전역 40개 중 남는 이름 동일 객체, engine 의 미관리 사유·경보 횟수 상수는 engine 에서 그대로 import). 동등성은
+ 네 시나리오(sell_paths 추가)가 본다.
 """
 import inspect
 import itertools
 
 import pytest
 
-from modules.auto_trade import account_sync, market_risk, reporting, trader
+from modules.auto_trade import account_sync, market_risk, reporting, selling, trader
 
 MIXINS = {
     reporting: (reporting.TraderReportingMixin,
@@ -38,6 +41,13 @@ MIXINS = {
                     "_get_toss_open_buy_reserved"),
                    {"config", "api", "account", "datetime", "db_manager", "logger", "time", "_get_trade_account",
                     "is_plausible_baseline", "load_daily_initial_asset", "save_daily_initial_asset"}),
+    selling: (selling.TraderSellingMixin,
+              ("_live_risk_map", "_last_known_sl_rate", "_effective_stop_loss_rate", "_cancel_pending_buy_on_stop_loss",
+               "_apply_corporate_action", "_already_half_sold", "_cached_anchor", "_restore_trailing_anchor",
+               "_alert_unmanaged_stop", "_scan_after_hours_sell_signals", "_alert_after_hours_sell",
+               "_check_sell_conditions"),
+              {"config", "api", "analysis", "concurrent", "datetime", "db_manager", "indicators", "logger", "time",
+               "utils", "_enrich_rules_with_weights", "_get_trade_account", "get_restricted_stocks"}),
 }
 _IDS = [m.__name__.rsplit(".", 1)[-1] for m in MIXINS]
 

@@ -82,7 +82,8 @@ def test_order_paths_pass_the_etf_flag():
     root = pathlib.Path(__file__).resolve().parent.parent
     #  백테스트·감사 도구는 대상에서 뺀다 — 국내 주식 전용 모델이고(ETF 자동매매 기각),
     #  격자를 바꾸면 과거 수치와의 연속성이 깨진다.
-    order_paths = ("modules/auto_trade/trader.py", "modules/trading.py",
+    #  매도 지정가는 C1 4단계(2026-10-25)로 selling.py 에서 만든다.
+    order_paths = ("modules/auto_trade/trader.py", "modules/auto_trade/selling.py", "modules/trading.py",
                    "modules/reserved_order_monitor.py", "modules/paper_broker.py")
     import io as _io
     import tokenize

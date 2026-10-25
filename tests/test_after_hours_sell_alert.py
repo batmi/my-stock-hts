@@ -154,7 +154,8 @@ def _scan(trader, hhmm="1600", holiday=False, holdings=_DEFAULT, enabled=True):
     settled = "20260810" if hhmm >= "1540" else "20260807"
 
     holdings = _holding() if holdings is _DEFAULT else holdings
-    with patch.object(at_pkg.trader, 'datetime', _Now), \
+    #  [2026-10-25] 이 스캔은 C1 4단계로 selling.py 에 있다 — 시계는 그 모듈의 datetime 을 바꿔 끼운다.
+    with patch.object(at_pkg.selling, 'datetime', _Now), \
          patch('modules.auto_trade.api.krx_last_settled_day', return_value=settled), \
          patch('modules.auto_trade.api.is_holiday_today', return_value=holiday), \
          patch('modules.auto_trade.api.get_domestic_balance', return_value=(holdings, {})), \

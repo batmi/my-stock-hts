@@ -47,7 +47,7 @@ def _run(trader, balance, checked=None, rules=None):
          patch('modules.auto_trade.trader.api.get_domestic_balance', return_value=balance), \
          patch('modules.auto_trade.trader.db_manager.db.get_all_stock_strategies',
                return_value=(rules if rules is not None else [])), \
-         patch('modules.auto_trade.trader.get_restricted_stocks', return_value={}), \
+         patch('modules.auto_trade.selling.get_restricted_stocks', return_value={}), \
          patch.object(config, 'AFTER_HOURS_SELL_ALERT', True, create=True), \
          patch.object(config, 'AFTER_HOURS_SELL_ALERT_TIME', "0000", create=True), \
          patch.object(type(trader), '_check_sell_conditions', fake_check):

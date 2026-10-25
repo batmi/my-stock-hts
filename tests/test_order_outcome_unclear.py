@@ -116,6 +116,11 @@ def test_the_pre_registration_is_cleaned_up_even_when_unclear():
 # 호출부 세 곳이 그 값을 실제로 다루는가 (구조로 고정한다)
 # ---------------------------------------------------------------------------
 
+def _order_src():
+    """주문을 내는 트레이더 코드 — 신규매수·피라미딩은 trader.py, 매도는 selling.py(2026-10-25 C1 4단계)."""
+    return "\n".join(open(f"modules/auto_trade/{f}", encoding="utf-8").read() for f in ("trader.py", "selling.py"))
+
+
 @pytest.mark.parametrize("marker", [
     "self.order_manager.send_order(cand['code']",      # 신규 매수
     "self.order_manager.send_order(code, add_qty",     # 피라미딩
@@ -124,7 +129,7 @@ def test_the_pre_registration_is_cleaned_up_even_when_unclear():
 def test_every_send_order_call_site_handles_the_unclear_outcome(marker):
     """호출부가 하나라도 이 예외를 안 잡으면, 그 경로는 워커의 포괄 except 로 흘러가
     '판정을 받지 못했습니다' 같은 **사실과 다른** 경보를 띄운다."""
-    src = open("modules/auto_trade/trader.py", encoding="utf-8").read()
+    src = _order_src()
     i = src.index(marker)
     window = src[max(0, i - 400):i + 900]
     assert "OrderOutcomeUnclear" in window, \
@@ -132,13 +137,13 @@ def test_every_send_order_call_site_handles_the_unclear_outcome(marker):
 
 
 def _unclear_handlers():
-    """trader.py 의 `except ... OrderOutcomeUnclear` 처리 블록들을 구문으로 뽑는다.
+    """trader.py·selling.py 의 `except ... OrderOutcomeUnclear` 처리 블록들을 구문으로 뽑는다.
 
     소스를 글자로 잘라 보지 않는다 — 처음에 그렇게 짰다가 잘못된 구간을 봤다.
     """
     import ast
 
-    tree = ast.parse(open("modules/auto_trade/trader.py", encoding="utf-8").read())
+    tree = ast.parse(_order_src())
     out = []
     for n in ast.walk(tree):
         if not isinstance(n, ast.ExceptHandler) or n.type is None:
@@ -180,7 +185,7 @@ def test_every_unclear_handler_stops_that_path():
 
 def test_the_sell_path_does_not_fall_through_to_the_success_block():
     """접수가 확인되지 않은 매도로 거래기록·예약취소·앵커정리를 하면 안 된다."""
-    src = open("modules/auto_trade/trader.py", encoding="utf-8").read()
+    src = _order_src()
     i = src.index("매도 결과 불명:")
     tail = src[i:i + 400]
     assert "return" in tail.split("\n\n")[0], "매도 워커가 성공 블록으로 흘러간다"

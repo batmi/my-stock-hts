@@ -50,6 +50,7 @@ _CRITICAL_FILES = (
     #  안내(계좌 동기화)가 여기서 나간다. [2026-10-25] market_risk 는 2단계(10-24)에서 이 목록에 넣는 것을 빠뜨렸다.
     'modules/auto_trade/market_risk.py',
     'modules/auto_trade/account_sync.py',
+    'modules/auto_trade/selling.py',        # 손절선 이탈·권리 조정·장 마감 뒤 매도 신호(매도, 2026-10-25 C1 4단계)
     'modules/reserved_order_monitor.py',
     'modules/market_halt.py',
 )

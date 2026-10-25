@@ -360,7 +360,8 @@ def _run_etf_cycle(trader, df, clock=None, nxt=False):
     trader.market_index_status = {}
     trader.market_status_notified = {}
 
-    with patch('modules.auto_trade.trader.datetime', clock or _MidSession), \
+    #  [2026-10-25] 매도 판정은 C1 4단계로 selling.py 에 있다 — 시계도 그 모듈에 건다.
+    with patch('modules.auto_trade.selling.datetime', clock or _MidSession), \
          patch('modules.auto_trade.api.send_telegram_message'), \
          patch('modules.auto_trade.load_restricted_stocks', return_value={}), \
          patch('modules.auto_trade.api.is_domestic_etf_etn', return_value=True), \

@@ -115,6 +115,7 @@ def test_the_prefix_is_one_the_gate_actually_recognises():
 
 def test_the_trading_loop_really_calls_this_function():
     """이 수정의 전제 — 매매 루프가 이 예열을 부른다. 안 부르면 고칠 이유가 없다."""
-    src = open("modules/auto_trade/trader.py", encoding="utf-8").read()
+    #  [2026-10-25] 매도 판정의 예열은 C1 4단계로 selling.py 에 있다 — 두 파일을 함께 센다.
+    src = "\n".join(open(f"modules/auto_trade/{f}", encoding="utf-8").read() for f in ("trader.py", "selling.py"))
     assert src.count("api.prefetch_multiple_current_prices(") >= 2, \
         "매매 루프가 더는 이 예열을 부르지 않는다 — 이 테스트의 근거가 사라졌다"

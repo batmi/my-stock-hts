@@ -76,7 +76,10 @@ def test_sell_skip_paths_are_not_debug_only():
     """
     import os
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    src = open(os.path.join(root, "modules/auto_trade/trader.py"), encoding="utf-8").read()
+    #  [2026-10-25] 매도 판정은 C1 4단계로 selling.py 에 있다. trader.py 에서 찾으면 '진행 중인 주문 존재'가
+    #   매수 후보 쪽의 같은 문구에 걸려, 매도 쪽을 보지 않은 채 통과한다.
+    src = open(os.path.join(root, "modules/auto_trade/selling.py"), encoding="utf-8").read()
+    assert "def _check_sell_conditions" in src, "매도 판정이 selling.py 에 없다 — 이 가드의 파일을 고쳐라"
 
     for marker in ("진행 중인 주문 존재", "주문 가능 수량 0"):
         idx = src.find(marker)

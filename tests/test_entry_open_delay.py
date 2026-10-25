@@ -82,19 +82,23 @@ def test_시작시간이_더_늦으면_그_시각_기준(dials):
 
 
 def test_청산_경로는_이_게이트를_보지_않는다():
-    """게이트가 매수 경로에만 걸려 있는지 소스로 고정한다."""
-    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                            "modules", "auto_trade", "trader.py"), encoding="utf-8").read()
+    """게이트가 매수 경로에만 걸려 있는지 소스로 고정한다.
+
+    [2026-10-25] 매도 판정(_check_sell_conditions)과 그 안전망은 C1 4단계로 selling.py 에 있다 —
+     매수 경로는 trader.py 에 남았다. 매도 모듈은 이 게이트를 아예 부르지 않아야 한다.
+    """
+    pkg = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "modules", "auto_trade")
+    src = open(os.path.join(pkg, "trader.py"), encoding="utf-8").read()
+    sell_src = open(os.path.join(pkg, "selling.py"), encoding="utf-8").read()
     buy_at = src.index("def _check_buy_conditions")
-    sell_at = src.index("def _check_sell_conditions")
 
     calls = [i for i in range(len(src))
              if src.startswith("entry_open_delay_remaining(", i)]
     assert calls, "매수 경로에 게이트 호출이 없다"
+    assert any(i > buy_at for i in calls), "게이트 호출이 매수 판정 밖에만 있다"
 
-    # 매도 함수 본문(다음 def 전까지) 안에서는 호출되면 안 된다.
-    sell_end = src.index("\n    def ", sell_at + 10)
-    assert not any(sell_at < i < sell_end for i in calls), \
+    assert "def _check_sell_conditions" in sell_src, "매도 판정이 selling.py 에 없다 — 이 가드의 파일을 고쳐라"
+    assert "entry_open_delay_remaining(" not in sell_src, \
         "청산 경로가 진입 보류 게이트를 보고 있다 — 손절이 함께 멈춘다"
 
 

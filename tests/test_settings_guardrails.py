@@ -323,6 +323,7 @@ def test_no_inline_atr_stop_formula_remains():
     import pathlib
     root = pathlib.Path(__file__).resolve().parent.parent
     targets = ["modules/auto_trade/trader.py", "modules/auto_trade/market_risk.py",   # 시장·리스크(C1 2단계)
+               "modules/auto_trade/selling.py",                                       # 매도(C1 4단계)
                "modules/backtest.py", "modules/portfolio_backtest.py"]
     offenders = []
     for rel in targets:
