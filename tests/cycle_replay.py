@@ -35,6 +35,12 @@
     매수가 걸린 손절(매수 취소 → 다음 주기 청산 → 매도 예약 취소), 개별 룰의 반익절, 액면분할(권리 조정 — 앵커
     환산·예약 취소), 매도 응답 유실(결과 불명)과 매도가능수량 조정·조회 실패·0(3주기 연속 → 경보), 시세 조회 실패
     (판정 불가), 일봉 조회 예외(분석 실패 경보), 마지막 주기는 장 마감 뒤(마감 전환·마감 스냅샷·청산 신호 알림).
+  · buy_paths — 관심목록·보유를 따로 둔 매수 경로(C1 5단계 '매수' 분리의 기준, 2026-10-25). 7주기다. 기동 직후 미체결
+    현황 미확인(매수·증액 보류), 0주기 손절 둘의 당일 재진입(손절가 위 차단·체결강도 허들 → 경신 재매수), 후보 게이트
+    (상관관계·추세품질 상한·수급·트레이딩 제한·지수 판단 불가·일봉 없음·판정 예외), 주문 가드(실시간가 실패·1주 값
+    초과·손절 기준 없음·ATR 손절률 상한·보유 한도), 예약 매수 자동 취소, 미체결이 슬롯을 차지하는 주기, D+2 예수금 부족,
+    옛 고점·반익절 기록 삭제 실패, 매수·증액 응답 유실(결과 불명), 증액 보류 사유들, 마지막 주기는 장 마감 뒤(증액 신호).
+    바깥 사건은 모두 api·가상 브로커·DB·전략 클래스에 건다 — 트레이더 모듈 전역에 걸면 옮긴 뒤 빗나간다.
 """
 import concurrent.futures
 import datetime as _dt
@@ -64,7 +70,8 @@ _FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 GOLDEN = os.path.join(_FIXTURES, "cycle_replay_golden.json")
 SCENARIOS = {"base": GOLDEN, "market_stress": os.path.join(_FIXTURES, "cycle_replay_golden_market.json"),
              "account_sync": os.path.join(_FIXTURES, "cycle_replay_golden_account.json"),
-             "sell_paths": os.path.join(_FIXTURES, "cycle_replay_golden_sell.json")}
+             "sell_paths": os.path.join(_FIXTURES, "cycle_replay_golden_sell.json"),
+             "buy_paths": os.path.join(_FIXTURES, "cycle_replay_golden_buy.json")}
 
 
 # ── 시계 ───────────────────────────────────────────────────────────────────────────────────
@@ -262,7 +269,7 @@ ACCOUNT_BACKFILL = {"written": 2, "skipped": 0, "restricted": ["재생외부(100
                     "partial": [("100060", "재생정체", 10)], "error": None}
 ACCOUNT_DEGRADED_CYCLES = {0}               # 이 주기(0 = 기동 포함)의 자산 집계는 해외잔고 구간이 실패한다
 #  시나리오마다 돌리는 주기 수. account_sync 는 장중 출금(2주기 직전) 뒤 3주기 연속 확인까지 지나야 해서 5주기다.
-SCENARIO_CYCLES = {"account_sync": 5, "sell_paths": 5}
+SCENARIO_CYCLES = {"account_sync": 5, "sell_paths": 5, "buy_paths": 7}
 #  [sell_paths] 기동 전 보유로만 심고 관심목록에는 넣지 않는다(매수 경로는 base 가 본다). 손절 쪽은 base 의
 #   재생하락(100050)과 같은 일봉이고, 반익절·분할·시세 쪽은 재생상승A(100010)·재생정체(100060)와 같은 일봉이다.
 SELL_UNIVERSE = [
@@ -307,9 +314,85 @@ SELL_ANALYZE_ERROR = {"100190": {0}}        # 이 주기에 매도 판정(analyz
 SELL_SELLABLE = {"100170": {0: 0, 1: 0, 2: 0, 3: 0}, "100160": {1: 15}, "100190": {1: None}}   # 주기 → 매도가능수량
 SELL_UNKNOWN_ORDER = {"100160": {0}}        # 이 주기의 매도 주문 응답이 유실된다(결과 불명 — 접수되지 않았다)
 SELL_CLOSE_AT = {4: (15, 41)}               # 이 주기가 시작되기 직전에 시계를 정규장 마감(확정 종가) 뒤로 옮긴다
+#  [buy_paths] 관심목록·보유를 base 와 따로 둔다 — 기동 전 보유 넷(그중 둘은 0주기에 손절된다)과 매수 후보 열다섯.
+#   일봉은 모두 상승형이다(seed 는 매수 상태가 나오는 것을 확인한 값). 같은 seed 는 같은 수익률이라 상관계수가 1 이다
+#   — 쌍둥이 말고는 보유와 seed 를 겹치지 않는다. 후보는 BUY_ACTIVE 의 주기에만 체결강도 135%(나머지 60%는 수급
+#   게이트에서 보류)라, 사건마다 그 주기에만 매수 후보가 된다.
+BUY_UNIVERSE = [
+    {"code": "101010", "name": "재생증액A", "exchange": "KOSPI", "kind": "up", "seed": 1, "base": 20000.0,
+     "path": [0.0]},       # 보유 +13% → 피라미딩: 0주기 미체결 현황 미확인 · 1주기 증액 횟수 조회 실패 · 2주기 매수가능 0
+                           #  · 3주기 주문 응답 유실(횟수는 올린 채) · 4·5주기 증액 횟수 조회 실패 · 마감 뒤 신호만
+    {"code": "101020", "name": "재생증액B", "exchange": "KOSDAQ", "kind": "up", "seed": 2, "base": 15000.0,
+     "path": [0.0]},       # 보유 +15%(개별 룰 ATR 배수) → 1주기 KOSDAQ 지수 판단 불가로 증액 보류 → 2주기 증액
+    {"code": "101030", "name": "재생고정손절", "exchange": "KOSPI", "kind": "up", "seed": 10, "base": 20000.0,
+     "path": [0.0]},       # 보유 -20%(개별 룰 고정 손절) → 0주기 손절 → 1주기 손절가 위 재진입 차단
+    {"code": "101040", "name": "재생ATR손절", "exchange": "KOSPI", "kind": "up", "seed": 11, "base": 20000.0,
+     "path": [0.0]},       # 보유 -20%(ATR 손절, 직전 매수 체결강도 150%) → 0주기 손절 → 1·3주기 재진입 허들 → 4주기 경신·재매수
+    {"code": "101050", "name": "재생신규", "exchange": "KOSPI", "kind": "up", "seed": 5, "base": 20000.0,
+     "path": [0.0, 0.0, 0.0, 0.0, -0.10]},   # 1주기 매수(매수가능 0 → 예수금 폴백, 대기 중인 예약 매수 취소) → 4주기 손절
+    {"code": "101060", "name": "재생급등락", "exchange": "KOSPI", "kind": "up", "seed": 6, "base": 20000.0,
+     "noise": 0.05, "path": [0.0, 0.0, -0.25]},   # 개별 룰 ATR 배수 6.0 → 손절률 상한 조정 → 1주기 매수 → 2주기 손절
+    {"code": "101070", "name": "재생쌍둥이", "exchange": "KOSPI", "kind": "up", "seed": 1, "base": 30000.0,
+     "path": [0.0]},       # 재생증액A 와 같은 수익률 → 상관관계 보류
+    {"code": "101080", "name": "재생과열", "exchange": "KOSPI", "kind": "up", "seed": 75, "base": 20000.0,
+     "path": [0.0]},       # 추세품질 300 이상 → 추세품질 상한 보류
+    {"code": "101090", "name": "재생제한", "exchange": "KOSPI", "kind": "up", "seed": 15, "base": 20000.0,
+     "path": [0.0]},       # 트레이딩 제한 → 후보 분석 제외
+    {"code": "101100", "name": "재생매도비", "exchange": "KOSPI", "kind": "up", "seed": 16, "base": 20000.0,
+     "path": [0.0]},       # 매도잔량비 0.6 → 수급 게이트 보류
+    {"code": "101110", "name": "재생차트", "exchange": "KOSPI", "kind": "up", "seed": 18, "base": 20000.0,
+     "path": [0.0]},       # 1주기 일봉 없음 → 판정 불가
+    {"code": "101120", "name": "재생오류", "exchange": "KOSPI", "kind": "up", "seed": 19, "base": 20000.0,
+     "path": [0.0]},       # 1주기 매수 판정 예외 → 분석 실패
+    {"code": "101130", "name": "재생시세", "exchange": "KOSPI", "kind": "up", "seed": 42, "base": 20000.0,
+     "path": [0.0]},       # 1주기 실시간 현재가 조회 실패 → 직전 종가로 판정하되 주문은 보류
+    {"code": "101140", "name": "재생고가", "exchange": "KOSPI", "kind": "up", "seed": 49, "base": 1_500_000.0,
+     "path": [0.0]},       # 1주 값이 배분액의 1.3배 초과 → 진입 보류
+    {"code": "101150", "name": "재생무손절", "exchange": "KOSPI", "kind": "up", "seed": 56, "base": 20000.0,
+     "path": [0.0]},       # 개별 룰 ATR 손절 끔 + 고정 손절 0 → 청산 기준 없음 → 진입 보류
+    {"code": "101160", "name": "재생대기열", "exchange": "KOSPI", "kind": "up", "seed": 40, "base": 20000.0,
+     "path": [0.0]},       # 1주기 보유 한도 도달 → 2주기 미체결이 슬롯을 차지 → 3주기 예수금(D+2) 부족
+    {"code": "101170", "name": "재생고점삭제", "exchange": "KOSPI", "kind": "up", "seed": 48, "base": 20000.0,
+     "path": [0.0]},       # 4주기 옛 트레일링 고점 삭제 실패 → 진입 보류(선점한 리스크 예산 반납)
+    {"code": "101180", "name": "재생유실", "exchange": "KOSPI", "kind": "up", "seed": 60, "base": 20000.0,
+     "path": [0.0]},       # 5주기 매수 응답 유실(결과 불명) → 이번 주기 매수 중단
+    {"code": "101190", "name": "재생코스닥", "exchange": "KOSDAQ", "kind": "up", "seed": 39, "base": 20000.0,
+     "path": [0.0]},       # 1주기 KOSDAQ 지수 판단 불가 → 시장 필터 보류
+]
+BUY_HOLDINGS = [
+    {"code": "101010", "qty": 30, "rel": 1 / 1.13, "days_ago": 6},
+    {"code": "101020", "qty": 40, "rel": 1 / 1.15, "days_ago": 6},
+    {"code": "101030", "qty": 20, "rel": 1.25, "days_ago": 8},
+    {"code": "101040", "qty": 20, "rel": 1.25, "days_ago": 8,
+     "reason": "조건 만족 [점수:9.0, RSI:61.0, 체결강도:150.0%]"},     # 재진입 허들은 직전 매수 사유의 체결강도다
+]
+BUY_RULES = {
+    "101020": {"stop_loss": -7.0, "use_atr_stop": 1, "atr_stop_multiplier": 3.0},
+    "101030": {"stop_loss": -7.0, "use_atr_stop": 0},
+    "101060": {"stop_loss": -7.0, "use_atr_stop": 1, "atr_stop_multiplier": 6.0, "invest_ratio": 0.2},
+    "101150": {"stop_loss": 0.0, "use_atr_stop": 0},
+}
+BUY_ACTIVE = {"101030": {1}, "101040": {1, 3, 4}, "101050": {1}, "101060": {1}, "101070": {1}, "101080": {1},
+              "101100": {1}, "101110": {1}, "101120": {1}, "101130": {1}, "101140": {1}, "101150": {1},
+              "101160": {1, 2, 3}, "101170": {4}, "101180": {5}, "101190": {1}}
+BUY_VOL_OVERRIDE = {"101040": {4: 160.0}}   # 재진입 허들(150%)을 넘는 체결강도
+BUY_ASK_BID = {"101100": 0.6}
+BUY_RESTRICTED = ("101090",)
+BUY_RESERVED = [("101050", "buy", 10, 0.97)]           # 신규 매수가 나가면 자동 취소되는 예약 매수
+BUY_NO_CHART = {"101110": {1}}                        # 이 주기에 일봉 조회가 빈 표를 준다
+BUY_ANALYZE_ERROR = {"101120": {1}}                   # 이 주기에 매수 판정(analyze_buy)이 예외를 던진다
+BUY_STALE_PRICE = {"101130": {1}}                     # 이 주기에 실시간 현재가 조회가 실패한다(0)
+BUY_BUYABLE = {"101050": {1: 0}, "101010": {2: 0}}    # 주기 → 매수가능수량(API)
+BUY_PYRAMID_COUNT_FAIL = {"101010": {1, 4, 5}}        # 이 주기에 증액 횟수 조회가 실패한다(-1)
+BUY_DELETE_TS_FAIL = {"101170": {4}}                  # 이 주기에 옛 트레일링 고점 삭제가 실패한다
+BUY_DELETE_HALF_FAIL = {"101040": {4}}                # 이 주기에 옛 반익절 기록 삭제가 실패한다(진입은 한다)
+BUY_UNKNOWN_ORDER = {"101010": {3}, "101180": {5}}    # 이 주기의 매수 주문 응답이 유실된다
+BUY_INDEX_UNKNOWN = {"KOSDAQ": {1}}                   # 이 주기에 지수 조회가 빈 표를 준다(판단 불가)
+BUY_D2_DEPOSIT = {3: 500}                             # 이 주기의 D+2 예수금(미결제 매수 대금으로 묶였다)
+BUY_CLOSE_AT = {6: (15, 41)}                          # 이 주기가 시작되기 직전에 시계를 정규장 마감 뒤로 옮긴다
 
 
-def _daily(kind, seed, base, n=260, end=None):
+def _daily(kind, seed, base, n=260, end=None, noise=0.012):
     rs = np.random.RandomState(seed)
     if kind == "up":
         drift = np.r_[np.full(n - 15, 0.004), np.full(10, -0.006), np.full(5, 0.012)]
@@ -317,8 +400,7 @@ def _daily(kind, seed, base, n=260, end=None):
         drift = np.zeros(n)
     else:
         drift = np.full(n, -0.003)
-    noise = rs.normal(0, 0.012, n)
-    close = base * np.cumprod(1 + drift + noise)
+    close = base * np.cumprod(1 + drift + rs.normal(0, noise, n))
     vol = (rs.uniform(0.8, 1.2, n) * 200000).astype(int)
     vol[-5:] = (vol[-5:] * np.linspace(1.5, 2.5, 5)).astype(int)
     dates = pd.bdate_range(end=end or (START.date() - _dt.timedelta(days=1)), periods=n)
@@ -365,7 +447,7 @@ def _tick_floor(price):
 class Market:
     def __init__(self, universe, scenario="base"):
         self.items = {u["code"]: u for u in universe}
-        self.daily = {u["code"]: _daily(u["kind"], u["seed"], u["base"]) for u in universe}
+        self.daily = {u["code"]: _daily(u["kind"], u["seed"], u["base"], noise=u.get("noise", 0.012)) for u in universe}
         self.cycle = 0          # 하네스가 주기마다 올린다(가격 경로의 칸)
         self.scenario = scenario
 
@@ -396,6 +478,8 @@ class Market:
     def index(self, market_name):
         if self.scenario == "market_stress":
             return _stress_index(market_name, self.cycle)
+        if self.scenario == "buy_paths" and self.cycle in BUY_INDEX_UNKNOWN.get(market_name, ()):
+            return pd.DataFrame()
         n = 200
         closes = 2500.0 * np.cumprod(np.full(n, 1.0015))
         dates = pd.bdate_range(end=START.date(), periods=n).strftime("%Y%m%d")
@@ -445,7 +529,8 @@ def run(tmp_path, cycles=None, scenario="base"):
     cycles = cycles or SCENARIO_CYCLES.get(scenario, CYCLES)
     CLOCK.now = START
     os.makedirs(str(tmp_path), exist_ok=True)
-    market = Market(UNIVERSE + (SELL_UNIVERSE if scenario == "sell_paths" else []), scenario)
+    watchlist = BUY_UNIVERSE if scenario == "buy_paths" else UNIVERSE
+    market = Market(watchlist + (SELL_UNIVERSE if scenario == "sell_paths" else []), scenario)
     telegrams = []
     trader_box = {}
 
@@ -501,7 +586,7 @@ def run(tmp_path, cycles=None, scenario="base"):
                      ("auto_app_secret", "replay-secret"), ("hts_id", "")):
             P(sess, k, v, create=True)
         stock_data = {"stocks_kr": [{"code": u["code"], "name": u["name"], "exchange": u["exchange"]}
-                                    for u in UNIVERSE], "etfs_kr": [], "stocks_us": [], "etfs_us": []}
+                                    for u in watchlist], "etfs_kr": [], "stocks_us": [], "etfs_us": []}
         P(sess, "stock_data", stock_data, create=True)
         original_db = db_manager.db.db_path
         db_manager.db.switch_path(db_path)
@@ -510,7 +595,9 @@ def run(tmp_path, cycles=None, scenario="base"):
         paper_broker.reset(SEED_CAPITAL)
         paper_broker.reset_price_cache()
         P(paper_broker, "_odno_seq", 0)
-        _seed_holdings(market)
+        _seed_holdings(market, BUY_HOLDINGS if scenario == "buy_paths" else SEEDED_HOLDINGS)
+        if scenario == "buy_paths":
+            _seed_buy_events(market)
         if scenario == "sell_paths":
             _seed_holdings(market, SELL_HOLDINGS)
             _seed_sell_events(market)
@@ -523,8 +610,8 @@ def run(tmp_path, cycles=None, scenario="base"):
         P(paper_broker, "_current_price", lambda code, fallback=0.0: market.price(code) or fallback)
         #  정규장 중 — 확정 종가 평가 없음. sell_paths 의 마지막 주기는 확정 뒤라 그때의 가격이 종가다.
         P(paper_broker, "_krx_settled_close",
-          lambda code: market.price(code) if (scenario == "sell_paths" and CLOCK.now.strftime("%H%M") >= "1540")
-          else 0.0)
+          lambda code: market.price(code) if (scenario in ("sell_paths", "buy_paths")
+                                              and CLOCK.now.strftime("%H%M") >= "1540") else 0.0)
         P(api, "get_chart_data", lambda code, *a, **k: market.chart(code))
         P(api, "get_current_price", lambda code, *a, **k: market.price(code))
         P(api, "get_current_price_data", lambda code, *a, **k: _price_payload(market, code))
@@ -588,6 +675,8 @@ def run(tmp_path, cycles=None, scenario="base"):
             #  장 마감 전환이 부르는 마감 브리핑 스케줄러 — 싱글톤을 이 실행 안에만 둔다(스레드는 띄우지 않는다).
             from modules import scheduler as _scheduler_mod
             P(_scheduler_mod.SystemScheduler, "_instance", None)
+        if scenario == "buy_paths":
+            _patch_buy_events(P, market, _engine_mod)
         analysis.reset_live_vol_regime()
         st.callback(analysis.reset_live_vol_regime)
         #  국면 판정은 프로세스 전역 캐시(TTL 60초)와 판정 불가 경고 표시를 든다 — 앞 실행의 값을 물려받지 않게.
@@ -638,6 +727,9 @@ def _cycle_hook(t, market):
             if market.cycle in SELL_CLOSE_AT:
                 hh, mm = SELL_CLOSE_AT[market.cycle]
                 CLOCK.now = CLOCK.now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if market.scenario == "buy_paths" and market.cycle in BUY_CLOSE_AT:
+            hh, mm = BUY_CLOSE_AT[market.cycle]
+            CLOCK.now = CLOCK.now.replace(hour=hh, minute=mm, second=0, microsecond=0)
         return r
     t._record_cycle_duration = _wrapped
 
@@ -663,7 +755,7 @@ def _seed_holdings(market, holdings=SEEDED_HOLDINGS):
             assert paper_broker._book_fill("buy", h["code"], name, h["qty"], avg, odno, when) is None
         if h.get("trade", True):
             db_manager.db.insert_trade("buy(AUTO)", h["code"], name, h["qty"], str(avg), odno,
-                                       reason="재생 시드", order_status="체결", custom_time=when,
+                                       reason=h.get("reason", "재생 시드"), order_status="체결", custom_time=when,
                                        buy_price=avg)
 
 
@@ -691,6 +783,96 @@ def _seed_sell_events(market):
         target = float(_tick_floor(market.prev_close(code) * rel))
         db_manager.db.insert_reserved_order("PAPER", "", "domestic", side, code, market.items[code]["name"], qty,
                                             target, "PRICE", target, None)
+
+
+def _seed_buy_events(market):
+    """[buy_paths] 트레이딩 제한·개별 룰·예약 매수를 심는다."""
+    from modules.auto_trade import common
+    for code in BUY_RESTRICTED:
+        common.add_restricted_stock(code, market.items[code]["name"], "재생 수동 보유", cano="PAPER", acnt="")
+    for code, rule in BUY_RULES.items():
+        db_manager.db.save_stock_strategy(code, market.items[code]["name"], dict(_menu_rule_defaults(), **rule))
+    for code, side, qty, rel in BUY_RESERVED:
+        target = float(_tick_floor(market.prev_close(code) * rel))
+        db_manager.db.insert_reserved_order("PAPER", "", "domestic", side, code, market.items[code]["name"], qty,
+                                            target, "PRICE", target, None)
+
+
+def _menu_rule_defaults():
+    """개별 룰 입력 화면(auto_trade.menu)이 새 룰에 채우는 기본값 — 지정하지 않은 칸은 지금 설정 그대로다."""
+    at, sell = config.ANALYSIS_THRESHOLDS, config.SELL_STRATEGY
+    return {"buy_score": at["BUY_SCORE"], "buy_rsi": at["BUY_RSI_MAX"],
+            "buy_vol_strength": at.get("BUY_VOL_STRENGTH", 100.0),
+            "auto_adjust_ask_bid_ratio": 1 if at.get("AUTO_ADJUST_ASK_BID_RATIO", True) else 0,
+            "buy_ask_bid_ratio": at.get("BUY_ASK_BID_RATIO", 1.0), "sell_score": sell["SELL_SCORE"],
+            "stop_loss": sell["STOP_LOSS_RATE"], "take_profit": sell["TAKE_PROFIT_RATE"],
+            "take_profit_rsi": sell["TAKE_PROFIT_RSI"],
+            "ts_activation": sell.get("TRAILING_STOP_ACTIVATION_RATE", 10.0),
+            "ts_callback": sell.get("TRAILING_STOP_CALLBACK_RATE", 5.0), "memo": "", "weights": None,
+            "invest_ratio": 0.0, "time_stop_days": sell["TIME_STOP_DAYS"],
+            "use_atr_stop": 1 if sell.get("USE_ATR_STOP", True) else 0,
+            "atr_stop_multiplier": sell.get("ATR_STOP_MULTIPLIER", 2.0),
+            "half_take_profit_use": 1 if sell.get("HALF_TAKE_PROFIT_USE", False) else 0}
+
+
+def _patch_buy_events(P, market, engine_mod):
+    """[buy_paths] 바깥 세계의 사건 — 모두 api·가상 브로커·DB·전략 클래스에 건다(트레이더 모듈 전역에는 걸지 않는다:
+    매수 메서드를 다른 모듈로 옮겨도 같은 자리에 걸려야 옮기기 전후 기록을 견줄 수 있다)."""
+    def _at(table, code):
+        return market.cycle in table.get(code, ())
+
+    def _vol(code, *a, **k):
+        over = BUY_VOL_OVERRIDE.get(code, {})
+        if market.cycle in over:
+            return over[market.cycle]
+        active = BUY_ACTIVE.get(code)
+        return 135.0 if active is None or market.cycle in active else 60.0
+    P(api, "get_realtime_vol_strength", _vol)
+    P(api, "get_ask_bid_ratio", lambda code, *a, **k: BUY_ASK_BID.get(code, 1.6))
+    P(api, "get_current_price", lambda code, *a, **k: 0.0 if _at(BUY_STALE_PRICE, code) else market.price(code))
+    P(api, "get_chart_data", lambda code, *a, **k: pd.DataFrame() if _at(BUY_NO_CHART, code) else market.chart(code))
+    _buyable = api.fetch_buyable_quantity
+    P(api, "fetch_buyable_quantity",
+      lambda code, price: (BUY_BUYABLE[code][market.cycle] if market.cycle in BUY_BUYABLE.get(code, {})
+                           else _buyable(code, price)))
+    _place = paper_broker.place_order
+
+    def _place_lost(action, code, qty, price, name=None):
+        if action.lower() == "buy" and _at(BUY_UNKNOWN_ORDER, code):
+            return {"rt_cd": "1", "msg_cd": "ORDER_UNKNOWN", "msg1": "재생: 주문 응답 유실", "output": {}}
+        return _place(action, code, qty, price, name=name)
+    P(paper_broker, "place_order", _place_lost)
+    _analyze_buy = engine_mod.DefaultStrategy.analyze_buy
+
+    def _analyze_buy_err(self_, code, *a, **k):
+        if _at(BUY_ANALYZE_ERROR, code):
+            raise TypeError("재생: 개별 룰 값이 비어 있다(NoneType)")
+        return _analyze_buy(self_, code, *a, **k)
+    P(engine_mod.DefaultStrategy, "analyze_buy", _analyze_buy_err)
+    db = db_manager.db
+    _count, _del_ts, _del_half = db.get_pyramid_count, db.delete_trailing_stop, db.delete_half_tp
+    P(db, "get_pyramid_count", lambda code: -1 if _at(BUY_PYRAMID_COUNT_FAIL, code) else _count(code))
+    P(db, "delete_trailing_stop", lambda code: False if _at(BUY_DELETE_TS_FAIL, code) else _del_ts(code))
+    P(db, "delete_half_tp", lambda code: False if _at(BUY_DELETE_HALF_FAIL, code) else _del_half(code))
+    #  기동 직후 미체결 복구 조회(restore_pending_orders)가 실패한다 — 0주기 끝의 미체결 관리
+    #   (get_unfilled_orders, 다른 조회다)가 성공하면 풀린다.
+    _open_orders = api.get_domestic_open_orders
+    calls = []
+
+    def _open_orders_once_none(*a, **k):
+        calls.append(1)
+        return None if len(calls) == 1 else _open_orders(*a, **k)
+    P(api, "get_domestic_open_orders", _open_orders_once_none)
+    _balance = api.get_domestic_balance
+
+    def _balance_d2(*a, **k):
+        holdings, summary = _balance(*a, **k)
+        if summary and market.cycle in BUY_D2_DEPOSIT:
+            summary = [dict(summary[0], prvs_rcdl_excc_amt=str(BUY_D2_DEPOSIT[market.cycle]))] + list(summary[1:])
+        return holdings, summary
+    P(api, "get_domestic_balance", _balance_d2)
+    from modules import scheduler as _scheduler_mod
+    P(_scheduler_mod.SystemScheduler, "_instance", None)
 
 
 def _paper_order_history():
@@ -781,6 +963,19 @@ def _collect(t, telegrams, scenario="base"):
             "SELECT code, highest_price FROM trailing_stops ORDER BY code", fetch="all") or []]
         out["paper_orders"] = [list(r) for r in paper_broker._db().execute_query(
             "SELECT odno, code, side, qty, filled_qty, status FROM paper_orders ORDER BY odno", fetch="all") or []]
+    if scenario == "buy_paths":
+        out["state"]["pending_restore_ok"] = _jsonable(getattr(t, "pending_restore_ok", None))
+        out["state"]["half_tp_cache"] = sorted(getattr(t, "half_tp_cache", None) or [])
+        out["state"]["pending_orders"] = sorted(getattr(t.order_manager, "pending_orders", None) or {})
+        out["reserved"] = [list(r) for r in db_manager.db.execute_query(
+            "SELECT code, order_type, qty, status, fail_reason FROM reserved_orders ORDER BY id", fetch="all") or []]
+        out["anchors"] = [list(r) for r in db_manager.db.execute_query(
+            "SELECT code, highest_price, pyramid_count FROM trailing_stops ORDER BY code", fetch="all") or []]
+        #  신호 원장 — 매수 신호였던 주기를 게이트별로 센다(updated_at 은 SQLite 의 진짜 시계라 뺀다).
+        out["signal_ledger"] = [list(r) for r in db_manager.db.execute_query(
+            "SELECT code, cycles, passed, blocked_vol, blocked_abr, blocked_hold, blocked_corr, blocked_rs, blocked_tq, "
+            "blocked_reentry, blocked_other, blocked_slot, blocked_cash, blocked_market, max_score, last_state "
+            "FROM signal_ledger ORDER BY code", fetch="all") or []]
     out["screens"] = _screens(t)
     return out
 

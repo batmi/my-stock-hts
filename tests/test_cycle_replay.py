@@ -22,8 +22,8 @@
  그리고 커밋 메시지에 기록이 왜 바뀌었는지 적는다. 구조만 바꾸는 커밋(C1 분리)에서는 바뀌면 안 된다.
 
 [시나리오] cycle_replay.SCENARIOS 마다 기준 기록이 따로 있다 — base(매매 경로)·market_stress(시장·리스크 경로,
- 2026-10-24)·account_sync(계좌 동기화 경로, 2026-10-25)·sell_paths(매도 경로, 2026-10-25). 시나리오마다 '실제로
- 그 경로를 지났는가'를 먼저 보고 나서 기록을 비교한다.
+ 2026-10-24)·account_sync(계좌 동기화 경로, 2026-10-25)·sell_paths(매도 경로, 2026-10-25)·buy_paths(매수 경로,
+ 2026-10-25). 시나리오마다 '실제로 그 경로를 지났는가'를 먼저 보고 나서 기록을 비교한다.
 """
 import difflib
 import json
@@ -80,8 +80,13 @@ def sell_trace(tmp_path_factory):
     return _fresh(tmp_path_factory, "sell_paths")
 
 
+@pytest.fixture(scope="module")
+def buy_trace(tmp_path_factory):
+    return _fresh(tmp_path_factory, "buy_paths")
+
+
 _TRACE_FIXTURE = {"base": "fresh_trace", "market_stress": "stress_trace", "account_sync": "account_trace",
-                  "sell_paths": "sell_trace"}
+                  "sell_paths": "sell_trace", "buy_paths": "buy_trace"}
 
 
 def test_재생은_매매_경로를_실제로_지난다(fresh_trace):
@@ -203,6 +208,57 @@ def test_매도_재생은_매도_경로를_실제로_지난다(sell_trace):
     assert {p["code"]: p["name"] for p in sell_trace["positions"]}.get("100140") == "재생반익"
     assert "100140(100140)" not in logs and "100130(100130)" not in logs
     for name, lines in sell_trace["screens"].items():
+        assert lines, f"{name}: 화면이 비어 있다"
+        assert not any(x.startswith("<") and "Error" in x for x in lines), f"{name}: 화면 출력 중 예외 {lines[:3]}"
+
+
+def test_매수_재생은_매수_경로를_실제로_지난다(buy_trace):
+    """buy_paths 가 노린 경로 — 하나라도 빠지면 그 경로의 분리는 기준 없이 옮겨진다."""
+    logs = "\n".join(buy_trace["logs"])
+    tg = "\n".join(buy_trace["telegram"])
+    for marker, where in (("매수 스킵: 미체결 주문 현황 미확인", logs),                          # 0주기: 복구 실패
+                          ("피라미딩 보류: 재생증액A - 미체결 주문 현황 미확인", logs),
+                          ("피라미딩 보류: 재생증액A - 증액 횟수를 확인할 수 없습니다", logs),     # 증액 가드
+                          ("피라미딩 보류: 재생증액B - KOSDAQ 지수 판단 불가", logs),
+                          ("피라미딩 보류: 재생증액A - 예수금 부족", logs),
+                          ("피라미딩 실행: 재생증액B", logs),
+                          ("피라미딩 중단: 재생증액A - 주문 접수 여부를 확인하지 못했습니다", logs),
+                          ("[장마감] 피라미딩 신호 감지 (주문 미전송): 재생증액A - 피라미딩 2차", logs),
+                          ("[분석스킵] 재생고정손절(101030): 당일 손절가 재진입 불가", logs),     # 재진입 방어
+                          ("[분석스킵] 재생ATR손절(101040): 당일 재진입 불가 (체결강도 135.0% <= 기존매수 150.0%)", logs),
+                          ("[당일 재진입(기존 150.0% 경신)]", logs),
+                          ("[상관관계 보류] (보유·미체결 재생증액A 상관계수: 1.00", logs),        # 후보 게이트
+                          ("[추세품질 상한] (추세품질", logs), ("[매수 스킵] 트레이딩 제한 종목 (1개): 재생제한", logs),
+                          ("[매도비:0.60<1.0]", logs), ("[체결:60.0%<100.0%]", logs),
+                          ("[분석스킵] 재생차트(101110): 차트 데이터 없음", logs),
+                          ("[분석실패] 재생오류(101120): 매수 판정 중 오류", logs),
+                          ("[시장 필터링] 지수 판단 불가(KOSDAQ) 매수 보류 (1종목): 재생코스닥", logs),
+                          ("[매수 보류] 재생무손절(101150) 손절 기준 없음", logs),                # 주문 가드
+                          ("매수 보류: 재생시세(101130) - 실시간 현재가 조회 실패", logs),
+                          ("[리스크 조정] ATR 손절률(", logs), ("매수 보류: 재생고가(101140) - 1주", logs),
+                          ("[예약취소] 신규 매수로 인해 대기 중이던 재생신규 매수 예약 주문 1건", logs),
+                          ("매수 중단: 최대 보유 종목 수(4개) 도달", logs),
+                          ("(보유 3 + 미체결 1)", logs),                                         # 미체결이 슬롯을 차지
+                          ("[매수스킵] 매수 조건 충족 1종목 — 주문 미전송 (예수금 부족 — 500원", logs),
+                          ("매수 보류: 재생고점삭제 - 이전 포지션의 트레일링 고점을 지우지 못했습니다", logs),
+                          ("[반익절] 재생ATR손절 이전 기록을 지우지 못했습니다", logs),
+                          ("매수 중단: 재생유실 - 주문 접수 여부를 확인하지 못했습니다", logs),
+                          ("[매수 결과 불명] 재생유실", tg)):
+        assert marker in where, f"매수 재생이 '{marker}' 경로를 지나지 않았다"
+    #  응답이 유실된 증액도 횟수는 올린 채 둔다 — 다음 주기가 상한을 넘겨 한 번 더 증액하지 않게.
+    counts = {r[0]: r[2] for r in buy_trace["anchors"]}
+    assert counts.get("101010") == 1 and counts.get("101020") == 1, buy_trace["anchors"]
+    assert [r[3] for r in buy_trace["reserved"]] == ["CANCELED"], buy_trace["reserved"]
+    ledger = {r[0]: r for r in buy_trace["signal_ledger"]}
+    #  (code, cycles, passed, vol, abr, hold, corr, rs, tq, reentry, other, slot, cash, market, …)
+    assert ledger["101070"][6] >= 1 and ledger["101080"][8] >= 1 and ledger["101100"][4] == 1
+    assert ledger["101030"][9] == 1 and ledger["101040"][9] == 2 and ledger["101190"][13] == 1
+    assert ledger["101160"][11] == 1 and ledger["101160"][12] == 1, ledger["101160"]
+    held = {p["code"] for p in buy_trace["positions"]}
+    assert held == {"101010", "101020", "101040"}, held        # 재생유실은 접수되지 않았다
+    state = buy_trace["state"]
+    assert state["pending_restore_ok"] is True and state["pending_orders"] == []
+    for name, lines in buy_trace["screens"].items():
         assert lines, f"{name}: 화면이 비어 있다"
         assert not any(x.startswith("<") and "Error" in x for x in lines), f"{name}: 화면 출력 중 예외 {lines[:3]}"
 
