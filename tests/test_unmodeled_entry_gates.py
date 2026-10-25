@@ -86,3 +86,32 @@ def test_prepare_universe_is_still_the_single_gate():
     src = open(pbt.__file__.replace('.pyc', '.py'), encoding='utf-8').read()
     code = "\n".join(l for l in src.split("\n") if not l.strip().startswith("#"))
     assert code.count("warn_if_unmodeled(") >= 2, "정의 + 호출이 있어야 한다"
+
+
+# ---------------------------------------------------------------- 리스크 배수 (2026-10-25)
+def test_리스크_배수가_켜져_있으면_미반영을_알린다(monkeypatch):
+    """실매매는 국면·휩소율·드로다운으로 진입 한도를 줄이는데, 메뉴 백테스트는 x1.00 세계를 굴린다 — 결과 옆에 밝힌다."""
+    import config
+    from modules import backtest
+    monkeypatch.setattr(config, "RISK_SCALING_PARAMS",
+                        dict(config.RISK_SCALING_PARAMS, USE_REGIME_RISK_SCALING=True,
+                             USE_WHIPSAW_RISK_SCALING=False, USE_DRAWDOWN_RISK_SCALING=True), raising=False)
+    note = backtest.live_risk_scaling_note()
+    assert note and "미반영" in note and "국면·드로다운" in note and "휩소율" not in note
+
+
+def test_실매매도_꺼져_있으면_알리지_않는다(monkeypatch):
+    import config
+    from modules import backtest
+    monkeypatch.setattr(config, "RISK_SCALING_PARAMS",
+                        dict(config.RISK_SCALING_PARAMS, USE_REGIME_RISK_SCALING=False,
+                             USE_WHIPSAW_RISK_SCALING=False, USE_DRAWDOWN_RISK_SCALING=False), raising=False)
+    assert backtest.live_risk_scaling_note() is None
+
+
+def test_두_메뉴_결과_화면이_그_안내를_싣는다():
+    """단일 종목(run_backtest)·포트폴리오(run_portfolio_backtest) 메뉴 — 한쪽만 싣으면 다른 쪽 결과가 조용히 갈라진다."""
+    import inspect
+    from modules import backtest, portfolio_backtest
+    assert "live_risk_scaling_note()" in inspect.getsource(backtest.run_backtest)
+    assert "backtest.live_risk_scaling_note()" in inspect.getsource(portfolio_backtest.run_portfolio_backtest)

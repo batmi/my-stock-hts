@@ -141,6 +141,22 @@ def daily_source_summary():
     return out
 
 
+def live_risk_scaling_note():
+    """실매매의 리스크 배수(신규 진입·증액 한도 감속)를 이 시뮬레이션이 재현하지 않는다는 안내. 실매매도 꺼져 있으면 None.
+
+    [2026-10-25] 실매매는 시장 국면·휩소율·계좌 드로다운에 따라 종목당 리스크와 히트 캡에 배수를 곱한다
+     (market_risk._update_risk_scale, 기본 셋 다 켜짐). 메뉴 백테스트(단일 종목·포트폴리오)는 그 배수를 넘기지 않아
+     한도가 늘 x1.00 인 세계를 굴리는데, 결과 화면에는 그 사실이 없었다. 감사 도구는 risk_scale_by_date 로 따로 준다.
+    """
+    p = getattr(config, 'RISK_SCALING_PARAMS', {}) or {}
+    on = [name for key, name in (("USE_REGIME_RISK_SCALING", "국면"), ("USE_WHIPSAW_RISK_SCALING", "휩소율"),
+                                 ("USE_DRAWDOWN_RISK_SCALING", "드로다운")) if p.get(key, True)]
+    if not on:
+        return None
+    return (f"🛡 리스크 배수: 실매매의 신규 진입·증액 한도 감속({'·'.join(on)})은 이 시뮬레이션에 미반영 — "
+            f"한도가 늘 x1.00 인 세계의 결과입니다(약세·손실 구간의 진입 규모가 실매매보다 큽니다).")
+
+
 def get_backtest_data(code, is_overseas, days):
     """백테스트용 장기 일봉.
 
@@ -2490,6 +2506,9 @@ def run_backtest():
             config.console.print("[dim yellow]🛡 시장 필터: 지수 데이터 조회 실패로 이번 백테스트에는 미반영됩니다. (실매매는 정상 적용)[/dim yellow]")
         else:
             config.console.print("[dim]🛡 시장 필터: 이번 시뮬레이션에서 OFF — 신규 진입 차단 없음[/dim]")
+        _rs_note = live_risk_scaling_note()
+        if _rs_note:
+            config.console.print(f"[dim]{_rs_note}[/dim]")
 
         if mode_choice == "2":
             run_monte_carlo_simulation(df, start_idx, initial_capital, buy_score, buy_rsi, is_overseas,

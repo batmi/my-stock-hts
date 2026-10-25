@@ -2036,6 +2036,9 @@ def run_portfolio_backtest():
                                  f"{' 외' if len(failed) > 5 else ''})[/dim]")
         config.console.print("[dim]※ 슬롯 경쟁·현금 제약·포트폴리오 히트 캡이 모두 반영된 단일 경로 결과입니다. "
                              "종목 구성이 바뀌면 값이 크게 달라질 수 있습니다.[/dim]")
+        _rs_note = backtest.live_risk_scaling_note()
+        if _rs_note:
+            config.console.print(f"[dim]{_rs_note}[/dim]")
         print_benchmark(dfs, dates)
         if use_bars:
             same_day = sum(1 for r in [res] for t in r["trades"] if t.get("nth_today", 1) >= 2)
