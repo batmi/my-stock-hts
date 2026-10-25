@@ -40,3 +40,21 @@ def test_regime_mock_is_not_overridden_by_real_index_data():
         df = analysis.get_domestic_index_data("KOSPI")
     src = (getattr(df, "attrs", {}) or {}).get("source") if df is not None else None
     assert src != "OPENAPI", "테스트가 실제 KRX 스냅샷을 읽었다"
+
+
+def test_settings_start_from_class_defaults_not_the_operator_file():
+    """[2026-10-25] 운용 기기에서는 전체 테스트가 운용자 설정 파일(json/dynamic_config.json) 위에서 돌았다.
+
+    config import 와 세션 초기화가 그 파일을 읽고, 테스트별 JSON_DIR 임시화는 그 뒤였다. 실측 맥북: 매매일지 연동이
+    켜져 있었고 RSI 상한이 70 이 아니라 70.0 이었다 — 같은 코드가 기기마다 다른 설정으로 검증된다. 이제 conftest 가
+    세션 시작에 클래스 기본값으로 되돌린다. 글자(형)까지 같아야 한다(70 과 70.0 은 == 로는 같다).
+    텔레그램 발송은 테스트마다 따로 끈다(isolate_test_files) — 그 한 값만 뺀다.
+    """
+    import json
+
+    def _dump(st):
+        d = st.model_dump()
+        d.pop("ENABLE_TELEGRAM")
+        return json.dumps(d, sort_keys=True, ensure_ascii=False, default=str)
+
+    assert _dump(config.settings) == _dump(config.GlobalSettings())

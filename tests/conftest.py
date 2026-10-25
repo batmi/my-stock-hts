@@ -141,7 +141,7 @@ def fake_session_env():
 
 
 @pytest.fixture(scope="session", autouse=True)
-def setup_config(isolate_production_db, fake_session_env):
+def setup_config(isolate_production_db, fake_session_env, tmp_path_factory):
     """테스트 세션 동안 사용할 설정 초기화 (한투증권 모드).
 
     [주의] mode 1은 **가상투자(paper)**다. 여기서 mode 1로 초기화하면 paper_broker가
@@ -149,6 +149,17 @@ def setup_config(isolate_production_db, fake_session_env):
      실제 네트워크 호출은 tests/ 의 호스트 차단 픽스처가 막으므로 mode 2가 안전하다.
     """
     config.session.initialize(mode="2")
+    # [격리 · 2026-10-25] 설정은 클래스 기본값(GlobalSettings())에서 출발한다 — 설정 파일이 없는 기기와 같다.
+    #  config 는 import 때, 위 initialize 는 프로필을 걸며 json/dynamic_config.json 을 읽는다. 테스트별 격리
+    #  (isolate_test_files 의 JSON_DIR 임시화)는 그 뒤라, 운용 기기에서는 전체 테스트가 운용자 설정 위에서 돌았다
+    #  (실측 맥북: JOURNAL_SYNC_USE·ENABLE_TELEGRAM·TELEGRAM_INSTANCE_NAME·ACTIVE_PRESET 이 기본값과 달랐고
+    #  BUY_RSI_MAX 는 70.0). 같은 코드가 기기마다 다른 설정으로 검증되던 것이다. 빈 폴더에서 프로필을 다시 건다.
+    _json_dir = config.JSON_DIR
+    config.JSON_DIR = str(tmp_path_factory.mktemp("settings_defaults"))
+    try:
+        config.set_config_profile(config.active_profile)
+    finally:
+        config.JSON_DIR = _json_dir
     # [단일계좌 고정] 종전 기본값이던 mode 1(모의투자)은 auto 계좌를 거래 계좌와 강제
     #  동기화했고, 그래서 대화형 주문 테스트에 '계좌 선택' 단계가 없었다. 실전 모드는
     #  두 계좌가 갈리면 그 단계가 생겨 Prompt 응답 순서가 통째로 밀린다. 계좌 분리가

@@ -254,7 +254,7 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 # 3) Dependencies
 pip install -r requirements.txt
 pip install -r requirements-dev.txt   # for development and tests
-python tools/core_checks.py           # fast core checks (decision/order/config invariants, auto-trading cycle replay, ~20s) — run before every commit
+python tools/core_checks.py           # fast core checks (decision/order/config invariants, DB schema, auto-trading cycle replay, ~20s) — run before every commit
 python -m pytest                      # full regression suite (includes clock-dependent tests; run when needed)
 
 # 4) Run
@@ -654,6 +654,7 @@ my-stock-hts/
 **DB backup and restore**
 - While the app is up — **whether or not auto trading runs** — one `db/backups/<ledger>_YYYYMMDD.db` per day is taken (right after start-up and at each date change; SQLite backup API, consistent snapshot including WAL; last 7 kept; on failure it retries every 10 minutes and alerts on Telegram once a day). Average cost, trailing highs, stop levels and trade history live only in this file.
 - `--no-bot` turns off bot command polling and the **scheduled notices** (holiday notice, morning briefing, disclosures, calendar, market halt) only. Immediate alerts, the liveness heartbeat, ledger backups and the CSAT-date refresh keep running — the option exists so two machines sharing one bot token do not send each scheduled notice twice.
+- **Schema number** — the ledger DB file header (`PRAGMA user_version`) carries the schema generation. Missing tables and columns are still filled at every start-up, and only a file that got all of them is stamped with the current number (if a column cannot be added the number is not raised and the DB write-failure alert fires — the next start-up tries again). If the file's number is higher than the code's (the code was rolled back, or a DB was copied from another machine) the number is left as is and a warning is logged. When you change the schema, raise `SCHEMA_VERSION` in `modules/db_manager.py` and rebuild the record with `DB_SCHEMA_UPDATE=1 python -m pytest tests/test_db_schema.py -o addopts=`. `tests/test_db_schema.py` (core checks) catches a schema change without a new number, a column that does not appear when a real old DB (`tests/fixtures/db_schema_history/` — DDL from the operating machines' backups) is opened by the current code, and SQL that writes to a column the schema does not have.
 - If `PRAGMA integrity_check` fails at start-up, auto trading refuses to start. To restore: ① stop every instance → ② move `db/trade_history.db` and its `-wal`/`-shm` sidecars aside → ③ `cp db/backups/trade_history_<date>.db db/trade_history.db` → ④ restart (missing columns are added by the migrations) → ⑤ if you use the journal web app, **re-sync** (section 10). Restore rehearsal 2026-09-20: backup integrity ok, boot/read/write fine.
 
 ---

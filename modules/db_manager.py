@@ -50,6 +50,18 @@ def _daily_asset_write_failed(date_str, account, exc):
                  f"드로다운 고점이 이 행에 걸려 있습니다: {type(exc).__name__}: {exc}")
 
 
+# ---------------------------------------------------------------------------
+# [스키마 번호 · 2026-10-25] _init_db 가 만드는 스키마(테이블·열·인덱스)의 세대. DB 파일 머리(PRAGMA user_version)에
+#  남긴다. 종전에는 번호가 없어, 어느 파일이 어느 코드의 스키마인지 파일만 보고 알 수 없었고 코드를 되돌려 옛 코드로
+#  새 스키마 파일을 열어도 아무 표시가 없었다.
+#  · 스키마를 바꾸면 이 값을 올린다. tests/test_db_schema.py 가 새 DB 의 스키마를 기록(tests/fixtures/db_schema.json)과
+#    맞대, 번호를 올리지 않은 변경을 잡는다.
+#  · 열 추가는 지금처럼 '없으면 더한다'(멱등, _add_missing_columns)로 쓴다. 매 기동 돌아 어떤 세대의 파일이든 빠진
+#    열을 메운다 — 번호로 건너뛰지 않는 이유다(실측 10-25: 맥 실전·파이 두 DB 모두 이 방식으로 새 DB 와 같은 열).
+#  · 멱등으로 쓸 수 없는 변경(테이블 재생성 등)이 생기면 그때 `if ver < N:` 단계로 둔다. 번호는 오르기만 한다.
+SCHEMA_VERSION = 1
+
+
 class DBManager:
     def __init__(self):
         self.db_path = config.DB_FILE_PATH
@@ -373,26 +385,18 @@ class DBManager:
                 # reject_count : '서버가 이 건을 명시적으로 거절한' 횟수만 센다. attempts 와
                 #                반드시 분리해야 한다 — attempts 로 포기 판정을 하면 웹서버가
                 #                반나절만 죽어 있어도 대기열 전체가 통째로 폐기된다.
-                cursor.execute("PRAGMA table_info(journal_outbox)")
-                outbox_columns = [info[1] for info in cursor.fetchall()]
                 # is_backlog  : 재동기화처럼 뒤늦게 밀어 넣은 행. 정렬에서 뒤로 보내
                 #               실시간 체결이 대량 backlog 뒤에 줄 서지 않게 한다.
                 # needs_patch : 이미 서버에 들어간 기록의 **정정분**. 서버는 같은
                 #               brokerExecutionId 를 duplicate 로 건너뛰기만 하므로
                 #               (덮어쓰지 않는다) 다시 POST 해서는 값이 갱신되지 않는다.
                 #               이 표시가 붙은 행은 PATCH 로 보낸다.
-                for col, dtype in (("dead_at", "TEXT"),
-                                   ("reject_count", "INTEGER DEFAULT 0"),
-                                   ("is_backlog", "INTEGER DEFAULT 0"),
-                                   ("needs_patch", "INTEGER DEFAULT 0")):
-                    if col not in outbox_columns:
-                        try:
-                            cursor.execute(f"ALTER TABLE journal_outbox ADD COLUMN {col} {dtype}")
-                        except Exception as e:
-                            #  화면에만 찍으면 헤드리스 운영(라즈베리파이)에서는 아무도 못 본다.
-                            #  컬럼이 없으면 그 컬럼을 읽는 조회가 **영영** 실패하므로 반드시 남긴다.
-                            logger.error(f"[DB] journal_outbox 컬럼 추가 실패({col}): {e}")
-                            config.console.print(f"[red][DB] journal_outbox 컬럼 추가 실패({col}): {e}[/red]")
+                #  아래 인덱스가 is_backlog·dead_at 을 쓰므로 인덱스보다 먼저 더한다.
+                failed = self._add_missing_columns(cursor, "journal_outbox", (
+                    ("dead_at", "TEXT"),
+                    ("reject_count", "INTEGER DEFAULT 0"),
+                    ("is_backlog", "INTEGER DEFAULT 0"),
+                    ("needs_patch", "INTEGER DEFAULT 0")))
                 # 전송 대기 행 조회는 synced_at·dead_at 이 모두 NULL 인 것만 보고,
                 # is_backlog 순으로 실시간 체결을 먼저 집는다.
                 #  CREATE INDEX IF NOT EXISTS 는 '이름'만 보므로, 정의를 바꿀 때는
@@ -603,36 +607,23 @@ class DBManager:
 
                 # [마이그레이션 2026-08-30] 일자별 순입출금. 자산 이력을 **옮기지 않고**
                 #  드로다운 기준을 맞추기 위한 값이다(get_max_daily_asset 주석 참조).
-                cursor.execute("PRAGMA table_info(daily_asset_history)")
-                _dah_cols = [c[1] for c in cursor.fetchall()]
-                if _dah_cols and "net_transfer" not in _dah_cols:
-                    cursor.execute("ALTER TABLE daily_asset_history "
-                                   "ADD COLUMN net_transfer REAL DEFAULT 0")
-                    print("[DB] 자산 이력 컬럼 추가됨: net_transfer")
-
-                # [마이그레이션 2026-09-01] 그날의 기준 원금(현금+매입원가-실현손익).
+                # [마이그레이션 2026-09-01] principal: 그날의 기준 원금(현금+매입원가-실현손익).
                 #  프로그램이 꺼져 있던 사이의 입출금을 되찾는 유일한 대조점이다
                 #  (trader._reconcile_offline_transfer 주석 참조).
-                if _dah_cols and "principal" not in _dah_cols:
-                    cursor.execute("ALTER TABLE daily_asset_history "
-                                   "ADD COLUMN principal REAL")
-                    print("[DB] 자산 이력 컬럼 추가됨: principal")
+                failed += self._add_missing_columns(cursor, "daily_asset_history", (
+                    ("net_transfer", "REAL DEFAULT 0"),
+                    ("principal", "REAL")))
 
                 # [마이그레이션 2026-08-30 / 2026-09-08] 계좌 상태·시장 필터 차단 컬럼 추가.
                 #  PK가 그대로라 ADD로 족하다. (이 지점은 위 is_sim 재생성 뒤라 컬럼 목록을
                 #  다시 읽는다 — 재생성된 표에는 이 칸들이 없다.)
-                cursor.execute("PRAGMA table_info(signal_ledger)")
-                _led_cols = [c[1] for c in cursor.fetchall()]
-                for _c in ("blocked_slot", "blocked_cash", "blocked_market"):
-                    if _led_cols and _c not in _led_cols:
-                        cursor.execute(f"ALTER TABLE signal_ledger ADD COLUMN {_c} INTEGER DEFAULT 0")
-                        print(f"[DB] 신호 원장 컬럼 추가됨: {_c}")
+                failed += self._add_missing_columns(cursor, "signal_ledger", (
+                    ("blocked_slot", "INTEGER DEFAULT 0"),
+                    ("blocked_cash", "INTEGER DEFAULT 0"),
+                    ("blocked_market", "INTEGER DEFAULT 0")))
 
                 # 컬럼 확장 (마이그레이션)
-                cursor.execute("PRAGMA table_info(trades)")
-                columns = [info[1] for info in cursor.fetchall()]
-                
-                new_columns = {
+                failed += self._add_missing_columns(cursor, "trades", {
                     "profit_amt": "INTEGER DEFAULT 0",
                     "profit_rate": "REAL DEFAULT 0.0",
                     "reason": "TEXT",
@@ -645,25 +636,10 @@ class DBManager:
                     # [2026-09-14] 실거래 profit_amt 는 총차익(비용 제외)이다. 원금 불변량만 이 비용을
                     #  빼서 순손익으로 본다(core.trading_cost.realized_profit 주석). 가상투자 행은 0.
                     "cost_amt": "REAL DEFAULT 0.0",
-                }
-                
-                for col, dtype in new_columns.items():
-                    if col not in columns:
-                        try:
-                            cursor.execute(f"ALTER TABLE trades ADD COLUMN {col} {dtype}")
-                            if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
-                                config.console.print(f"[dim green][DB] 컬럼 추가됨: {col}[/dim green]")
-                        except Exception as e:
-                            #  화면에만 찍으면 헤드리스 운영(라즈베리파이)에서는 아무도 못 본다.
-                            #  컬럼이 없으면 그 컬럼을 읽는 조회가 **영영** 실패하므로 반드시 남긴다.
-                            logger.error(f"[DB] 컬럼 추가 실패({col}): {e}")
-                            config.console.print(f"[red][DB] 컬럼 추가 실패({col}): {e}[/red]")
+                })
 
                 # stock_strategies 테이블 컬럼 확장 (memo 추가)
-                cursor.execute("PRAGMA table_info(stock_strategies)")
-                strat_columns = [info[1] for info in cursor.fetchall()]
-                
-                new_strat_columns = {
+                failed += self._add_missing_columns(cursor, "stock_strategies", {
                     "buy_vol_strength": "REAL", "memo": "TEXT", "weights": "TEXT",
                     "invest_ratio": "REAL", "time_stop_days": "INTEGER",
                     "use_atr_stop": "INTEGER", "atr_stop_multiplier": "REAL",
@@ -671,123 +647,35 @@ class DBManager:
                     # [2026-10-24] 룰 입력 화면이 받던 두 값의 열이 없어 저장 때마다 버려졌다
                     #  (엔진은 늘 전역값). 기존 행은 NULL = 전역값을 따른다(engine.rule_value).
                     "buy_ask_bid_ratio": "REAL", "auto_adjust_ask_bid_ratio": "INTEGER",
-                }
-                for col, dtype in new_strat_columns.items():
-                    if col not in strat_columns:
-                        try:
-                            cursor.execute(f"ALTER TABLE stock_strategies ADD COLUMN {col} {dtype}")
-                            if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
-                                config.console.print(f"[dim green][DB] stock_strategies 테이블에 {col} 컬럼 추가 완료[/dim green]")
-                        except Exception as e:
-                            #  화면에만 찍으면 헤드리스 운영(라즈베리파이)에서는 아무도 못 본다.
-                            #  컬럼이 없으면 그 컬럼을 읽는 조회가 **영영** 실패하므로 반드시 남긴다.
-                            logger.error(f"[DB] stock_strategies 컬럼 추가 실패({col}): {e}")
-                            config.console.print(f"[red][DB] stock_strategies 컬럼 추가 실패({col}): {e}[/red]")
+                })
 
                 # [추가] trailing_stops 컬럼 확장 — 코퍼레이트 액션(액면분할·무상증자) 탐지용.
                 #  최고가는 원시 가격이라 분할이 일어나면 조정 전 값으로 남는다. 직전 주기의
                 #  매입평균단가·매입금액을 함께 들고 있어야 '평단만 바뀌고 매입금액은 그대로'인
                 #  분할을 매수·매도와 구분할 수 있다(engine.detect_corporate_action 주석 참조).
-                cursor.execute("PRAGMA table_info(trailing_stops)")
-                ts_columns = [info[1] for info in cursor.fetchall()]
                 # [추가] pyramid_count — 증액 횟수를 자유 텍스트 사유가 아니라 여기 둔다.
                 #  (사유 파싱은 기록이 유실되면 0으로 읽혀 상한을 넘겨 증액된다)
-                if "pyramid_count" not in ts_columns:
-                    try:
-                        cursor.execute("ALTER TABLE trailing_stops ADD COLUMN pyramid_count INTEGER DEFAULT 0")
-                        if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
-                            config.console.print("[dim green][DB] trailing_stops 테이블에 pyramid_count 컬럼 추가 완료[/dim green]")
-                    except Exception as e:
-                        #  화면에만 찍으면 헤드리스 운영(라즈베리파이)에서는 아무도 못 본다.
-                        #  컬럼이 없으면 그 컬럼을 읽는 조회가 **영영** 실패하므로 반드시 남긴다.
-                        logger.error(f"[DB] trailing_stops 컬럼 추가 실패(pyramid_count): {e}")
-                        config.console.print(f"[red][DB] trailing_stops 컬럼 추가 실패(pyramid_count): {e}[/red]")
-                for col in ("ref_avg_price", "ref_pchs_amt"):
-                    if col not in ts_columns:
-                        try:
-                            cursor.execute(f"ALTER TABLE trailing_stops ADD COLUMN {col} REAL DEFAULT 0.0")
-                            if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
-                                config.console.print(f"[dim green][DB] trailing_stops 테이블에 {col} 컬럼 추가 완료[/dim green]")
-                        except Exception as e:
-                            #  화면에만 찍으면 헤드리스 운영(라즈베리파이)에서는 아무도 못 본다.
-                            #  컬럼이 없으면 그 컬럼을 읽는 조회가 **영영** 실패하므로 반드시 남긴다.
-                            logger.error(f"[DB] trailing_stops 컬럼 추가 실패({col}): {e}")
-                            config.console.print(f"[red][DB] trailing_stops 컬럼 추가 실패({col}): {e}[/red]")
+                failed += self._add_missing_columns(cursor, "trailing_stops", (
+                    ("pyramid_count", "INTEGER DEFAULT 0"),
+                    ("ref_avg_price", "REAL DEFAULT 0.0"),
+                    ("ref_pchs_amt", "REAL DEFAULT 0.0")))
 
-                # reserved_orders 테이블 컬럼 확장 (fail_reason 추가)
-                cursor.execute("PRAGMA table_info(reserved_orders)")
-                ro_columns = [info[1] for info in cursor.fetchall()]
-                if "fail_reason" not in ro_columns:
-                    try:
-                        cursor.execute("ALTER TABLE reserved_orders ADD COLUMN fail_reason TEXT")
-                        if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
-                            config.console.print("[dim green][DB] reserved_orders 테이블에 fail_reason 컬럼 추가 완료[/dim green]")
-                    except Exception as e:
-                        #  화면에만 찍으면 헤드리스 운영(라즈베리파이)에서는 아무도 못 본다.
-                        #  컬럼이 없으면 그 컬럼을 읽는 조회가 **영영** 실패하므로 반드시 남긴다.
-                        logger.error(f"[DB] reserved_orders 컬럼 추가 실패(fail_reason): {e}")
-                        config.console.print(f"[red][DB] reserved_orders 컬럼 추가 실패(fail_reason): {e}[/red]")
-
-                if "expire_dt" not in ro_columns:
-                    try:
-                        cursor.execute("ALTER TABLE reserved_orders ADD COLUMN expire_dt TEXT")
-                        if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
-                            config.console.print("[dim green][DB] reserved_orders 테이블에 expire_dt 컬럼 추가 완료[/dim green]")
-                    except Exception as e:
-                        #  화면에만 찍으면 헤드리스 운영(라즈베리파이)에서는 아무도 못 본다.
-                        #  컬럼이 없으면 그 컬럼을 읽는 조회가 **영영** 실패하므로 반드시 남긴다.
-                        logger.error(f"[DB] reserved_orders 컬럼 추가 실패(expire_dt): {e}")
-                        config.console.print(f"[red][DB] reserved_orders 컬럼 추가 실패(expire_dt): {e}[/red]")
-
-                #  [추가 2026-09-06] 발동 시각. odno 는 **당일 채번**이라 그 값만으로는
+                # reserved_orders 테이블 컬럼 확장
+                #  [추가 2026-09-06] triggered_at: 발동 시각. odno 는 **당일 채번**이라 그 값만으로는
                 #   유일하지 않은데([[odno-daily-reset]]), 예약 주문 행은 발동 뒤에도 계속
                 #   남아 있어 몇 주 전 TRIGGERED 행이 오늘 체결의 '예약 주문'으로 잡혔다.
                 #   created_at 으로는 가를 수 없다 — 지난주에 걸어 둔 예약이 오늘 발동할
                 #   수 있어 생성일과 발동일이 다르다. 발동한 날을 따로 적는다.
-                if "triggered_at" not in ro_columns:
-                    try:
-                        cursor.execute("ALTER TABLE reserved_orders ADD COLUMN triggered_at TIMESTAMP")
-                        if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
-                            config.console.print("[dim green][DB] reserved_orders 테이블에 triggered_at 컬럼 추가 완료[/dim green]")
-                    except Exception as e:
-                        #  화면에만 찍으면 헤드리스 운영(라즈베리파이)에서는 아무도 못 본다.
-                        #  컬럼이 없으면 그 컬럼을 읽는 조회가 **영영** 실패하므로 반드시 남긴다.
-                        logger.error(f"[DB] reserved_orders 컬럼 추가 실패(triggered_at): {e}")
-                        config.console.print(f"[red][DB] reserved_orders 컬럼 추가 실패(triggered_at): {e}[/red]")
+                #  composite_json: 복합(AND) 조건 예약 주문의 서브 조건 리스트(JSON)
+                failed += self._add_missing_columns(cursor, "reserved_orders", (
+                    ("fail_reason", "TEXT"),
+                    ("expire_dt", "TEXT"),
+                    ("triggered_at", "TIMESTAMP"),
+                    ("lowest_price", "REAL DEFAULT 0.0"),
+                    ("highest_price", "REAL DEFAULT 0.0"),
+                    ("composite_json", "TEXT")))
 
-                if "lowest_price" not in ro_columns:
-                    try:
-                        cursor.execute("ALTER TABLE reserved_orders ADD COLUMN lowest_price REAL DEFAULT 0.0")
-                        if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
-                            config.console.print("[dim green][DB] reserved_orders 테이블에 lowest_price 컬럼 추가 완료[/dim green]")
-                    except Exception as e:
-                        #  화면에만 찍으면 헤드리스 운영(라즈베리파이)에서는 아무도 못 본다.
-                        #  컬럼이 없으면 그 컬럼을 읽는 조회가 **영영** 실패하므로 반드시 남긴다.
-                        logger.error(f"[DB] reserved_orders 컬럼 추가 실패(lowest_price): {e}")
-                        config.console.print(f"[red][DB] reserved_orders 컬럼 추가 실패(lowest_price): {e}[/red]")
-
-                if "highest_price" not in ro_columns:
-                    try:
-                        cursor.execute("ALTER TABLE reserved_orders ADD COLUMN highest_price REAL DEFAULT 0.0")
-                        if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
-                            config.console.print("[dim green][DB] reserved_orders 테이블에 highest_price 컬럼 추가 완료[/dim green]")
-                    except Exception as e:
-                        #  화면에만 찍으면 헤드리스 운영(라즈베리파이)에서는 아무도 못 본다.
-                        #  컬럼이 없으면 그 컬럼을 읽는 조회가 **영영** 실패하므로 반드시 남긴다.
-                        logger.error(f"[DB] reserved_orders 컬럼 추가 실패(highest_price): {e}")
-                        config.console.print(f"[red][DB] reserved_orders 컬럼 추가 실패(highest_price): {e}[/red]")
-
-                # [추가] 복합(AND) 조건 예약 주문용 컬럼 (서브 조건 리스트를 JSON으로 저장)
-                if "composite_json" not in ro_columns:
-                    try:
-                        cursor.execute("ALTER TABLE reserved_orders ADD COLUMN composite_json TEXT")
-                        if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
-                            config.console.print("[dim green][DB] reserved_orders 테이블에 composite_json 컬럼 추가 완료[/dim green]")
-                    except Exception as e:
-                        #  화면에만 찍으면 헤드리스 운영(라즈베리파이)에서는 아무도 못 본다.
-                        #  컬럼이 없으면 그 컬럼을 읽는 조회가 **영영** 실패하므로 반드시 남긴다.
-                        logger.error(f"[DB] reserved_orders 컬럼 추가 실패(composite_json): {e}")
-                        config.console.print(f"[red][DB] reserved_orders 컬럼 추가 실패(composite_json): {e}[/red]")
+                self._stamp_schema_version(cursor, failed)
 
                 conn.commit()
             except Exception as e:
@@ -808,6 +696,56 @@ class DBManager:
                 # [수정] 예외 발생 시에도 연결을 확실히 닫아 ResourceWarning(unclosed database) 방지
                 if conn is not None:
                     conn.close()
+
+    def _add_missing_columns(self, cursor, table, columns):
+        """table 에 없는 열만 더한다(멱등 — 매 기동 돈다). 더하지 못한 열을 'table.col' 목록으로 돌려준다.
+
+        columns 는 (열, 정의) 쌍의 나열이나 {열: 정의}. 종전에는 테이블마다 같은 검사·추가·실패 기록을 손으로
+        되풀이했고(일곱 곳), 그중 자산 이력·신호 원장 두 곳은 실패 기록 없이 예외로 뒤 테이블의 열 추가까지 멈췄다.
+        """
+        if isinstance(columns, dict):
+            columns = columns.items()
+        have = {info[1] for info in cursor.execute(f"PRAGMA table_info({table})").fetchall()}
+        failed = []
+        for col, ddl in columns:
+            if col in have:
+                continue
+            try:
+                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+            except Exception as e:
+                #  화면에만 찍으면 헤드리스 운영(라즈베리파이)에서는 아무도 못 본다.
+                #  컬럼이 없으면 그 컬럼을 읽는 조회가 **영영** 실패하므로 반드시 남긴다.
+                logger.error(f"[DB] {table} 컬럼 추가 실패({col}): {e}")
+                config.console.print(f"[red][DB] {table} 컬럼 추가 실패({col}): {e}[/red]")
+                failed.append(f"{table}.{col}")
+                continue
+            logger.info(f"[DB] {table} 컬럼 추가: {col}")
+            if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
+                config.console.print(f"[dim green][DB] {table} 테이블에 {col} 컬럼 추가[/dim green]")
+        return failed
+
+    def _stamp_schema_version(self, cursor, failed):
+        """기준 스키마를 다 갖춘 파일에 세대 번호(SCHEMA_VERSION)를 남긴다. 번호는 오르기만 한다.
+
+        · 파일 번호가 코드보다 크면 더 새 코드가 쓰던 파일이다(코드를 되돌렸거나 다른 기기의 DB 를 옮겨 왔다).
+          낮추지 않고 경고만 남긴다 — 옛 코드는 모르는 열을 읽지 않을 뿐 대개 그대로 돈다. 다만 그 사이 새 코드가
+          테이블을 다시 만든 적이 있으면(예: 신호 원장 PK 변경) 옛 코드의 쓰기가 실패할 수 있다.
+        · 열 추가가 하나라도 실패했으면 올리지 않는다 — 덜 갖춘 파일에 '갖췄다'는 번호를 붙이지 않는다. 실패는
+          운용자에게 닿는 창구(_note_write_failure → 주 루프의 DB 쓰기 실패 알림)로 올린다. 다음 기동이 다시 메운다.
+        """
+        ver = cursor.execute("PRAGMA user_version").fetchone()[0]
+        if ver > SCHEMA_VERSION:
+            msg = (f"[DB] 이 DB 파일은 더 새 코드의 스키마입니다(파일 {ver} > 코드 {SCHEMA_VERSION}) — "
+                   f"코드를 되돌렸거나 다른 기기의 DB 를 옮겨 왔습니다: {self.db_path}")
+            logger.warning(msg)
+            if self._is_screen_output_allowed() and config.SCREEN_DEBUG_LEVEL != "OFF":
+                config.console.print(f"[yellow]{msg}[/yellow]")
+        if failed:
+            self._note_write_failure("DB 초기화", self.db_path, f"컬럼 추가 실패 {', '.join(failed)}")
+            return
+        if ver < SCHEMA_VERSION:
+            cursor.execute(f"PRAGMA user_version = {int(SCHEMA_VERSION)}")
+            logger.info(f"[DB] 스키마 번호 {ver} → {SCHEMA_VERSION}: {self.db_path}")
 
     def _enqueue_journal(self, cursor, trade):
         """매매일지 웹서버 전송 대기열에 적재 (호출자의 트랜잭션 안에서 실행).

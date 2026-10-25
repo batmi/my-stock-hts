@@ -253,7 +253,7 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 # 3) 의존성 설치
 pip install -r requirements.txt
 pip install -r requirements-dev.txt   # 개발·테스트까지 할 경우
-python tools/core_checks.py           # 빠른 핵심 검사(판단·주문·설정 불변식·자동매매 주기 재생, 약 20초) — 커밋 전에 돌린다
+python tools/core_checks.py           # 빠른 핵심 검사(판단·주문·설정 불변식·DB 스키마·자동매매 주기 재생, 약 20초) — 커밋 전에 돌린다
 python -m pytest                      # 전체 회귀 검사(시간 의존 테스트 포함, 필요할 때)
 
 # 4) 실행
@@ -653,6 +653,7 @@ my-stock-hts/
 **DB 백업과 복원**
 - 앱이 떠 있는 동안 **자동매매 여부와 무관하게** 하루 1개 `db/backups/<원장>_YYYYMMDD.db` 를 뜹니다(기동 직후와 날짜가 바뀔 때, SQLite backup API로 WAL까지 일관된 스냅샷, 최근 7개 보존, 실패하면 10분마다 재시도하고 텔레그램으로 하루 한 번 알림). 평단·트레일링 최고가·손절 기준·매매 기록이 이 파일에만 있습니다.
 - `--no-bot` 은 봇 명령 수신과 **정기 안내**(휴장·장전 브리핑·공시·일정·시장 정지)만 끕니다. 즉시 알림·생존 신호(하트비트)·원장 백업·수능일 재수집은 그대로 돕니다 — 같은 봇 토큰을 쓰는 두 기기에서 정기 안내가 두 번 가지 않게 하려는 옵션입니다.
+- **스키마 번호** — 원장 DB 파일 머리(`PRAGMA user_version`)에 스키마 세대 번호를 남깁니다. 빠진 테이블·컬럼은 지금처럼 기동할 때마다 채우고, 다 채운 파일에만 현재 번호를 붙입니다(채우지 못하면 번호를 올리지 않고 DB 쓰기 실패 알림으로 알립니다 — 다음 기동이 다시 채웁니다). 파일 번호가 코드보다 크면(코드를 되돌렸거나 다른 기기의 DB를 옮겨 온 경우) 번호를 낮추지 않고 로그에 경고합니다. 스키마를 바꾸면 `modules/db_manager.py` 의 `SCHEMA_VERSION` 을 올리고 `DB_SCHEMA_UPDATE=1 python -m pytest tests/test_db_schema.py -o addopts=` 로 기록을 다시 만듭니다. `tests/test_db_schema.py`(핵심 검사)가 번호를 올리지 않은 변경, 실제 옛 DB(`tests/fixtures/db_schema_history/` — 운용 기기 백업의 DDL)를 지금 코드로 열 때 생기지 않는 컬럼, 스키마에 없는 컬럼에 쓰는 SQL을 잡습니다.
 - 기동 시 `PRAGMA integrity_check` 가 실패하면 자동매매를 시작하지 않습니다. 복원 절차: ① 앱을 모두 종료 → ② `db/trade_history.db` 와 `-wal`·`-shm` 사이드카를 옮겨 두고 → ③ `cp db/backups/trade_history_<날짜>.db db/trade_history.db` → ④ 재기동(빠진 컬럼은 마이그레이션이 자동으로 채웁니다) → ⑤ 매매일지 웹을 쓰면 **재동기화** 필요(10절). 2026-09-20 복원 리허설: 백업본 무결성 ok, 기동·읽기·쓰기 정상.
 
 ---

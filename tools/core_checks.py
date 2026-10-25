@@ -62,6 +62,7 @@ CORE_TESTS = (
     "tests/test_python_min_compat.py",
     "tests/test_pandas_version_semantics.py",
     "tests/test_run_manifest.py",
+    "tests/test_db_schema.py",
     # 감사 도구 규약(씨드 안내·공통 구간 분할)과 경계 실험 도구
     "tests/test_audit_seed_notice.py",
     "tests/test_audit_common_conventions.py",
