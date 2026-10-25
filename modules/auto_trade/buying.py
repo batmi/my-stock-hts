@@ -574,7 +574,11 @@ class TraderBuyingMixin:
 
     #  손실 청산 계열의 사유 접두어. 이 사유로 나간 종목은 같은 날 그 가격 위에서 되사지 않는다.
     #  (익절·반익절·트레일링·시간청산은 제외 — 추세가 살아 있는 상태의 청산이라 재진입이 정당하다)
-    _STOP_EXIT_PREFIXES = ("손절", "본전청산")
+    #  'ATR손절'을 따로 둔다 — 매도 실행부(selling)가 ATR 이 적용된 손절의 사유를 '손절(…)'에서
+    #  'ATR손절(…)'로 바꿔 적으므로 '손절' 접두어에 걸리지 않는다. 빠져 있던 동안(2026-08-05 게이트
+    #  도입 ~ 2026-10-25) 기본 손절 방식(ATR)의 손절에는 이 게이트가 한 번도 걸리지 않았다.
+    #  백테스트(portfolio_backtest reentry_block)는 처음부터 셋을 모두 본다.
+    _STOP_EXIT_PREFIXES = ("손절", "ATR손절", "본전청산")
 
     @staticmethod
     def _collect_stop_exit_prices(today_trades):

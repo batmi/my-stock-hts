@@ -55,6 +55,38 @@ def test_break_even_exit_is_treated_as_stop():
     assert AutoTrader._collect_stop_exit_prices(trades) == {'035420': 231000.0}
 
 
+def test_atr_stop_exit_is_treated_as_stop():
+    """ATR 손절도 손절이다 — 매도 실행부가 사유를 '손절(…)'에서 'ATR손절(…)'로 바꿔 적는다.
+
+    [2026-10-25] 접두어가 ('손절', '본전청산') 뿐이라 기본 손절 방식(ATR)의 손절에는 이 게이트가
+    한 번도 걸리지 않았다(2026-08-05 도입 이후). 주기 재생(buy_paths)에서 아침 50,000원에 ATR 손절된
+    종목을 같은 날 50,200원에 되사는 것으로 드러났다. 개별 룰 표기가 붙은 사유도 같다.
+    """
+    trades = [
+        {'time': '2026-10-21 10:00:00', 'type': 'sell(AUTO)', 'code': '101040', 'price': '50000',
+         'reason': 'ATR손절(-20.0%) [청산선 ATR:-3.6%(60,343) TS:+5%(65,895)→-5%(62,600)]'},
+        {'time': '2026-10-21 10:00:00', 'type': 'sell(AUTO)', 'code': '101020', 'price': '33000',
+         'reason': 'ATR손절(-7.1%) [개별 룰 적용]'},
+    ]
+    assert AutoTrader._collect_stop_exit_prices(trades) == {'101040': 50000.0, '101020': 33000.0}
+
+
+def test_stop_exit_prefixes_match_backtest_reentry_block():
+    """실매매와 백테스트(reentry_block)가 같은 사유를 손절로 본다.
+
+    백테스트는 처음부터 'ATR손절'을 넣고 있었고 실매매만 빠져 있었다 — 감사(tools/audit_reentry_block)가
+    잰 게이트와 실매매가 막는 범위가 달랐다. 한쪽만 바뀌면 다시 갈라진다.
+    """
+    import inspect
+    import re as _re
+    from modules import portfolio_backtest
+    src = inspect.getsource(portfolio_backtest.run_portfolio)
+    m = _re.search(r'reentry_block and str\(reason\)\.startswith\(\(([^)]*)\)\)', src)
+    assert m, "백테스트의 손절 사유 판정 자리를 찾지 못했다 — 옮겼다면 이 가드도 옮길 것"
+    backtest = {s.strip().strip('"\'') for s in m.group(1).split(',') if s.strip()}
+    assert backtest == set(AutoTrader._STOP_EXIT_PREFIXES), (backtest, AutoTrader._STOP_EXIT_PREFIXES)
+
+
 def test_buy_side_trades_are_ignored():
     trades = [{'time': '2026-08-05 09:00:00', 'type': '매수(AUTO)', 'code': '035420',
                'price': '230500', 'reason': '손절(-0.2%)'}]

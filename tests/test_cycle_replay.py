@@ -225,6 +225,7 @@ def test_매수_재생은_매수_경로를_실제로_지난다(buy_trace):
                           ("피라미딩 중단: 재생증액A - 주문 접수 여부를 확인하지 못했습니다", logs),
                           ("[장마감] 피라미딩 신호 감지 (주문 미전송): 재생증액A - 피라미딩 2차", logs),
                           ("[분석스킵] 재생고정손절(101030): 당일 손절가 재진입 불가", logs),     # 재진입 방어
+                          ("[분석스킵] 재생ATR손절(101040): 당일 손절가 재진입 불가 (현재가 50,100 >= 손절가 50,000)", logs),
                           ("[분석스킵] 재생ATR손절(101040): 당일 재진입 불가 (체결강도 135.0% <= 기존매수 150.0%)", logs),
                           ("[당일 재진입(기존 150.0% 경신)]", logs),
                           ("[상관관계 보류] (보유·미체결 재생증액A 상관계수: 1.00", logs),        # 후보 게이트
@@ -256,6 +257,10 @@ def test_매수_재생은_매수_경로를_실제로_지난다(buy_trace):
     assert ledger["101160"][11] == 1 and ledger["101160"][12] == 1, ledger["101160"]
     held = {p["code"] for p in buy_trace["positions"]}
     assert held == {"101010", "101020", "101040"}, held        # 재생유실은 접수되지 않았다
+    #  ATR 손절도 '손절가보다 비싸게 되사지 않는다'에 걸린다 — 되산 값은 그날 손절가(50,000) 아래다.
+    rebuy = [f for f in buy_trace["fills"] if f["code"] == "101040" and f["type"] == "매수"
+             and f["time"].startswith("2026-10-21")]
+    assert len(rebuy) == 1 and rebuy[0]["price"] < 50000, rebuy
     state = buy_trace["state"]
     assert state["pending_restore_ok"] is True and state["pending_orders"] == []
     for name, lines in buy_trace["screens"].items():
