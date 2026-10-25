@@ -194,3 +194,34 @@ def test_rule_stop_loss_actually_triggers(df):
 
     assert res is not None
     assert res['action'] == 'sell', f"손절률 -0.1%를 넘겼는데 청산 판정이 아니다: {res.get('reason')}"
+
+
+def test_룰을_기본값_있는_get_으로_읽는_자리가_없다():
+    """[2026-10-25] 매수·증액의 손절률이 `rule.get('stop_loss', sl_rate)` 였다 — NULL 열에 None 이 들어가, ATR 손절을 끈
+    룰이면 전역 손절률로 돌아가지 않고 '손절 기준 없음'으로 진입·증액을 막았다. 룰 값은 engine.rule_value 로 읽는다.
+    (이름에 rule 이 든 변수만 본다 — 룰 행이 아닌 dict 의 기본값 조회까지 막지 않는다.)"""
+    import os
+    import re
+    root = os.path.join(os.path.dirname(__file__), os.pardir)
+    pat = re.compile(r"\b\w*rule\w*\.get\(\s*['\"][a-z_]+['\"]\s*,")
+    hits, seen = [], 0
+    for base in ("modules", "api", "core", "brokers"):
+        for dirpath, _dirs, files in os.walk(os.path.join(root, base)):
+            for f in files:
+                if not f.endswith(".py"):
+                    continue
+                p = os.path.join(dirpath, f)
+                for i, line in enumerate(open(p, encoding="utf-8"), 1):
+                    code = line.split("#")[0]
+                    if "rule_value(" in code:
+                        seen += 1
+                    if pat.search(code):
+                        hits.append(f"{os.path.relpath(p, root)}:{i}")
+    assert seen >= 3, "rule_value 호출을 거의 못 찾았다 — 경로가 바뀌었으면 이 가드를 고칠 것"
+    assert not hits, f"NULL 열에 None 을 넣는 룰 기본값 조회: {hits}"
+
+
+def test_손절률이_NULL_인_룰은_전역_손절률로_되돌아간다():
+    from modules.auto_trade.engine import rule_value
+    rule = dict(_RULE_ONLY_STOP_LOSS, stop_loss=None, use_atr_stop=0)
+    assert rule_value(rule, 'stop_loss', config.SELL_STRATEGY["STOP_LOSS_RATE"]) == config.SELL_STRATEGY["STOP_LOSS_RATE"]

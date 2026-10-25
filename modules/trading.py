@@ -911,7 +911,8 @@ def send_order(order_type):
                 # 개별 룰 확인
                 custom_rule = db_manager.db.get_stock_strategy(stock_code)
                 if custom_rule:
-                    sl_rate = custom_rule.get('stop_loss', sl_rate)
+                    #  룰의 NULL(지정 안 함)은 전역값이다 — custom_rule.get(키, 기본값)은 NULL 에 None 을 준다(engine.rule_value).
+                    sl_rate = auto_trade.rule_value(custom_rule, 'stop_loss', sl_rate)
                 
                 final_sl_rate = sl_rate
                 label = "고정"

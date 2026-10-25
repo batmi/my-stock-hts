@@ -242,7 +242,9 @@ class TraderBuyingMixin:
             use_atr_stop = config.SELL_STRATEGY.get("USE_ATR_STOP", True)
             atr_mult = config.SELL_STRATEGY.get("ATR_STOP_MULTIPLIER", 2.0)
             if rule:
-                sl_rate = rule.get('stop_loss', sl_rate)
+                #  룰의 NULL(지정 안 함)은 전역값이다 — rule.get(키, 기본값)은 NULL 에 None 을 줘, ATR 손절을 끈 룰에서
+                #  '손절 기준 없음'으로 증액을 막았다(engine.rule_value 주석).
+                sl_rate = _pkg().rule_value(rule, 'stop_loss', sl_rate)
                 if rule.get('use_atr_stop') is not None:
                     use_atr_stop = bool(rule['use_atr_stop'])
                 if rule.get('atr_stop_multiplier') is not None:
@@ -1284,7 +1286,9 @@ class TraderBuyingMixin:
 
             if cand.get('rule'):
                 rule = cand['rule']
-                sl_rate = rule.get('stop_loss', sl_rate)
+                #  룰의 NULL(지정 안 함)은 전역값이다 — rule.get(키, 기본값)은 NULL 에 None 을 줘, ATR 손절을 끈 룰에서
+                #  '손절 기준 없음'으로 진입을 막았다(engine.rule_value 주석).
+                sl_rate = _pkg().rule_value(rule, 'stop_loss', sl_rate)
                 if rule.get('use_atr_stop') is not None:
                     use_atr_stop = bool(rule['use_atr_stop'])
                 if rule.get('atr_stop_multiplier') is not None:
