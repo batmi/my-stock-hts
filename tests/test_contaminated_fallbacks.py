@@ -78,13 +78,15 @@ def test_both_buy_paths_share_the_guard_and_sell_paths_do_not():
     assert "contaminated_chart_reason(" in src_buy
     assert "contaminated_chart_reason(" in src_pyr
     #  [2026-10-25] 매수(정의·신규 매수·피라미딩)는 C1 5단계로 buying.py, 청산은 4단계로 selling.py 에 있다 —
-    #   trader 하나만 세면 0 이 나오고, 청산 쪽에 새로 생긴 호출은 아예 보지 못한다. AutoTrader 조각 전부를 센다.
-    from modules.auto_trade import account_sync, buying, market_risk, reporting, selling
+    #   trader 하나만 세면 0 이 나오고, 청산 쪽에 새로 생긴 호출은 아예 보지 못한다. AutoTrader 조각 전부를 센다
+    #   (주기 제어는 6단계로 lifecycle·loop).
+    from modules.auto_trade import account_sync, buying, lifecycle, loop, market_risk, reporting, selling
     counts = {m.__name__: inspect.getsource(m).count("contaminated_chart_reason(")
-              for m in (trader, buying, selling, account_sync, market_risk, reporting)}
+              for m in (trader, buying, selling, account_sync, market_risk, reporting, lifecycle, loop)}
     assert counts == {"modules.auto_trade.trader": 0, "modules.auto_trade.buying": 3,
                       "modules.auto_trade.selling": 0, "modules.auto_trade.account_sync": 0,
-                      "modules.auto_trade.market_risk": 0, "modules.auto_trade.reporting": 0}, \
+                      "modules.auto_trade.market_risk": 0, "modules.auto_trade.reporting": 0,
+                      "modules.auto_trade.lifecycle": 0, "modules.auto_trade.loop": 0}, \
         f"정의 + 매수 + 피라미딩 세 곳 밖(예: 청산)에 쓰이면 안 된다: {counts}"
 
 

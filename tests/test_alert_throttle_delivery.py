@@ -79,7 +79,8 @@ def trader():
 
 
 def _db_alert(monkeypatch, trader, delivered, count=3):
-    from modules.auto_trade import trader as tr
+    #  DB 쓰기 실패 알림(_check_db_write_failures)은 C1 6단계로 loop.py 에 있다.
+    from modules.auto_trade import loop as tr
 
     sent = []
     monkeypatch.setattr(tr.db_manager.db, 'get_write_failures',

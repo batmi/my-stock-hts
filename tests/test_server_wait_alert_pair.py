@@ -12,7 +12,8 @@ import time
 import pytest
 
 from modules.auto_trade import AutoTrader
-from modules.auto_trade import trader as tr
+#  서버 복구 대기(_wait_for_server_recovery)는 C1 6단계로 loop.py 에 있다 — 그 모듈의 time·api 를 바꿔 끼운다.
+from modules.auto_trade import loop as tr
 
 
 @pytest.fixture

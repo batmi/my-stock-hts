@@ -131,6 +131,10 @@ def test_정상_저장은_True다(monkeypatch, tmp_path):
     assert common.load_daily_initial_asset(KEY) == 10_000_000
 
 
+#  AutoTrader 를 이루는 모듈 — 트레이더 본체와 C1 로 나눈 믹스인들.
+_AUTOTRADER_PIECES = ("trader", "reporting", "market_risk", "account_sync", "selling", "buying", "lifecycle", "loop")
+
+
 def test_호출부가_실패를_사용자에게_알린다(monkeypatch, tmp_path):
     """'갱신 및 저장'이라고 찍어 놓고 저장이 안 된 상태를 막는다."""
     import ast
@@ -138,8 +142,9 @@ def test_호출부가_실패를_사용자에게_알린다(monkeypatch, tmp_path)
 
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     bare, seen = [], 0
-    #  [2026-10-25] 계좌 감시(첫 주기 기준선 저장)는 C1 3단계로 account_sync.py 에 있다 — 두 파일을 다 본다.
-    for rel in ("modules/auto_trade/trader.py", "modules/auto_trade/account_sync.py"):
+    #  [2026-10-25] 계좌 감시(첫 주기 기준선 저장)는 C1 3단계로 account_sync.py, 기동(initialize)·날짜 변경(_run_loop)은
+    #   6단계로 lifecycle.py·loop.py 에 있다 — AutoTrader 조각을 모두 본다(또 옮겨져도 빗나가지 않게).
+    for rel in [f"modules/auto_trade/{m}.py" for m in _AUTOTRADER_PIECES]:
         tree = ast.parse(open(os.path.join(root, rel), encoding="utf-8").read())
         for n in ast.walk(tree):
             if isinstance(n, ast.Call) and ast.unparse(n.func).endswith("save_daily_initial_asset"):
@@ -167,13 +172,13 @@ def _baseline_write_sites():
     """save_daily_initial_asset 을 부르는 자리와, 그 자리가 검사를 지나는지.
 
     [2026-10-25] 계좌 감시(_monitor_account_status — 첫 주기 기준선)는 C1 3단계로 account_sync 에
-     있다. 종전에는 trader 모듈만 훑어서, 옮긴 뒤로는 그 자리를 보지 않은 채 통과했다 — 둘 다 본다.
+     있다. 종전에는 trader 모듈만 훑어서, 옮긴 뒤로는 그 자리를 보지 않은 채 통과했다. 기동(initialize)·날짜 변경
+     (_run_loop)도 6단계로 lifecycle·loop 에 있다 — AutoTrader 조각을 모두 본다.
     """
-    import modules.auto_trade.account_sync as A
-    import modules.auto_trade.trader as T
+    import importlib
 
     calls = []
-    for mod in (T, A):
+    for mod in [importlib.import_module(f"modules.auto_trade.{m}") for m in _AUTOTRADER_PIECES]:
         tree = ast.parse(inspect.getsource(mod))
         for fn in ast.walk(tree):
             if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):

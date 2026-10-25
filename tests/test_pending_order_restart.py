@@ -113,7 +113,7 @@ def test_initialize_actually_runs_the_restore(trader):
     with patch('modules.auto_trade.api.get_domestic_balance', return_value=([], summary)), \
          patch('modules.auto_trade.db_manager.db.get_all_trailing_stops', return_value={}), \
          patch('modules.auto_trade.db_manager.db.get_all_half_tp', return_value=set()), \
-         patch('modules.auto_trade.trader.load_daily_initial_asset', return_value=1_000_000), \
+         patch('modules.auto_trade.lifecycle.load_daily_initial_asset', return_value=1_000_000), \
          patch.object(trader.order_manager, 'restore_pending_orders',
                       return_value=True) as restore:
         assert trader.initialize() is True
@@ -130,7 +130,7 @@ def test_initialize_holds_buys_when_the_restore_fails(trader):
     with patch('modules.auto_trade.api.get_domestic_balance', return_value=([], summary)), \
          patch('modules.auto_trade.db_manager.db.get_all_trailing_stops', return_value={}), \
          patch('modules.auto_trade.db_manager.db.get_all_half_tp', return_value=set()), \
-         patch('modules.auto_trade.trader.load_daily_initial_asset', return_value=1_000_000), \
+         patch('modules.auto_trade.lifecycle.load_daily_initial_asset', return_value=1_000_000), \
          patch.object(trader.order_manager, 'restore_pending_orders', return_value=False):
         trader.initialize()
     assert trader.pending_restore_ok is False, \

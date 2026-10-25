@@ -112,7 +112,7 @@ def test_재시작_성공은_그대로_알린다(bot):
 
 def test_실제_잠금_거부가_사유를_남긴다(bot, monkeypatch):
     """위 테스트는 스텁이 사유를 심는다 — 사유를 만드는 쪽도 함께 못 박는다."""
-    from modules.auto_trade import trader as tr
+    from modules.auto_trade import lifecycle as tr     # 중복 실행 잠금(_acquire_instance_lock)은 C1 6단계로 lifecycle.py
 
     class _HeldLock:
         holder = "pid=1234 account=1111"
@@ -135,7 +135,7 @@ def test_실제_잠금_거부가_사유를_남긴다(bot, monkeypatch):
 
 def test_잠금에_성공하면_사유가_비워진다(bot, monkeypatch):
     """앞 시도의 사유가 남아 다음 성공을 오염시키면 안 된다."""
-    from modules.auto_trade import trader as tr
+    from modules.auto_trade import lifecycle as tr     # 중복 실행 잠금(_acquire_instance_lock)은 C1 6단계로 lifecycle.py
 
     class _FreeLock:
         holder = ""

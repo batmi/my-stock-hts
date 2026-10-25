@@ -45,7 +45,7 @@ def _run(trader, balance, checked=None, rules=None):
     with patch('modules.auto_trade.trader.api.is_holiday_today', return_value=False), \
          patch('modules.auto_trade.trader.api.krx_last_settled_day', return_value=TODAY), \
          patch('modules.auto_trade.trader.api.get_domestic_balance', return_value=balance), \
-         patch('modules.auto_trade.trader.db_manager.db.get_all_stock_strategies',
+         patch('modules.db_manager.db.get_all_stock_strategies',
                return_value=(rules if rules is not None else [])), \
          patch('modules.auto_trade.selling.get_restricted_stocks', return_value={}), \
          patch.object(config, 'AFTER_HOURS_SELL_ALERT', True, create=True), \

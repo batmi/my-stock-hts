@@ -233,7 +233,7 @@ def _closing(trader, settled=TODAY, holiday=False, ok=True):
         def now(cls, tz=None):
             return _dt(2026, 8, 28, 15, 45)
 
-    with patch.object(at_pkg.trader, 'datetime', _Now), \
+    with patch.object(at_pkg.loop, 'datetime', _Now), \
          patch('modules.auto_trade.api.is_holiday_today', return_value=holiday), \
          patch('modules.auto_trade.api.krx_last_settled_day', return_value=settled), \
          patch('modules.paper_broker.snapshot_equity', return_value=ok) as snap:

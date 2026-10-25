@@ -158,7 +158,7 @@ def test_risk_scale_drawdown_level1(trader):
     # HWM 1000만, 현재 930만 → DD 7% → 1단계
     trader.current_total_asset = 9_300_000
     with _patch_regime_neutral(), \
-         patch('modules.auto_trade.trader.db_manager.db.get_max_daily_asset', return_value=10_000_000):
+         patch('modules.db_manager.db.get_max_daily_asset', return_value=10_000_000):
         trader._update_risk_scale()
     assert trader.risk_scale == pytest.approx(0.75)
 
@@ -171,7 +171,7 @@ def test_risk_scale_drawdown_level2(trader):
     # HWM 1000만, 현재 880만 → DD 12% → 2단계
     trader.current_total_asset = 8_800_000
     with _patch_regime_neutral(), \
-         patch('modules.auto_trade.trader.db_manager.db.get_max_daily_asset', return_value=10_000_000):
+         patch('modules.db_manager.db.get_max_daily_asset', return_value=10_000_000):
         trader._update_risk_scale()
     assert trader.risk_scale == pytest.approx(0.5)
 
@@ -185,7 +185,7 @@ def test_risk_scale_regime_and_drawdown_compound(trader):
                                       DD_LEVEL_1=5.0, DD_SCALE_1=0.75, DD_LEVEL_2=10.0, DD_SCALE_2=0.5)
     trader.current_total_asset = 8_800_000  # DD 12% → 0.5
     with _patch_regime("PendDown"), \
-         patch('modules.auto_trade.trader.db_manager.db.get_max_daily_asset', return_value=10_000_000):
+         patch('modules.db_manager.db.get_max_daily_asset', return_value=10_000_000):
         trader._update_risk_scale()
     assert trader.risk_scale == pytest.approx(0.6 * 0.5)
 
@@ -197,7 +197,7 @@ def test_risk_scale_no_drawdown(trader):
                                       DD_LEVEL_1=5.0, DD_SCALE_1=0.75)
     trader.current_total_asset = 9_800_000  # DD 2%
     with _patch_regime_neutral(), \
-         patch('modules.auto_trade.trader.db_manager.db.get_max_daily_asset', return_value=10_000_000):
+         patch('modules.db_manager.db.get_max_daily_asset', return_value=10_000_000):
         trader._update_risk_scale()
     assert trader.risk_scale == pytest.approx(1.0)
 
@@ -208,7 +208,7 @@ def test_drawdown_pct_uses_initial_asset_as_hwm_floor(trader):
     trader.initial_asset = 10_000_000
     trader.current_total_asset = 9_000_000
     trader._hwm_cache_date = None
-    with patch('modules.auto_trade.trader.db_manager.db.get_max_daily_asset', return_value=8_000_000):
+    with patch('modules.db_manager.db.get_max_daily_asset', return_value=8_000_000):
         dd = trader._get_account_drawdown_pct()
     # HWM = max(DB 800만, 시작 1000만) = 1000만 → DD = (1000-900)/1000 = 10%
     assert dd == pytest.approx(10.0)

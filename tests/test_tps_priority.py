@@ -80,7 +80,9 @@ def test_system_thread_prefixes_cover_trading_executors():
     for rel in ("modules/auto_trade/trader.py", "modules/auto_trade/engine.py",
                 "modules/auto_trade/conclusion.py", "modules/auto_trade/reporting.py",
                 "modules/auto_trade/selling.py",        # 매도 풀 at_sell(2026-10-25 C1 4단계)
-                "modules/auto_trade/buying.py"):        # 후보 풀 at_cand·cand_io·at_cand_io(같은 날 5단계)
+                "modules/auto_trade/buying.py",         # 후보 풀 at_cand·cand_io·at_cand_io(같은 날 5단계)
+                "modules/auto_trade/lifecycle.py",      # 기동 초기화 풀 at_init(같은 날 6단계)
+                "modules/auto_trade/loop.py"):
         src = open(os.path.join(root, rel), encoding="utf-8").read()
         prefixes += re.findall(r'thread_name_prefix="([^"]+)"', src)
 

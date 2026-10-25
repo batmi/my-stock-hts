@@ -209,7 +209,7 @@ def test_heartbeat_holdings_seeded_at_startup():
     갱신하면 휴장일 재기동 뒤 다음 거래일 09:00까지 0이다(2026-09-13 파이 실측).
     """
     import inspect
-    from modules.auto_trade import trader as tr
+    from modules.auto_trade import lifecycle as tr       # 기동 초기화(initialize)는 C1 6단계로 lifecycle.py
 
     src = inspect.getsource(tr)
     i = src.index("self.initial_holdings = holdings")

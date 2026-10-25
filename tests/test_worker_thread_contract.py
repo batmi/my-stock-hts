@@ -141,7 +141,9 @@ def test_검사기가_실제로_무언가를_보고_있다():
     found = [(os.path.relpath(p, ROOT), h)
              for p in _source_files() for h in _spawns_inside_account_context(p)]
     assert len(found) >= 5, f"AccountContext 안의 스레드 생성을 {len(found)}건밖에 못 찾았다"
-    assert any("trader.py" in rel for rel, _ in found)
+    #  기동 초기화 풀(at_init)은 C1 6단계로 lifecycle.py, 장 마감 브리핑 스레드는 주 루프(loop.py)에 있다.
+    assert any(rel.endswith(os.path.join("auto_trade", "lifecycle.py")) for rel, _ in found)
+    assert any(rel.endswith(os.path.join("auto_trade", "loop.py")) for rel, _ in found)
 
 
 def test_먼저_고쳐진_풀들이_되돌아가지_않았다():

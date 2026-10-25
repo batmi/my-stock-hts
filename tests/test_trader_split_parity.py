@@ -18,47 +18,61 @@
 [2026-10-25 5단계] 매수 메서드 9개와 클래스 속성 2개를 modules/auto_trade/buying.TraderBuyingMixin 으로 옮겼다(같은
  방법 — AST 동일, 바꾼 곳은 정적 메서드의 클래스 이름 한 곳, 전역 18개 동일 객체). 매수만 쓰던 모듈 함수 둘(후보
  정렬 키·오염 일봉 판정)도 함께 옮겼고 trader 가 다시 import 한다. 동등성은 다섯 시나리오(buy_paths 추가)가 본다.
+[2026-10-25 6단계] 주기 제어를 둘로 옮겼다 — 기동·정지 6개는 modules/auto_trade/lifecycle.TraderLifecycleMixin, 주 루프와
+ 그 둘레 11개는 modules/auto_trade/loop.TraderLoopMixin(같은 방법 — AST 동일, 바꾼 곳은 정적 메서드의 클래스 이름 두 곳,
+ 전역 25·18개 동일 객체). 주 루프만 쓰던 모듈 수준 이름(알림 억제 간격 둘·세션 비교 키)도 함께 옮겼고 trader 가 다시
+ import 한다. trader 는 더는 db_manager·time·account·concurrent 와 common 의 기준선·계좌 함수를 들지 않는다 — 아래 각
+ 믹스인의 '함께 쓰는 전역'에서 그 이름들을 뺐다. 동등성은 여섯 시나리오(lifecycle 추가)가 본다.
 """
 import inspect
 import itertools
 
 import pytest
 
-from modules.auto_trade import account_sync, buying, market_risk, reporting, selling, trader
+from modules.auto_trade import account_sync, buying, lifecycle, loop, market_risk, reporting, selling, trader
 
 MIXINS = {
     reporting: (reporting.TraderReportingMixin,
                 ("print_status", "get_status_message", "get_health_message", "print_report", "view_log_file",
                  "get_performance_report", "get_recent_logs", "_get_holdings_message"),
-                {"config", "api", "console", "datetime", "db_manager", "utils", "logger"}),
+                {"config", "api", "console", "datetime", "utils", "logger"}),     # db_manager 는 6단계로 trader 가 안 쓴다
     market_risk: (market_risk.TraderMarketRiskMixin,
                   ("_update_market_indices_status", "_format_market_filter_basis", "_notify_market_unknown",
                    "_whipsaw_risk_scale", "_update_vol_regime", "_update_risk_scale", "_risk_floor_day",
                    "_hold_intraday_floor", "_save_risk_floor", "_get_account_drawdown_pct"),
-                  {"config", "api", "datetime", "db_manager", "logger",
-                   "_get_trade_account", "trade_account_key"}),     # timedelta 는 3단계, analysis 는 5단계로 trader 가 안 쓴다
+                  {"config", "api", "datetime", "logger", "trade_account_key"}),
+    #  ↑ timedelta 는 3단계, analysis 는 5단계, db_manager·_get_trade_account 는 6단계로 trader 가 안 쓴다
     account_sync: (account_sync.TraderAccountSyncMixin,
                    ("effective_baseline", "daily_pnl_base", "transfer_note", "_offline_transfer_threshold",
                     "_realized_matches_broker", "_reconcile_offline_transfer", "_reevaluate_buy_halt_after_transfer",
                     "_sync_external_fills", "_run_account_circuit_breaker", "_monitor_account_status",
                     "_get_toss_open_buy_reserved"),
-                   {"config", "api", "account", "datetime", "db_manager", "logger", "time", "_get_trade_account",
-                    "is_plausible_baseline", "load_daily_initial_asset", "save_daily_initial_asset"}),
+                   {"config", "api", "datetime", "logger"}),
+    #  ↑ account·db_manager·time 과 기준선·계좌 함수는 6단계로 trader 가 안 쓴다(lifecycle·loop 가 가져갔다)
     selling: (selling.TraderSellingMixin,
               ("_live_risk_map", "_last_known_sl_rate", "_effective_stop_loss_rate", "_cancel_pending_buy_on_stop_loss",
                "_apply_corporate_action", "_already_half_sold", "_cached_anchor", "_restore_trailing_anchor",
                "_alert_unmanaged_stop", "_scan_after_hours_sell_signals", "_alert_after_hours_sell",
                "_check_sell_conditions"),
-              {"config", "api", "concurrent", "datetime", "db_manager", "logger", "time",
-               "utils", "_enrich_rules_with_weights", "_get_trade_account", "get_restricted_stocks"}),
-    #  ↑ analysis·indicators 는 5단계로 trader 가 안 쓴다(buying 이 가져갔다)
+              {"config", "api", "datetime", "logger", "utils"}),
+    #  ↑ analysis·indicators 는 5단계로, concurrent·db_manager·time·룰/계좌/제한 종목 함수는 6단계로 trader 가 안 쓴다
     buying: (buying.TraderBuyingMixin,
              ("_try_pyramid_buy", "occupied_slot_codes", "_check_buy_conditions", "_collect_stop_exit_prices",
               "_analyze_candidate_worker", "_note_score_boundary", "_drain_boundary_rows", "_analyze_candidates",
               "_execute_buy_orders"),
-             {"config", "api", "concurrent", "context", "datetime", "db_manager", "logger", "time", "utils",
-              "_enrich_rules_with_weights", "_get_trade_account", "get_restricted_stocks",
+             {"config", "api", "context", "datetime", "logger", "utils",
               "candidate_priority_key", "contaminated_chart_reason"}),     # 둘은 trader 가 다시 import 한다
+    lifecycle: (lifecycle.TraderLifecycleMixin,
+                ("initialize", "_acquire_instance_lock", "_release_instance_lock", "_check_db_health", "start", "stop"),
+                {"config", "api", "console", "context", "datetime", "logger", "os", "threading", "utils",
+                 "trade_account_key"}),
+    loop: (loop.TraderLoopMixin,
+           ("_check_db_write_failures", "_record_cycle_duration", "_warn_if_memory_low", "loop_stall_seconds",
+            "loop_stall_threshold", "_peak_rss_mb", "_health_memory", "_run_loop", "_errors_are_not_the_server",
+            "_wait_for_server_recovery", "_snapshot_paper_closing_equity"),
+           {"config", "api", "console", "context", "datetime", "logger", "os", "threading", "utils",
+            "session_phase_key", "_IDLE_SESSION_PHASES", "DB_WRITE_FAIL_ALERT_COOLDOWN",
+            "CODE_ERROR_ALERT_COOLDOWN"}),     # 넷은 trader 가 다시 import 한다
 }
 _IDS = [m.__name__.rsplit(".", 1)[-1] for m in MIXINS]
 

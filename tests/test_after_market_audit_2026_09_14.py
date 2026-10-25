@@ -16,7 +16,7 @@ from unittest.mock import patch
 import api
 import config
 from modules import account, market_halt, trading
-from modules.auto_trade import conclusion, trader
+from modules.auto_trade import conclusion, loop
 
 
 def _monitor():
@@ -62,7 +62,9 @@ def test_history_sync_shares_conclusion_profit_rules():
 
 
 def test_session_change_message_knows_after_market():
-    full = inspect.getsource(trader)
+    #  개장 전환 알림은 주 루프(C1 6단계로 loop.py)에 있다.
+    full = inspect.getsource(loop)
+    assert "📢 [정규장 시작]" in full, "개장 전환 알림 자리를 찾지 못했다 — 옮겼다면 읽는 모듈을 고칠 것"
     assert '"1600" <= now_time_str < "1610"' in full and "애프터마켓 개시" in full
     assert '"1530" <= now_time_str < "1540"' not in full, "휴게(15:30~16:00)엔 시장이 없어 도달 불가한 분기"
 

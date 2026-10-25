@@ -541,12 +541,14 @@ my-stock-hts/
 │   ├── benchmark.py        #   Benchmarks — buy-and-hold of the same symbols, KOSPI, KOSDAQ (backtest screens and audits)
 │   ├── auto_trade/         # [5] System trading
 │   │   ├── engine.py       #     Trading engine (strategy, orders, risk)
-│   │   ├── trader.py       #     Main loop (analyze → buy/sell → report)
+│   │   ├── trader.py       #     Trader core (singleton, initial state, mixin composition, shared methods)
 │   │   ├── reporting.py    #     Trader screens and reports (status, ops health, performance report, log viewer)
 │   │   ├── market_risk.py  #     Trader market and risk state (market filter, judgement on hold, risk multiplier, stop-cap ratio)
 │   │   ├── account_sync.py #     Trader account sync (equity baseline, transfer detection, account circuit breaker, external-fill sync)
 │   │   ├── selling.py      #     Trader selling (sell loop, unmanaged-position alerts, stop protection, trailing anchor, corporate actions, after-close signals)
 │   │   ├── buying.py       #     Trader buying (account-state gates, re-entry guards, candidate analysis and gates, order execution, pyramiding)
+│   │   ├── lifecycle.py    #     Trader startup and stop (initialization, duplicate-instance lock, DB checks, start/stop alerts)
+│   │   ├── loop.py         #     Trader main loop (one cycle, server-outage wait, cycle timing, memory alerts, stall watch)
 │   │   ├── conclusion.py   #     Fill monitoring and confirmation
 │   │   ├── performance.py  #     Performance-report math (record cleanup, statistics; pure functions)
 │   │   ├── common.py       #     Shared helpers (restrictions, hours, order status)

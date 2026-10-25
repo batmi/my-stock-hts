@@ -326,7 +326,7 @@ def test_고점_조회_실패는_하루치_캐시에_굳지_않는다(monkeypatc
         calls.append(1)
         raise RuntimeError("database is locked")
 
-    monkeypatch.setattr(trader_mod.db_manager.db, 'get_max_daily_asset', _fail)
+    monkeypatch.setattr(market_risk_mod.db_manager.db, 'get_max_daily_asset', _fail)
     #  _get_account_drawdown_pct 는 C1 2단계(2026-10-24)로 market_risk 에 있다 — 그 모듈의 전역을 바꿔 끼운다.
     monkeypatch.setattr(market_risk_mod, '_get_trade_account', lambda: ("11111111", "01"))
 
@@ -352,7 +352,7 @@ def test_이력이_없으면_그_결론은_캐시한다(monkeypatch):
     t.baseline_principal = 0
 
     calls = []
-    monkeypatch.setattr(trader_mod.db_manager.db, 'get_max_daily_asset',
+    monkeypatch.setattr(market_risk_mod.db_manager.db, 'get_max_daily_asset',
                         lambda *a, **k: calls.append(1) or None)
     #  _get_account_drawdown_pct 는 C1 2단계(2026-10-24)로 market_risk 에 있다 — 그 모듈의 전역을 바꿔 끼운다.
     monkeypatch.setattr(market_risk_mod, '_get_trade_account', lambda: ("11111111", "01"))

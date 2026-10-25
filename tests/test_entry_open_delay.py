@@ -86,12 +86,15 @@ def test_청산_경로는_이_게이트를_보지_않는다():
 
     [2026-10-25] 매도 판정(_check_sell_conditions)과 그 안전망은 C1 4단계로 selling.py, 매수 판정
      (_check_buy_conditions)은 C1 5단계로 buying.py 에 있다. 매도 모듈은 이 게이트를 아예 부르지 않아야 하고,
-     주기 제어(trader.py)도 부르지 않는다 — 부르는 곳은 매수 판정 하나다.
+     주기 제어도 부르지 않는다 — 부르는 곳은 매수 판정 하나다. 주기 제어는 C1 6단계로 lifecycle.py(기동·정지)·
+     loop.py(주 루프)에 있고, trader.py 에는 상태와 공용 메서드만 남았다 — 셋 다 본다.
     """
     pkg = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "modules", "auto_trade")
     src = open(os.path.join(pkg, "buying.py"), encoding="utf-8").read()
     sell_src = open(os.path.join(pkg, "selling.py"), encoding="utf-8").read()
-    trader_src = open(os.path.join(pkg, "trader.py"), encoding="utf-8").read()
+    trader_src = "".join(open(os.path.join(pkg, f), encoding="utf-8").read()
+                         for f in ("trader.py", "lifecycle.py", "loop.py"))
+    assert "def _run_loop" in trader_src, "주 루프가 이 세 파일에 없다 — 옮겼다면 이 가드의 파일을 고쳐라"
     buy_at = src.index("def _check_buy_conditions")
 
     calls = [i for i in range(len(src))

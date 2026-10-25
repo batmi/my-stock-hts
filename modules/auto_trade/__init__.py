@@ -5,13 +5,16 @@
   - common.py     : 공용 헬퍼 (제한종목/일일자산/ODNO/장시간/OrderStatus/룰 가중치)
   - engine.py     : DefaultStrategy · OrderManager · RiskManager
   - conclusion.py : ConclusionMonitor (체결 감시/확정)
-  - trader.py     : AutoTrader (메인 루프)
+  - trader.py     : AutoTrader (싱글톤·상태 초기값·믹스인 결합, 여러 믹스인이 함께 쓰는 것)
   - reporting.py  : AutoTrader 의 화면·보고 믹스인(재수출 대상 아님 — AutoTrader 가 상속한다)
   - market_risk.py: AutoTrader 의 시장·리스크 믹스인(재수출 대상 아님 — AutoTrader 가 상속한다)
   - account_sync.py: AutoTrader 의 계좌 동기화 믹스인(재수출 대상 아님 — AutoTrader 가 상속한다)
   - selling.py    : AutoTrader 의 매도 믹스인(재수출 대상 아님 — AutoTrader 가 상속한다)
   - buying.py     : AutoTrader 의 매수 믹스인(재수출 대상 아님 — AutoTrader 가 상속한다. 후보 정렬 키·오염 일봉
                     판정은 trader 가 다시 import 해 재수출된다)
+  - lifecycle.py  : AutoTrader 의 기동·정지 믹스인(재수출 대상 아님 — AutoTrader 가 상속한다)
+  - loop.py       : AutoTrader 의 주 루프 믹스인(재수출 대상 아님 — AutoTrader 가 상속한다. 세션 비교 키·알림 억제
+                    간격은 trader 가 다시 import 해 재수출된다)
   - performance.py: 성과 보고 계산(순수 함수, 재수출 대상 아님 — trader 가 위임해 쓴다)
   - menu.py       : 터미널 메뉴 UI
 

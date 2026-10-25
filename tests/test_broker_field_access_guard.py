@@ -51,6 +51,8 @@ _SCANNED = (
     'modules/auto_trade/account_sync.py',   # 계좌 동기화(2026-10-25 C1 3단계)
     'modules/auto_trade/selling.py',        # 매도 판정·안전망(2026-10-25 C1 4단계)
     'modules/auto_trade/buying.py',         # 매수 판정의 잔고 행 읽기(2026-10-25 C1 5단계)
+    'modules/auto_trade/lifecycle.py',      # 시작 알림·종료 알림의 잔고 요약 행(2026-10-25 C1 6단계)
+    'modules/auto_trade/loop.py',           # 주기 예수금(잔고 요약 행) 읽기(같은 날 6단계)
     'modules/auto_trade/engine.py',
     'modules/auto_trade/common.py',
     'modules/auto_trade/conclusion.py',

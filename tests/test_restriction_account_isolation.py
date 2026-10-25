@@ -120,11 +120,11 @@ def test_trader_never_looks_up_restrictions_without_an_account():
     """
     import re
     #  표시 경로(상태 화면·텔레그램 상태)는 2026-10-24 C1 분리로 reporting.py 에, 매도 판정과 마감 후
-    #   스캔은 2026-10-25 C1 4단계로 selling.py 에, 매수 후보 분석은 같은 날 5단계로 buying.py 에 있다 — 넷 다 본다.
-    src = (open('modules/auto_trade/trader.py', encoding='utf-8').read()
-           + open('modules/auto_trade/reporting.py', encoding='utf-8').read()
-           + open('modules/auto_trade/selling.py', encoding='utf-8').read()
-           + open('modules/auto_trade/buying.py', encoding='utf-8').read())
+    #   스캔은 2026-10-25 C1 4단계로 selling.py 에, 매수 후보 분석은 같은 날 5단계로 buying.py 에, 시작·종료 알림의
+    #   보유 분석과 주기마다의 제한 종목 적재는 6단계로 lifecycle.py·loop.py 에 있다 — 여섯 다 본다.
+    src = "".join(open(f'modules/auto_trade/{m}.py', encoding='utf-8').read()
+                  for m in ("trader", "reporting", "selling", "buying", "lifecycle", "loop"))
+    assert src.count("get_restricted_stocks(") >= 6, "제한 종목 조회 자리를 다 찾지 못했다 — 옮겼다면 파일 목록을 고칠 것"
     bare = re.findall(r'get_restricted_stocks\(\s*\)', src)
     assert not bare, (
         f"계좌를 지정하지 않은 get_restricted_stocks() 호출이 {len(bare)}곳 남아 있다 — "

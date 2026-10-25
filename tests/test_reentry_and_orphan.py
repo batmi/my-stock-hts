@@ -216,7 +216,8 @@ def test_paper_mode_has_its_own_account_label():
     """
     import os
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    src = open(os.path.join(root, "modules/auto_trade/trader.py"), encoding="utf-8").read()
+    #  주기 로그의 운용 계좌 라벨은 주 루프(C1 6단계로 loop.py)에 있다.
+    src = open(os.path.join(root, "modules/auto_trade/loop.py"), encoding="utf-8").read()
 
     idx = src.find('acc_type = "한투증권(자동)"')
     assert idx > 0, "운용 계좌 라벨 분기를 찾지 못했다"

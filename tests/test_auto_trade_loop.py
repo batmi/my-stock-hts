@@ -26,7 +26,7 @@ def test_run_loop_market_closed(mock_tg, mock_deposit, mock_balance, trader):
     #   그 20분 동안 문구가 '휴게 시간 대기'로 갈려 **코드가 아니라 벽시계 때문에** 실패한다
     #   (실측 08:5x). 같은 계열의 시각 의존이 매수 경로에도 있다.
     with patch('api.is_holiday_today', return_value=False), \
-         patch('modules.auto_trade.trader.is_single_price_break', return_value=False), \
+         patch('modules.auto_trade.loop.is_single_price_break', return_value=False), \
          patch.object(trader, 'is_market_open', return_value=False):
         # 한 번만 실행하고 종료되도록 설정
         with patch('time.sleep', side_effect=InterruptedError):

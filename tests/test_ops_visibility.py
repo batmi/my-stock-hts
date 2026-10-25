@@ -76,13 +76,13 @@ class _Trader:
 def capture_alerts(monkeypatch):
     sent = []
 
-    class _Pkg:
-        @staticmethod
-        def alert_delivered(msg, urgent=False):
-            sent.append((msg, urgent))
-            return True
+    def alert_delivered(msg, urgent=False):
+        sent.append((msg, urgent))
+        return True
 
-    monkeypatch.setattr("modules.auto_trade.trader._pkg", lambda: _Pkg)
+    #  경보는 _pkg().alert_delivered 로 나간다 — 패키지 쪽 이름에 건다. 모듈의 _pkg 에 걸면 그 메서드가 다른
+    #   모듈로 옮겨질 때 빗나간다(C1 6단계로 _warn_if_memory_low 는 loop.py 에 있다).
+    monkeypatch.setattr("modules.auto_trade.alert_delivered", alert_delivered)
     return sent
 
 
@@ -157,12 +157,7 @@ def test_memory_check_is_actually_wired_into_the_cycle():
 
 def test_undelivered_alert_is_not_marked_as_sent(monkeypatch):
     """전달 실패를 '보냈다'로 굳히면 그날은 영영 조용하다."""
-    class _Pkg:
-        @staticmethod
-        def alert_delivered(msg, urgent=False):
-            return False
-
-    monkeypatch.setattr("modules.auto_trade.trader._pkg", lambda: _Pkg)
+    monkeypatch.setattr("modules.auto_trade.alert_delivered", lambda msg, urgent=False: False)
     t = _Trader(avail=float(config.SYSTEM_MEMORY_RISK_MB) - 1)
     t._warn_if_memory_low()
     assert getattr(t, "_mem_alert_key", None) is None
