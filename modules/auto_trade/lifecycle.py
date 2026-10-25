@@ -320,6 +320,8 @@ class TraderLifecycleMixin:
                 console.print("[dim]db/backups 의 최근 백업으로 복구한 뒤 다시 시작하세요. "
                               "(평단·트레일링 최고가·손절 기준이 이 파일에만 있습니다)[/dim]")
             api.send_telegram_message(f"⛔ [DB 이상] {msg}")
+            #  원격 /start 의 응답이 사유를 싣는다(telegram_bot._start_failure_reason) — 잠금 거부와 같은 규약.
+            self.start_block_reason = "DB 무결성 검사 실패 — 손절 기준이 든 DB 가 손상됐습니다(백업으로 복구 필요)"
             return False
 
         path = db_manager.db.backup()
@@ -341,6 +343,22 @@ class TraderLifecycleMixin:
                 console.print(f"\n[bold yellow]⚠ {msg}[/bold yellow]")
             api.send_telegram_message(f"⚠️ [디스크 경고] {msg}")
         return True
+
+    def _report_start_failure(self, reason):
+        """기동이 초기화에서 멈췄다는 사실을 화면 밖으로도 알린다(화면 로그·텔레그램·차단 사유).
+
+        [2026-10-25] 중복 실행 차단·DB 이상은 텔레그램을 보내고(잠금 거부는 차단 사유도 남긴다), 초기화 예외만
+         mystock.log(logger.error)와 콘솔에 남았다. 텔레그램 /start 는 is_running 으로 실패는 알아채도 사유가 비었고,
+         `--auto` 기동(main.py)은 아무도 응답을 받지 않아 실패 자체를 아무도 몰랐다 — 부팅 직후 네트워크가 늦어
+         기동 잔고 조회가 실패하면, 프로세스와 하트비트는 살아 있는 채 자동매매만 꺼져 있다(외부 감시자는 프로세스
+         사망만 본다). 그동안 손절·트레일링 감시가 돌지 않는다.
+        """
+        reason = str(reason or "원인 미상")[:300]
+        self.start_block_reason = f"기동 초기화 실패 — {reason}"
+        self.log(f"[기동 실패] 자동매매를 시작하지 못했습니다 — {reason}")
+        api.send_telegram_message(
+            f"⛔ [기동 실패] 자동매매를 시작하지 못했습니다.\n사유: {reason}\n\n"
+            f"손절·트레일링 감시가 돌지 않습니다. 원인을 확인한 뒤 다시 시작해 주세요(/start).")
 
     def start(self, interactive=True):
         if self.is_running:
@@ -426,7 +444,7 @@ class TraderLifecycleMixin:
             if not self.initialized:
                 if not self.initialize():
                     self._release_instance_lock()
-                    self.log("초기화 실패로 자동매매를 시작할 수 없습니다.")
+                    self._report_start_failure("초기화가 완료되지 않았습니다")
                     if api._is_screen_output_allowed():
                         console.print("[bold red]시스템 초기화에 실패하여 자동매매를 시작할 수 없습니다.[/bold red]")
                         if config.SCREEN_DEBUG_LEVEL in ["ERROR", "TRACE", "DEBUG"]:
@@ -576,6 +594,9 @@ class TraderLifecycleMixin:
             if not self.is_running:
                 self._release_instance_lock()
             logger.error(f"자동매매 시작 실패: {e}")
+            #  루프가 뜬 뒤의 예외(시작 알림 조립 중 등)는 매매가 돌고 있으니 기동 실패가 아니다.
+            if not self.is_running:
+                self._report_start_failure(e)
             if api._is_screen_output_allowed():
                 console.print(f"[bold red]자동매매 시작 실패: {e}[/bold red]")
                 if config.SCREEN_DEBUG_LEVEL in ["ERROR", "TRACE", "DEBUG"]:

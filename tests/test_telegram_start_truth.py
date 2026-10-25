@@ -150,3 +150,48 @@ def test_잠금에_성공하면_사유가_비워진다(bot, monkeypatch):
     monkeypatch.setattr(tr.instance_lock, 'InstanceLock', _FreeLock)
     assert bot.trader._acquire_instance_lock() is True
     assert bot.trader.start_block_reason == ""
+
+
+def test_초기화_예외도_사유를_남기고_텔레그램으로_알린다(bot, monkeypatch):
+    """[2026-10-25] 초기화 예외는 mystock.log 와 콘솔에만 남았다 — /start 응답의 사유가 비었고, `--auto` 기동은
+    실패 자체를 아무도 몰랐다(부팅 직후 기동 잔고 조회 실패 → 프로세스·하트비트는 정상인 채 자동매매만 꺼짐)."""
+    import config
+    from modules.auto_trade import lifecycle as tr     # 기동(start)은 C1 6단계로 lifecycle.py
+
+    sent, logged, released = [], [], []
+    monkeypatch.setattr(config.session, 'is_paper', True, raising=False)
+    monkeypatch.setattr(config.session, 'is_toss', False, raising=False)
+    monkeypatch.setattr(tr.api, 'send_telegram_message', lambda m, *a, **k: sent.append(m))
+    monkeypatch.setattr(tr.api, '_is_screen_output_allowed', lambda: False)
+    monkeypatch.setattr(type(bot.trader), 'log', lambda self, m, *a, **k: logged.append(m), raising=False)
+    monkeypatch.setattr(type(bot.trader), '_acquire_instance_lock', lambda self: True)
+    monkeypatch.setattr(type(bot.trader), '_release_instance_lock', lambda self: released.append(1))
+    monkeypatch.setattr(type(bot.trader), '_check_db_health', lambda self: True)
+
+    def _boom(self):
+        raise Exception("자산/예수금 조회 실패 (API 응답 없음)")
+    monkeypatch.setattr(type(bot.trader), 'initialize', _boom)
+    bot.trader.initialized = False
+    bot.trader.initial_asset = 0
+
+    reply = bot._cmd_start(None)
+    assert bot.trader.is_running is False
+    assert released, "루프가 뜨지 못했는데 잠금을 붙들고 있다 — 다음 시도가 '이미 실행 중'으로 거부된다"
+    assert "시작하지 못했습니다" in reply and "자산/예수금 조회 실패" in reply, reply
+    assert len(sent) == 1 and sent[0].startswith("⛔ [기동 실패]"), sent
+    assert "자산/예수금 조회 실패" in sent[0] and "손절·트레일링" in sent[0]
+    assert any(m.startswith("[기동 실패]") for m in logged), "화면 로그(트레이더 로그 파일)에 남지 않았다"
+
+
+def test_DB_손상_사유도_원격까지_간다(bot, monkeypatch):
+    """DB 이상은 텔레그램을 따로 보내지만 /start 응답의 사유는 비어 있었다 — 잠금 거부와 같이 사유를 남긴다."""
+    from modules.auto_trade import lifecycle as tr
+
+    monkeypatch.setattr(tr.db_manager.db, 'check_integrity',
+                        lambda: (False, "Page 7: btreeInitPage() returns error code 11"))
+    monkeypatch.setattr(tr.api, 'send_telegram_message', lambda *a, **k: None)
+    monkeypatch.setattr(tr.api, '_is_screen_output_allowed', lambda: False)
+    monkeypatch.setattr(type(bot.trader), 'log', lambda self, *a, **k: None, raising=False)
+
+    assert bot.trader._check_db_health() is False
+    assert "DB 무결성 검사 실패" in bot._start_failure_reason()
