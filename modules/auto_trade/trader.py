@@ -21,17 +21,12 @@ import 한다.
 """
 import threading
 import logging
-import requests
-import json
-from core import jsonio
 import os
-import sqlite3 # [추가] DB 직접 접근용
 from datetime import datetime
 import config
 from core import context # [추가]
 import api
 from core import utils
-from modules import chart # [추가] 차트 모듈
 from modules.auto_trade import performance # 성과 보고 계산(순수 함수)
 from modules.auto_trade.reporting import TraderReportingMixin  # 화면·보고(상태·관제·보고서) — AutoTrader 가 상속한다
 from modules.auto_trade.market_risk import TraderMarketRiskMixin  # 시장·리스크(지수 상태·리스크 배수) — AutoTrader 가 상속한다

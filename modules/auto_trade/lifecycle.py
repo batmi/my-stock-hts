@@ -441,15 +441,10 @@ class TraderLifecycleMixin:
 
         try:
             # [수정] 초기화 로직 분리
-            if not self.initialized:
-                if not self.initialize():
-                    self._release_instance_lock()
-                    self._report_start_failure("초기화가 완료되지 않았습니다")
-                    if api._is_screen_output_allowed():
-                        console.print("[bold red]시스템 초기화에 실패하여 자동매매를 시작할 수 없습니다.[/bold red]")
-                        if config.SCREEN_DEBUG_LEVEL in ["ERROR", "TRACE", "DEBUG"]:
-                            console.print("[bold red][ERROR] 시스템 초기화 실패[/bold red]")
-                    return
+            #  initialize 는 True 를 돌려주거나 예외를 던진다. 거짓이 오더라도 같은 실패 경로(아래 except —
+            #  잠금 해제·기동 실패 알림·화면 안내)를 타게 예외로 바꾼다(2026-10-25: 따로 두던 분기는 닿지 않았다).
+            if not self.initialized and not self.initialize():
+                raise RuntimeError("초기화가 완료되지 않았습니다")
 
             self.is_running = True
             self.start_time = datetime.now()
@@ -491,7 +486,7 @@ class TraderLifecycleMixin:
                 if deposit == 0:
                     deposit = api.safe_int(summary[0].get('dnca_tot_amt', 0))
 
-            msg = f"🟢 [시스템 시작] 자동매매가 시작되었습니다.\n"
+            msg = "🟢 [시스템 시작] 자동매매가 시작되었습니다.\n"
             if self.initial_asset > 0:
                 msg += f"초기 자산: {self.initial_asset:,}원"
             else:

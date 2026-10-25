@@ -183,6 +183,32 @@ def test_초기화_예외도_사유를_남기고_텔레그램으로_알린다(bo
     assert any(m.startswith("[기동 실패]") for m in logged), "화면 로그(트레이더 로그 파일)에 남지 않았다"
 
 
+def test_초기화가_거짓을_돌려줘도_같은_실패_경로를_탄다(bot, monkeypatch):
+    """[2026-10-25] initialize 는 True 를 돌려주거나 예외를 던진다. 거짓 반환을 따로 받던 분기는 닿지 않았고, 예외 경로와
+    알림·잠금 해제를 따로 들고 있었다 — 이제 예외로 바꿔 한 경로로 모은다. 거짓이 와도 매매 루프를 띄우면 안 된다."""
+    import config
+    from modules.auto_trade import lifecycle as tr
+
+    sent, released = [], []
+    monkeypatch.setattr(config.session, 'is_paper', True, raising=False)
+    monkeypatch.setattr(config.session, 'is_toss', False, raising=False)
+    monkeypatch.setattr(tr.api, 'send_telegram_message', lambda m, *a, **k: sent.append(m))
+    monkeypatch.setattr(tr.api, '_is_screen_output_allowed', lambda: False)
+    monkeypatch.setattr(type(bot.trader), 'log', lambda self, *a, **k: None, raising=False)
+    monkeypatch.setattr(type(bot.trader), '_acquire_instance_lock', lambda self: True)
+    monkeypatch.setattr(type(bot.trader), '_release_instance_lock', lambda self: released.append(1))
+    monkeypatch.setattr(type(bot.trader), '_check_db_health', lambda self: True)
+    monkeypatch.setattr(type(bot.trader), 'initialize', lambda self: False)
+    bot.trader.initialized = False
+    bot.trader.initial_asset = 0
+
+    reply = bot._cmd_start(None)
+    assert bot.trader.is_running is False
+    assert released, "루프가 뜨지 못했는데 잠금을 붙들고 있다"
+    assert "초기화가 완료되지 않았습니다" in reply, reply
+    assert len(sent) == 1 and sent[0].startswith("⛔ [기동 실패]"), sent
+
+
 def test_DB_손상_사유도_원격까지_간다(bot, monkeypatch):
     """DB 이상은 텔레그램을 따로 보내지만 /start 응답의 사유는 비어 있었다 — 잠금 거부와 같이 사유를 남긴다."""
     from modules.auto_trade import lifecycle as tr
