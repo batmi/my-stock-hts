@@ -323,3 +323,63 @@ def test_risk_scale_actually_shrinks_allocation(trader):
 
     assert reduced < full, "배수를 낮췄는데 배분액이 그대로면 방어가 작동하지 않는 것"
     assert reduced == pytest.approx(full * 0.6, rel=0.02)
+
+
+# =========================================================
+# _update_risk_scale — 계산 실패가 드러나는가 (2026-10-25)
+# =========================================================
+def _fail_regime():
+    return patch('modules.auto_trade.market_risk.analysis.get_market_regime_detail',
+                 side_effect=RuntimeError("지수 응답 형식 이상"))
+
+
+def test_계산이_실패하면_직전_배수를_유지하고_화면_로그에_남긴다(trader, monkeypatch):
+    """종전에는 DEBUG 로그에만 남아 배수가 굳은 사실을 아무도 몰랐다 — 시장 필터를 끈 운용에서는 유일한 시장 브레이크다."""
+    logged, alerts = [], []
+    trader.risk_scale = 0.6
+    trader.risk_scale_fails = 0
+    trader._risk_scale_fail_alerted = False
+    monkeypatch.setattr(type(trader), 'log', lambda self, m, *a, **k: logged.append(m), raising=False)
+    monkeypatch.setattr("modules.auto_trade.alert_delivered", lambda m, urgent=False: alerts.append((m, urgent)) or True)
+    with _fail_regime():
+        trader._update_risk_scale()
+    assert trader.risk_scale == pytest.approx(0.6), "모르면 바꾸지 않는다 — 직전 배수를 그대로 쓴다"
+    assert trader.risk_scale_fails == 1
+    assert any("배수 계산 실패" in m and "x0.60" in m for m in logged), logged
+    assert not alerts, "한 번은 일시적일 수 있다 — 바로 경보하지 않는다"
+    assert "배수 계산 연속 실패 1회" in trader.get_health_message()
+
+
+def test_연속_실패는_한_번_경보하고_복구되면_풀린다(trader, monkeypatch):
+    from modules.auto_trade.market_risk import RISK_SCALE_ALERT_FAILS
+    logged, alerts = [], []
+    trader.risk_scale_fails = 0
+    trader._risk_scale_fail_alerted = False
+    monkeypatch.setattr(type(trader), 'log', lambda self, m, *a, **k: logged.append(m), raising=False)
+    monkeypatch.setattr("modules.auto_trade.alert_delivered", lambda m, urgent=False: alerts.append((m, urgent)) or True)
+    with _fail_regime():
+        for _ in range(RISK_SCALE_ALERT_FAILS + 2):
+            trader._update_risk_scale()
+    assert len(alerts) == 1 and alerts[0][1] is True, alerts
+    assert "리스크 배수 이상" in alerts[0][0] and f"{RISK_SCALE_ALERT_FAILS}회 연속" in alerts[0][0]
+    config.RISK_SCALING_PARAMS = dict(config.RISK_SCALING_PARAMS, USE_DRAWDOWN_RISK_SCALING=False)
+    with _patch_regime("Bull"):
+        trader._update_risk_scale()
+    assert trader.risk_scale_fails == 0 and trader._risk_scale_fail_alerted is False
+    assert any("배수 계산 복구" in m for m in logged), logged
+    assert "배수 계산 연속 실패" not in trader.get_health_message()
+
+
+def test_경보가_닿지_않으면_다음_실패에서_다시_보낸다(trader, monkeypatch):
+    """못 닿은 경보를 '보냈다'로 굳히면 배수가 굳은 채로 영영 조용하다."""
+    from modules.auto_trade.market_risk import RISK_SCALE_ALERT_FAILS
+    tries = []
+    trader.risk_scale_fails = 0
+    trader._risk_scale_fail_alerted = False
+    monkeypatch.setattr(type(trader), 'log', lambda self, *a, **k: None, raising=False)
+    monkeypatch.setattr("modules.auto_trade.alert_delivered", lambda m, urgent=False: tries.append(m) and False)
+    with _fail_regime():
+        for _ in range(RISK_SCALE_ALERT_FAILS + 1):
+            trader._update_risk_scale()
+    assert len(tries) == 2, "전달이 확인되지 않았는데 다시 보내지 않는다"
+    assert trader._risk_scale_fail_alerted is False

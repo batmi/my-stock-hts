@@ -29,6 +29,10 @@ from modules.auto_trade.common import (_get_trade_account, load_daily_risk_floor
 #  트레이더 로그와 같은 이름 — 시장·리스크 코드가 남기는 로그도 'modules.auto_trade.trader' 로 모인다.
 logger = logging.getLogger("modules.auto_trade.trader")
 
+#  리스크 배수 계산이 이만큼 연속 실패하면 알린다 — 계좌 차단기(account_sync.CIRCUIT_BREAKER_ALERT_FAILS)와 같은 문턱.
+#  한 번은 일시적 데이터 결손일 수 있지만, 연속 실패는 '배수가 굳어 있다'는 뜻이다.
+RISK_SCALE_ALERT_FAILS = 3
+
 
 def _pkg():
     """패키지(modules.auto_trade) 네임스페이스 접근자 — trader._pkg 와 같은 규약.
@@ -366,8 +370,25 @@ class TraderMarketRiskMixin:
                         market_reasons[m_type] = " ".join(
                             p for p in (market_reasons.get(m_type, ""), dd_reason) if p)
         except Exception as e:
-            logger.debug(f"[리스크 스케일링] 배수 계산 실패 (기존값 유지): {e}")
+            #  [2026-10-25] 실패하면 직전 배수를 그대로 쓴다(모르면 바꾸지 않는다) — 그 정책은 맞다. 다만 종전에는
+            #   DEBUG 로그에만 남아, 계산이 며칠씩 실패해도 배수가 굳은 사실을 아무도 몰랐다. 시장 필터를 끈 운용에서는
+            #   이 배수가 유일한 시장 인식 브레이크다. 계좌 차단기(account_sync)와 같은 규약으로 드러낸다:
+            #   실패마다 화면 로그, 연속 RISK_SCALE_ALERT_FAILS 회면 경보(전달 확인 뒤 표식), 건강 화면 표시, 복구 로그.
+            self.risk_scale_fails = getattr(self, 'risk_scale_fails', 0) + 1
+            prev = getattr(self, 'risk_scale', 1.0)
+            logger.warning(f"[리스크 스케일링] 배수 계산 실패({self.risk_scale_fails}회) — 직전 x{prev:.2f} 유지: {e}")
+            self.log(f"[리스크 스케일링] 배수 계산 실패 — 직전 배수 x{prev:.2f} 를 그대로 씁니다: {e}")
+            if self.risk_scale_fails >= RISK_SCALE_ALERT_FAILS and not getattr(self, '_risk_scale_fail_alerted', False):
+                if _pkg().alert_delivered(
+                        f"⚠️ [리스크 배수 이상] 리스크 배수 계산이 {self.risk_scale_fails}회 연속 실패했습니다.\n"
+                        f"직전 배수 x{prev:.2f} 가 그대로 쓰입니다 — 시장이 나빠져도 신규 진입 한도가 줄지 않습니다.\n"
+                        f"오류: {e}", urgent=True):
+                    self._risk_scale_fail_alerted = True
             return
+        if getattr(self, 'risk_scale_fails', 0):
+            self.log(f"[리스크 스케일링] 배수 계산 복구 (연속 {self.risk_scale_fails}회 실패 동안 직전 값 유지)")
+        self.risk_scale_fails = 0
+        self._risk_scale_fail_alerted = False
 
         # 3) 같은 날 안에서는 조이기만 한다 — 푸는 것은 다음 날 첫 주기(_hold_intraday_floor 주석).
         scale, reason, market_scales, market_reasons = self._hold_intraday_floor(

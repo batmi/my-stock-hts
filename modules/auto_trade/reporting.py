@@ -688,6 +688,11 @@ class TraderReportingMixin:
             risk_parts.append(f"리스크 배수 x{risk_scale:.2f} (신규 매수 예산 {risk_scale * 100:.0f}%로 축소)")
             if risk_scale_reason:
                 risk_parts.append(f"축소 사유: {risk_scale_reason[:60]}")
+        _rs_fails = getattr(self, 'risk_scale_fails', 0)
+        if _rs_fails:
+            #  배수 계산이 실패하면 직전 값이 굳는다(market_risk._update_risk_scale) — '정상 x1.00'과 구분되어야 한다.
+            risk_parts.append(f"[bold red]배수 계산 연속 실패 {_rs_fails}회 — 직전 값 유지[/bold red]")
+            warnings.append(f"리스크 배수 계산 연속 실패 {_rs_fails}회 (배수가 굳어 있음)")
 
         # [동적 손절 캡 · 2026-10-24] 지금 적용 중인 ATR 손절 캡과 그 근거. 도입(08-09) 이후 실매매 캡이 한 번도
         #  움직이지 않았는데 어디에도 보이지 않아 두 달 넘게 몰랐다 — 고정값으로 도는 것도 그렇다고 적는다.

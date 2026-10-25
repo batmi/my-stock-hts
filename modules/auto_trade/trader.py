@@ -176,6 +176,8 @@ class AutoTrader(TraderReportingMixin, TraderMarketRiskMixin, TraderAccountSyncM
                 #  차단기가 안 도는 것을 아무도 모르는 상태가 가장 나쁘다.
                 cls._instance.circuit_breaker_ran_at = 0.0
                 cls._instance.circuit_breaker_fails = 0
+                # [안전장치] 리스크 배수 계산 연속 실패 횟수 — 실패하면 직전 배수가 굳는다(market_risk._update_risk_scale).
+                cls._instance.risk_scale_fails = 0
                 # [안전장치] 서버는 정상인데 루프가 터진 횟수. 킬스위치가 '서버 장애 대기'로
                 #  오판해 매도 감시까지 멈추는 것을 막은 횟수이기도 하다.
                 cls._instance.code_error_streaks = 0
