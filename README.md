@@ -528,6 +528,7 @@ my-stock-hts/
 │   ├── settings.py         # [0] 시스템 설정
 │   ├── market.py           # [1] 시장 지수 조회
 │   ├── analysis.py         # [2] 종목 시세·기술적 분석
+│   ├── judgment.py         #     판정 핵심(채점·종목 상태·지수 국면 분류·52주 위치) — analysis 가 같은 이름으로 다시 내보냄
 │   ├── score_model.py      #     구조화 채점 결과(항목 ID·상태·기여값, 경계 계측)
 │   ├── exit_rules.py       #     청산 판단 공통 계층(실매매·백테스트가 같은 우선순위 체인 사용)
 │   ├── position_sizing.py  #     진입 배분액 공통 계층(기초 비중·리스크·변동성 3층 min 결합)

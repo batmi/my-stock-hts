@@ -86,6 +86,7 @@ def test_an_empty_frame_gives_a_defined_answer():
 def test_analysis_delegates_to_the_core_definition():
     """화면 경로가 자기 사본으로 되돌아가면 다시 갈라진다."""
     from modules import analysis as an
+    from modules import judgment as jg   # [C2 · 2026-10-25] _w52_* 는 judgment 로 옮겼다 — 시각은 그 모듈에서 읽는다
 
     df = _frame(spike_at=0)
 
@@ -94,13 +95,13 @@ def test_analysis_delegates_to_the_core_definition():
         def now(cls, tz=None):
             return NOW
 
-    orig = an.datetime
-    an.datetime = _Fixed
+    orig = jg.datetime
+    jg.datetime = _Fixed
     try:
         assert an._w52_band(df) == ind.w52_band(df, now=NOW)
         assert an._w52_high_low(df) == ind.w52_high_low(df, now=NOW)
     finally:
-        an.datetime = orig
+        jg.datetime = orig
 
 
 def test_no_one_computes_the_band_by_hand():

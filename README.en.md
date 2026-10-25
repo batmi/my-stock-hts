@@ -529,6 +529,7 @@ my-stock-hts/
 │   ├── settings.py         # [0] Settings
 │   ├── market.py           # [1] Market indices
 │   ├── analysis.py         # [2] Quotes and technical analysis
+│   ├── judgment.py         #     Decision core (scoring, stock state, index regime, 52-week position) — re-exported by analysis
 │   ├── score_model.py      #     Structured score results (item IDs, status, contributions, boundary probes)
 │   ├── exit_rules.py       #     Shared exit-decision layer (live and backtest use one priority chain)
 │   ├── position_sizing.py  #     Shared entry sizing (base weight, risk and volatility caps, min-combined)

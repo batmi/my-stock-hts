@@ -58,6 +58,7 @@ CORE_TESTS = (
     "tests/test_import_side_effects.py",
     "tests/test_layer_packages.py",
     "tests/test_trader_split_parity.py",
+    "tests/test_judgment_split.py",
     "tests/test_cycle_replay.py",
     "tests/test_python_min_compat.py",
     "tests/test_pandas_version_semantics.py",

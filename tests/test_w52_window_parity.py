@@ -48,6 +48,7 @@ def test_the_window_matches_the_live_definition():
     import datetime as dt
 
     from modules import analysis as an
+    from modules import judgment as jg   # [C2 · 2026-10-25] _w52_* 는 judgment 로 옮겼다 — 시각은 그 모듈에서 읽는다
 
     rng = np.random.default_rng(3)
     n = 500
@@ -60,12 +61,12 @@ def test_the_window_matches_the_live_definition():
         def now(cls, tz=None):
             return dt.datetime.strptime(df["date"].iloc[-1], "%Y%m%d")
 
-    orig = an.datetime
-    an.datetime = _Fixed
+    orig = jg.datetime
+    jg.datetime = _Fixed
     try:
         h, l = an._w52_band(df)
     finally:
-        an.datetime = orig
+        jg.datetime = orig
 
     assert float(df["roll_high_52w"].iloc[-1]) == pytest.approx(h, rel=1e-12)
     assert float(df["roll_low_52w"].iloc[-1]) == pytest.approx(l, rel=1e-12)
