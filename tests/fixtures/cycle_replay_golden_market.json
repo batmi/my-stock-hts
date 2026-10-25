@@ -136,7 +136,7 @@
     "code": "100040",
     "fee": 4885.0,
     "price": 74800.0,
-    "profit_amt": 113739.00000000015,
+    "profit_amt": 113739.0,
     "qty": 30,
     "time": "2026-10-21 10:02:04",
     "type": "매도"
@@ -306,7 +306,7 @@
   ],
   "positions": [
    {
-    "avg_price": 60766.666666666664,
+    "avg_price": 60766.66667,
     "code": "100010",
     "first_buy_at": "2026-10-13 10:00:00",
     "last_buy_at": "2026-10-21 10:00:00",
@@ -588,11 +588,11 @@
     "KOSDAQ": true,
     "KOSPI": true
    },
-   "portfolio_heat_amt": 35139.66479667812,
+   "portfolio_heat_amt": 35139.6648,
    "risk_floor": {
     "by_market": {
-     "KOSDAQ": 0.40800000000000003,
-     "KOSPI": 0.45942857142857146
+     "KOSDAQ": 0.408,
+     "KOSPI": 0.4594285714
     },
     "date": "2026-10-21",
     "reason": "KOSDAQ 국면 판정 불가 — 직전 x0.51 유지, 드로다운 12.4% x0.8",
@@ -600,12 +600,12 @@
      "KOSDAQ": "국면 판정 불가 — 직전 x0.51 유지 드로다운 12.4% x0.8",
      "KOSPI": "하락 미확정 x0.6 휩소율 50% x0.96 드로다운 11.0% x0.8"
     },
-    "scale": 0.40800000000000003
+    "scale": 0.408
    },
-   "risk_scale": 0.40800000000000003,
+   "risk_scale": 0.408,
    "risk_scale_by_market": {
-    "KOSDAQ": 0.40800000000000003,
-    "KOSPI": 0.45942857142857146
+    "KOSDAQ": 0.408,
+    "KOSPI": 0.4594285714
    },
    "risk_scale_reason": "KOSDAQ 국면 판정 불가 — 직전 x0.51 유지, 드로다운 12.4% x0.8",
    "risk_scale_reason_by_market": {
@@ -614,7 +614,7 @@
    },
    "risk_scale_regime_by_market": {
     "KOSDAQ": 0.51,
-    "KOSPI": 0.9571428571428572
+    "KOSPI": 0.9571428571
    },
    "skipped_by_market_filter_count": {
     "KOSDAQ": 3,
@@ -705,7 +705,7 @@
     "profit_amt": 0,
     "qty": "15",
     "reason": "피라미딩 1차 (수익률:+13.1%, 점수:9.5, 상태:강매수)",
-    "stop_loss_rate": -3.965756050106216,
+    "stop_loss_rate": -3.96575605,
     "time": "2026-10-21 10:00:00",
     "type": "buy(AUTO)"
    },
@@ -716,7 +716,7 @@
     "profit_amt": 0,
     "qty": "10",
     "reason": "피라미딩 1차 (수익률:+22.6%, 점수:8.0, 상태:강매수)",
-    "stop_loss_rate": -4.3162538510445545,
+    "stop_loss_rate": -4.316253851,
     "time": "2026-10-21 10:00:00",
     "type": "buy(AUTO)"
    },
@@ -760,7 +760,7 @@
     "profit_amt": 0,
     "qty": "14",
     "reason": "조건 만족(슈퍼모멘텀) [점수:10.0, RSI:67.3, 체결강도:135.0%] [ATR:1,251/변동성:24.2%] [청산선 ATR:-3.0%(79,790) TS:+5%(86,632)→-5%(82,250)]",
-    "stop_loss_rate": -3.0497886475158977,
+    "stop_loss_rate": -3.049788648,
     "time": "2026-10-21 10:01:03",
     "type": "buy(AUTO)"
    },

@@ -717,6 +717,11 @@ def run(tmp_path, cycles=None, scenario="base"):
             P(_scheduler_mod.SystemScheduler, "_instance", None)
         if scenario == "buy_paths":
             _patch_buy_events(P, market, _engine_mod)
+        #  메모리 측정 — 진짜 값은 /proc 를 읽어 기기마다 모양이 다르다(리눅스는 피크·가용 메모리가 붙고, 맥은 /proc 가
+        #   없어 프로세스 메모리만 나온다). 2026-10-24 부터 CI(리눅스)의 비교가 이 줄로 실패했다. 맥과 같은 모양(가용 0 =
+        #   측정 불가, 피크 = 현재)으로 고정한다 — 경보(_warn_if_memory_low)도 가용 0 이면 돌지 않는다. lifecycle 은 아래에서
+        #   경보 경로를 지나도록 따로 바꾼다. 클래스 속성이라 메서드를 다른 모듈로 옮겨도 같은 자리에서 찾아진다(MRO).
+        P(_trader_mod.AutoTrader, "_health_memory", staticmethod(lambda: (400.0, 0.0, 400.0)))
         life = {"starts": 0, "cycle": None, "attempt": -1, "health": list(LIFE_SERVER_HEALTH),
                 "emptied": set(), "deposit_none": False}
         if scenario == "lifecycle":
@@ -1175,5 +1180,21 @@ def env_signature():
     return {"pandas": pd.__version__, "numpy": ".".join(np.__version__.split(".")[:2]), "rich": version("rich")}
 
 
+def _round_floats(o):
+    """실수는 유효숫자 10자리로 — 기기(CPU·수학 라이브러리)가 다르면 같은 계산의 마지막 자리가 갈린다.
+
+    [2026-10-25] 기준 기록은 맥(arm64)에서 만들었고 CI 는 리눅스(x86-64)에서 돈다. 손절률 같은 원시 실수가
+     -3.965756050106216 / -3.965756050106215 로 마지막 자리에서 갈려 비교가 실패했다(판 조합은 같아도 기기가 다르다).
+     화면·알림 글자는 이미 자릿수를 정해 찍으므로 그대로 둔다 — 원시 실수만 맞춘다.
+    """
+    if isinstance(o, float):
+        return float(f"{o:.10g}") if o == o and abs(o) != float("inf") else o
+    if isinstance(o, dict):
+        return {k: _round_floats(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_round_floats(v) for v in o]
+    return o
+
+
 def dump(trace):
-    return json.dumps(trace, ensure_ascii=False, indent=1, sort_keys=True, default=str)
+    return json.dumps(_round_floats(trace), ensure_ascii=False, indent=1, sort_keys=True, default=str)

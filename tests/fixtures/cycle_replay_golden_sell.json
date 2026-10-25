@@ -304,7 +304,7 @@
     "code": "100040",
     "fee": 4885.0,
     "price": 74800.0,
-    "profit_amt": 113739.00000000015,
+    "profit_amt": 113739.0,
     "qty": 30,
     "time": "2026-10-21 10:02:06",
     "type": "매도"
@@ -659,7 +659,7 @@
   ],
   "positions": [
    {
-    "avg_price": 60766.666666666664,
+    "avg_price": 60766.66667,
     "code": "100010",
     "first_buy_at": "2026-10-13 10:00:00",
     "last_buy_at": "2026-10-21 10:00:00",
@@ -683,7 +683,7 @@
     "qty": 30
    },
    {
-    "avg_price": 61166.666666666664,
+    "avg_price": 61166.66667,
     "code": "100140",
     "first_buy_at": "2026-10-13 10:00:00",
     "last_buy_at": "2026-10-21 10:01:04",
@@ -1103,7 +1103,7 @@
    },
    "paper_closing_snapshot_date": "20261021",
    "pending_orders": [],
-   "portfolio_heat_amt": 52361.97462585718,
+   "portfolio_heat_amt": 52361.97463,
    "risk_scale": 1.0,
    "risk_scale_by_market": {
     "KOSDAQ": 1.0,
@@ -1312,7 +1312,7 @@
     "profit_amt": 0,
     "qty": "15",
     "reason": "피라미딩 1차 (수익률:+13.1%, 점수:9.5, 상태:강매수)",
-    "stop_loss_rate": -3.965756050106216,
+    "stop_loss_rate": -3.96575605,
     "time": "2026-10-21 10:00:00",
     "type": "buy(AUTO)"
    },
@@ -1323,7 +1323,7 @@
     "profit_amt": 0,
     "qty": "10",
     "reason": "피라미딩 1차 (수익률:+22.6%, 점수:8.0, 상태:강매수)",
-    "stop_loss_rate": -4.3162538510445545,
+    "stop_loss_rate": -4.316253851,
     "time": "2026-10-21 10:00:00",
     "type": "buy(AUTO)"
    },
@@ -1400,7 +1400,7 @@
     "profit_amt": 0,
     "qty": "5",
     "reason": "피라미딩 1차 (수익률:+11.9%, 점수:9.5, 상태:강매수)",
-    "stop_loss_rate": -3.965756050106216,
+    "stop_loss_rate": -3.96575605,
     "time": "2026-10-21 10:01:04",
     "type": "buy(AUTO)"
    },

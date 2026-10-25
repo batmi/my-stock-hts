@@ -393,7 +393,7 @@
   ],
   "positions": [
    {
-    "avg_price": 60866.666666666664,
+    "avg_price": 60866.66667,
     "code": "100010",
     "first_buy_at": "2026-10-13 10:00:00",
     "last_buy_at": "2026-10-21 09:00:30",
@@ -712,7 +712,7 @@
     303.1
    ],
    "pending_restore_ok": true,
-   "portfolio_heat_amt": 81235.26704253256,
+   "portfolio_heat_amt": 81235.26704,
    "risk_scale": 1.0,
    "risk_scale_by_market": {
     "KOSDAQ": 1.0,
@@ -820,7 +820,7 @@
     "profit_amt": 0,
     "qty": "15",
     "reason": "피라미딩 1차 (수익률:+13.6%, 점수:10.0, 상태:강매수)",
-    "stop_loss_rate": -3.995736409507074,
+    "stop_loss_rate": -3.99573641,
     "time": "2026-10-21 09:00:30",
     "type": "buy(AUTO)"
    },
@@ -875,7 +875,7 @@
     "profit_amt": 0,
     "qty": "32",
     "reason": "조건 만족(슈퍼모멘텀) [점수:10.0, RSI:67.9, 체결강도:135.0%] [ATR:1,266/변동성:24.4%] [청산선 ATR:-3.1%(79,961) TS:+5%(86,842)→-5%(82,410)]",
-    "stop_loss_rate": -3.0770934485807784,
+    "stop_loss_rate": -3.077093449,
     "time": "2026-10-21 09:02:23",
     "type": "buy(AUTO)"
    }
