@@ -34,8 +34,10 @@ from tools.audit_common import base_metrics, exits, windows
 ALIAS = {"wr": "win"}
 
 # 시그니처가 다른 도구 — 포트폴리오 결과 dict 하나를 받는 형태가 아니다.
-#  (audit_axis_combination.metrics 는 지수 시계열·노출도를 함께 받는 별개 계산이다.)
-SKIP = {"audit_axis_combination.py"}
+#  (audit_axis_combination.metrics 는 지수 시계열·노출도를 함께 받는 별개 계산이다.
+#   audit_kospi_filter.metrics 는 코스피 지수/현금 전환 실험의 일별 수익률 시계열(dates, returns, …)을 받는다 —
+#   종목 매매가 없어 승률·PF·청산 표본 같은 공통 항목이 애초에 없다. 2026-10-25 74d8f65 에서 들어왔다.)
+SKIP = {"audit_axis_combination.py", "audit_kospi_filter.py"}
 
 
 def _synth_result(with_rotation=False):
