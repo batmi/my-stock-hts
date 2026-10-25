@@ -134,12 +134,16 @@ def test_계좌_재생은_계좌_동기화_경로를_실제로_지난다(account
                           ("[방어 모드 해제] 입출금을 기준 자산에 반영했습니다", tg),       # 입출금 뒤 재평가
                           ("외부 예수금 출금 자동 감지", logs), ("[예수금 출금 자동 감지]", tg),   # 3주기 연속 확인
                           ("[시작 자산 보류] 자산 집계에서 결손이 있습니다(해외잔고)", tg),   # 기동 자산 결손
-                          ("자산 집계 일부 실패(결손: 해외잔고)", logs),                    # 첫 주기 대안 계산
-                          ("[시스템 보정] 초기 자산 정보 갱신 및 저장", logs)):
+                          ("초기 자산: 보류 — 결손 없는 자산 조회에서 잡습니다", tg),        # 시작 알림
+                          ("자산 집계 일부 실패(결손: 해외잔고) — 이번 주기 총자산을 대안 계산(", logs),  # 0주기
+                          ("[시스템 보정] 초기 자산 정보 갱신 및 저장", logs)):              # 1주기(온전)
         assert marker in where, f"계좌 재생이 '{marker}' 경로를 지나지 않았다"
+    #  0주기의 보류는 기동이 이미 알린 사실이다 — 같은 날 두 번 보내지 않는다.
+    assert "[시작 자산 보류] 자산 집계 일부 실패" not in alerts + tg
+    assert "초기 자산: 0원" not in tg and "이전 자산" not in logs
     state = account_trace["state"]
     assert state["buy_halted"] is False and state["buy_halt_kind"] is None, "방어 모드가 스스로 풀리지 않았다"
-    assert state["net_transfer_today"] <= cycle_replay.ACCOUNT_INTRADAY[1] + 1000
+    assert state["net_transfer_today"] <= cycle_replay.ACCOUNT_INTRADAY[2] + 1000
     rows = {r[0]: r for r in account_trace["asset_history"]}
     assert len(rows) == 2, rows
     first, today = sorted(rows)

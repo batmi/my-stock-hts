@@ -466,13 +466,14 @@ class TraderAccountSyncMixin:
                     #   **일부만 빠진** 총자산이 그대로 통과한다. 이제 집계 쪽이 어느
                     #   구간을 못 채웠는지 말해 주므로 그것을 본다.
                     is_asset_broken = False
+                    _broken_cause = ""
                     _degraded = list((asset_data or {}).get('degraded') or [])
                     if asset_data and total_eval > 0 and asset_data.get('sec_eval', 0) == 0:
                         is_asset_broken = True
+                        _broken_cause = "통합 자산 조회 이상 감지(주식 평가액 0 수신 — API 지연 추정)"
                     elif _degraded:
                         is_asset_broken = True
-                        self.log(f"⚠️ 자산 집계 일부 실패(결손: {', '.join(_degraded)}) — "
-                                 f"이번 주기 총자산을 대안 계산으로 대체합니다.")
+                        _broken_cause = f"자산 집계 일부 실패(결손: {', '.join(_degraded)})"
 
                     if asset_data and not is_asset_broken:
                         current_total = asset_data.get('tot_asset', 0)
@@ -482,9 +483,14 @@ class TraderAccountSyncMixin:
                         cash = deposit_d2 + (deposit_res.get('foreign_deposit', 0) if deposit_res else 0)
                         current_total = cash + total_eval
                         order_possible = deposit_res.get('order_possible', deposit_d2) if deposit_res else deposit_d2
-                        
+
+                        #  [Fix 2026-10-25] 종전 문구는 '이전 자산으로 대체'였는데, 대체값은 이전 주기의
+                        #   자산이 아니라 바로 위의 대안 계산(예수금 + 국내 보유 평가)이다 — 해외 주식
+                        #   평가액은 들어 있지 않다. 결손일 때는 같은 사건이 두 줄(앞줄만 바른 문구)로 찍혔다.
                         if is_asset_broken:
-                            self.log(f"⚠️ 통합 자산 조회 이상 감지 (API 지연 추정). 안전을 위해 이전 자산({current_total:,}원)으로 대체합니다.")
+                            self.log(f"⚠️ {_broken_cause} — 이번 주기 총자산을 대안 계산(예수금 {cash:,}원 + "
+                                     f"국내 보유 평가 {total_eval:,}원 = {current_total:,}원, 해외 주식 평가 "
+                                     f"제외)으로 대체합니다.")
 
                     # [Fix] 토스: 미체결 매수 주문에 묶인 현금을 자산에 보정한다.
                     # (매수가능금액은 예약 현금을 제외하므로, 주문 접수/취소 시 자산이 출렁여
@@ -514,6 +520,25 @@ class TraderAccountSyncMixin:
                             if saved_initial > 0:
                                 self.initial_asset = saved_initial
                                 self.log(f"[시스템 보정] 기존 초기 자산 기록 로드: {self.initial_asset:,}원")
+                            elif is_asset_broken:
+                                # [Fix 2026-10-25] 기동(initialize)과 날짜 변경 갱신은 집계에 결손이
+                                #  있으면 기준선을 박지 않는다(2026-09-08 — '모르면 박지 않는다').
+                                #  이 자리만 결손을 보지 않고 위의 대안 계산값을 기준선으로 박아,
+                                #  기동이 보류한 결정을 한 주기 뒤에 뒤집었다(아래 09-01 의 반토막
+                                #  검사와 같은 구멍). 대안 계산에는 해외 주식 평가액이 없어서, 해외
+                                #  보유가 있는 계좌면 기준선이 그만큼 낮게 하루를 지배한다. 0으로
+                                #  두고 결손 없는 주기에 다시 잰다. 기동이 같은 보류를 이미 알렸으면
+                                #  (_baseline_defer_date) 다시 보내지 않는다.
+                                today_str = datetime.now().strftime("%Y-%m-%d")
+                                if getattr(self, '_baseline_defer_date', None) != today_str:
+                                    self._baseline_defer_date = today_str
+                                    warn = (f"⚠️ [시작 자산 보류] {_broken_cause}.\n대안 계산값 "
+                                            f"{current_total:,}원(해외 주식 평가 제외)을 오늘 기준 자산으로 "
+                                            f"삼지 않습니다.\n계좌 차단기(일일 손실 한도)가 그때까지 동작하지 "
+                                            f"않습니다 — 결손 없는 조회에서 스스로 잡습니다.")
+                                    self.log(warn)
+                                    if not _pkg().alert_delivered(warn, urgent=True):
+                                        self._baseline_defer_date = None
                             elif is_plausible_baseline(acc_str, current_total):
                                 self.initial_asset = current_total
                                 if save_daily_initial_asset(acc_str, self.initial_asset):
@@ -650,7 +675,14 @@ class TraderAccountSyncMixin:
                         # 과거에는 initial_asset(=시작 총자산=현금+평가금)과 비교했는데, 보유 종목에 평가손익이
                         # 있으면 매입원가≠평가금이라 그 차이(=시작 시점 평가손익)가 가짜 입출금으로 오인되었다.
                         # → 보유 종목 하락만으로 '가짜 입금'이 잡혀 기준자산이 부풀고 비상정지가 오작동했다.
-                        if is_first_init or self.baseline_principal <= 0:
+                        #  [Fix 2026-10-25] 오늘 시작 자산을 못 박은 주기(위의 결손 보류·급감 거부)에는 기준
+                        #   원금도 잡지 않고 오프라인 대조도 미룬다. 종전에는 원금만 먼저 잡고 대조를 끝낸
+                        #   뒤, 시작 자산이 잡히는 주기에 원금을 그 시점으로 **다시** 잡았다. 그러면 그 사이의
+                        #   입출금은 장중 감지(기준 원금 대비)에도, 오프라인 대조(하루 1회 — 이미 끝남)에도
+                        #   걸리지 않고 사라진다. 출금이면 자산 이력에 안 남아 내일부터 90일 동안 가짜
+                        #   드로다운이 된다(주기 재생 account_sync 에서 150만 출금이 이렇게 사라졌다).
+                        #   두 기준은 같은 스냅샷에서 함께 잡고, 그 전의 입출금은 그때 오프라인 대조가 되찾는다.
+                        if (is_first_init or self.baseline_principal <= 0) and self.initial_asset > 0:
                             # [오프라인 입출금] 기준을 새로 잡기 **전에** 꺼져 있던 사이의
                             #  입출금부터 되찾는다. 새로 잡고 나면 대조할 것이 없어진다.
                             self._reconcile_offline_transfer(
@@ -692,7 +724,8 @@ class TraderAccountSyncMixin:
                         #  기준 자산을 **옮기지 않아도** 차단기·사이징이 이 값으로 즉시 보정된다
                         #  (effective_baseline 참조). 옮기면 initial_asset과 baseline_principal이
                         #  같은 폭으로 움직여 이 값이 0이 되므로, 반영 전후의 유효 기준은 동일하다.
-                        if toss_cash_reliable and realized_ok:
+                        #  기준 원금이 아직 없으면(위 보류) 잴 기준이 없다 — 0과 빼면 원금 전체가 '입금'이 된다.
+                        if toss_cash_reliable and realized_ok and self.baseline_principal > 0:
                             _net = int(current_principal - self.baseline_principal)
                             # [잡음 바닥] 원금 대조에는 잔돈이 남는다 — 매수 수수료는 현금만
                             #  깎고 매입원가에는 안 들어가서, 거래한 날마다 수십~수백원이
@@ -830,19 +863,3 @@ class TraderAccountSyncMixin:
             if rmn > 0 and price > 0:
                 reserved += int(rmn * price)
         return reserved
-
-    def _get_total_estimated_asset(self):
-        """현재 총 추정 자산(예수금 + 주식평가금) 계산"""
-        try:
-            cano = config.session.auto_cano
-            acnt = config.session.auto_acnt_prdt_cd
-            
-            # [수정] 해외 자산 누락 방지를 위해 완벽하게 계산된 통합 자산 데이터 사용
-            asset_data = account.get_asset_status_data(cano, acnt)
-            if asset_data:
-                return asset_data.get('tot_asset', 0)
-        except Exception as e:
-            logger.debug(f"자산 조회 중 예외 발생: {str(e)}")
-        
-        self.log(f"⚠️ 자산 조회 최종 실패. (KIS 서버 응답 지연)")
-        return None

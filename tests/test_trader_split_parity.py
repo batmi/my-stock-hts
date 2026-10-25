@@ -35,7 +35,7 @@ MIXINS = {
                    ("effective_baseline", "daily_pnl_base", "transfer_note", "_offline_transfer_threshold",
                     "_realized_matches_broker", "_reconcile_offline_transfer", "_reevaluate_buy_halt_after_transfer",
                     "_sync_external_fills", "_run_account_circuit_breaker", "_monitor_account_status",
-                    "_get_toss_open_buy_reserved", "_get_total_estimated_asset"),
+                    "_get_toss_open_buy_reserved"),
                    {"config", "api", "account", "datetime", "db_manager", "logger", "time", "_get_trade_account",
                     "is_plausible_baseline", "load_daily_initial_asset", "save_daily_initial_asset"}),
 }

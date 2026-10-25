@@ -25,11 +25,11 @@
     KOSPI 하락 미확정·휩소율 → 장중 반등(장중 래칫 유지) → 조회 실패(판단 보류), KOSDAQ 이평선 이탈(필터 차단)
     → 회복 → 조회 중 예외, 자산 고점 대비 10% 넘는 계좌 드로다운(2단계 감속·경보), 지수 장기 이력 수신 실패
     (동적 손절 캡 고정·경고).
-  · account_sync — base 시장에 계좌 사건을 얹는다(C1 3단계 '계좌 동기화' 분리의 기준, 2026-10-25).
-    꺼져 있던 사이의 출금 30만(첫 주기 원금 대조로 되찾음) → 1주기 뒤 장중 출금 150만(그 주기 일일 손실 한도로
-    방어 모드 → 다음 주기 순입출금 반영으로 스스로 해제 → 3주기 연속 확인으로 입출금 알림), 기동 시 외부 체결
-    동기화 결과(외부 매수 제한·부분 복원 안내), 기동~첫 주기의 자산 집계 일부 실패(시작 자산 보류 → 첫 주기에
-    대안 계산으로 기준선을 잡는다).
+  · account_sync — base 시장에 계좌 사건을 얹는다(C1 3단계 '계좌 동기화' 분리의 기준, 2026-10-25). 5주기다.
+    기동~0주기의 자산 집계 일부 실패(시작 자산 보류 → 0주기도 보류 → 1주기의 온전한 집계로 시작 자산·기준 원금을
+    함께 잡는다), 꺼져 있던 사이의 출금 30만(그 1주기 원금 대조로 되찾음) → 2주기 직전 장중 출금 150만(그 주기
+    일일 손실 한도로 방어 모드 → 다음 주기 순입출금 반영으로 스스로 해제 → 3주기 연속 확인으로 입출금 알림),
+    기동 시 외부 체결 동기화 결과(외부 매수 제한·부분 복원 안내).
 """
 import concurrent.futures
 import datetime as _dt
@@ -219,15 +219,18 @@ STRESS_INDEX = {
 STRESS_ASSET_HISTORY = [11_000_000 + 60_000 * i for i in range(16)] + [11_900_000 - 120_000 * i for i in range(1, 11)]
 #  [account_sync] 계좌 사건.
 #   · 어제 시작 자산 1,090만과 그때의 기준 원금(오늘 원금 + 30만)을 남겨 둔다 — 꺼져 있던 사이 30만이 빠졌다.
-#   · 1주기가 끝난 뒤 가상 계좌에서 150만을 출금한다(장중 입출금).
+#   · 기준선이 잡힌 1주기가 끝난 뒤 가상 계좌에서 150만을 출금한다(장중 입출금). 0주기는 집계 결손으로 기준선을
+#     보류하므로, 그보다 앞에서 빼면 장중 입출금이 아니라 '기준을 잡기 전의 입출금'(오프라인 대조 몫)이 된다.
 #   · 기동 시 외부 체결 동기화는 가상투자에서 꺼진다(holdings_backfill.supports_broker_history) — 증권사 체결 이력을
 #     대조한 결과 요약을 대역으로 준다. 복원·제한 등록 자체는 holdings_backfill 테스트가 본다.
 ACCOUNT_OFFLINE_WITHDRAWAL = 300_000
 ACCOUNT_YESTERDAY_ASSET = 10_900_000
-ACCOUNT_INTRADAY = {1: -1_500_000}          # 주기 번호(그 주기가 시작되기 직전) → 가상 입출금액
+ACCOUNT_INTRADAY = {2: -1_500_000}          # 주기 번호(그 주기가 시작되기 직전) → 가상 입출금액
 ACCOUNT_BACKFILL = {"written": 2, "skipped": 0, "restricted": ["재생외부(100090)"],
                     "partial": [("100060", "재생정체", 10)], "error": None}
 ACCOUNT_DEGRADED_CYCLES = {0}               # 이 주기(0 = 기동 포함)의 자산 집계는 해외잔고 구간이 실패한다
+#  시나리오마다 돌리는 주기 수. account_sync 는 장중 출금(2주기 직전) 뒤 3주기 연속 확인까지 지나야 해서 5주기다.
+SCENARIO_CYCLES = {"account_sync": 5}
 
 
 def _daily(kind, seed, base, n=260, end=None):
@@ -357,10 +360,11 @@ def _project_modules():
             yield mod
 
 
-def run(tmp_path, cycles=CYCLES, scenario="base"):
+def run(tmp_path, cycles=None, scenario="base"):
     """하네스를 한 번 돌리고 기록(dict)을 돌려준다. tmp_path 는 가상 원장 DB 자리."""
     if scenario not in SCENARIOS:
         raise ValueError(f"모르는 시나리오: {scenario}")
+    cycles = cycles or SCENARIO_CYCLES.get(scenario, CYCLES)
     CLOCK.now = START
     os.makedirs(str(tmp_path), exist_ok=True)
     market = Market(UNIVERSE, scenario)

@@ -164,19 +164,24 @@ import inspect
 
 
 def _baseline_write_sites():
-    """save_daily_initial_asset 을 부르는 자리와, 그 자리가 검사를 지나는지."""
+    """save_daily_initial_asset 을 부르는 자리와, 그 자리가 검사를 지나는지.
+
+    [2026-10-25] 계좌 감시(_monitor_account_status — 첫 주기 기준선)는 C1 3단계로 account_sync 에
+     있다. 종전에는 trader 모듈만 훑어서, 옮긴 뒤로는 그 자리를 보지 않은 채 통과했다 — 둘 다 본다.
+    """
+    import modules.auto_trade.account_sync as A
     import modules.auto_trade.trader as T
 
-    src = inspect.getsource(T)
-    tree = ast.parse(src)
     calls = []
-    for fn in ast.walk(tree):
-        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        names = {n.func.id for n in ast.walk(fn)
-                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
-        if "save_daily_initial_asset" in names:
-            calls.append((fn.name, names))
+    for mod in (T, A):
+        tree = ast.parse(inspect.getsource(mod))
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            names = {n.func.id for n in ast.walk(fn)
+                     if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+            if "save_daily_initial_asset" in names:
+                calls.append((fn.name, names))
     return calls
 
 
@@ -184,6 +189,10 @@ def test_기준선을_적는_함수는_타당성_검사를_함께_지난다():
     """[가드] 새 저장 경로가 생겨도 검사 없이 지나가지 못하게 못 박는다."""
     sites = _baseline_write_sites()
     assert sites, "save_daily_initial_asset 호출부를 하나도 못 찾았다 — 검사기가 낡았다"
+    #  기준선을 박는 세 경로(기동·날짜 변경·첫 주기)를 실제로 보고 있는지부터 — 또 옮겨지면
+    #  조용히 둘만 보고 통과하지 않게 한다.
+    missing = {"initialize", "_run_loop", "_monitor_account_status"} - {n for n, _ in sites}
+    assert not missing, f"기준선 경로를 못 찾았다: {sorted(missing)} — 코드가 옮겨졌다면 훑는 모듈을 고쳐라"
     bad = [name for name, names in sites
            if "is_plausible_baseline" not in names]
     assert not bad, (

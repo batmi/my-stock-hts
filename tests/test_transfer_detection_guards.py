@@ -103,7 +103,8 @@ def test_the_derived_correction_is_gated_on_the_same_conditions():
     게이트를 통과 못 하면 보정하지 않는다(0으로 되돌린다).
     """
     src = inspect.getsource(T.AutoTrader._monitor_account_status)
-    assert "if toss_cash_reliable and realized_ok:" in src
+    #  [2026-10-25] 기준 원금이 아직 없는 주기(시작 자산 보류)도 같은 게이트로 막는다 — 0과 빼면 원금 전체가 '입금'이다.
+    assert "if toss_cash_reliable and realized_ok and self.baseline_principal > 0:" in src
     assert "self.net_transfer_today = 0" in src, "못 잰 경우 보정을 끄는 경로가 없다"
 
 

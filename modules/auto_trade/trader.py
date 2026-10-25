@@ -438,6 +438,9 @@ class AutoTrader(TraderReportingMixin, TraderMarketRiskMixin, TraderAccountSyncM
                             f"(일일 손실 한도)가 동작하지 않으니 확인해 주세요.")
                     self.log(warn)
                     api.send_telegram_message(warn)
+                    #  첫 주기의 계좌 감시도 결손이면 같은 보류를 한다(account_sync) — 같은 날
+                    #  같은 사실을 두 번 알리지 않도록 그쪽 스로틀을 찍어 둔다.
+                    self._baseline_defer_date = datetime.now().strftime("%Y-%m-%d")
 
                 if tot_asset > 0:
                     account_key = f"{target_cano}-{acnt}"
@@ -718,16 +721,23 @@ class AutoTrader(TraderReportingMixin, TraderMarketRiskMixin, TraderAccountSyncM
             # [수정] 시작 메시지 생성 로직은 초기화 시 저장된 데이터 활용
             holdings = self.initial_holdings
             summary = self.initial_summary
-            deposit = 0
-            if self.initial_asset > 0:
-                if summary:
-                    deposit = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
-                    if deposit == 0:
-                        deposit = api.safe_int(summary[0].get('dnca_tot_amt', 0))
-            
+            #  [Fix 2026-10-25] 시작 자산을 보류한 날(집계 결손·직전 대비 급감·조회 실패)에는
+            #   '초기 자산 0원'이 찍혔고, 예수금도 그 조건에 묶여 함께 0원이었다 — 잔고가 빈
+            #   계좌와 글자가 같다. 보류 사유는 위의 경고가 따로 알린다. 예수금은 기동 잔고
+            #   조회(summary)에서 읽으므로 시작 자산과 무관하게 보이고, 그 조회가 없을 때만
+            #   '확인 불가'로 적는다(못 읽은 것은 0원이 아니다).
+            deposit = None
+            if summary:
+                deposit = api.safe_int(summary[0].get('prvs_rcdl_excc_amt', 0))
+                if deposit == 0:
+                    deposit = api.safe_int(summary[0].get('dnca_tot_amt', 0))
+
             msg = f"🟢 [시스템 시작] 자동매매가 시작되었습니다.\n"
-            msg += f"초기 자산: {self.initial_asset:,}원"
-            msg += f"\n현재 예수금: {deposit:,}원"
+            if self.initial_asset > 0:
+                msg += f"초기 자산: {self.initial_asset:,}원"
+            else:
+                msg += "초기 자산: 보류 — 결손 없는 자산 조회에서 잡습니다(그때까지 계좌 차단기 미동작)"
+            msg += f"\n현재 예수금: {deposit:,}원" if deposit is not None else "\n현재 예수금: 확인 불가"
             
             # [복원] 상세 자산 현황 추가
             stock_eval_amt = 0

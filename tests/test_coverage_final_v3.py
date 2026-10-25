@@ -81,20 +81,6 @@ def test_refine_trade_records_priority():
     assert len(refined) == 1
     assert refined[0]['reason'] == '전략 매수'
 
-@patch('modules.auto_trade.api.get_domestic_balance')
-@patch('modules.auto_trade.api.get_deposit_balance')
-def test_get_total_estimated_asset_fallback(mock_deposit, mock_balance):
-    """자산 계산 Fallback 테스트"""
-    trader = auto_trade.AutoTrader()
-    # 잔고 조회 실패 (API 모듈은 실패 시 None, None을 반환함)
-    mock_balance.return_value = (None, None)
-    # 예수금 조회 성공
-    mock_deposit.return_value = {'deposit': 1000000, 'foreign_deposit': 0, 'd2_deposit': 1000000}
-    
-    
-    asset = trader._get_total_estimated_asset()
-    assert asset == 1000000
-
 # --- Utils ---
 def test_get_tick_size_edge():
     """호가 단위 경계값 테스트"""
