@@ -658,6 +658,34 @@ def test_ping_failure_accumulates_streak(db, monkeypatch):
     assert journal_sync._ping_fail_streak == 3
 
 
+def test_한_번_끊겼다_살아나면_경고도_회복도_남기지_않는다(db, monkeypatch, caplog):
+    """[2026-10-25] 열흘 동안 회복 345건 중 314건이 1회 실패였다 — 실패 WARNING·회복 INFO 가 두 줄씩 쌓여 538줄이 됐고,
+    긴급 알림에 붙는 로그 꼬리(mystock.log 20줄)를 덮었다."""
+    journal_sync._ping_fail_streak = 0
+    with caplog.at_level("DEBUG", logger=journal_sync.logger.name):
+        _patch_transport(monkeypatch, None)
+        assert journal_sync.ping('running') is False
+        _patch_transport(monkeypatch, _FakeResponse(200, {'status': 'success'}))
+        assert journal_sync.ping('running') is True
+    loud = [r for r in caplog.records if r.levelno >= 20 and "Ping" in r.getMessage()]
+    assert not loud, [r.getMessage() for r in loud]
+    assert journal_sync._ping_fail_streak == 0
+
+
+def test_두_번_연속_끊기면_경고하고_회복도_알린다(db, monkeypatch, caplog):
+    """웹 표시등이 '통신단절'로 바뀌는 3회보다 먼저 남는다 — 진짜 끊김은 여전히 보인다."""
+    journal_sync._ping_fail_streak = 0
+    with caplog.at_level("DEBUG", logger=journal_sync.logger.name):
+        _patch_transport(monkeypatch, None)
+        for _ in range(journal_sync._PING_WARN_FROM):
+            journal_sync.ping('running')
+        warns = [r.getMessage() for r in caplog.records if r.levelname == "WARNING" and "Ping 실패" in r.getMessage()]
+        assert len(warns) == 1 and f"연속 {journal_sync._PING_WARN_FROM}회" in warns[0], warns
+        _patch_transport(monkeypatch, _FakeResponse(200, {'status': 'success'}))
+        journal_sync.ping('running')
+    assert any(r.levelname == "INFO" and "Ping 회복" in r.getMessage() for r in caplog.records)
+
+
 def test_notify_shutdown_sends_stopped(db, monkeypatch):
     """HTS 종료 시 stopped 를 보내야 웹 표시등이 즉시 '정지됨'으로 바뀐다."""
     calls = _patch_transport(monkeypatch, _FakeResponse(200, {'status': 'success'}))

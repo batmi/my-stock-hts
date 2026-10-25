@@ -119,8 +119,13 @@ _PING_INTERVAL_SEC = 10
 _PING_TIMEOUT = 4             # 초 — 10초마다 도는 하트비트가 통신 지연에 오래 물리면 안 된다
 _TICK_INTERVAL_SEC = _PING_INTERVAL_SEC   # 워커 순회 주기(Ping 주기에 맞춘다)
 # 10초 간격이라 실패 로그를 매번 남기면 로그가 이것만으로 찬다.
-# 첫 실패(= 감지 시점)와 이후 5분마다 한 번씩만 WARNING 으로 남긴다.
+# 연속 _PING_WARN_FROM 회째(= 감지 시점)와 이후 5분마다 한 번씩만 WARNING 으로 남긴다.
 _PING_WARN_EVERY = 30
+# [2026-10-25] 종전에는 첫 실패부터 남겼다. 그런데 대부분은 한 번 끊겼다 바로 살아난다 — 열흘 동안 회복 345건 중
+#  314건이 1회 실패(4초 시한 초과)였고, 실패 WARNING 과 회복 INFO 가 두 줄씩 쌓여 열흘에 538줄이 됐다. 그 줄들이
+#  긴급 알림에 붙는 로그 꼬리(mystock.log 20줄)를 덮었다. 두 번 연속(약 20초)부터 남긴다 — 웹 표시등이
+#  '통신단절'로 바뀌는 3회보다 먼저다. 한 번짜리는 DEBUG 로만 남긴다.
+_PING_WARN_FROM = 2
 _SHUTDOWN_PING_TIMEOUT = 3    # 초 — 종료 통지가 프로그램 종료를 붙잡지 않도록 짧게
 
 
@@ -1406,9 +1411,11 @@ def ping(status='running', message=None, timeout=None, force=False):
     if ok:
         # 서버가 200 을 줬으면 ack 도 전달됐다 — 다음 Ping 에 또 실어 보내지 않는다.
         _pending_ack = None
-        # 끊겼다가 살아난 것은 운용자가 알아야 하므로 회복만 INFO 로 남긴다.
-        if _ping_fail_streak:
+        # 끊겼다가 살아난 것은 운용자가 알아야 하므로 회복만 INFO 로 남긴다(경고를 남긴 끊김만 — 짝을 맞춘다).
+        if _ping_fail_streak >= _PING_WARN_FROM:
             logger.info(f"[Journal] 봇 상태 Ping 회복 (연속 실패 {_ping_fail_streak}회 후)")
+        elif _ping_fail_streak:
+            logger.debug("[Journal] 봇 상태 Ping 회복 (한 번 끊김)")
         _ping_fail_streak = 0
         logger.debug(f"[Journal] 봇 상태 Ping 전송 (status={status})")
 
@@ -1428,10 +1435,13 @@ def ping(status='running', message=None, timeout=None, force=False):
     else:
         _ping_fail_streak += 1
         reason = res.status_code if res is not None else '응답 없음'
-        # 10초 간격이라 매번 남기면 로그가 이것만으로 찬다 — 첫 실패와 이후 5분마다만.
-        if _ping_fail_streak == 1 or _ping_fail_streak % _PING_WARN_EVERY == 0:
+        # 10초 간격이라 매번 남기면 로그가 이것만으로 찬다 — 연속 _PING_WARN_FROM 회째와 이후 5분마다만.
+        if _ping_fail_streak == _PING_WARN_FROM or (_ping_fail_streak > _PING_WARN_FROM
+                                                    and _ping_fail_streak % _PING_WARN_EVERY == 0):
             logger.warning(f"[Journal] 봇 상태 Ping 실패 ({reason}) "
                            f"— 연속 {_ping_fail_streak}회")
+        else:
+            logger.debug(f"[Journal] 봇 상태 Ping 실패 ({reason}) — 연속 {_ping_fail_streak}회")
     return ok
 
 
