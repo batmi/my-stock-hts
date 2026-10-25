@@ -433,7 +433,7 @@ def test_check_buy_conditions_low_cash_limit():
     
     with patch.object(trader, 'log') as mock_log:
         # Cash 500 < 1000
-        trader._check_buy_conditions([], {'d2_deposit': 500}, is_market_open=True)
+        trader._check_buy_conditions([], {'d2_deposit': 500})
         assert any("예수금 부족" in str(c) for c in mock_log.call_args_list)
 
 def test_check_buy_conditions_max_holdings_limit():
@@ -450,7 +450,7 @@ def test_check_buy_conditions_max_holdings_limit():
     
     with patch.object(trader, '_analyze_candidates', return_value=[{'code': '005930', 'name': 'Samsung', 'price': 50000, 'score': 9.0, 'rsi': 50.0, 'adx': 25.0, 'cci': 100.0, 'vol_strength': 150.0, 'atr': 500}]):
         with patch.object(trader, 'log') as mock_log:
-            trader._check_buy_conditions(holdings, {'d2_deposit': 1000000}, is_market_open=True)
+            trader._check_buy_conditions(holdings, {'d2_deposit': 1000000})
             assert any("최대 보유 종목 수" in str(c) for c in mock_log.call_args_list)
 
 # --- api.py additional ---

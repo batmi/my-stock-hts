@@ -355,7 +355,11 @@ class TraderBuyingMixin:
             self.log(f"[슬롯] 미체결 주문을 세지 못했습니다 — 잔고만으로 판정합니다: {e}")
         return occupied
 
-    def _check_buy_conditions(self, holdings, deposit_res, is_market_open=True, rules_map=None, restricted_stocks=None):
+    def _check_buy_conditions(self, holdings, deposit_res, rules_map=None, restricted_stocks=None):
+        #  장이 열린 주기에서만 부른다 — 주 루프(_run_loop)는 장이 닫혀 있으면 이 앞에서 마감 처리로
+        #  빠진다. [2026-10-25] 그래서 받던 is_market_open 은 늘 True 였고, 그 값으로만 닿던
+        #  '[장마감] 매수 후보 감지 (주문 미전송)' 분기는 지웠다. 인자만 남기면 False 를 넘긴 호출이
+        #  장 밖에서 주문까지 가므로 인자째 뺐다.
         # [안전장치] 방어 모드(일일 손실 한도 초과 등)에서는 신규 진입만 차단한다.
         #  매도 검사(_check_sell_conditions)는 이 게이트 앞에서 이미 수행되므로 손절 감시는 유지된다.
         if getattr(self, 'buy_halted', False):
@@ -369,13 +373,12 @@ class TraderBuyingMixin:
         #  [근거] 개장 첫 30분 진입은 스파이크를 고점에서 추격하고 되돌림을 맞는다.
         #   tools/audit_time_of_day.py(30m·씨드5) 전체 136.7% vs 현행 131.1%(47-0-28),
         #   같은 차단량 무작위 대조 5장 전승 — 상세는 config.SYSTEM_ENTRY_OPEN_DELAY_USE 주석.
-        if is_market_open:
-            delay_left = entry_open_delay_remaining()
-            if delay_left > 0:
-                if self.consecutive_errors == 0:  # 로그 도배 방지
-                    self.log(f"매수 스킵: 개장 직후 진입 보류 — {delay_left // 60}분 "
-                             f"{delay_left % 60}초 남음 (청산 감시는 계속됩니다)")
-                return
+        delay_left = entry_open_delay_remaining()
+        if delay_left > 0:
+            if self.consecutive_errors == 0:  # 로그 도배 방지
+                self.log(f"매수 스킵: 개장 직후 진입 보류 — {delay_left // 60}분 "
+                         f"{delay_left % 60}초 남음 (청산 감시는 계속됩니다)")
+            return
 
         # [안전장치] 미체결 주문 현황을 모르면 신규 매수를 보류한다. 재기동 직후 복구
         #  조회가 실패한 상태로 매수하면, 이미 거래소에 걸린 주문을 못 보고 같은 종목에
@@ -549,12 +552,6 @@ class TraderBuyingMixin:
         
         # 2. 매수 집행
         if candidates:
-            if not is_market_open:
-                self.log(f"[장마감] 매수 후보 감지 (주문 미전송): {len(candidates)}종목")
-                for cand in candidates:
-                     self.log(f"   - {cand['name']} ({cand['score']}점)")
-                return
-
             if not can_buy:
                 # [수정] '조건 미달'은 사실과 반대였다 — 이 종목들은 매수 조건을 통과한
                 #  후보이고, 막은 것은 계좌 상태(슬롯·예수금)다. 무엇을 풀어야 살 수 있는지

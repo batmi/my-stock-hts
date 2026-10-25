@@ -42,7 +42,7 @@ def test_halt_buys_blocks_new_entries_only(trader):
 
     # 매수 경로: 후보 분석에 진입하지 않고 즉시 반환되어야 한다
     with patch.object(trader, '_analyze_candidates') as mock_analyze:
-        trader._check_buy_conditions([], {'d2_deposit': 10_000_000}, is_market_open=True)
+        trader._check_buy_conditions([], {'d2_deposit': 10_000_000})
         mock_analyze.assert_not_called()
 
     # 매도 경로: 방어 모드와 무관하게 정상 동작해야 한다 (보유 없음 → 히트 0으로 정상 종료)

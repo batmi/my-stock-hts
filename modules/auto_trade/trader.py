@@ -1528,7 +1528,7 @@ class AutoTrader(TraderReportingMixin, TraderMarketRiskMixin, TraderAccountSyncM
                             self._check_sell_conditions(holdings, current_market_status, rules_map=_cycle_rules_map, restricted_stocks=_cycle_restricted)
                             # 2. 매수 조건 점검 ([안전장치] 잔고 0건 재확인 대기 중에는 건너뛴다)
                             if not balance_unconfirmed:
-                                self._check_buy_conditions(holdings, deposit_res, current_market_status, rules_map=_cycle_rules_map, restricted_stocks=_cycle_restricted)
+                                self._check_buy_conditions(holdings, deposit_res, rules_map=_cycle_rules_map, restricted_stocks=_cycle_restricted)
                             # 3. 미체결 주문 관리 (오래된 주문 취소) - 장 중에만 수행
                             self.order_manager.manage_unfilled_orders()
                         # 4. DB 쓰기 실패 확인 — 실패는 인메모리 캐시에 가려 세션 중엔

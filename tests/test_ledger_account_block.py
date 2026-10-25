@@ -129,8 +129,7 @@ def _run_buy_cycle(trader, holdings, cash):
          patch('modules.auto_trade.db_manager.db.get_all_stock_strategies', return_value=[]):
         trader.buy_halted = False
         trader.pending_restore_ok = True
-        trader._check_buy_conditions(holdings, {'d2_deposit': cash}, is_market_open=True,
-                                     rules_map={})
+        trader._check_buy_conditions(holdings, {'d2_deposit': cash}, rules_map={})
     return seen.get('buy_block', '(호출 안 됨)')
 
 

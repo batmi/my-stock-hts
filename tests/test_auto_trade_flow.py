@@ -106,7 +106,7 @@ def test_check_buy_conditions(mock_get_rules, mock_calc, mock_place, mock_qty, m
     # 실행
     with patch('modules.auto_trade.db_manager.db.insert_trade'), \
          patch('modules.auto_trade.api.send_telegram_message'):
-        trader._check_buy_conditions([], deposit_res, is_market_open=True)
+        trader._check_buy_conditions([], deposit_res)
         
     # 주문 함수 호출 확인
     mock_place.assert_called()
