@@ -30,6 +30,11 @@
     함께 잡는다), 꺼져 있던 사이의 출금 30만(그 1주기 원금 대조로 되찾음) → 2주기 직전 장중 출금 150만(그 주기
     일일 손실 한도로 방어 모드 → 다음 주기 순입출금 반영으로 스스로 해제 → 3주기 연속 확인으로 입출금 알림),
     기동 시 외부 체결 동기화 결과(외부 매수 제한·부분 복원 안내).
+  · sell_paths — base 시장·보유에, 시스템이 정상 경로로 청산하지 못하는 포지션과 매도 후처리 사건을 얹는다
+    (C1 4단계 '매도' 분리의 기준, 2026-10-25). 5주기다. 트레이딩 제한·ETF 제외 보유의 손절선 이탈 경보, 미체결
+    매수가 걸린 손절(매수 취소 → 다음 주기 청산 → 매도 예약 취소), 개별 룰의 반익절, 액면분할(권리 조정 — 앵커
+    환산·예약 취소), 매도 응답 유실(결과 불명)과 매도가능수량 조정·조회 실패·0(3주기 연속 → 경보), 시세 조회 실패
+    (판정 불가), 일봉 조회 예외(분석 실패 경보), 마지막 주기는 장 마감 뒤(마감 전환·마감 스냅샷·청산 신호 알림).
 """
 import concurrent.futures
 import datetime as _dt
@@ -58,7 +63,8 @@ CYCLES = 4
 _FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 GOLDEN = os.path.join(_FIXTURES, "cycle_replay_golden.json")
 SCENARIOS = {"base": GOLDEN, "market_stress": os.path.join(_FIXTURES, "cycle_replay_golden_market.json"),
-             "account_sync": os.path.join(_FIXTURES, "cycle_replay_golden_account.json")}
+             "account_sync": os.path.join(_FIXTURES, "cycle_replay_golden_account.json"),
+             "sell_paths": os.path.join(_FIXTURES, "cycle_replay_golden_sell.json")}
 
 
 # ── 시계 ───────────────────────────────────────────────────────────────────────────────────
@@ -163,6 +169,32 @@ def _as_completed_in_order(fs, timeout=None):
     return iter(list(fs))
 
 
+class _LogTape(list):
+    """트레이더의 화면 로그 — 그대로 최근 300줄로 잘리게 두고(트레이더가 보는 모양), 잘려 나간 줄만 따로 모은다.
+
+    trader.log 는 300줄을 넘으면 맨 앞 줄을 버린다. 기록을 t.logs 로만 남기면 긴 시나리오(sell_paths)의 앞 주기가
+    빠지고, '그 사이에 늘어난 줄'(len 차이)이 0 이 되어 화면·정지 로그가 비어 보인다.
+    """
+
+    def __init__(self, *a):
+        super().__init__(*a)
+        self.dropped = []
+
+    def pop(self, index=-1):
+        item = super().pop(index)
+        if index == 0:
+            self.dropped.append(item)
+        return item
+
+    def everything(self):
+        return self.dropped + list(self)
+
+
+def _all_logs(t):
+    logs = t.logs
+    return logs.everything() if isinstance(logs, _LogTape) else list(logs)
+
+
 class _NoStartThread(threading.Thread):
     """AutoTrader 가 띄우는 스레드 — 만들되 띄우지 않는다(주 루프는 하네스가 직접 돈다)."""
 
@@ -230,7 +262,51 @@ ACCOUNT_BACKFILL = {"written": 2, "skipped": 0, "restricted": ["재생외부(100
                     "partial": [("100060", "재생정체", 10)], "error": None}
 ACCOUNT_DEGRADED_CYCLES = {0}               # 이 주기(0 = 기동 포함)의 자산 집계는 해외잔고 구간이 실패한다
 #  시나리오마다 돌리는 주기 수. account_sync 는 장중 출금(2주기 직전) 뒤 3주기 연속 확인까지 지나야 해서 5주기다.
-SCENARIO_CYCLES = {"account_sync": 5}
+SCENARIO_CYCLES = {"account_sync": 5, "sell_paths": 5}
+#  [sell_paths] 기동 전 보유로만 심고 관심목록에는 넣지 않는다(매수 경로는 base 가 본다). 손절 쪽은 base 의
+#   재생하락(100050)과 같은 일봉이고, 반익절·분할·시세 쪽은 재생상승A(100010)·재생정체(100060)와 같은 일봉이다.
+SELL_UNIVERSE = [
+    {"code": "100110", "name": "재생제한", "exchange": "KOSPI", "kind": "down", "seed": 1, "base": 14000.0,
+     "path": [0.0]},       # 트레이딩 제한(수동 보유) -20% → 판정 제외 + 손절선 이탈 경보
+    {"code": "100120", "name": "KODEX 재생", "exchange": "KOSPI", "kind": "down", "seed": 1, "base": 10000.0,
+     "path": [0.0]},       # ETF(자동매도 제외 설정) -17% → 판정 제외 + 경보 + 앵커 복원
+    {"code": "100130", "name": "재생대기", "exchange": "KOSDAQ", "kind": "down", "seed": 1, "base": 12000.0,
+     "path": [0.0]},       # 미체결 매수가 걸린 채 -20% → 매수 취소(손절 보호) → 다음 주기 손절 → 매도 예약 취소
+    {"code": "100140", "name": "재생반익", "exchange": "KOSPI", "kind": "up", "seed": 1, "base": 20000.0,
+     "path": [0.0]},       # 개별 룰(익절 20%·반익절 사용) +12% → 반익절
+    {"code": "100150", "name": "재생분할", "exchange": "KOSDAQ", "kind": "side", "seed": 3, "base": 18000.0,
+     "path": [0.0]},       # 2주기 직전 2:1 액면분할 → 권리 조정(앵커 환산·예약 매수 취소)
+    {"code": "100160", "name": "재생불명", "exchange": "KOSPI", "kind": "down", "seed": 1, "base": 15000.0,
+     "path": [0.0]},       # -20% 손절 → 0주기 응답 유실(결과 불명) → 1주기 매도가능 15주로 조정 → 2주기 잔량
+    {"code": "100170", "name": "재생수량", "exchange": "KOSDAQ", "kind": "down", "seed": 1, "base": 9000.0,
+     "path": [0.0]},       # -20% 손절인데 매도가능 0 (3주기 연속 → 경보) → 마감 뒤 청산 신호 알림
+    {"code": "100180", "name": "재생시세", "exchange": "KOSPI", "kind": "side", "seed": 3, "base": 16000.0,
+     "path": [0.0]},       # 1주기 시세 조회 실패 → 판정 불가(직전 가격으로 평가)
+    {"code": "100190", "name": "재생오류", "exchange": "KOSDAQ", "kind": "down", "seed": 1, "base": 11000.0,
+     "path": [0.0]},       # 0주기 매도 판정 예외 → 분석 실패 경보 → 1주기 매도가능 조회 실패(보유 수량으로 매도)
+]
+SELL_HOLDINGS = [
+    {"code": "100110", "qty": 20, "rel": 1.25, "days_ago": 15, "trade": False},     # HTS 직접 매수(매수 기록 없음)
+    {"code": "100120", "qty": 30, "rel": 1.20, "days_ago": 10},
+    {"code": "100130", "qty": 20, "rel": 1.25, "days_ago": 10},
+    {"code": "100140", "qty": 20, "rel": 1 / 1.12, "days_ago": 6},
+    {"code": "100150", "qty": 10, "rel": 1 / 1.05, "days_ago": 5},
+    {"code": "100160", "qty": 20, "rel": 1.25, "days_ago": 10},
+    {"code": "100170", "qty": 20, "rel": 1.25, "days_ago": 10},
+    {"code": "100180", "qty": 20, "rel": 1 / 1.03, "days_ago": 5},
+    {"code": "100190", "qty": 20, "rel": 1.25, "days_ago": 10},
+]
+SELL_RESTRICTED = ("100110",)
+SELL_PENDING_BUY = {"100130": 5}            # 기동 전부터 걸려 있는 미체결 매수 수량(체결되지 않는다)
+SELL_RULES = {"100140": {"buy_score": 7.0, "buy_rsi": 70, "sell_score": 4.0, "stop_loss": -7.0, "take_profit": 20.0,
+                         "take_profit_rsi": 0.0, "ts_activation": 10.0, "ts_callback": 5.0, "half_take_profit_use": 1}}
+SELL_RESERVED = [("100130", "sell", 20, 1.10), ("100150", "buy", 5, 0.95)]   # 코드·종류·수량·목표가(전일 종가 대비 배)
+SELL_SPLIT_AT = {"100150": 2}               # 이 주기가 시작되기 직전에 2:1 액면분할(수량 2배·평단 절반·일봉 절반)
+SELL_STALE = {"100180": {1}}                # 이 주기에 시세 조회가 실패한다
+SELL_ANALYZE_ERROR = {"100190": {0}}        # 이 주기에 매도 판정(analyze_sell)이 예외를 던진다(2026-08-05 의 룰 NULL 사고 모양)
+SELL_SELLABLE = {"100170": {0: 0, 1: 0, 2: 0, 3: 0}, "100160": {1: 15}, "100190": {1: None}}   # 주기 → 매도가능수량
+SELL_UNKNOWN_ORDER = {"100160": {0}}        # 이 주기의 매도 주문 응답이 유실된다(결과 불명 — 접수되지 않았다)
+SELL_CLOSE_AT = {4: (15, 41)}               # 이 주기가 시작되기 직전에 시계를 정규장 마감(확정 종가) 뒤로 옮긴다
 
 
 def _daily(kind, seed, base, n=260, end=None):
@@ -300,6 +376,8 @@ class Market:
         u = self.items.get(code)
         if u is None:
             return 0.0
+        if self.scenario == "sell_paths" and self.cycle in SELL_STALE.get(code, ()):
+            return 0.0          # 시세 조회 실패(가상 브로커는 직전 정상가로 폴백하고 '판정 불가'로 표시한다)
         k = min(self.cycle, len(u["path"]) - 1)
         return float(_tick_floor(self.prev_close(code) * (1 + u["path"][k])))
 
@@ -367,7 +445,7 @@ def run(tmp_path, cycles=None, scenario="base"):
     cycles = cycles or SCENARIO_CYCLES.get(scenario, CYCLES)
     CLOCK.now = START
     os.makedirs(str(tmp_path), exist_ok=True)
-    market = Market(UNIVERSE, scenario)
+    market = Market(UNIVERSE + (SELL_UNIVERSE if scenario == "sell_paths" else []), scenario)
     telegrams = []
     trader_box = {}
 
@@ -433,6 +511,9 @@ def run(tmp_path, cycles=None, scenario="base"):
         paper_broker.reset_price_cache()
         P(paper_broker, "_odno_seq", 0)
         _seed_holdings(market)
+        if scenario == "sell_paths":
+            _seed_holdings(market, SELL_HOLDINGS)
+            _seed_sell_events(market)
         if scenario == "market_stress":
             _seed_asset_history()
         if scenario == "account_sync":
@@ -440,7 +521,10 @@ def run(tmp_path, cycles=None, scenario="base"):
 
         # 합성 시장
         P(paper_broker, "_current_price", lambda code, fallback=0.0: market.price(code) or fallback)
-        P(paper_broker, "_krx_settled_close", lambda code: 0.0)   # 정규장 중 — 확정 종가 평가 없음
+        #  정규장 중 — 확정 종가 평가 없음. sell_paths 의 마지막 주기는 확정 뒤라 그때의 가격이 종가다.
+        P(paper_broker, "_krx_settled_close",
+          lambda code: market.price(code) if (scenario == "sell_paths" and CLOCK.now.strftime("%H%M") >= "1540")
+          else 0.0)
         P(api, "get_chart_data", lambda code, *a, **k: market.chart(code))
         P(api, "get_current_price", lambda code, *a, **k: market.price(code))
         P(api, "get_current_price_data", lambda code, *a, **k: _price_payload(market, code))
@@ -473,6 +557,37 @@ def run(tmp_path, cycles=None, scenario="base"):
                     data = dict(data, degraded=list(data.get("degraded") or []) + ["해외잔고"])
                 return data
             P(_account_mod, "get_asset_status_data", _asset_status_degraded)
+        if scenario == "sell_paths":
+            _fetch_sellable = api.fetch_sellable_quantity
+            P(api, "fetch_sellable_quantity",
+              lambda code: (SELL_SELLABLE[code][market.cycle]
+                            if market.cycle in SELL_SELLABLE.get(code, {}) else _fetch_sellable(code)))
+            _place = paper_broker.place_order
+
+            def _place_lost(action, code, qty, price, name=None):
+                if action.lower() == "sell" and market.cycle in SELL_UNKNOWN_ORDER.get(code, ()):
+                    return {"rt_cd": "1", "msg_cd": "ORDER_UNKNOWN", "msg1": "재생: 주문 응답 유실", "output": {}}
+                return _place(action, code, qty, price, name=name)
+            P(paper_broker, "place_order", _place_lost)
+            _analyze_sell = _engine_mod.DefaultStrategy.analyze_sell
+
+            def _analyze_sell_err(self_, code, *a, **k):
+                if market.cycle in SELL_ANALYZE_ERROR.get(code, ()):
+                    raise TypeError("재생: 개별 룰 값이 비어 있다(NoneType)")
+                return _analyze_sell(self_, code, *a, **k)
+            P(_engine_mod.DefaultStrategy, "analyze_sell", _analyze_sell_err)
+            #  당일 주문내역 — 실계좌처럼 시험 모델 주문 행(미체결·취소)을 돌려준다. 이 재생에는 체결 감시
+            #   스레드가 없다(가상투자에서는 그 감시가 시험 모델의 취소를 원장 상태로 정리한다). 그래서 손절
+            #   보호가 직접 취소한 매수는 미체결 관리의 고아 주문 해제(실계좌 경로 — 당일 주문내역의 잔량 0)가
+            #   정리하게 한다. 가상투자의 진짜 응답은 빈 목록이다.
+            P(api, "get_today_history", lambda *a, **k: _paper_order_history())
+            #  시장 구분 — 관심목록 밖 보유는 KIS 마스터 → KRX 상장 목록(네트워크)으로 간다. 합성 종목은 표에서 답한다.
+            _by_master = analysis._get_market_type_by_master
+            P(analysis, "_get_market_type_by_master",
+              lambda code: market.items[code]["exchange"] if code in market.items else _by_master(code))
+            #  장 마감 전환이 부르는 마감 브리핑 스케줄러 — 싱글톤을 이 실행 안에만 둔다(스레드는 띄우지 않는다).
+            from modules import scheduler as _scheduler_mod
+            P(_scheduler_mod.SystemScheduler, "_instance", None)
         analysis.reset_live_vol_regime()
         st.callback(analysis.reset_live_vol_regime)
         #  국면 판정은 프로세스 전역 캐시(TTL 60초)와 판정 불가 경고 표시를 든다 — 앞 실행의 값을 물려받지 않게.
@@ -483,6 +598,7 @@ def run(tmp_path, cycles=None, scenario="base"):
         AutoTrader = _trader_mod.AutoTrader     # 패키지가 재수출하는 것과 같은 클래스
         AutoTrader._instance = None
         t = AutoTrader()
+        t.logs = _LogTape(t.logs)
         trader_box["t"] = t
         t.start(interactive=False)
         trace: dict = {"start_logs": [_mask(x) for x in t.logs]}
@@ -494,10 +610,10 @@ def run(tmp_path, cycles=None, scenario="base"):
         trace.update(_collect(t, telegrams, scenario))
         trace["alerts"] = list(alerts)
         #  종료 경로 — 실제 정지(stop)로 잠금을 풀고 정지 알림을 남긴다(다음 재생이 '중복 실행'에 걸리지 않게)
-        n_logs, n_tg, n_al = len(t.logs), len(telegrams), len(alerts)
+        n_logs, n_tg, n_al = len(_all_logs(t)), len(telegrams), len(alerts)
         t.thread = _NoStartThread()         # 루프 스레드가 끝난 상태(실제 정지와 같은 경로)
         t.stop(use_status=False)
-        trace["stop"] = {"logs": [_mask(x) for x in t.logs[n_logs:]], "telegram": telegrams[n_tg:],
+        trace["stop"] = {"logs": [_mask(x) for x in _all_logs(t)[n_logs:]], "telegram": telegrams[n_tg:],
                          "alerts": alerts[n_al:]}
         t.is_running = False
         AutoTrader._instance = None
@@ -515,6 +631,13 @@ def _cycle_hook(t, market):
         if market.scenario == "account_sync" and market.cycle in ACCOUNT_INTRADAY:
             ok, msg = paper_broker.adjust_seed(ACCOUNT_INTRADAY[market.cycle])
             assert ok, msg
+        if market.scenario == "sell_paths":
+            for code, at in SELL_SPLIT_AT.items():
+                if market.cycle == at:
+                    _apply_split(market, code, 2)
+            if market.cycle in SELL_CLOSE_AT:
+                hh, mm = SELL_CLOSE_AT[market.cycle]
+                CLOCK.now = CLOCK.now.replace(hour=hh, minute=mm, second=0, microsecond=0)
         return r
     t._record_cycle_duration = _wrapped
 
@@ -528,18 +651,75 @@ def _price_payload(market, code):
                                       "stck_hgpr": str(int(p)), "stck_lwpr": str(int(p))}}
 
 
-def _seed_holdings(market):
-    """기동 전 보유분을 가상 원장과 거래 기록에 심는다(매수일은 days_ago 영업일 전)."""
-    for h in SEEDED_HOLDINGS:
+def _seed_holdings(market, holdings=SEEDED_HOLDINGS):
+    """기동 전 보유분을 가상 원장과 거래 기록에 심는다(매수일은 days_ago 영업일 전).
+    trade=False 는 거래 기록 없이 원장에만 둔다(HTS 에서 직접 산 포지션)."""
+    for h in holdings:
         when = pd.bdate_range(end=START, periods=h["days_ago"] + 1)[0].strftime("%Y-%m-%d 10:00:00")
         name = market.items[h["code"]]["name"]
         avg = float(_tick_floor(market.prev_close(h["code"]) * h["rel"]))
         odno = f"SEED{h['code']}"
         with paper_broker._lock:
             assert paper_broker._book_fill("buy", h["code"], name, h["qty"], avg, odno, when) is None
-        db_manager.db.insert_trade("buy(AUTO)", h["code"], name, h["qty"], str(avg), odno,
-                                   reason="재생 시드", order_status="체결", custom_time=when,
-                                   buy_price=avg)
+        if h.get("trade", True):
+            db_manager.db.insert_trade("buy(AUTO)", h["code"], name, h["qty"], str(avg), odno,
+                                       reason="재생 시드", order_status="체결", custom_time=when,
+                                       buy_price=avg)
+
+
+def _seed_sell_events(market):
+    """[sell_paths] 트레이딩 제한·기동 전 미체결 매수·개별 룰·예약 주문을 심는다."""
+    from modules.auto_trade import common
+    for code in SELL_RESTRICTED:
+        common.add_restricted_stock(code, market.items[code]["name"], "재생 수동 보유", cano="PAPER", acnt="")
+    stamp = START.replace(minute=0, second=0) - _dt.timedelta(minutes=5)       # 09:55 — 오늘 낸 주문
+    for code, qty in SELL_PENDING_BUY.items():
+        name = market.items[code]["name"]
+        price = float(_tick_floor(market.prev_close(code) * 0.95))
+        odno = f"PREPLAY{code}"
+        #  가상 브로커의 시험 모델 주문 행 — 체결 예정 시각이 하루 뒤라 이 재생 동안 체결되지 않는다.
+        paper_broker._db().execute_query(
+            f"INSERT INTO paper_orders ({paper_broker._ORDER_COLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (odno, code, name, "buy", qty, price, 0, 0.0, "open", stamp.strftime("%Y-%m-%d %H:%M:%S"),
+             stamp.strftime("%Y-%m-%d %H:%M:%S"), None,
+             json.dumps([[(stamp + _dt.timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S"), qty]]), 0, 0, "재생 미체결"))
+        db_manager.db.insert_trade("buy(AUTO)", code, name, qty, str(price), odno, reason="재생 미체결 매수",
+                                   order_status="접수", custom_time=stamp.strftime("%Y-%m-%d %H:%M:%S"))
+    for code, rule in SELL_RULES.items():
+        db_manager.db.save_stock_strategy(code, market.items[code]["name"], dict(rule))
+    for code, side, qty, rel in SELL_RESERVED:
+        target = float(_tick_floor(market.prev_close(code) * rel))
+        db_manager.db.insert_reserved_order("PAPER", "", "domestic", side, code, market.items[code]["name"], qty,
+                                            target, "PRICE", target, None)
+
+
+def _paper_order_history():
+    """[sell_paths] 가상 시험 모델 주문 행을 KIS 당일 주문체결 조회(output1) 모양으로."""
+    rows = []
+    for odno, code, name, side, qty, price, filled, status, created in paper_broker._db().execute_query(
+            "SELECT odno, code, name, side, qty, price, filled_qty, status, created_at FROM paper_orders "
+            "ORDER BY odno", fetch="all") or []:
+        filled = int(filled or 0)
+        cncl = int(qty) - filled if status == "cancelled" else 0
+        rmn = int(qty) - filled if status == "open" else 0
+        when = _dt.datetime.strptime(created, "%Y-%m-%d %H:%M:%S")
+        rows.append({"odno": odno, "pdno": code, "prdt_name": name, "ord_qty": str(qty),
+                     "tot_ccld_qty": str(filled), "cncl_cfrm_qty": str(cncl), "rmn_qty": str(rmn),
+                     "avg_prvs": "0", "ord_unpr": str(int(price)), "ord_dt": when.strftime("%Y%m%d"),
+                     "ord_tmd": when.strftime("%H%M%S"), "sll_buy_dvsn_cd": "02" if side == "buy" else "01",
+                     "sll_buy_dvsn_cd_name": "매수" if side == "buy" else "매도"})
+    return {"rt_cd": "0", "output1": rows, "output2": {}}
+
+
+def _apply_split(market, code, n):
+    """[sell_paths] n:1 액면분할 — 가상 원장 수량 n배·평단 1/n, 일봉(수정주가)과 이후 시세 1/n."""
+    df = market.daily[code]
+    for col in ("open", "high", "low", "close"):
+        df[col] = (df[col] / n).round()
+    df["volume"] = df["volume"] * n
+    with paper_broker._lock:
+        paper_broker._db().execute_query(
+            "UPDATE paper_positions SET qty = qty * ?, avg_price = avg_price / ? WHERE code = ?", (n, n, code))
 
 
 def _seed_asset_history():
@@ -562,7 +742,7 @@ def _seed_principal_snapshot():
 
 
 def _collect(t, telegrams, scenario="base"):
-    out = {"logs": [_mask(x) for x in t.logs], "telegram": list(telegrams)}
+    out = {"logs": [_mask(x) for x in _all_logs(t)], "telegram": list(telegrams)}
     out["fills"] = [{k: r.get(k) for k in ("time", "type", "code", "qty", "price", "amount", "fee", "profit_amt")}
                     for r in paper_broker.get_fills()]
     out["positions"] = paper_broker.get_positions()
@@ -588,6 +768,19 @@ def _collect(t, telegrams, scenario="base"):
         out["asset_history"] = [list(r) for r in db_manager.db.execute_query(
             "SELECT date, asset, net_transfer, principal FROM daily_asset_history WHERE account = ? ORDER BY date",
             (paper_broker._account_key(),), fetch="all") or []]
+    if scenario == "sell_paths":
+        out["state"].update({k: _jsonable(getattr(t, k, None)) for k in (
+            "no_sellable_streak", "stuck_pending_streak", "after_hours_sell_notified", "after_hours_scan_date",
+            "paper_closing_snapshot_date")})
+        out["state"]["half_tp_cache"] = sorted(getattr(t, "half_tp_cache", None) or [])
+        out["state"]["unmanaged_stop_notified"] = sorted(getattr(t, "unmanaged_stop_notified", None) or {})
+        out["state"]["pending_orders"] = sorted(getattr(t.order_manager, "pending_orders", None) or {})
+        out["reserved"] = [list(r) for r in db_manager.db.execute_query(
+            "SELECT code, order_type, qty, status, fail_reason FROM reserved_orders ORDER BY id", fetch="all") or []]
+        out["anchors"] = [list(r) for r in db_manager.db.execute_query(
+            "SELECT code, highest_price FROM trailing_stops ORDER BY code", fetch="all") or []]
+        out["paper_orders"] = [list(r) for r in paper_broker._db().execute_query(
+            "SELECT odno, code, side, qty, filled_qty, status FROM paper_orders ORDER BY odno", fetch="all") or []]
     out["screens"] = _screens(t)
     return out
 
@@ -610,7 +803,7 @@ def _screens(t):
                      ("log_current_holdings", lambda: t.log_current_holdings())):
         saved_width = console._width
         console.width = 135
-        n_logs = len(t.logs)
+        n_logs = len(_all_logs(t))
         try:
             with console.capture() as cap:
                 try:
@@ -621,7 +814,7 @@ def _screens(t):
                     console.print(f"<{type(e).__name__}: {e}>")
         finally:
             console._width = saved_width
-        screens[name] = [_mask(x) for x in cap.get().splitlines()] + [_mask(x) for x in t.logs[n_logs:]]
+        screens[name] = [_mask(x) for x in cap.get().splitlines()] + [_mask(x) for x in _all_logs(t)[n_logs:]]
     for name, fn in (("get_status_message", t.get_status_message), ("get_health_message", t.get_health_message),
                      ("get_performance_report", t.get_performance_report)):
         try:

@@ -22,8 +22,8 @@
  그리고 커밋 메시지에 기록이 왜 바뀌었는지 적는다. 구조만 바꾸는 커밋(C1 분리)에서는 바뀌면 안 된다.
 
 [시나리오] cycle_replay.SCENARIOS 마다 기준 기록이 따로 있다 — base(매매 경로)·market_stress(시장·리스크 경로,
- 2026-10-24)·account_sync(계좌 동기화 경로, 2026-10-25). 시나리오마다 '실제로 그 경로를 지났는가'를 먼저 보고
- 나서 기록을 비교한다.
+ 2026-10-24)·account_sync(계좌 동기화 경로, 2026-10-25)·sell_paths(매도 경로, 2026-10-25). 시나리오마다 '실제로
+ 그 경로를 지났는가'를 먼저 보고 나서 기록을 비교한다.
 """
 import difflib
 import json
@@ -75,7 +75,13 @@ def account_trace(tmp_path_factory):
     return _fresh(tmp_path_factory, "account_sync")
 
 
-_TRACE_FIXTURE = {"base": "fresh_trace", "market_stress": "stress_trace", "account_sync": "account_trace"}
+@pytest.fixture(scope="module")
+def sell_trace(tmp_path_factory):
+    return _fresh(tmp_path_factory, "sell_paths")
+
+
+_TRACE_FIXTURE = {"base": "fresh_trace", "market_stress": "stress_trace", "account_sync": "account_trace",
+                  "sell_paths": "sell_trace"}
 
 
 def test_재생은_매매_경로를_실제로_지난다(fresh_trace):
@@ -150,6 +156,47 @@ def test_계좌_재생은_계좌_동기화_경로를_실제로_지난다(account
     assert rows[first][2] <= -cycle_replay.ACCOUNT_OFFLINE_WITHDRAWAL + 1000, "오프라인 출금이 대조점 행에 없다"
     assert rows[today][2] == state["net_transfer_today"], "오늘 순입출금이 자산 이력에 없다"
     for name, lines in account_trace["screens"].items():
+        assert lines, f"{name}: 화면이 비어 있다"
+        assert not any(x.startswith("<") and "Error" in x for x in lines), f"{name}: 화면 출력 중 예외 {lines[:3]}"
+
+
+def test_매도_재생은_매도_경로를_실제로_지난다(sell_trace):
+    """sell_paths 가 노린 경로 — 하나라도 빠지면 그 경로의 분리는 기준 없이 옮겨진다."""
+    logs = "\n".join(sell_trace["logs"])
+    tg = "\n".join(sell_trace["telegram"])
+    alerts = "\n".join(a["message"] for a in sell_trace["alerts"])
+    for marker, where in (("[분석스킵] 재생제한: 트레이딩 제한", logs),                          # 미관리 포지션
+                          ("[매도스킵] KODEX 재생(100120): ETF 제외 설정", logs),
+                          ("[TrailingStop] KODEX 재생(100120) 앵커 복원", logs),               # 판정 밖 앵커 복원
+                          ("종목: 재생제한(100110)", alerts), ("종목: KODEX 재생(100120)", alerts),
+                          ("[손절 보호] 재생대기(100130) 수익률", logs), ("🛑 [손절 보호] 재생대기", tg),  # 미체결 매수 취소
+                          ("[고아주문 해제] 100130", logs),
+                          ("매도 실행: 재생대기 - ATR손절", logs),                                # 다음 주기 청산
+                          ("[예약취소] 전량 매도로 인해 대기 중이던 재생대기 매도 예약 주문 1건", logs),
+                          ("매도 실행: 재생반익 - 반익절", logs), ("[개별 룰 적용]", logs),          # 반익절
+                          ("[권리 조정] 재생분할(100150)", logs), ("트레일링 최고가 0.5000배 보정", alerts),
+                          ("예약 매수 취소: PRICE", alerts),
+                          ("매도 결과 불명: 재생불명", logs), ("[매도 결과 불명] 재생불명", tg),       # 응답 유실
+                          ("매도 수량 조정: 재생불명 20주 -> 15주", logs),
+                          ("매도 중단: 재생수량 주문 가능 수량 부족 (미체결 존재 가능성 · 3회 연속)", logs),
+                          ("[손절선 이탈 — 매도 실패]", alerts),
+                          ("[분석스킵] 재생시세(100180): 현재가 조회 실패(판정 불가)", logs),          # 시세 실패
+                          ("[분석실패] 재생오류(100190)", logs), ("매도 판정 오류 (분석 실패)", alerts),
+                          ("매도 수량 조회 실패: 재생오류", logs),
+                          ("💤 [거래 종료]", logs), ("[관찰 모드] 마감 자산 스냅샷 기록", logs),         # 마감 뒤
+                          ("[장마감] 청산 신호 점검", logs),
+                          ("[장마감] 매도 신호 감지 (주문 미전송): 재생수량", logs),
+                          ("[장마감 후 매도 신호]", alerts)):
+        assert marker in where, f"매도 재생이 '{marker}' 경로를 지나지 않았다"
+    state = sell_trace["state"]
+    assert state["half_tp_cache"] == ["100140"], state["half_tp_cache"]
+    assert state["pending_orders"] == [] and state["stuck_pending_streak"] == {}, "취소한 매수가 대기로 남았다"
+    assert state["after_hours_scan_date"] == state["paper_closing_snapshot_date"] == "20261021"
+    assert [r[3] for r in sell_trace["reserved"]] == ["CANCELED", "CANCELED"], sell_trace["reserved"]
+    assert ["100150", 9694.5] in sell_trace["anchors"], "분할 뒤 앵커가 환산되지 않았다"
+    held = {p["code"]: p["qty"] for p in sell_trace["positions"]}
+    assert held.get("100150") == 20 and "100130" not in held and "100160" not in held and "100190" not in held, held
+    for name, lines in sell_trace["screens"].items():
         assert lines, f"{name}: 화면이 비어 있다"
         assert not any(x.startswith("<") and "Error" in x for x in lines), f"{name}: 화면 출력 중 예외 {lines[:3]}"
 
