@@ -90,8 +90,8 @@ def isolate_krx_openapi_snapshot(tmp_path_factory):
 
 #  [격리 · 2026-10-16] 세션 초기화(core.session.initialize)가 읽는 계좌·앱키 환경변수.
 #   종전에는 운용자 셸(~/.htsrc)의 **실제 값**을 그대로 읽었다 — 맥북 테스트 출력에 실계좌번호가
-#   찍혔고, 그 값이 없는 CI(GitHub Actions)에서는 initialize 가 '계좌번호 입력' 프롬프트를 띄워
-#   모든 테스트가 준비 단계에서 죽었다(2026-10-16 첫 CI 실행 32건 전부 setup ERROR).
+#   찍혔고, 그 값이 없는 깨끗한 환경(셸 설정이 없는 새 기기)에서는 initialize 가 '계좌번호 입력' 프롬프트를 띄워
+#   모든 테스트가 준비 단계에서 죽었다(2026-10-16 실측 32건 전부 setup ERROR).
 #   네트워크는 차단 픽스처가 막지만, 테스트 결과가 셸 환경에 따라 갈리면 안 된다 → 항상 가짜 값.
 _FAKE_SESSION_ENV = {
     "REAL_APP_KEY": "TEST_REAL_APP_KEY", "REAL_APP_SECRET": "TEST_REAL_APP_SECRET",
@@ -110,7 +110,7 @@ def fresh_krx_openapi_db(tmp_path_factory, isolate_krx_openapi_snapshot):
     """[격리 · 2026-10-16] 테스트마다 빈 Open API 저장소.
 
     세션 하나가 임시 DB 하나를 공유하자, 가짜 응답(_call 패치)으로 적재한 테스트의 행이 같은 워커의
-    뒤 테스트로 넘어갔다 — CI 에서 지수 폴백 체인 테스트가 KIS/tvDatafeed 대신 앞 테스트가 남긴 가짜
+    뒤 테스트로 넘어갔다 — 병렬 실행에서 지수 폴백 체인 테스트가 KIS/tvDatafeed 대신 앞 테스트가 남긴 가짜
     코스피 6,700 평평한 1년치를 읽고 'OPENAPI' 로 답했다(test_toss_api, 실행 순서에 따라서만 실패).
     경로를 직접 지정하는 테스트(test_krx_openapi 의 store)는 이 위에서 다시 바꾼다.
     """
