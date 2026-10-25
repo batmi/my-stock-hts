@@ -228,18 +228,6 @@ def test_get_holdings_message(mock_balance):
     msg_empty = trader._get_holdings_message("12345678")
     assert "없음" in msg_empty
 
-def test_get_prev_rsi():
-    """전일 RSI 계산 테스트"""
-    trader = auto_trade.AutoTrader()
-    
-    # 1. 데이터 부족
-    assert trader._get_prev_rsi(pd.DataFrame()) is None
-    
-    # 2. 데이터 충분
-    df = pd.DataFrame({'close': [100 + i for i in range(20)]})
-    rsi = trader._get_prev_rsi(df)
-    assert rsi is not None
-
 @patch('modules.auto_trade.api.check_server_health')
 @patch('modules.auto_trade.alert_delivered', return_value=True)
 def test_wait_for_server_recovery_loop(mock_tg, mock_health):

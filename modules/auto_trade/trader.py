@@ -1795,18 +1795,6 @@ class AutoTrader(TraderReportingMixin, TraderMarketRiskMixin, TraderAccountSyncM
             except Exception as e:
                 self.log(f"[장애 대기] 점검 중 오류: {e}")
 
-
-
-    def _get_prev_rsi(self, df):
-        """전일 RSI 계산 (주의 조건 판단용)"""
-        if df is not None and not df.empty and len(df) >= 16:
-            delta = df['close'].diff()
-            gain = delta.where(delta > 0, 0).ewm(com=13, adjust=False).mean()
-            loss = -delta.where(delta < 0, 0).ewm(com=13, adjust=False).mean()
-            try: return (100 - (100 / (1 + gain/loss))).iloc[-2]
-            except Exception: pass
-        return None
-
     def _clamp_order_price(self, code, order_price):
         """지정가를 가격제한폭(상·하한가) 안으로 되돌린다.
 
