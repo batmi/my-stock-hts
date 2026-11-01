@@ -2927,10 +2927,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
     ai_prompt_msg = "🤖 AI 지수 심층 진단을 수행하시겠습니까?" if is_index else "🤖 AI 종목 심층 진단을 수행하시겠습니까?"
     if Prompt.ask(ai_prompt_msg, choices=["y", "n"], default="n") == 'y':
         from modules import theme_analysis
-        from rich.markdown import Markdown
-        from rich.panel import Panel
-        from rich.padding import Padding
-        
+
         rsi_val_str = f"{ind['rsi']:.1f}" if ind['rsi'] is not None else "-"
         adx_val_str = f"{ind['adx']:.1f}" if ind['adx'] is not None else "-"
         cci_val_str = f"{ind['cci']:.1f}" if ind['cci'] is not None else "-"
@@ -2980,8 +2977,6 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
             if answer.startswith("⚠️"):
                 config.console.print(f"\n{answer}")
             else:
-                md = Markdown(answer)
-                
                 if is_index:
                     idx_table = Table(title="지수 분석 정보", box=box.HORIZONTALS, show_header=True, header_style="dim", border_style="dim")
                     idx_table.add_column("지수명", justify="left", style="white", no_wrap=True)
@@ -3112,9 +3107,7 @@ def diagnose_stock(target_code=None, target_name=None, target_is_overseas=False)
                     is_etf = (not is_overseas) and api.is_domestic_etf_etn(code, name)
                     print_table(table_title, [(name, code)], is_overseas=is_overseas, is_etf=is_etf)
                 
-                panel = Panel(md, title=title_str, border_style="cyan", padding=(1, 2), width=120)
-                config.console.print()
-                config.console.print(Padding(panel, (0, 4)))
+                utils.print_ai_report(answer, title_str)
         else:
             config.console.print("[red]분석 결과를 생성하지 못했습니다.[/red]")
 

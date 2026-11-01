@@ -1530,9 +1530,6 @@ def run_monte_carlo_simulation(full_df, start_idx, initial_capital, buy_score, b
     config.console.print()
     if Prompt.ask("🤖 AI 백테스팅 성과 진단을 수행하시겠습니까?", choices=["y", "n"], default="n") == 'y':
         from modules import theme_analysis
-        from rich.markdown import Markdown
-        from rich.panel import Panel
-        from rich.padding import Padding
         
         param_info = f"매수 {buy_score}점/RSI{buy_rsi}, 매도 {sell_score}점, 익절 +{take_profit}%/RSI{take_profit_rsi}, 손절 {stop_loss}%, 트레일링 +{ts_activation}%/-{ts_callback}%, 시간청산 {time_stop_days}일"
         if use_atr_stop: param_info += f", ATR손절 x{atr_mult}"
@@ -1568,10 +1565,7 @@ def run_monte_carlo_simulation(full_df, start_idx, initial_capital, buy_score, b
             if answer.startswith("⚠️"):
                 config.console.print(f"\n{answer}")
             else:
-                md = Markdown(answer)
-                panel = Panel(md, title=f"🤖 AI 몬테카를로 백테스팅 성과 진단: {name}({code})", border_style="cyan", padding=(1, 2), width=120)
-                config.console.print()
-                config.console.print(Padding(panel, (0, 4)))
+                utils.print_ai_report(answer, f"🤖 AI 몬테카를로 백테스팅 성과 진단: {name}({code})")
         else:
             config.console.print("[red]진단 결과를 생성하지 못했습니다.[/red]")
 
@@ -1845,9 +1839,6 @@ def run_walk_forward(full_df, start_idx, initial_capital, is_overseas, base_para
     config.console.print()
     if Prompt.ask("🤖 AI 백테스팅 성과 진단을 수행하시겠습니까?", choices=["y", "n"], default="n") == 'y':
         from modules import theme_analysis
-        from rich.markdown import Markdown
-        from rich.panel import Panel
-        from rich.padding import Padding
         
         param_info = f"매수 {base_params['buy_score']}점/RSI{base_params['buy_rsi']}, 매도 {base_params['sell_score']}점, 익절 +{base_params['take_profit']}%/RSI{base_params['take_profit_rsi']}, 손절 {base_params['stop_loss']}%, 트레일링 +{base_params['ts_activation']}%/-{base_params['ts_callback']}%"
         
@@ -1885,10 +1876,7 @@ def run_walk_forward(full_df, start_idx, initial_capital, is_overseas, base_para
             if answer.startswith("⚠️"):
                 config.console.print(f"\n{answer}")
             else:
-                md = Markdown(answer)
-                panel = Panel(md, title=f"🤖 AI Walk-Forward 성과 진단: {name}({code})", border_style="cyan", padding=(1, 2), width=120)
-                config.console.print()
-                config.console.print(Padding(panel, (0, 4)))
+                utils.print_ai_report(answer, f"🤖 AI Walk-Forward 성과 진단: {name}({code})")
         else:
             config.console.print("[red]진단 결과를 생성하지 못했습니다.[/red]")
 
@@ -3314,9 +3302,6 @@ def run_backtest():
         config.console.print()
         if Prompt.ask("🤖 AI 백테스팅 성과 진단 및 최적 파라미터 조언을 받으시겠습니까?", choices=["y", "n"], default="n") == 'y':
             from modules import theme_analysis
-            from rich.markdown import Markdown
-            from rich.panel import Panel
-            from rich.padding import Padding
             
             param_info = f"매수 {buy_score}점/RSI{buy_rsi}, 매도 {sell_score}점, 익절 +{take_profit}%/RSI{take_profit_rsi}, 손절 {stop_loss}%, 트레일링 +{ts_activation}%/-{ts_callback}%, 시간청산 {time_stop_days}일"
             if use_atr_stop: param_info += f", ATR손절 x{atr_mult}"
@@ -3354,10 +3339,7 @@ def run_backtest():
                 if answer.startswith("⚠️"):
                     config.console.print(f"\n{answer}")
                 else:
-                    md = Markdown(answer)
-                    panel = Panel(md, title=f"🤖 AI 단일 백테스팅 성과 진단: {name}({code})", border_style="cyan", padding=(1, 2), width=120)
-                    config.console.print()
-                    config.console.print(Padding(panel, (0, 4)))
+                    utils.print_ai_report(answer, f"🤖 AI 단일 백테스팅 성과 진단: {name}({code})")
             else:
                 config.console.print("[red]진단 결과를 생성하지 못했습니다.[/red]")
 

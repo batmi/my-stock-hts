@@ -7,8 +7,6 @@ import math
 from contextlib import closing
 from datetime import datetime, timezone
 import time
-from rich.panel import Panel
-from rich.markdown import Markdown
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
 from rich.table import Table
 from rich import box
@@ -1291,15 +1289,7 @@ def _analyze_with_gemini_ui():
             _save_theme_analysis(result)
 
     if result:
-        # Markdown 렌더링
-        md = Markdown(result)
-        
-        # Panel 생성 (내부 패딩 적용)
-        panel = Panel(md, title="실시간 테마 분석 리포트", border_style="cyan", padding=(1, 2), width=120)
-        
-        # 화면 출력 시 양쪽 마진 적용 (Padding: top, right, bottom, left)
-        config.console.print()
-        config.console.print(Padding(panel, (0, 4)))
+        utils.print_ai_report(result, "실시간 테마 분석 리포트")
 
 def _analyze_with_custom_prompt_ui():
     """사용자 정의 프롬프트로 Gemini 분석 실행"""
@@ -1317,10 +1307,7 @@ def _analyze_with_custom_prompt_ui():
         result = analyze_market_trends_with_gemini(custom_prompt=user_prompt)
 
         if result:
-            md = Markdown(result)
-            panel = Panel(md, title="AI 분석 리포트 (Custom)", border_style="cyan", padding=(1, 2), width=120)
-            config.console.print()
-            config.console.print(Padding(panel, (0, 4)))
+            utils.print_ai_report(result, "AI 분석 리포트 (Custom)")
 
 def _analyze_stock_ui():
     """개별 종목 AI 심층 진단 UI"""
@@ -1502,10 +1489,7 @@ def _analyze_stock_ui():
             answer = analyze_stock_with_gemini(code, name, tech_info)
             
         if answer:
-            md = Markdown(answer)
-            panel = Panel(md, title=f"🤖 AI 종목 심층 진단: {name}({code})", border_style="cyan", padding=(1, 2), width=120)
-            config.console.print()
-            config.console.print(Padding(panel, (0, 4)))
+            utils.print_ai_report(answer, f"🤖 AI 종목 심층 진단: {name}({code})")
         else:
             config.console.print("[red]분석 결과를 생성하지 못했습니다.[/red]")
             

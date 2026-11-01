@@ -635,9 +635,6 @@ def _maybe_ai_summary(events):
     items_text = "\n".join(lines)
 
     from modules import theme_analysis
-    from rich.markdown import Markdown
-    from rich.panel import Panel
-    from rich.padding import Padding
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
                   BarColumn(), console=config.console, transient=True) as progress:
         progress.add_task(f"[cyan]Gemini가 공시를 분석 중...[/cyan]\n[dim]  (모델: {config.GEMINI_MODEL})[/dim]", total=None)
@@ -646,5 +643,4 @@ def _maybe_ai_summary(events):
         if answer.startswith("⚠️"):
             config.console.print(f"\n{answer}")
         else:
-            config.console.print()
-            config.console.print(Padding(Panel(Markdown(answer), title="🤖 AI 공시 해석", border_style="cyan", padding=(1, 2), width=120), (0, 4)))
+            utils.print_ai_report(answer, "🤖 AI 공시 해석")

@@ -16,6 +16,7 @@ import os
 import re
 import sqlite3
 import time
+import unicodedata
 from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
@@ -1118,6 +1119,68 @@ def align_rows_column(rows, index):
         if len(r) > index:
             r[index] = c
     return rows
+
+
+# ==========================================================
+# [AI 리포트 상자] 이모지를 걷어 내고 테두리 상자에 담아 출력한다
+# ==========================================================
+#  [왜 걷어 내는가 · 2026-11-01] 같은 리포트가 어떤 터미널에서는 상자가 반듯하고, 어떤
+#   터미널(tmux 를 띄운 창)에서는 오른쪽 테두리가 한 칸 안으로 들어가고 줄 끝에 잔상이
+#   남았다. 깨진 줄은 전부 이모지(⭐ 📊 🔍 ⚠️)가 든 줄이었다. rich 는 이모지를 2칸으로 세어
+#   테두리 자리를 잡는데, 이모지 폭은 rich·tmux·터미널이 각자 다른 표로 정한다 — 1칸으로
+#   그리는 터미널에서는 그 줄의 테두리만 한 칸 당겨진다. 한글·영문·괘선은 어디서나 폭이 같다.
+#   원문은 캐시·텔레그램(이모지가 멀쩡하다)·'⚠️' 오류 표시에 그대로 쓰이므로
+#   **터미널 상자에 그리기 직전에만** 걷어 낸다.
+#  보조 평면의 그림 문자는 전부, BMP 기호 블록은 기본이 그림(EAW=W)이거나 뒤에 VS16(U+FE0F)이
+#   붙어 그림으로 바뀐 것만 걷는다. ★ ✓ ☆ 같은 글자 기호는 어디서나 1칸이라 둔다.
+_EMOJI_UNIT = "[⌀-⏿☀-➿⬀-⯿\U0001F000-\U0001FAFF][️‍⃣]*"
+_EMOJI_UNIT_RE = re.compile(_EMOJI_UNIT)
+_EMOJI_RUN_RE = re.compile(f"((?:{_EMOJI_UNIT})+)( ?)")   # 국기·ZWJ 처럼 붙은 묶음째로 본다
+_EMOJI_JOINER_RE = re.compile("[️‍⃣]")   # 홀로 남은 VS16·ZWJ·키캡 꼬리
+
+
+def _is_emoji_unit(unit):
+    return ("️" in unit or ord(unit[0]) >= 0x1F000
+            or unicodedata.east_asian_width(unit[0]) == "W")
+
+
+def strip_emoji(text):
+    """터미널마다 폭이 다른 이모지를 걷어 낸다. 경고(⚠)는 뜻이 남도록 ※ 로 바꾼다.
+
+    이모지 묶음이 줄머리·공백·여는 괄호 뒤에 있으면 바로 뒤 공백 하나도 함께 지운다
+    ('[📊 요약]' → '[요약]'). 낱말에 붙어 있으면 공백을 남겨 앞뒤 낱말이 붙지 않게 한다.
+    """
+    if not text:
+        return text
+    text = re.sub("⚠️?", "※", text)
+
+    def _drop(m):
+        run, space = m.groups()
+        kept = "".join(u for u in _EMOJI_UNIT_RE.findall(run) if not _is_emoji_unit(u))
+        if kept == run:
+            return m.group(0)
+        if kept:
+            return kept + space
+        prev = m.string[m.start() - 1] if m.start() else "\n"
+        return "" if (prev.isspace() or prev in "[(") else space
+
+    return _EMOJI_JOINER_RE.sub("", _EMOJI_RUN_RE.sub(_drop, text))
+
+
+def print_ai_report(text, title):
+    """AI 리포트(마크다운)를 테두리 상자에 담아 출력한다 — AI 리포트 출력부의 단일 소스.
+
+    본문과 제목의 이모지를 strip_emoji 로 걷어 낸 뒤 그린다. 여백은 종전 그대로다
+    (상자 안 padding=(1, 2), 폭 120, 좌우 마진 4).
+    """
+    from rich.markdown import Markdown
+    from rich.padding import Padding
+    from rich.panel import Panel
+
+    panel = Panel(Markdown(strip_emoji(text)), title=strip_emoji(title),
+                  border_style="cyan", padding=(1, 2), width=120)
+    config.console.print()
+    config.console.print(Padding(panel, (0, 4)))
 
 
 def format_obv_cell(obv_val, obv_ma_val):

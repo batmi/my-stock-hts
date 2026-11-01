@@ -1711,15 +1711,8 @@ def main():
                                                 if ai_result.startswith("⚠️"):
                                                     config.console.print(f"\n{ai_result}")
                                                 else:
-                                                    # [출력 통일] 기존 AI 심층 진단 리포트와 동일한 여백/패딩 사용
-                                                    #   (theme_analysis.py: Panel padding=(1,2), width=120 + 좌우 마진 Padding(_,(0,4)))
-                                                    from rich.markdown import Markdown
-                                                    from rich.panel import Panel
-                                                    from rich.padding import Padding
-                                                    _md = Markdown(ai_result)
-                                                    _panel = Panel(_md, title=f"🤖 AI 차트 분석: {target_name}({target_code}) - {period_str}", border_style="cyan", padding=(1, 2), width=120)
-                                                    config.console.print()
-                                                    config.console.print(Padding(_panel, (0, 4)))
+                                                    # [출력 통일] 다른 AI 리포트와 같은 상자(utils.print_ai_report)
+                                                    utils.print_ai_report(ai_result, f"🤖 AI 차트 분석: {target_name}({target_code}) - {period_str}")
 
                                 last_sub_choice = sub_choice
                                 action_taken = True
