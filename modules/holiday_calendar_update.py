@@ -107,10 +107,16 @@ def _project_root():
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+# [Ctrl+C 격리 · 2026-11-02] 하위 프로세스는 따로 세션을 연다(start_new_session=True).
+#  같은 세션이면 앱과 함께 터미널의 전경 프로세스 그룹에 들어가, 운용자가 메뉴에서 누른 Ctrl+C
+#  (앱은 '종료하시겠습니까?(기본 n)'로 받고 계속 돈다)를 같이 받고 죽는다. 파이에서 10-04·11-01 두 번,
+#  재기동 20초 안팎에 스냅샷이 KeyboardInterrupt 로 끝났다(스케줄러가 기동 직후 바로 돌린다).
+#  스냅샷은 다시 시도하면 그만이지만(11-01 은 90초 뒤 기동 점검의 시도가 성공했다), pip 가 설치 도중
+#  끊기면 패키지가 반쯤 남을 수 있다.
 def _snapshot_in_fresh_interpreter():
     code = "from modules.holiday_calendar_update import _print_snapshot; _print_snapshot()"
     res = subprocess.run([sys.executable, "-c", code], cwd=_project_root(), capture_output=True,
-                         text=True, timeout=SNAPSHOT_TIMEOUT_SEC)
+                         text=True, timeout=SNAPSHOT_TIMEOUT_SEC, start_new_session=True)
     if res.returncode != 0:
         raise RuntimeError(f"스냅샷 실패: {(res.stderr or '').strip()[-300:]}")
     return json.loads(res.stdout.strip().splitlines()[-1])
@@ -122,7 +128,8 @@ def _pip_upgrade():
     in_venv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
     if not in_venv:
         cmd.append("--break-system-packages")     # 시스템 파이썬(PEP 668) — run.sh 와 같은 처리
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=PIP_TIMEOUT_SEC)
+    res = subprocess.run(cmd, capture_output=True, text=True, timeout=PIP_TIMEOUT_SEC,
+                         start_new_session=True)     # 위 [Ctrl+C 격리] 참고
     tail = ((res.stdout or "") + (res.stderr or "")).strip().splitlines()
     return res.returncode == 0, (tail[-1] if tail else "")
 

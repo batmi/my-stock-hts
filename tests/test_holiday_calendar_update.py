@@ -114,6 +114,25 @@ def test_warm_import_loads_the_lazy_financial_modules():
     assert "holidays.financial.ny_stock_exchange" in sys.modules
 
 
+def test_children_do_not_share_the_terminal_ctrl_c():
+    """[2026-11-02] 메뉴의 Ctrl+C 가 같은 프로세스 그룹의 스냅샷을 죽였다(파이 10-04·11-01).
+
+    스냅샷·pip 둘 다 따로 세션을 열어야 한다 — 특히 pip 는 설치 도중 끊기면 패키지가 반쯤 남는다.
+    conftest 가 세션 내내 두 함수를 막아 두므로(실제 pip 차단) 소스에서 subprocess 호출을 전수로 본다.
+    """
+    import ast
+    import inspect
+    tree = ast.parse(inspect.getsource(H))
+    calls = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+             and isinstance(n.func.value, ast.Name) and n.func.value.id == "subprocess"]
+    assert len(calls) == 2                       # 스냅샷·pip — 늘면 새 호출도 이 검사를 받는다
+    for c in calls:
+        v = {k.arg: k.value for k in c.keywords}.get("start_new_session")
+        assert isinstance(v, ast.Constant) and v.value is True, \
+            f"{c.lineno}행 subprocess 호출이 터미널 Ctrl+C 를 같이 받는다(start_new_session=True 필요)"
+
+
 def test_change_is_not_lost_when_the_post_pip_snapshot_fails():
     """pip 는 됐는데 사후 스냅샷이 실패하면, 다음 시도의 '갱신 전'은 이미 새 버전이다 — 옛 기준을 보관한다."""
     before = _snap("0.103", ["2026-10-03"])
