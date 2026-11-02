@@ -1,4 +1,5 @@
 # indicators.py
+from datetime import datetime, timedelta   # 모듈 수준에 둔다 — w52_high_low 주석 참조
 import pandas as pd
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
@@ -44,8 +45,13 @@ def w52_high_low(df, now=None):
 
     창의 기준점은 '오늘'이다 — 과거 시점 프레임(백테스트)에는 쓰지 말 것.
     그쪽은 backtest.apply_w52_position 이 봉마다 창을 굴린다.
+
+    [시계는 모듈 수준 이름에서 읽는다 · 2026-11-02] 종전엔 여기서 `from datetime import datetime` 을
+      함수 안에서 했다. 주기 재생(tests/cycle_replay)은 프로젝트 모듈이 **모듈 수준에** 들고 있는
+      datetime 만 가짜 시계로 바꾸므로 이 자리를 비껴갔고, now 없이 부르는 자동매매 후보 경로
+      (engine 의 w52_position)가 실제 오늘로 창을 잘랐다 — 기준 기록이 날짜가 지날수록 어긋났다
+      (10-25 기록의 52주위치 85% 가 11-02 에 84%). 운용 동작은 같다.
     """
-    from datetime import datetime, timedelta
     try:
         if df is None or getattr(df, 'empty', True) or 'date' not in df.columns:
             return None, None

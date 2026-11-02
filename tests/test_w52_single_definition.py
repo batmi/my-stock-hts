@@ -104,6 +104,34 @@ def test_analysis_delegates_to_the_core_definition():
         jg.datetime = orig
 
 
+def test_the_window_follows_the_module_clock():
+    """[2026-11-02] 날짜를 안 넘긴 호출은 모듈 수준 `datetime` 의 now() 로 창을 자른다.
+
+    주기 재생(tests/cycle_replay)은 프로젝트 모듈이 모듈 수준에 들고 있는 datetime 만 가짜 시계로
+    바꾼다. 함수 안에서 따로 import 하면 그 시계를 비껴가 실제 오늘로 창을 잘라, 재생 기준 기록이
+    날짜가 지날수록 어긋났다(buy_paths 52주위치 85%→84%). 하네스와 같은 방식으로 바꿔 끼워 본다.
+    """
+    idx = pd.bdate_range(end=NOW, periods=400)
+    c = np.linspace(100.0, 200.0, len(idx))
+    c[idx.get_indexer([NOW - dt.timedelta(days=340)], method="bfill")[0]] = 1000.0   # NOW 엔 창 안, 60일 뒤엔 창 밖
+    df = pd.DataFrame({"date": idx.strftime("%Y%m%d"), "high": c * 1.01, "low": c * 0.99, "close": c})
+    later = NOW + dt.timedelta(days=60)
+    assert ind.w52_band(df, now=NOW) != ind.w52_band(df, now=later), "기준점에 따라 밴드가 바뀌는 프레임이어야 한다"
+
+    class _Fixed(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW
+
+    orig = ind.datetime
+    ind.datetime = _Fixed
+    try:
+        assert ind.w52_band(df) == ind.w52_band(df, now=NOW)
+        assert ind.w52_position(df, 150.0) == ind.w52_position(df, 150.0, now=NOW)
+    finally:
+        ind.datetime = orig
+
+
 def test_no_one_computes_the_band_by_hand():
     """`tail(250)` 로 고/저를 뽑는 사본이 다시 생기면 여기서 걸린다."""
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
