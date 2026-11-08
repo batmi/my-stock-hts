@@ -62,10 +62,12 @@ def fetch_nxt_price(code):
 
 # ==========================================================
 # 연장거래 마지막가 기억 — 야간/주말/휴장 시 현재가 표시용 (실전 전용)
-#  프리마켓(NXT 08:00~09:00)·KRX 애프터마켓(16:00~20:00) 동안 받은 현재가를 보관했다가,
+#  KRX 애프터마켓(16:00~20:00) 동안 받은 현재가를 보관했다가,
 #  거래가 없는 시간대(야간 20:00~익일 08:00 / 주말 / 휴장일)에 USE_KRX_CLOSE_AFTER_HOURS=False 면
 #  '마지막 연장거래가'(= 그날 KRX 애프터 최종가)를 현재가로 노출한다. 디스크에 영속하여 재시작에도 보존.
 #  [2026-09-14] 종전에는 NXT 애프터(15:30~20:00) 체결가를 기억했다. 이제 NXT 애프터는 이용하지 않는다.
+#  [2026-11-08] 회상은 '마지막으로 마감된 거래일'에 기억한 값만 인정하고(종전 '5일 이내'),
+#   프리마켓(08:00~09:00) 값은 기억하지 않는다 — _nxt_recalled_close 독스트링 참조.
 #  모의투자(VTS)는 NXT 미지원이므로 이 경로를 타지 않는다(항상 KRX 종가).
 # ==========================================================
 _nxt_last_close = {}
@@ -73,7 +75,6 @@ _nxt_last_close_lock = threading.RLock()
 _nxt_last_close_loaded = False
 _nxt_last_close_dirty = False
 _nxt_last_close_saved_at = 0.0
-_NXT_RECALL_MAX_AGE_DAYS = 5   # 연휴 고려: 마지막 NXT 종가를 최대 5일까지 유효로 인정
 
 def _nxt_close_file():
     base = getattr(config, 'DATA_DIR', None) or getattr(config, 'JSON_DIR', '.')
@@ -114,11 +115,12 @@ def _nxt_save_last_close(force=False):
         logger.debug(f"[NXT] 마지막 종가 캐시 저장 실패: {e}")
 
 def _nxt_remember_close(code, price):
-    """연장거래 시간에 받은 현재가를 '마지막 연장거래가'로 기억한다.
+    """KRX 애프터마켓(16:00~20:00)에 받은 현재가를 '마지막 연장거래가'로 기억한다.
 
-    [2026-09-14] 기억하는 값은 두 종류다 — 프리마켓(08:00~09:00)의 NXT 체결가와
-    KRX 애프터마켓(16:00~20:00)의 KRX 체결가. 하루의 마지막 기록은 언제나 뒤의 것이므로,
-    야간에 회상하는 값은 **KRX 애프터마켓 최종가**다(USE_KRX_CLOSE_AFTER_HOURS=False 표시 기준).
+    야간에 회상하는 값은 **그날 KRX 애프터마켓 최종가**다(USE_KRX_CLOSE_AFTER_HOURS=False 표시 기준).
+    [2026-11-08] 프리마켓(08:00~09:00)의 NXT 체결가는 더 이상 여기로 오지 않는다. 종전 설명은
+     '하루의 마지막 기록은 언제나 애프터 값'이라고 가정했는데, 그 종목을 16~20시에 아무도 묻지
+     않은 날에는 08시대 값이 마지막 기록으로 남는다 — 그 가격은 그날 정규장이 이미 대체했다.
     """
     global _nxt_last_close_dirty
     try:
@@ -134,18 +136,31 @@ def _nxt_remember_close(code, price):
     _nxt_save_last_close()
 
 def _nxt_recalled_close(code):
-    """야간/주말/휴장 시 보여줄 마지막 연장거래가(KRX 애프터 최종가). 너무 오래된(>5일) 값은 폐기(0 반환)."""
+    """야간/주말/휴장 시 보여줄 마지막 연장거래가(KRX 애프터 최종가). 쓸 수 없으면 0.
+
+    [Fix 2026-11-08] **마지막으로 마감된 거래일(krx_last_settled_day)에 기억한 값만** 인정한다.
+     종전 기준은 '기억한 지 5일 이내'였다. 기억은 16~20시에 그 종목의 현재가를 물을 때만
+     갱신되는데, 그 시간대에 아무도 묻지 않은 거래일이 끼면 뒤에 마감된 세션을 건너뛰고 더
+     오래된 값이 회상됐다. 5일 창은 그것을 '연휴 여유'로 허용하고 있었다.
+       실측(파이 mode 1, 2026-11-08 일 13시, USE_KRX_CLOSE_AFTER_HOURS=False): 국내 ETF 표 20종목
+       전부가 11-04(수) 종가를 현재가로 보였다 — KODEX 200 89,715 +6.03%, 실제 11-06(금) 종가는
+       79,005 −6.62%. ETF 는 시스템 트레이딩이 묻지 않아 운용자가 16~20시에 표를 열 때만 기억되고,
+       마지막이 11-04 저녁이었다. 등락 기준가(stck_sdpr)는 KIS 가 주는 금요일 기준가(11-05 종가)라
+       수요일 가격과 목요일 기준이 한 행에 섞여, 금요일 급락이 급등으로 보였다.
+     0 을 돌려주면 호출부는 KIS 현재가(stck_prpr) — 그 세션의 KRX 가격 — 로 돌아간다.
+     기준일 판정은 krx_last_settled_day 하나다: 평일 20시 이후는 오늘, 자정~개장 전은 직전
+     거래일, 주말·휴장은 마지막 거래일.
+    """
     _nxt_load_last_close()
     with _nxt_last_close_lock:
         e = _nxt_last_close.get(code)
     if not e:
         return 0
     try:
-        d = datetime.strptime(e.get('date', ''), '%Y%m%d')
-        if (datetime.now() - d).days > _NXT_RECALL_MAX_AGE_DAYS:
+        if str(e.get('date', '')) != _api().krx_last_settled_day():
             return 0
         return _api().safe_int(e.get('price'))
-    except Exception:
+    except Exception:      # noqa: BLE001 - 판정 실패는 '회상하지 않음'(KIS 현재가 사용)
         return 0
 
 def _nxt_quote_phase():

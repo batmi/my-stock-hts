@@ -94,14 +94,18 @@ def get_current_price_data(code, is_overseas, include_nxt=True, cache_ttl=3.0, f
             # [최적화] 정규장(09:00~15:30)엔 KRX가 대표가이므로 NXT 보조호출을 생략(_nxt_quote_window)해
             #  종목당 호출을 절반으로 줄인다.
             # [2026-09-14 KRX 애프터마켓] 단계별 처리:
-            #   active(프리 08:00~09:00)  : NXT(NX) 현재가를 ats_prpr 로 병합 · 기억
+            #   active(프리 08:00~09:00)  : NXT(NX) 현재가를 ats_prpr 로 병합(기억하지 않는다 — 아래)
             #   krx_after(16:00~20:00)    : KRX(J) 현재가가 곧 대표가 — 병합할 것이 없다. 다만 그 값을
             #                               '마지막 연장거래가'로 기억해 둔다(야간 표시용)
             #   break(15:30~16:00)        : KRX 휴게 — 어느 시장도 없다(NXT 는 프리마켓만). 아무것도
             #                               병합하지 않는다(J = KRX 정규장 종가)
             #   offhours(야간·휴장)       : 라이브 NXT 를 **묻지 않는다**(물으면 NXT 20:00 종가가 온다).
-            #                               기억한 KRX 애프터 최종가를 ats_prpr 로 노출한다
-            #                               (USE_KRX_CLOSE_AFTER_HOURS=False 의 '마지막 실거래가').
+            #                               마지막으로 마감된 거래일에 기억한 KRX 애프터 최종가가 있으면
+            #                               ats_prpr 로 노출한다(USE_KRX_CLOSE_AFTER_HOURS=False 의
+            #                               '마지막 실거래가'). 없으면 J(그 세션의 KRX 가격) 그대로다.
+            # [2026-11-08] 프리마켓 값은 기억하지 않는다. 회상은 야간(20시~)·휴장에만 일어나는데, 그때는
+            #  그날 정규장이 이미 프리마켓 가격을 대체했다. 회상이 '마지막 마감 거래일' 날짜만 보게 되면서
+            #  (_nxt_recalled_close), 그날 16~20시에 묻지 않은 종목은 08시대 NXT 가격이 밤에 현재가로 나올 수 있었다.
             # 모의투자(VTS)는 NXT 미지원 → fetch_nxt_price 가 0 이라 프리마켓 병합만 자연히 빠진다.
             out = res.get('output', {})
             if include_nxt:
@@ -110,7 +114,6 @@ def get_current_price_data(code, is_overseas, include_nxt=True, cache_ttl=3.0, f
                     nxt_price = _api().fetch_nxt_price(code)
                     if nxt_price > 0:
                         out['ats_prpr'] = str(nxt_price)
-                        _api()._nxt_remember_close(code, nxt_price)         # 받은 값은 항상 기억
                 elif phase == 'krx_after':
                     _api()._nxt_remember_close(code, _api().safe_int(out.get('stck_prpr')))
                 elif phase == 'offhours':

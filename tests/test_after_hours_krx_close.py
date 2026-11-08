@@ -482,12 +482,40 @@ def test_night_recalls_krx_after_last_price_not_live_nxt(monkeypatch):
 
 
 def test_premarket_still_merges_nxt(monkeypatch):
-    """프리마켓(08:00~09:00)은 정책 변경 밖 — NXT 병합이 그대로다."""
+    """프리마켓(08:00~09:00)은 정책 변경 밖 — NXT 병합이 그대로다.
+    [2026-11-08] 다만 그 값을 야간용으로 기억하지는 않는다. 회상은 그날 20시 이후에야 일어나는데,
+    그때는 정규장이 이미 프리마켓 가격을 대체했다(16~20시에 묻지 않은 종목은 08시대 값이 남았다)."""
     price, seen = _price_at(monkeypatch, datetime(2026, 9, 14, 8, 30),
                             j_price=70000, nx_price=70900, remembered=0)
     assert price == 70900
     assert 'NX' in seen
-    assert remembered_calls == [70900]
+    assert remembered_calls == []
+
+
+@pytest.mark.parametrize("remembered_on,expected", [
+    ("20261104", 79005),   # 수요일 값 — 그 뒤 두 세션이 마감됐다 → 회상하지 않고 J(금요일 종가)
+    ("20261106", 79100),   # 금요일 애프터 값 — 마지막 마감 거래일 것이라 회상한다
+])
+def test_weekend_recall_only_from_last_settled_session(monkeypatch, remembered_on, expected):
+    """[실측 2026-11-08 일 13:16, 파이 mode 1, USE_KRX_CLOSE_AFTER_HOURS=False] 국내 ETF 표 20종목이
+    11-04(수) 종가를 현재가로 보였다. 회상 규칙을 가짜로 바꾸지 않고 실제 함수로 태운다."""
+    from api.quotes import nxt as qn
+    real_recall = qn._nxt_recalled_close          # _price_env 가 람다로 바꾸기 전에 잡아 둔다
+    config.settings.USE_KRX_CLOSE_AFTER_HOURS = False
+    remembered_calls.clear()
+    _price_env(monkeypatch, j_price=79005, nx_price=0, remembered=0)
+    monkeypatch.setattr(api, '_nxt_recalled_close', real_recall)
+    monkeypatch.setattr(api, '_nxt_last_close_loaded', True)      # 디스크(운영 파일) 로드 차단
+    monkeypatch.setitem(qn._nxt_last_close, '069500', {'price': 79100 if remembered_on == "20261106" else 89715,
+                                                       'date': remembered_on})
+    monkeypatch.setattr(api, 'krx_last_settled_day', lambda: "20261106")
+    dt = datetime(2026, 11, 8, 13, 16)
+    md, hp, _ = _at(dt, holiday=True)
+    with md as m, hp:
+        m.now.return_value = dt
+        m.strptime = datetime.strptime
+        assert api.get_current_price("069500", False) == expected
+    assert remembered_calls == []                 # 휴장에는 기억하지 않는다
 
 
 # ==========================================================
