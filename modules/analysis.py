@@ -4513,6 +4513,22 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
             except (TypeError, ValueError, KeyError, IndexError):
                 krx_close_px, krx_prev_px = 0.0, 0.0
 
+        # [2026-11-08] 미국 휴장 구간 — 모드와 무관하게 현재가·등락·52주 위치를 일봉의 정규장 확정 봉으로
+        #  맞춘다(api.us_regular_close_fixed). 종전에는 curr_data 의 last 를 그대로 썼는데, 그 값이
+        #  KIS 는 정규장 종가·토스는 애프터 최종가라 같은 순간 같은 종목이 모드마다 달랐다
+        #  (실측 NVDA: KIS 186.64 +2.78% / 토스 188.72 +3.92%). 위 오버레이도 이 구간에는 꺼져 있다.
+        #  [방어] 마지막 봉이 마지막 정규장 세션보다 오래됐으면 종전 경로(curr_data)를 그대로 탄다.
+        us_close_px, us_prev_px = 0.0, 0.0
+        if is_overseas and api.display_price_krx_fixed(True) \
+                and chart_df is not None and len(chart_df) >= 2:
+            try:
+                last_bar_date = str(chart_df.iloc[-1]['date']).replace('-', '')[:8]
+                if last_bar_date >= utils.market_today(True):
+                    us_close_px = float(chart_df.iloc[-1]['close'])
+                    us_prev_px = float(chart_df.iloc[-2]['close'])
+            except (TypeError, ValueError, KeyError, IndexError):
+                us_close_px, us_prev_px = 0.0, 0.0
+
         # [추가] 토스: 현재가 API가 등락(전일대비)/52주 고저를 제공하지 않으므로 차트(캔들)에서 보강한다.
         # (이 함수는 이미 chart_df를 확보하므로 추가 API 호출 없이 out에 주입한다)
         if config.session.is_toss and curr_data and curr_data.get('rt_cd') == '0' \
@@ -4643,7 +4659,7 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                         h52, l52 = float(detail.get('h52p', 0) or 0), float(detail.get('l52p', 0) or 0)
                     # 기준 현재가도 표시 현재가(KIS/토스 last)를 우선한다.
                     _out = curr_data.get('output', {}) if (curr_data or {}).get('rt_cd') == '0' else {}
-                    c = float(_out.get('last', 0) or 0) or float(detail.get('last', 0) or 0)
+                    c = us_close_px or float(_out.get('last', 0) or 0) or float(detail.get('last', 0) or 0)
                     if h52 > l52:
                         pos = (c - l52)/(h52 - l52)*100
                         w52_pos_val = pos
@@ -4663,6 +4679,11 @@ def _analyze_table_row(item, title, is_overseas, use_investor_data, restricted_s
                 rate = float(out.get('rate', 0) or 0)
                 diff = float(out.get('diff', 0) or 0)
                 if rate < 0 and diff > 0: diff = -diff
+                # [휴장] 정규장 확정 종가로 대체 (등락 기준도 일봉 직전 봉으로 함께 교체)
+                if us_close_px > 0 and us_prev_px > 0:
+                    curr = us_close_px
+                    diff = curr - us_prev_px
+                    rate = diff / us_prev_px * 100
                 curr_fmt = f"${curr:,.2f}"
                 diff_str = f"{diff:+.2f}"
             else:

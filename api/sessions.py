@@ -488,6 +488,26 @@ def us_session_phase():
     return 'after'
 
 
+def us_regular_close_fixed():
+    """미국 개별 종목의 표시가·지표를 '마지막 정규장 확정 봉'에 고정하는 구간인가 — 휴장이면 True.
+
+    [2026-11-08] 휴장(주말·공휴일·데이마켓 없는 야간)에는 미국 시세가 멈춰 있는데, 멈춘 값이
+     모드마다 달랐다. 실측(2026-11-08 일 ET 03시): KIS(mode 1·2) 현재가는 금요일 정규장 종가
+     (NVDA 186.64 — 8종목 전부 일봉 종가·yfinance 정규장 종가와 일치), 토스(mode 3)는 애프터
+     최종가(188.72)였다. 해외는 그 값을 일봉 마지막 봉에 늘 덮어썼으므로 지표까지 갈렸다
+     (RSI 30.8 vs 32.8, CCI −195.1 vs −190.7, EMA5 193 vs 194 — 덮어쓴 종가 하나로 전부 재현).
+     휴장 구간에는 모든 모드가 정규장 확정 봉 하나를 보게 한다. 반대(애프터 최종가로 통일)는
+     할 수 없다 — KIS 는 주말에 애프터 최종가를 주지 않는다.
+    장이 열린 구간(프리·정규·애프터·데이마켓)은 종전대로 살아 있는 가격을 반영한다.
+    ※ 미국 **개별 종목** 전용이다. 해외 지수·환율·원자재·코인(yfinance 지수 경로)은 주말에도
+      움직이는 것이 있어 이 게이트를 타지 않는다(chart_cache._get_cached_chart 참조).
+    """
+    try:
+        return us_session_phase() == 'closed'
+    except Exception:      # noqa: BLE001 - 판정 실패는 종전 동작(실시간가 반영)
+        return False
+
+
 def market_session_label(is_overseas=False, is_domestic_etf=False):
     """현재 세션 라벨과 rich 스타일을 (텍스트, 스타일)로 반환한다.
 
@@ -511,7 +531,8 @@ def market_session_label(is_overseas=False, is_domestic_etf=False):
             return (f"애프터마켓 · {clock}", "yellow")
         if phase == 'day':
             return (f"데이마켓 · {clock}", "yellow")
-        return (f"휴장(주말·공휴일) · {clock}", "dim")
+        #  [2026-11-08] 휴장 중 값은 모드와 무관하게 정규장 종가다(us_regular_close_fixed).
+        return (f"휴장(주말·공휴일) · 정규장 종가 · {clock}", "dim")
 
     phase = domestic_session_phase()
     if phase == 'krx':
@@ -594,6 +615,33 @@ def _krx_close_passed_at():
         return None
 
 
+def _us_close_passed_at():
+    """미국 휴장 구간이면 마지막 정규장 세션이 '완전히' 끝난 시각(그 세션일 ET 20:00 = 애프터 종료)을
+    이 기계의 현지 시각(naive datetime)으로 돌려준다. 휴장 구간이 아니면 None.
+
+    _krx_close_passed_at 의 미국판이다 — 이 시각 전에 받은 미국 일봉 캐시는 버린다.
+    [2026-11-08] 휴장 구간에 실시간가 덮어쓰기를 끄면서(us_regular_close_fixed) 필요해졌다.
+     종전에는 덮어쓰기가 마지막 봉을 늘 현재가로 바꿔 줘서, 정규장 도중(예: 금 ET 15:00 =
+     토 KST 05:00)에 받은 **미완성 금요일 봉**이 6시간 TTL 동안 캐시에 남아도 드러나지 않았다.
+     덮어쓰기가 없으면 그 봉의 종가가 그대로 '정규장 종가'로 보인다.
+    기준을 정규장 마감(16:00)이 아니라 애프터 종료(20:00)로 잡는다. 애프터 중에 받은 '오늘' 봉이
+     연장거래 체결을 담는지 출처마다 확인되지 않았다(토스 캔들 등). 휴장 구간은 언제나 20:00
+     이후라 한 번의 재조회로 끝난다.
+    ET↔현지 차이는 지금 시각의 차이를 쓴다. 서머타임이 바뀌는 주말에는 1시간 어긋날 수 있으나,
+     그 무렵의 캐시는 이미 TTL(6시간)로 만료돼 있다.
+    """
+    try:
+        if not us_regular_close_fixed():
+            return None
+        day = market_today(True)                 # 휴장 구간에서는 마지막 정규장 세션일(ET)
+        now = datetime.now()
+        offset_min = round((now - _api().now_us_eastern()).total_seconds() / 60)
+        ended = datetime.strptime(day, '%Y%m%d').replace(hour=20) + timedelta(minutes=offset_min)
+        return ended if now >= ended else None
+    except Exception:      # noqa: BLE001 - 판정 실패 시 종전 동작(캐시 유지)
+        return None
+
+
 def krx_last_settled_day():
     """가장 최근 '확정된' KRX 정규장 세션 일자(YYYYMMDD).
 
@@ -626,9 +674,11 @@ def chart_overlay_enabled(is_overseas=False):
     [2026-09-14] KRX 애프터마켓('krx_after')도 **반영하지 않는다**. 같은 KRX 라도 정규장
      밖 체결이 확정 일봉을 덮으면 ATR → 손절폭 → 포지션 크기가 함께 흔들리는 건 NXT 와 같다.
      'skip'(정규장) 하나만 허용한다 — 이 비교를 `!= 'offhours'` 류로 느슨하게 바꾸면 안 된다.
+    [2026-11-08] 해외(미국 개별 종목)는 휴장 구간에만 반영하지 않는다 — us_regular_close_fixed 참조.
+     해외 지수·환율·코인은 chart_cache 가 이 게이트를 건너뛰어 종전대로 반영한다.
     """
     if is_overseas:
-        return True
+        return not us_regular_close_fixed()
     try:
         return _api()._nxt_quote_phase() == 'skip'
     except Exception:      # noqa: BLE001 - 판정 실패는 '정규장'으로 보고 종전 동작 유지
@@ -670,9 +720,12 @@ def display_price_krx_fixed(is_overseas=False):
 
     ※ 지표는 이 설정과 무관하게 항상 KRX 확정 봉으로 계산한다(chart_overlay_enabled).
     ※ 주문 가격도 이 설정과 무관하게 항상 실시간가를 쓴다(체결 보장).
+    [2026-11-08] 해외(미국 개별 종목)는 휴장 구간에 정규장 종가로 고정한다 — 설정과 무관하다
+     (us_regular_close_fixed). 이 설정은 국내 애프터 최종가와 정규장 종가 사이의 선택이고,
+     미국은 KIS 가 주말에 애프터 최종가를 주지 않아 선택지가 하나뿐이다.
     """
     if is_overseas:
-        return False
+        return us_regular_close_fixed()
     try:
         phase = _api()._nxt_quote_phase()
     except Exception:      # noqa: BLE001 - 판정 실패 시 고정하지 않음(실시간가 노출)

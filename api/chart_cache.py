@@ -116,7 +116,9 @@ def _chart_disk_get(cache_key, today_str, is_overseas=False):
         ttl_sec = max(0.0, float(getattr(config, 'CHART_CACHE_TTL_MINUTES', 360))) * 60
     except (TypeError, ValueError):
         ttl_sec = 360 * 60
-    closed_at = None if is_overseas else _api()._krx_close_passed_at()
+    #  [2026-11-08] 미국 개별 종목도 같은 규칙 — 휴장 구간에는 '마지막 정규장 세션이 끝난 뒤'에
+    #   저장된 것만 쓴다(sessions._us_close_passed_at). 이 함수는 지수(is_index)에는 불리지 않는다.
+    closed_at = _api()._us_close_passed_at() if is_overseas else _api()._krx_close_passed_at()
     try:
         with _CHART_DISK_LOCK, closing(sqlite3.connect(_chart_disk_path())) as conn:
             conn.execute("CREATE TABLE IF NOT EXISTS chart_cache (cache_key TEXT PRIMARY KEY, trade_date TEXT, df_blob BLOB, ts REAL)")
@@ -371,7 +373,12 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
     now = datetime.now()
     today_str = now.strftime("%Y-%m-%d")
     cache_key = _chart_cache_key(code, is_overseas, is_index)
-    settled_at = None if is_overseas else _api()._krx_close_passed_at()
+    #  [2026-11-08] 미국 개별 종목은 휴장 구간에 마지막 정규장 세션이 끝난 뒤의 캐시만 쓴다
+    #   (_us_close_passed_at). 해외 지수·환율·코인(is_index)은 종전대로 검사하지 않는다.
+    if is_overseas:
+        settled_at = None if is_index else _api()._us_close_passed_at()
+    else:
+        settled_at = _api()._krx_close_passed_at()
 
     with _CHART_CACHE_LOCK:
         cached = _CHART_CACHE.get(cache_key)
@@ -412,7 +419,9 @@ def _get_cached_chart(code, is_overseas, is_index, fetch_func, realtime_overlay=
         # [추가] 모든 장 종료 후(NXT 애프터마켓 20:00 이후·주말·휴장)에는 국내 봉을 갱신하지 않는다.
         #  이 시간대의 현재가는 마지막 NXT 체결가로 굳어 있어, 확정된 KRX 일봉 종가를 덮어쓰면
         #  지표가 통째로 흔들린다(chart_overlay_price 참조). 설정으로 끌 수 있다.
-        if not _api().chart_overlay_enabled(is_overseas):
+        #  [2026-11-08] 미국 개별 종목도 휴장 구간에는 덮어쓰지 않는다(us_regular_close_fixed).
+        #   해외 지수·환율·원자재·코인(is_index)은 주말에도 움직이는 것이 있어 종전대로 늘 반영한다.
+        if not (is_overseas and is_index) and not _api().chart_overlay_enabled(is_overseas):
             return df
         _OVERLAY_GUARD.active = True
         try:

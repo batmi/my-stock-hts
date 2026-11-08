@@ -481,6 +481,21 @@ def krx_break_window_closed(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def us_session_not_closed(request, monkeypatch):
+    """[벽시계 격리 · 2026-11-08] 미국 휴장 구간(주말·공휴일·데이마켓 없는 야간)에는 미국 개별 종목의
+    일봉에 실시간가를 덮어쓰지 않고 표시가를 정규장 종가로 고정한다(api.us_regular_close_fixed).
+    해외 차트·시세 테스트는 '덮어쓴다'를 전제로 쓰였으므로, 주말에 스위트를 돌리면 그 전제가
+    깨진다(2026-11-08 일요일 실측: test_chart_cache::test_overseas_no_base_skips_purge).
+    기본은 '휴장 아님'으로 고정한다. 휴장 동작 자체를 검증하는 파일은 @pytest.mark.real_us_session 로 끈다.
+    (패키지 setattr 이 api.sessions 로 전파되므로 그 모듈 안의 직접 호출에도 닿는다.)
+    """
+    if request.node.get_closest_marker("real_us_session"):
+        return
+    import api as _api_pkg
+    monkeypatch.setattr(_api_pkg, "us_regular_close_fixed", lambda *a, **k: False)
+
+
+@pytest.fixture(autouse=True)
 def paper_broker_market_open(request, monkeypatch):
     """[벽시계 격리 · 2026-09-16] 가상투자 체결(paper_broker.place_order)은 열린 시장이 없으면
     거절한다(휴게·야간·휴장). 테스트가 밤에 돌면 주문 경로 전부가 그 게이트에 걸리므로
