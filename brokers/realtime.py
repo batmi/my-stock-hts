@@ -333,8 +333,12 @@ class TossPollingFeed(RealtimeFeed):
 #      집합 diff 방식을 그대로 쓸 수 없다.
 #    · keepalive 는 JSON 이 아니라 **순수 텍스트 `PING`**(대문자 4글자)이다. 그리고 서버가
 #      보내주는 데이터는 idle 타이머를 리셋하지 않는다 — 데이터를 받는 중에도 계속 보내야 한다.
-#    · 인증은 handshake 1회뿐이라 연결 유지 중 토큰이 만료돼도 끊기지 않는다. 토큰은
-#      **재연결할 때만** 필요하다.
+#    · 인증은 handshake 에서 하지만, **연결 중에도 서버가 토큰을 다시 검사한다**(AsyncAPI
+#      1.2.3 — 1.2.2 까지는 '연결 유지 중 만료돼도 안 끊긴다'였다). 만료·재발급·허용 IP
+#      제외면 `auth-revoked` 프레임을 보내고 연결을 닫는다. 재연결 때 캐시 토큰을 그대로
+#      쓰면, 다른 기기의 재발급으로 무효가 된 토큰은 캐시가 아직 '유효'라고 답하므로
+#      접속 401 만 되풀이한다 — 그래서 거절당한 토큰은 기억해 두고 새로 받는다
+#      (_note_auth_failure → _fetch_token).
 #    · 동시 연결이 계정당 2개이고, 초과하면 **가장 오래된 연결이 close code 없이** 종료된다.
 #      같은 앱키를 다른 기기에서 쓰면 서로 밀어내는데 로그에는 그냥 '끊김'으로 보인다.
 #      그래서 재연결은 반드시 지수 백오프(jitter 포함)로 한다 — 즉시 재연결하면 두 기기가
@@ -381,6 +385,8 @@ class TossWsFeed(RealtimeFeed):
         self._subscribed = False    # 주문 채널이 ack 로 확정됐는가
         self._declared = ()         # 마지막으로 선언한 구독(재선언 여부 판단용)
         self._quote_codes = frozenset()   # ack 로 확정된 시세 종목
+        self._conn_token = None     # 지금 연결에 쓴 토큰(auth-revoked 때 '이것이 죽었다'를 알리려고)
+        self._stale_token = None    # 서버가 거절한 토큰 — 다음 연결 전에 재발급한다
 
     # ---- 라이프사이클 ----
     def start(self):
@@ -485,11 +491,43 @@ class TossWsFeed(RealtimeFeed):
             return None
 
     def _fetch_token(self):
+        """연결에 쓸 토큰. 서버가 거절한 토큰이 있으면 그것만은 다시 쓰지 않는다.
+
+        [왜 강제 재발급인가] 토큰 캐시는 만료 시각만 보고 '유효'를 답한다. 같은 앱키로 다른
+         기기가 재발급하면(토스는 client 당 유효 토큰이 1개) 캐시는 그 사실을 모른 채 죽은
+         토큰을 돌려주고, 접속은 401 만 되풀이한다 — REST 쪽이 401 을 맞고 재발급할 때까지.
+         장중엔 금방 풀리지만 야간·주말엔 오래 끌 수 있다.
+        [폭주 방지] stale_token 을 함께 넘긴다(REST 401 복구와 같은 장치). 그 사이 다른
+         스레드가 이미 재발급했으면 캐시 토큰이 달라져 있으므로 새로 발급하지 않고 그것을 쓴다.
+        """
         try:
             from brokers import toss_api
+            stale = self._stale_token
+            if stale:
+                return toss_api.get_access_token(force_refresh=True, stale_token=stale)
             return toss_api.get_access_token()
         except Exception as e:      # noqa: BLE001
             logger.info(f"[TossWS] 토큰 발급 실패(REST 폴링 유지): {e}")
+            return None
+
+    def _note_auth_failure(self, token):
+        """서버가 이 토큰을 거절했다(접속 401·auth-revoked) — 다음 연결은 새 토큰으로."""
+        if token:
+            self._stale_token = token
+
+    @staticmethod
+    def _handshake_status(exc):
+        """websockets 접속 거절 예외의 HTTP 상태. 접속 거절이 아니면 None.
+
+        자리가 버전마다 다르다 — 14 미만은 InvalidStatusCode.status_code, 14 이상은
+        InvalidStatus.response.status_code(HTTPStatus). requirements 가 >=12 를 허용한다.
+        """
+        st = getattr(exc, 'status_code', None)
+        if st is None:
+            st = getattr(getattr(exc, 'response', None), 'status_code', None)
+        try:
+            return int(st) if st is not None else None
+        except (TypeError, ValueError):
             return None
 
     async def _run(self):
@@ -506,6 +544,7 @@ class TossWsFeed(RealtimeFeed):
                 continue
             self._log_toggle(True)
             connected = False
+            token = None
             try:
                 token = await self._loop.run_in_executor(None, self._fetch_token)
                 seq = await self._loop.run_in_executor(None, self._resolve_account_seq)
@@ -525,6 +564,8 @@ class TossWsFeed(RealtimeFeed):
                 async with conn as ws:
                     connected = True
                     attempt = 0        # 성공했으니 백오프를 처음으로 되돌린다
+                    self._conn_token = token
+                    self._stale_token = None   # 이 토큰은 받아들여졌다
                     self._got_event = False
                     self._got_quote = False
                     self._subscribed = False
@@ -553,8 +594,15 @@ class TossWsFeed(RealtimeFeed):
                         rotator.cancel()
                 logger.info("[TossWS] 연결 종료")
             except Exception as e:      # noqa: BLE001
-                logger.info(f"[TossWS] 연결 오류: {e}")
+                if self._handshake_status(e) == 401:
+                    #  접속 단계의 401 = 이 토큰이 죽었다. 403(허용 IP 미등록)은 재발급해도
+                    #  같으므로 여기에 넣지 않는다 — 토큰 발급 경로가 IP_BLOCKED 로 따로 알린다.
+                    self._note_auth_failure(token)
+                    logger.info("[TossWS] 접속 거절(401) — 새 토큰을 받아 재연결합니다")
+                else:
+                    logger.info(f"[TossWS] 연결 오류: {e}")
             finally:
+                self._conn_token = None
                 #  끊긴 뒤에도 캐시가 남아 있으면 읽기 경로가 '신선하다'고 믿고 낡은 값을
                 #  쓴다(TTL 3초 안이면 통과한다). 연결이 없으면 REST 로 가야 한다.
                 self._subscribed = False
@@ -621,15 +669,21 @@ class TossWsFeed(RealtimeFeed):
         return True
 
     async def _rotate_loop(self, ws, seq):
-        """관심종목 로테이션 주기마다 구독을 다시 선언한다(내용이 바뀐 때만)."""
+        """관심종목 로테이션 주기마다 구독을 다시 선언한다(내용이 바뀐 때만).
+
+        시세를 꺼 둔 연결에서도 **선언이 거부돼 장부가 비었으면**(_on_error) 다시 선언한다 —
+        그 배열에는 주문 채널이 들어 있고, 재선언이 없으면 이 연결은 끝날 때까지 주문
+        이벤트 없이 지낸다. 장부가 그대로면 아무것도 보내지 않는다(전과 같다).
+        """
         interval = getattr(config, 'WS_ROTATE_INTERVAL_SEC', 30)
         try:
             while not self._stop.is_set():
                 await asyncio.sleep(interval)
-                if not self._quotes_enabled():
-                    continue
-                self.manager.advance()
-                await self._declare(ws, seq)
+                if self._quotes_enabled():
+                    self.manager.advance()
+                    await self._declare(ws, seq)
+                elif not self._declared:
+                    await self._declare(ws, seq)
         except asyncio.CancelledError:
             pass
 
@@ -728,7 +782,21 @@ class TossWsFeed(RealtimeFeed):
             #  프레임 직후 연결이 끊긴다. 백오프 루프가 재연결하고 다시 선언한다.
             logger.info(f"[TossWS] 서버 배포 알림({code}) → 재연결 대기: {msg}")
             return
-        logger.warning(f"[TossWS] 에러 프레임: {code} — {msg} (기존 구독은 유지된다)")
+        if code == 'auth-revoked':
+            #  [AsyncAPI 1.2.3] 연결 중 토큰 재검증 실패 — 이 프레임 직후 서버가 연결을 닫는다.
+            #   토큰이 하루에 한 번 갈릴 때마다 오는 예정된 끊김이라 경고가 아니라 안내다.
+            #   이 연결의 토큰을 '죽었다'로 적어 두어, 재연결이 캐시의 같은 토큰을 다시 들고
+            #   401 을 되풀이하지 않게 한다.
+            self._note_auth_failure(self._conn_token)
+            logger.info(f"[TossWS] 토큰 재검증 실패({code}) → 연결이 닫힙니다. "
+                        f"새 토큰으로 재연결합니다: {msg}")
+            return
+        #  그 밖의 에러 프레임은 '선언 전체 실패'다(rate-limit-exceeded·too-many-topics 등).
+        #   서버는 **이전 구독을 유지**하는데, 장부(_declared)에는 방금 보낸 목록이 '선언함'으로
+        #   적혀 있어 내용이 같은 동안 다시 보내지 않는다. 비워서 다음 로테이션에 다시 선언한다.
+        self._declared = ()
+        logger.warning(f"[TossWS] 에러 프레임: {code} — {msg} "
+                       f"(기존 구독은 유지된다 · 다음 주기에 다시 선언)")
 
     #  토스 수치는 전부 문자열(decimal)이다. 못 읽으면 0 이 아니라 None 이어야 한다 —
     #  0 은 '값이 0'이라는 사실이고, 못 읽은 것은 사실이 없는 것이다.

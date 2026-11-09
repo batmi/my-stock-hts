@@ -162,6 +162,40 @@ def get_period_profit_summary(cano=None, acnt_prdt_cd=None, start_date=None, end
     }
     return _api().call_api(constants.API_URLS["DOMESTIC"]["INQUIRY"]["PROFIT"], "domestic", "inquiry", "profit", params=params)
 
+def get_period_cash_flows(start_date, end_date=None):
+    """증권사 거래내역이 말하는 구간의 '주식 매매가 아닌' 원화 현금 흐름. 모르면 **None**.
+
+    {'transfer', 'income', 'securities_moves', 'unknown', 'rows'} — 뜻은 api.toss._toss_period_cash_flows.
+    날짜는 결제일 기준 YYYY-MM-DD(포함). 지금은 토스(1.2.28 거래내역)만 이 장부를 준다.
+
+    [무엇에 쓰는가] 정지 중 입출금 보정(trader._reconcile_offline_transfer)은 원금 불변식의 잔차로
+     입출금을 **추정**한다. 이 장부는 그 정답지다 — 둘이 어긋나면 우리가 모르는 매매가 있다.
+     KIS 의 기간 실현손익(get_period_profit_summary) 대조와 같은 자리, 같은 규칙(어긋나면 보류)이다.
+    [None 의 뜻] 가상투자·한투·조회 실패는 전부 '대조할 장부가 없다'이다. '흐름이 0' 과 다르다.
+    """
+    if _paper_active() or not config.session.is_toss:
+        return None
+    try:
+        return _api()._toss_period_cash_flows(start_date, end_date)
+    except Exception as e:
+        logger.warning(f"[Toss] 거래내역 조회 실패 — '흐름 없음'이 아닙니다: {e}")
+        return None
+
+
+def get_period_securities_moves(codes, months=12):
+    """보유 종목의 증권 입출고 순수량 {code: +입고−출고}. 모르면 **None**(토스 1.2.28 거래내역만 준다).
+
+    보유분 복원이 '부분 복원'의 원인을 바로 적는 데만 쓴다 — 평단이 없으므로 기록을 만들지 않는다.
+    """
+    if not codes or _paper_active() or not config.session.is_toss:
+        return None
+    try:
+        return _api()._toss_period_securities_moves(codes, months=months)
+    except Exception as e:
+        logger.warning(f"[Toss] 증권 입출고 내역 조회 실패 — '입고 없음'이 아닙니다: {e}")
+        return None
+
+
 def get_today_history(cano=None, acnt_prdt_cd=None, retries=None, target_date=None):
     """금일 체결 내역 조회"""
     # [관찰 모드] 실계좌 체결 내역을 조회하지 않는다. 가상 주문은 즉시 체결되어

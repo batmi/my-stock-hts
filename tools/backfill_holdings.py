@@ -80,8 +80,8 @@ def main():
         total_new += new
         head = f"\n[cyan]{p['name']}({p['code']})[/cyan] 보유 {p['qty']}주"
         if p['missing'] > 0:
-            head += (f"  [yellow]— 부분 복원: {p['missing']}주가 조회 구간({args.months}개월)보다 "
-                     f"과거에 진입[/yellow]")
+            head += (f"  [yellow]— 부분 복원: "
+                     f"{hb.describe_missing(p['missing'], p.get('transfer_in', 0), args.months)}[/yellow]")
         console.print(head)
         if not p['records']:
             console.print("  [dim]체결 내역을 찾지 못했습니다.[/dim]")

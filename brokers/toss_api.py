@@ -60,6 +60,17 @@ _GROUP_RPS = {
     #  초과 시엔 429 그룹 쿨다운이 방어한다. (지수는 4종 이하 소량 호출이라 낮아도 무해)
     "MARKET_INDICATOR": 5,
     "MARKET_INDICATOR_CHART": 3,
+    # [2026-11-08] 표에 없던 그룹 — 없으면 기본값(TOSS_TX_PER_SECOND=10)으로 돌았다. 전부 미실측이라
+    #  보수적으로 잡고, 실측은 파이에서 `tools/toss_tps_probe.py --limits`(그룹당 1회 호출로 서버의
+    #  X-RateLimit-Limit 헤더를 읽는다)로 한다. 맥북에서 돌리면 토큰 재발급이 파이의 토큰을 무효화한다.
+    #   STOCK_TRADING_TREND: 종목 수급·공매도(1.2.14부터 사용, 종목당 5분 캐시). 같은 Stock Info 태그의
+    #                        STOCK 실측 5에 맞춘다.
+    #   TRANSACTION:         거래내역(1.2.28) — 정지 중 입출금 대조에 하루 1~2회, 페이지 몇 장.
+    #   SECTOR/SECTOR_RANKING: 섹터(1.2.28) — 화면에서 사람이 고를 때만.
+    "STOCK_TRADING_TREND": 5,
+    "TRANSACTION": 3,
+    "SECTOR": 3,
+    "SECTOR_RANKING": 3,
 }
 
 _rate_lock = threading.Lock()
@@ -524,6 +535,49 @@ def get_rankings(rank_type="MARKET_TRADING_AMOUNT", market_country="KR",
                     account=False)
 
 
+def get_investor_trading_rankings(count=100):
+    """투자자별 순매수·순매도 상위(1.2.28). 국내 종목(ETF 포함), KRX·NXT 통합 거래액.
+
+    {foreigner|institution|individual: {rankedAt, netBuyRankings:[{rank,symbol,currency,netBuyAmount}],
+                                        netSellRankings:[{rank,symbol,currency,netSellAmount}]}}
+
+    [쓰는 법] **최신 영업일만** 준다(과거 날짜 조회 없음) → 백테스트할 수 없으므로 화면 표시에만 쓴다.
+     투자자마다 갱신 시점이 달라 rankedAt 이 서로 다르다(외국인·기관은 장중 잠정치, 개인은 정규장
+     종료 후 — 그 전에는 직전 영업일). 데이터를 못 주는 투자자는 rankedAt=null·빈 목록이다.
+    """
+    return _request("GET", "/api/v1/rankings/investor-trading", group="RANKING",
+                    params={"count": count}, account=False)
+
+
+def get_sectors():
+    """토스 섹터 목록(1.2.28). {sectors:[{sectorId,name,depth,parentSectorId}]} — depth 0 대·1 중·2 소분류.
+
+    토스 자체 분류이고 한 종목이 여러 섹터에 속할 수 있으며 **현재 분류만** 준다. 방어주 배제·탐색
+    업종(DART 업종코드·KSIC 11차)을 대신하지 않는다 — 그 규칙들의 감사 근거가 그 분류다.
+    """
+    return _request("GET", "/api/v1/sectors", group="SECTOR", account=False)
+
+
+def get_sector_rankings(rank_type="TOP_GAINERS", market_country="KR", duration="1d"):
+    """섹터 랭킹(1.2.28). rank_type: TOP_GAINERS|MARKET_TRADING_AMOUNT, duration: 1d·1w·1mo·3mo·6mo·1y.
+
+    {rankings:[{rank,sectorId,name,changeRate,tradingAmount,marketCapitalization,currency}]}
+    대·중분류만 나온다. 금액은 US 도 원화 환산값. tradingAmount·marketCapitalization 은 null 일 수 있다.
+    """
+    return _request("GET", "/api/v1/sectors/rankings", group="SECTOR_RANKING",
+                    params={"type": rank_type, "marketCountry": market_country,
+                            "duration": duration}, account=False)
+
+
+def get_sector_stocks(sector_id, market_country="KR"):
+    """섹터(하위 포함) 구성 보통주, 시가총액 내림차순(1.2.28).
+
+    {stocks:[{symbol,name,volume,tradingAmount,marketCapitalization,currency}]} — 시세 없는 종목은 null.
+    """
+    return _request("GET", f"/api/v1/sectors/{sector_id}/stocks", group="SECTOR",
+                    params={"marketCountry": market_country}, account=False)
+
+
 def get_stocks(symbols):
     """종목 기본정보 다건. symbols: list[str] (최대 200)."""
     if isinstance(symbols, (list, tuple)):
@@ -696,3 +750,29 @@ def get_orders(status="OPEN", symbol=None, from_date=None, to_date=None, cursor=
 def get_order(order_id):
     """주문 상세."""
     return _request("GET", f"/api/v1/orders/{order_id}", group="ORDER_HISTORY")
+
+
+# =========================================================================
+# 거래내역 (Transaction · 1.2.28)
+# =========================================================================
+def get_transactions(transaction_types=None, from_date=None, to_date=None, cursor=None, limit=None):
+    """계좌 거래내역 한 페이지. {transactions:[...], nextCursor, hasNext}
+
+    매매·입출금·환전·배당·이자·수수료·증권 입출고를 국내·미국 한 목록으로 준다(미결제 먼저).
+    from_date/to_date 는 **결제일** 기준(YYYY-MM-DD, 포함). to 를 생략하면 미결제까지 나온다.
+    금액은 부호가 없다 — 방향은 transactionType 이, 취소 건(isCancellation)은 그 반대가 정한다.
+    건수가 limit 보다 적어도 다음 페이지가 있을 수 있으니 끝은 hasNext 로 판정한다.
+    필터를 바꾸면 cursor 를 버리고 첫 페이지부터 다시 받아야 한다(커서 오류 400).
+    """
+    params = {}
+    if transaction_types:
+        params["transactionTypes"] = ",".join(transaction_types)
+    if from_date:
+        params["from"] = from_date
+    if to_date:
+        params["to"] = to_date
+    if cursor:
+        params["cursor"] = cursor
+    if limit:
+        params["limit"] = limit
+    return _request("GET", "/api/v1/transactions", group="TRANSACTION", params=params)

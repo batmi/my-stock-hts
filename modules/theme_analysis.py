@@ -1976,9 +1976,16 @@ def run_theme_analysis():
             ("5", "투자 캘린더", "Investment Calendar"),
             ("6", "공시 모니터링", "Disclosure Monitoring"),
             ("7", "수급 · 물량 신호", "Supply-Demand & Overhang"),
-            ("8", "재무 스냅샷", "Financial Snapshot")
+            ("8", "재무 스냅샷", "Financial Snapshot"),
+            ("9", "투자자 순매수 · 섹터 순위", "Investor & Sector Ranking (Toss)")
         ]
-        choice = utils.show_menu("종목발굴·재무분석 (Discovery & Financials)", menu_items, default_choice=last_choice)
+        #  [9] 은 토스 1.2.28 거래소 순위 API 라 토스 모드에서만 연다 — 다른 모드에서는 회색(선택 불가).
+        from modules.manage import toss_rankings
+        disabled = set() if toss_rankings.available() else {"9"}
+        if last_choice in disabled:
+            last_choice = "1"
+        choice = utils.show_menu("종목발굴·재무분석 (Discovery & Financials)", menu_items,
+                                 default_choice=last_choice, disabled=disabled)
         if choice.lower() in ['b', 'q']: return False
         if choice.lower() == 'h':
             if getattr(utils, 'show_help', None):
@@ -2015,6 +2022,11 @@ def run_theme_analysis():
             from modules.manage import financials
             financials.show_financial_snapshot()
             is_success = True
+        elif choice == '9':
+            #  자체 하위 메뉴가 결과 화면마다 pause 하므로 여기서 한 번 더 멈추지 않는다.
+            toss_rankings.show_toss_rankings()
+            last_choice = choice
+            continue
 
         if is_success:
             last_choice = choice

@@ -2384,6 +2384,28 @@ class DBManager:
                 logger.warning(f"[DB] 순입출금 가산 실패({account} {date_str}): {e}")
                 return False
 
+    def get_net_transfer_between(self, start_date, end_date, account):
+        """[start_date, end_date] 자산 이력 행에 **이미 적힌** 순입출금 합계를 (합계, ok)로 돌려준다.
+
+        [무엇에 쓰는가] 오프라인 대조(trader._reconcile_offline_transfer)의 잔차
+         (오늘 원금 − 대조점 원금 − 구간 실현손익)는 대조점 이후의 입출금 **전부**다. 그중
+         프로그램이 돌던 날 장중 감지가 이미 그날 행에 적은 몫이 있다. 그것을 빼지 않으면
+         같은 돈이 대조점 행에 한 번 더 더해진다(2026-11-08 재현: 장중 +100만 → 다음 날
+         아침 +100만 가산 → 200만).
+        get_max_daily_asset 의 환산과 같은 행(asset > 0)만 센다 — 환산에 실린 것만 '이미
+        반영됐다'고 할 수 있다. 조회 실패는 (0, False) — 0과 '못 쟀다'를 가른다.
+        """
+        try:
+            cursor = self._get_conn().cursor()
+            cursor.execute("SELECT COALESCE(SUM(net_transfer), 0) FROM daily_asset_history "
+                           "WHERE account = ? AND date >= ? AND date <= ? AND asset > 0",
+                           (account, start_date, end_date))
+            row = cursor.fetchone()
+            return float((row[0] if row else 0) or 0), True
+        except Exception as e:
+            _swallowed("get_net_transfer_between", e)
+            return 0.0, False
+
     def get_realized_profit_between(self, start_date, end_date, account, is_sim=False):
         """[start_date, end_date] 구간의 실현손익 합계와 신뢰 여부를 (합계, ok)로 돌려준다.
 

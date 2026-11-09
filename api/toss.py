@@ -1665,6 +1665,146 @@ def _toss_period_executions(codes, months=12):
     return rows, start.strftime("%Y%m%d")
 
 
+#  거래내역(1.2.28)의 거래 유형별 현금 방향. 스펙의 '일반 거래(isCancellation=false)의 현금 방향' 표 그대로다.
+_TOSS_TX_INFLOW = frozenset({"SELL", "DEPOSIT", "EXCHANGE_IN", "DIVIDEND", "INTEREST"})
+_TOSS_TX_OUTFLOW = frozenset({"BUY", "WITHDRAWAL", "EXCHANGE_OUT", "FEE"})
+_TOSS_TX_SECURITIES = frozenset({"SECURITIES_TRANSFER_IN", "SECURITIES_TRANSFER_OUT"})
+_TOSS_TX_PAGE_CAP = 50          # 100건 × 50쪽 = 5,000건. 넘으면 반쪽 합계를 내지 않고 실패로 올린다.
+
+
+def _toss_strict_amount(v):
+    """금액 문자열 → float. 못 읽으면 None — 0 으로 읽으면 '그 돈이 없었다'가 된다."""
+    if v is None:
+        return None
+    try:
+        return float(str(v).replace(',', ''))
+    except (TypeError, ValueError):
+        return None
+
+
+def _toss_period_cash_flows(start_date, end_date=None):
+    """결제일 [start_date, end_date] 구간의 **원화 현금 흐름 중 주식 매매가 아닌 것**을 모은다(거래내역 1.2.28).
+
+    반환 {'transfer', 'income', 'securities_moves', 'unknown', 'rows'}
+      transfer: 주식 운용 바깥과 주고받은 원화(+유입/−유출) — 은행 입출금, 환전, 채권·옵션 매매와
+                그 원리금·세금. 우리 원금(현금+매입원가−실현손익) 기준으로는 모두 '입출금'이다.
+      income:   배당(세후) + 예탁금 이자 − 수수료(외화보관 등). 돈은 들어왔지만 입출금이 아니다.
+      securities_moves: 국내 증권 입출고 건수(타사 이관·주식배당). 금액이 없어 원금 변화를 잴 수 없다.
+      unknown:  원화 거래인데 해석하지 못한 건수(새 거래 유형·금액 누락). 하나라도 있으면 합계를 믿지 않는다.
+
+    [왜 주식 매매를 빼는가] 주식 매수·매도는 원금 불변식이 이미 설명한다(현금이 빠진 만큼 매입원가가
+     늘고, 매도는 실현손익으로 상쇄). 남는 것은 매수 수수료 정도의 잔돈이고, 호출부 문턱이 흡수한다.
+    [원화만] 토스 모드의 자동매매 원금은 국내 원화 계좌 기준이다(해외 평가 제외). 달러 거래는 원화
+     원금을 움직이지 않으므로 보지 않는다 — 원화→달러 환전은 원화 쪽 EXCHANGE_OUT 으로 잡힌다.
+    [취소 건] isCancellation=true 면 원거래 유형을 유지한 채 돈은 반대로 움직인다(입금 취소 = 출금).
+    [조회 실패는 올린다] 응답이 dict 가 아니거나 페이지 상한에 닿으면 예외다. 반쪽 합계를 '이 기간의
+     현금 흐름'이라고 내면, 대조가 우리가 모르는 매매를 그대로 통과시킨다([[unknown-vs-empty]]).
+    """
+    out = {'transfer': 0.0, 'income': 0.0, 'securities_moves': 0, 'unknown': 0, 'rows': 0}
+    cursor = None
+    exhausted = False
+    for _ in range(_TOSS_TX_PAGE_CAP):
+        res = toss_api.get_transactions(from_date=start_date, to_date=end_date,
+                                        cursor=cursor, limit=100)
+        if not isinstance(res, dict):
+            raise RuntimeError(f"토스 거래내역을 조회하지 못했습니다(from={start_date}) "
+                               f"— '거래가 없다'가 아닙니다")
+        for t in (res.get('transactions') or []):
+            out['rows'] += 1
+            kind = str(t.get('transactionType') or '').upper()
+            if kind in _TOSS_TX_SECURITIES:
+                if str(t.get('marketCountry') or '').upper() == 'KR':
+                    out['securities_moves'] += 1
+                continue
+            if str(t.get('currency') or '').upper() != 'KRW':
+                continue
+            asset_class = t.get('assetClass')
+            asset_class = str(asset_class).upper() if asset_class else None
+            if kind in ('BUY', 'SELL'):
+                if asset_class == 'STOCK':
+                    continue                  # 원금 불변식이 설명한다
+                if asset_class is None:       # 스펙상 매매는 늘 상품군이 있다 — 주식인지 모른다
+                    out['unknown'] += 1
+                    continue
+            if kind in _TOSS_TX_INFLOW:
+                sign = 1.0
+            elif kind in _TOSS_TX_OUTFLOW:
+                sign = -1.0
+            else:
+                out['unknown'] += 1           # 스펙: unknown enum 을 허용하라 — 방향을 모르면 합계에 넣지 않는다
+                continue
+            if t.get('isCancellation') is True:
+                sign = -sign
+            amount = _toss_strict_amount(t.get('netAmount'))
+            if amount is None:
+                amount = _toss_strict_amount(t.get('amount'))
+            if amount is None:
+                out['unknown'] += 1
+                continue
+            #  배당은 종목에서, 이자·수수료는 계좌(assetClass 없음)에서 나온 것만 '수익'이다.
+            #  채권 이자(assetClass=BOND)는 주식 운용 바깥의 돈이 들어온 것이라 입출금 쪽이다.
+            if kind == 'DIVIDEND' or (kind in ('INTEREST', 'FEE') and asset_class is None):
+                out['income'] += sign * amount
+            else:
+                out['transfer'] += sign * amount
+        if not res.get('hasNext'):
+            exhausted = True
+            break
+        cursor = res.get('nextCursor')
+        if not cursor:
+            exhausted = True
+            break
+    if not exhausted:
+        raise RuntimeError(f"토스 거래내역이 페이지 상한({_TOSS_TX_PAGE_CAP * 100}건)에서 끊겼습니다 "
+                           f"— 반쪽 합계로 입출금을 대조하지 않습니다")
+    return out
+
+
+def _toss_period_securities_moves(codes, months=12):
+    """국내 증권 입출고(타사 이관·주식배당) 순수량 {code: +입고−출고}. 조회 실패는 예외.
+
+    [왜] 보유분 복원(holdings_backfill)은 주문 이력으로 지금 수량을 역산한다. 입고된 주식은 주문이
+     없어 역산이 0 까지 못 내려가고, 그 종목은 '진입이 조회 구간보다 과거'라는 **틀린 진단**으로
+     보고된다. 거래내역(1.2.28)이 그 수량을 준다 — 금액(평단)은 없으므로 기록을 지어내지 않고
+     진단 문구만 바로잡는다.
+    """
+    wanted = {str(c).strip() for c in codes or () if c}
+    out = {}
+    if not wanted:
+        return out
+    start = (datetime.now() - timedelta(days=int(months * 30.5))).strftime("%Y-%m-%d")
+    cursor = None
+    exhausted = False
+    for _ in range(_TOSS_TX_PAGE_CAP):
+        res = toss_api.get_transactions(transaction_types=sorted(_TOSS_TX_SECURITIES),
+                                        from_date=start, cursor=cursor, limit=100)
+        if not isinstance(res, dict):
+            raise RuntimeError("토스 증권 입출고 내역을 조회하지 못했습니다 — '입고 없음'이 아닙니다")
+        for t in (res.get('transactions') or []):
+            if str(t.get('marketCountry') or '').upper() != 'KR':
+                continue
+            code = str(t.get('symbol') or '').strip()
+            if code not in wanted:
+                continue
+            kind = str(t.get('transactionType') or '').upper()
+            if kind not in _TOSS_TX_SECURITIES:
+                continue
+            qty = _toss_strict_amount(t.get('quantity'))
+            if qty is None:
+                raise RuntimeError(f"토스 증권 입출고 수량을 읽지 못했습니다({code})")
+            sign = 1 if kind == 'SECURITIES_TRANSFER_IN' else -1
+            if t.get('isCancellation') is True:
+                sign = -sign
+            out[code] = out.get(code, 0) + sign * int(qty)
+        if not res.get('hasNext') or not res.get('nextCursor'):
+            exhausted = True
+            break
+        cursor = res.get('nextCursor')
+    if not exhausted:
+        raise RuntimeError("토스 증권 입출고 내역이 페이지 상한에서 끊겼습니다")
+    return out
+
+
 def _toss_period_entry_dates(codes, qty_map=None, months=12):
     """토스 CLOSED 주문 이력에서 현 포지션의 진입일을 찾는다. {code: 'YYYYMMDD'}
 

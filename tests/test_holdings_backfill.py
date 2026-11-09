@@ -764,3 +764,50 @@ def test_kis_single_day_full_page_is_unknown_not_complete(monkeypatch):
         'rt_cd': '0', 'output1': _kis_rows([today] * acct._KIS_CCLD_PAGE_SIZE)})
     _rows, _win, ok = acct._fetch_period_executions(["005930"], cano="1", acnt_prdt_cd="01", months=3)
     assert ok is False
+
+
+# ─────────────────────────────────────────────
+# 증권 입고(타사 이관·주식배당)는 주문이 없다 — 2026-11-08 토스 거래내역(1.2.28)
+# ─────────────────────────────────────────────
+
+def _fetched_one_buy(*a, **k):
+    return {"005930": [_tx("20261001", True, 4)]}
+
+
+def test_partial_cause_is_a_securities_transfer_in(monkeypatch):
+    """주문 이력으로는 4주만 설명되는데 10주를 들고 있다 — 6주가 입고분이면 '과거 진입'이 아니다."""
+    import api
+    monkeypatch.setattr(api, "get_period_executions", _fetched_one_buy)
+    monkeypatch.setattr(api, "get_period_securities_moves", lambda codes, months=12: {"005930": 6})
+    monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: False)
+    plans = hb.plan([{'pdno': '005930', 'prdt_name': '삼성전자', 'hldg_qty': '10'}])
+    assert plans[0]['missing'] == 6 and plans[0]['transfer_in'] == 6
+    assert len(plans[0]['records']) == 1, "평단이 없는 입고분으로 기록을 지어내면 안 된다"
+    assert "입고" in hb.describe_missing(6, 6) and "과거" not in hb.describe_missing(6, 6)
+
+
+def test_partial_cause_unknown_keeps_the_old_wording(monkeypatch):
+    """한투·조회 실패는 입고 수량을 모른다(None) — 종전 진단 그대로."""
+    import api
+    monkeypatch.setattr(api, "get_period_executions", _fetched_one_buy)
+    monkeypatch.setattr(api, "get_period_securities_moves", lambda codes, months=12: None)
+    monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: False)
+    plans = hb.plan([{'pdno': '005930', 'prdt_name': '삼성전자', 'hldg_qty': '10'}])
+    assert plans[0]['transfer_in'] == 0
+    assert hb.describe_missing(6, 0, 12) == "6주가 조회 구간(12개월)보다 과거에 진입"
+
+
+def test_securities_moves_are_not_asked_when_everything_is_explained(monkeypatch):
+    import api
+    monkeypatch.setattr(api, "get_period_executions",
+                        lambda *a, **k: {"005930": [_tx("20261001", True, 10)]})
+    asked = []
+    monkeypatch.setattr(api, "get_period_securities_moves",
+                        lambda codes, months=12: asked.append(codes) or {})
+    monkeypatch.setattr(hb, '_exists', lambda odno, on_date=None: False)
+    hb.plan([{'pdno': '005930', 'prdt_name': '삼성전자', 'hldg_qty': '10'}])
+    assert asked == [], "설명이 다 됐는데 거래내역을 또 불렀다(TRANSACTION 한도 낭비)"
+
+
+def test_describe_missing_mixed():
+    assert hb.describe_missing(6, 2, 12) == "6주 중 2주는 증권 입고분, 나머지는 조회 구간(12개월)보다 과거에 진입"

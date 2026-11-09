@@ -41,7 +41,7 @@ Quotes, orders, analysis, and automated trading all run in the terminal. Each me
 | `[3]` | Chart Analysis | Weekly/daily/hourly/intraday chart images, plus **AI chart image reading** (Gemini Vision). `[7] Batch` collects several stocks (watchlist, indices, direct input; `1,3,5-8`, `all` or search) and renders the same chart type for all of them at once (same quality as a single chart, up to `BATCH_CHART_MAX`=30). |
 | `[4]` | Backtesting | Single stock / **N-slot watchlist portfolio** / **Monte Carlo** (±1% price noise that persists for days, slippage variance, fill misses, 1,000 runs → mean, VaR 95%, stdev) / **Walk-Forward** validation. Optimization over buy score, RSI cap, stop width, pyramiding depth, and scoring weights runs alongside. |
 | `[5]` | System Trading | Start/stop/status/report/log for the auto-trader, **per-symbol trading rules**, and **restricted symbols**. |
-| `[6]` | Discovery & Financials | Naver theme ranking, **TradingView screener** (9 presets: top movers, gap-up, breakout, pullback, volume momentum, oversold rebound, value turnaround, high dividend, trend reversal — KR/US), AI theme analysis, AI stock diagnosis, investment calendar, disclosure monitoring, supply/overhang signals, financial snapshot. |
+| `[6]` | Discovery & Financials | Naver theme ranking, **TradingView screener** (9 presets: top movers, gap-up, breakout, pullback, volume momentum, oversold rebound, value turnaround, high dividend, trend reversal — KR/US), AI theme analysis, AI stock diagnosis, investment calendar, disclosure monitoring, supply/overhang signals, financial snapshot, **investor net-buy and sector rankings** (Toss mode only — top foreign / institutional / retail net buys and sells, top Toss sectors by change and their constituents. Only the latest business day is available, so they are shown on screen and never feed trading decisions). |
 | `[7]` | Watchlist | Add/remove/view/edit/memo for domestic & US stocks and ETFs, plus **candidate discovery** (rule-based screening with multi-select add). |
 | `[8]` | Order Management | Buy, sell, modify, cancel, and **9 types of reserved orders**. |
 | `[9]` | Assets | Asset summary, holdings, trade history (Excel export), trade evaluation, **position analysis** (direct entry handles unlisted assets — enter ticker `KRXGOLD` to register spot-gold holdings in grams and see ATR stop / trailing levels), **paper account management**. |
@@ -346,6 +346,8 @@ export TOSS_ACC_NUM="..."     # optional — the first account is selected if om
 
 > ⚠️ **Toss requires IP allow-listing.** From an unregistered network (mobile tethering, VPN, dynamic IP) token issuance itself is refused with `IP address not allowed`. Register the **public IP** of the machine that will run the program (developer center → app settings → allowed IPs); a static IP line is recommended for always-on operation.
 > KIS does not require IP registration, but if you set a customer-IP restriction on the key, only that IP will connect. On token failure the pre-flight check prints your **current public IP along with cause-specific guidance**.
+> ⚠️ **Toss allows only one valid token per app key.** Issuing a token with the same key on another machine revokes the token the first machine was using at once (REST gets a 401 and re-issues; the WebSocket is closed with `auth-revoked` and reconnects with a new token). Test lookups from anywhere other than the machine running Toss mode briefly disturb that machine.
+> Checking rate limits: `python tools/toss_tps_probe.py --limits` calls each group once and shows the per-second limit the server reports next to the program's setting. For the reason above, run it **on the machine that runs Toss mode (the Pi)**.
 
 ### 6.3 Telegram Bot
 
@@ -564,7 +566,8 @@ my-stock-hts/
 │   │   ├── scan.py         #     Shared parallel fetch collector (failure counts shown on screen)
 │   │   ├── disclosure.py   #     [6-6] Disclosure monitoring
 │   │   ├── insider.py      #     [6-7] Supply and overhang signals
-│   │   └── financials.py   #     [6-8] Financial snapshot
+│   │   ├── financials.py   #     [6-8] Financial snapshot
+│   │   └── toss_rankings.py#     [6-9] Investor net-buy and sector rankings (Toss)
 │   ├── trading.py          # [8] Order management
 │   ├── account.py          # [9] Assets and balances
 │   ├── paper_broker.py     # Paper-mode virtual broker (intercepts at the api layer)
@@ -635,7 +638,7 @@ my-stock-hts/
 **Quote consistency**
 - **Unified real-time price** — the analysis screen and the auto-trader compute indicators from the same intraday price through a single entry point (`indicators.apply_realtime_price`).
 - **WebSocket quotes and fill notifications (KIS)** — KIS WS pushes prices and volume strength (automatic REST fallback when unsubscribed or disconnected), and fill notifications (AES256-CBC) wake fill confirmation immediately. A single connection caps at 41 subscriptions, so **holdings then buy candidates are always subscribed** and the remaining slots rotate. `USE_WEBSOCKET` applies without a restart.
-- **WebSocket order events (Toss, mode 3)** — Toss mode supports WebSocket too, but subscribes to **order events (`personal:order`) only**. An event is never trusted on its content: it wakes an order-history reconciliation so fills are confirmed immediately, and REST polling remains in place if the socket fails. **Quotes are not subscribed** — Toss realtime quotes merge NXT, so cumulative volume cannot be separated out. It needs no extra environment variables (the Toss app key is reused) and is toggled by the same `USE_WEBSOCKET`.
+- **WebSocket order events and quotes (Toss, mode 3)** — Toss mode supports WebSocket too. An **order event (`personal:order`)** is never trusted on its content: it wakes an order-history reconciliation so fills are confirmed immediately, and REST polling remains in place if the socket fails. **Quotes (last price and order-book totals)** are subscribed as well (`TOSS_WS_SUBSCRIBE_QUOTES`, on by default) but used only for order prices and triggers; cumulative volume and fill strength are not taken (Toss realtime quotes merge KRX and NXT, and the spec says not to rebuild volume from frames). The server re-validates the token during the connection (AsyncAPI 1.2.3), so a token change closes the socket with `auth-revoked`; the rejected token is not reused and a fresh one is fetched before reconnecting. It needs no extra environment variables (the Toss app key is reused) and is toggled by the same `USE_WEBSOCKET`.
 - **Backtest/live data parity** — domestic backtests always use the same official KRX dailies as live trading (Open API first → FDR fallback) regardless of mode. The Open API close is the regular-session close, identical to the live bars; only ranges served by FDR alone (no key, not yet backfilled) differ slightly from 2026-09-14 on, where the portal close is the after-market final print. A **warning** is raised when the retrieved window is shorter than requested, so truncation is never silent.
 
 **Observability & operations**

@@ -307,3 +307,139 @@ def test_a_blocked_reconcile_is_retried_next_cycle(db, trader):
         assert _reconcile(trader, 27)[0] == 0
     with _broker(trader, {'realized': 0, 'cost': 0}):
         assert _reconcile(trader, 27)[0] == -10_000
+
+
+# ───────── ⑦ 장중에 이미 적은 입출금을 다음 날 다시 더하지 않는다 (2026-11-08) ─────────
+
+def _net(db, date_str):
+    row = db._get_conn().execute(
+        "SELECT net_transfer FROM daily_asset_history WHERE date = ? AND account = ?",
+        (date_str, ACC)).fetchone()
+    return row[0] if row else None
+
+
+def test_an_intraday_transfer_is_not_added_again_next_morning(db, trader):
+    """[실재현] 잔차는 대조점 이후의 입출금 **전부**다 — 장중 감지가 이미 그날 행에 적은 몫이 있다.
+
+    종전에는 그것을 빼지 않아 장중 +100만 입금이 다음 날 아침 기준선을 잡을 때 대조점 행에
+    한 번 더 더해졌다(net_transfer 200만). 출금이면 고점이 그만큼 더 낮아져 한도가 열린다.
+    """
+    db.save_daily_asset(_d(1), ACC, 10_000_000.0, principal=10_000_000.0)
+    db.save_daily_asset(_d(1), ACC, 10_000_000.0, net_transfer=1_000_000)   # 장중 감지가 남긴 몫
+    amount, tg = _reconcile(trader, 11_000_000)
+    assert amount == 0, f"장중에 적은 입금을 또 더했다: {amount}"
+    assert _net(db, _d(1)) == 1_000_000.0
+    tg.assert_not_called()
+
+
+def test_only_the_unrecorded_part_is_added(db, trader):
+    """장중에 적은 뒤 프로그램이 꺼진 사이 또 입출금이 있었다면 그 나머지만 적는다."""
+    db.save_daily_asset(_d(3), ACC, 10_000_000.0, principal=10_000_000.0)
+    db.save_daily_asset(_d(3), ACC, 10_000_000.0, net_transfer=-2_000_000)  # 그날 장중 출금
+    db.save_daily_asset(_d(2), ACC, 8_000_000.0)                            # 대조점 없는 날
+    # 꺼져 있던 사이 50만 더 출금 → 오늘 원금 750만
+    amount, _ = _reconcile(trader, 7_500_000)
+    assert amount == -500_000
+    assert _net(db, _d(3)) == -2_500_000.0
+
+
+def test_recorded_transfers_unreadable_means_no_correction(db, trader):
+    """이미 적힌 몫을 못 읽으면 같은 돈을 두 번 적을 수 있다 — 모르면 안 건드린다."""
+    _fill_incident(db)
+    with patch.object(db, "get_net_transfer_between", return_value=(0.0, False)):
+        assert _reconcile(trader, 27)[0] == 0
+    assert _reconcile(trader, 27)[0] == -10_000, "보류는 '오늘 몫을 썼다'가 아니다"
+
+
+def test_net_transfer_sum_counts_only_rows_the_drawdown_uses(db):
+    """get_max_daily_asset 의 환산(asset > 0)에 실린 것만 '이미 반영됐다'고 할 수 있다."""
+    db.save_daily_asset(_d(3), ACC, 1_000.0, net_transfer=-300)
+    db.save_daily_asset(_d(2), ACC, 1_000.0, net_transfer=100)
+    db.save_daily_asset(_d(1), ACC, 0.0, net_transfer=999)
+    assert db.get_net_transfer_between(_d(3), _d(1), ACC) == (-200.0, True)
+    assert db.get_net_transfer_between(_d(2), _d(2), ACC) == (100.0, True)
+    assert db.get_net_transfer_between(_d(9), _d(8), ACC) == (0.0, True)
+
+
+# ───────── ⑧ 토스 거래내역(1.2.28)과 대조한다 ─────────
+
+def _ledger(book):
+    return patch('modules.auto_trade.account.fetch_period_cash_flows', return_value=book)
+
+
+def _book(transfer=0.0, income=0.0, securities_moves=0, unknown=0):
+    return {'transfer': transfer, 'income': income, 'securities_moves': securities_moves,
+            'unknown': unknown, 'rows': 1}
+
+
+def test_a_roundtrip_while_off_is_caught_by_the_toss_ledger(db, trader):
+    """[핵심] 토스에는 기간 실현손익 장부가 없어 이 대조가 늘 통과였다.
+
+    거래내역이 '입출금은 없었다'고 말하는데 원금이 100만 줄었으면, 그 100만은 우리가 모르는
+    매매의 손실이다. 출금으로 적으면 고점이 낮아져 리스크 한도가 조용히 열린다.
+    """
+    db.save_daily_asset(_d(10), ACC, 10_000_000.0, principal=10_000_000.0)
+    db.save_daily_asset(_d(1), ACC, 9_000_000.0)
+    with _ledger(_book(transfer=0.0)):
+        assert _reconcile(trader, 9_000_000)[0] == 0, "모르는 매매를 출금으로 적었다"
+
+
+def test_the_toss_ledger_agreeing_lets_the_correction_through(db, trader):
+    _fill_incident(db)
+    with _ledger(_book(transfer=-10_000.0)):
+        assert _reconcile(trader, 27)[0] == -10_000
+
+
+def test_dividends_are_not_recorded_as_a_deposit(db, trader):
+    """배당은 돈이 들어왔어도 입출금이 아니다 — 문턱(최대 5만원)을 넘으면 '입금'으로 적히던 것."""
+    db.save_daily_asset(_d(10), ACC, 10_000_000.0, principal=10_000_000.0)
+    db.save_daily_asset(_d(1), ACC, 10_080_000.0)
+    with _ledger(_book(income=80_000.0)):
+        assert _reconcile(trader, 10_080_000)[0] == 0
+
+
+def test_a_deposit_with_a_dividend_records_only_the_deposit(db, trader):
+    db.save_daily_asset(_d(10), ACC, 10_000_000.0, principal=10_000_000.0)
+    db.save_daily_asset(_d(1), ACC, 11_080_000.0)
+    with _ledger(_book(transfer=1_000_000.0, income=80_000.0)):
+        assert _reconcile(trader, 11_080_000)[0] == 1_000_000
+    assert _net(db, _d(10)) == 1_000_000.0
+
+
+def test_securities_moves_block_the_correction(db, trader):
+    """타사 이관·주식배당 입고는 금액이 없다 — 매입원가가 늘어 원금이 뛰어도 그것이 입금인지 모른다."""
+    _fill_incident(db)
+    with _ledger(_book(transfer=-10_000.0, securities_moves=1)):
+        assert _reconcile(trader, 27)[0] == 0
+
+
+def test_unreadable_ledger_rows_block_the_correction(db, trader):
+    _fill_incident(db)
+    with _ledger(_book(transfer=-10_000.0, unknown=2)):
+        assert _reconcile(trader, 27)[0] == 0
+
+
+def test_no_ledger_keeps_the_previous_behaviour(db, trader):
+    """가상투자·한투·조회 실패는 장부가 없다 — 대조 불가가 기능 정지가 되면 안 된다."""
+    _fill_incident(db)
+    with _ledger(None):
+        assert _reconcile(trader, 27)[0] == -10_000
+
+
+def test_the_ledger_window_runs_through_today(db, trader):
+    """잔차에는 오늘 기준선을 잡기 전까지의 입출금도 들어 있다 — 실현손익과 달리 오늘 몫이 상쇄되지 않는다."""
+    _fill_incident(db)
+    with _ledger(_book(transfer=-10_000.0)) as m:
+        _reconcile(trader, 27)
+    start, end = m.call_args[0][:2]
+    assert start == _d(35) and end == _d(0)
+
+
+def test_ledger_tolerance_absorbs_buy_commissions(trader):
+    """매수 수수료는 현금만 깎고 매입원가에 안 들어간다 — 그 잔돈으로 보정을 막으면 안 된다."""
+    with _ledger(_book(transfer=-1_000_000.0)):
+        ok, income = trader._cash_flows_match_broker("2026-08-01", "2026-08-10", -1_000_700.0, 50_000)
+    assert ok and income == 0.0
+    with _ledger(_book(transfer=-1_000_000.0)):
+        ok, _ = trader._cash_flows_match_broker("2026-08-01", "2026-08-10", -1_200_000.0, 50_000)
+    assert not ok

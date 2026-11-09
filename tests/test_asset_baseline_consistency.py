@@ -115,6 +115,7 @@ def test_offline_reconcile_runs_once_a_day(trader):
     db = MagicMock()
     db.get_last_principal_snapshot.return_value = ("2026-08-20", 10_000_000.0)
     db.get_realized_profit_between.return_value = (0, True)
+    db.get_net_transfer_between.return_value = (0.0, True)   # 그 사이 장중에 적힌 입출금 없음
     db.add_net_transfer.return_value = True
     with patch('modules.auto_trade.db_manager.db', db), \
          patch('modules.auto_trade.api.send_telegram_message'):
@@ -129,6 +130,7 @@ def test_a_failed_measurement_is_retried(trader):
     db = MagicMock()
     db.get_last_principal_snapshot.return_value = ("2026-08-20", 10_000_000.0)
     db.get_realized_profit_between.side_effect = [(0, False), (0, True)]
+    db.get_net_transfer_between.return_value = (0.0, True)
     db.add_net_transfer.return_value = True
     with patch('modules.auto_trade.db_manager.db', db), \
          patch('modules.auto_trade.api.send_telegram_message'):

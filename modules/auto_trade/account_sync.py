@@ -128,6 +128,7 @@ class TraderAccountSyncMixin:
 
         조회 자체가 불가능하면(모의·토스·관찰 모드, 통신 실패) 대조를 건너뛴다 — 이 대조는
         추가 방어막이지 전제 조건이 아니다. 여기서 막으면 정작 필요한 보정까지 사라진다.
+        (토스는 이 장부가 없지만 거래내역이 있어 _cash_flows_match_broker 가 같은 일을 한다.)
         """
         try:
             cano, acnt = _get_trade_account()
@@ -146,6 +147,47 @@ class TraderAccountSyncMixin:
             logger.debug(f"[오프라인 입출금] 증권사 실현손익 대조 실패(보정은 계속): {e}")
             return True
 
+    def _cash_flows_match_broker(self, start_date, end_date, residual, tolerance):
+        """정지 구간의 추정 입출금(원금 잔차)을 증권사 거래내역과 대조한다. 반환: (통과, 장부의 수익분).
+
+        [왜 필요한가] _realized_matches_broker 와 같은 자리다. 잔차는 '주식 매매로 설명되지 않는
+         원화 흐름'이라 입출금뿐 아니라 우리가 모르는 매매의 손익도 섞인다. KIS 는 기간 실현손익
+         장부로 그것을 가리는데 토스에는 그 장부가 없어 이 대조가 늘 통과였다. 토스 1.2.28
+         거래내역은 잔차가 담아야 할 흐름(입출금·환전·배당·이자·수수료)을 직접 준다 —
+         둘이 맞으면 잔차를 믿고, 어긋나면 모르는 매매가 있다는 뜻이라 보정을 보류한다.
+
+        [값이 아니라 대조로 쓴다] 장부가 맞을 때만 잔차를 쓰고, 장부에서 가져오는 것은 배당·이자·
+         수수료(수익분) 하나다 — 그것은 돈이 들어왔어도 입출금이 아니므로 기록에서 뺀다.
+         종전에는 문턱(최대 5만원)이 이것을 잡음으로 흡수했고, 넘으면 배당이 '입금'으로 적혔다.
+
+        [보류하는 경우] 국내 증권 입출고(타사 이관·주식배당)가 있으면 금액이 없어 원금 변화를 잴 수
+         없고, 해석 못 한 거래가 있으면 합계를 믿을 수 없다 — 둘 다 '모르면 안 건드린다'.
+        [장부가 없으면] 가상투자·한투·조회 실패는 (True, 0) — 대조 불가가 기능 정지가 되면 안 된다.
+        """
+        try:
+            book = account.fetch_period_cash_flows(start_date, end_date)
+        except Exception as e:
+            logger.debug(f"[오프라인 입출금] 거래내역 대조 실패(보정은 계속): {e}")
+            return True, 0.0
+        if not book:
+            return True, 0.0
+        if book.get('securities_moves'):
+            self.log(f"[오프라인 입출금] 구간에 증권 입출고 {book['securities_moves']}건이 있어(타사 이관·"
+                     f"주식배당 — 금액 없음) 원금 변화를 잴 수 없습니다. 보정을 보류합니다.")
+            return False, 0.0
+        if book.get('unknown'):
+            self.log(f"[오프라인 입출금] 해석하지 못한 거래 {book['unknown']}건이 있어 거래내역 합계를 "
+                     f"믿을 수 없습니다. 보정을 보류합니다.")
+            return False, 0.0
+        expected = float(book.get('transfer') or 0) + float(book.get('income') or 0)
+        gap = float(residual) - expected
+        if abs(gap) > max(tolerance, 1000.0):
+            self.log(f"[오프라인 입출금] 거래내역의 입출금·배당 합계({expected:+,.0f}원)와 원금 변화"
+                     f"({float(residual):+,.0f}원)가 {abs(gap):,.0f}원 어긋납니다 — 우리가 모르는 매매가 "
+                     f"있어 보정을 보류합니다. (수동 매매 기록은 보유 종목만 복원됩니다)")
+            return False, 0.0
+        return True, float(book.get('income') or 0)
+
     def _reconcile_offline_transfer(self, account_key, current_principal, realized_ok):
         """프로그램이 꺼져 있던 사이의 입출금을 스스로 되찾아 자산 이력에 적는다.
 
@@ -161,6 +203,12 @@ class TraderAccountSyncMixin:
          움직인다. 따라서
              순입출금 = (오늘 원금) - (마지막으로 남긴 원금) - (그 사이의 실현손익)
          오늘의 실현손익은 양변에서 상쇄되므로 합산 구간은 [그날, 어제]다.
+         이 잔차는 대조점 이후의 입출금 **전부**다. 프로그램이 돌던 날 장중 감지가 이미 그날
+         행에 적은 몫은 빼고 나머지만 적는다 — [Fix 2026-11-08] 종전에는 빼지 않아, 장중에
+         잡힌 입출금이 다음 날 아침 기준선을 잡을 때 대조점 행에 **한 번 더** 더해졌다
+         (재현: 장중 +100만 → 다음 날 +100만 가산 = 200만). 출금이면 고점이 그만큼 더 낮아져
+         드로다운이 과소 계산된다 — 한도가 열리는 방향이다. 배당·이자·수수료는 거래내역이
+         있으면(토스) 수익분으로 빼고 남는 것만 입출금으로 적는다(_cash_flows_match_broker).
 
         [어느 행에 적는가] 마지막 스냅샷을 남긴 그날의 행이다. 자산 행은 그날 '시작'
          스냅샷이고 환산식은 'd일 이후에 일어난 입출금'을 d의 자산에 더하므로
@@ -211,20 +259,38 @@ class TraderAccountSyncMixin:
             threshold = self._offline_transfer_threshold(last_principal)
             if not self._realized_matches_broker(last_date, yesterday, realized, threshold):
                 return 0
-            self._offline_reconcile_date = today      # 쟀다 = 오늘 몫은 끝났다
 
             residual = float(current_principal) - float(last_principal) - float(realized)
-            if abs(residual) < threshold:
+            #  거래내역 구간은 대조점 날부터 **오늘까지**다 — 잔차에는 오늘 기준선을 잡기 전까지의
+            #  입출금도 들어 있다(실현손익과 달리 오늘 몫이 상쇄되지 않는다).
+            cash_ok, income = self._cash_flows_match_broker(last_date, today, residual, threshold)
+            if not cash_ok:
+                return 0
+            recorded, recorded_ok = db_manager.db.get_net_transfer_between(
+                last_date, yesterday, account_key)
+            if not recorded_ok:
+                self.log("[오프라인 입출금] 이미 기록된 순입출금을 읽지 못해 보정하지 않습니다 "
+                         "— 같은 돈을 두 번 적을 수 있습니다.")
+                return 0          # 다음 주기에 다시 해 본다
+            self._offline_reconcile_date = today      # 쟀다 = 오늘 몫은 끝났다
+
+            unrecorded = residual - income - recorded
+            if abs(unrecorded) < threshold:
                 return 0
 
-            amount = int(round(residual))
+            amount = int(round(unrecorded))
             if not db_manager.db.add_net_transfer(last_date, account_key, amount):
                 return 0                       # 그날 행이 없다 = 적을 자리가 없다
 
             self._hwm_cache_date = None        # 환산이 바뀌었으니 드로다운을 다시 잰다
             action_str = "입금" if amount > 0 else "출금"
+            extra = ""
+            if recorded:
+                extra += f", 이미 기록된 입출금 {int(recorded):+,}원 제외"
+            if income:
+                extra += f", 배당·이자·수수료 {int(income):+,}원 제외"
             self.log(f"💰 정지 중 발생한 예수금 {action_str} 자동 반영: {amount:+,}원 "
-                     f"(대조점 {last_date}, 구간 실현손익 {int(realized):+,}원)")
+                     f"(대조점 {last_date}, 구간 실현손익 {int(realized):+,}원{extra})")
             try:
                 api.send_telegram_message(
                     f"💰 [정지 중 {action_str} 자동 반영]\n"
@@ -233,7 +299,7 @@ class TraderAccountSyncMixin:
                     f"✅ 드로다운 기준(자산 고점)이 이 금액을 빼고 계산되므로 "
                     f"조치할 것은 없습니다.\n"
                     f"(대조: {last_date} 원금 {int(last_principal):,}원 → 현재 "
-                    f"{int(current_principal):,}원, 그 사이 실현손익 {int(realized):+,}원)")
+                    f"{int(current_principal):,}원, 그 사이 실현손익 {int(realized):+,}원{extra})")
             except Exception:
                 pass
             return amount
@@ -319,8 +385,10 @@ class TraderAccountSyncMixin:
                     "있습니다 — 그 경우 제한을 풀어야 손절·트레일링이 다시 돕니다 "
                     "(자동매매 메뉴의 제한 종목 관리).")
         if res['partial']:
-            msg += ("\n\n⚠️ 조회 구간보다 과거에 진입해 일부만 복원된 종목:\n· "
-                    + "\n· ".join(f"{n}({c}) {m}주" for c, n, m in res['partial']))
+            moved = res.get('transfer_in') or {}
+            msg += ("\n\n⚠️ 일부만 복원된 종목:\n· "
+                    + "\n· ".join(f"{n}({c}) — {holdings_backfill.describe_missing(m, moved.get(c, 0))}"
+                                  for c, n, m in res['partial']))
         #  본문에 "제한을 풀어야 손절·트레일링이 다시 돕니다"가 들어 있다 — 기동 시
         #  한 번만 나가는 안내이므로, 놓치면 그 종목이 무방비로 남은 것을 아무도 모른다.
         if not _pkg().alert_delivered(msg):

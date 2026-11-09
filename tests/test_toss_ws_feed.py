@@ -11,7 +11,7 @@
  셋 다 "동작은 하는데 느려진다"로 나타나 사람이 알아채기 어렵다. 그래서 사실을 남기는지,
  깨우는지를 여기서 고정한다.
 
-[관련] AsyncAPI 3.0.0 · info.version 1.2.2 · wss://openapi-ws.tossinvest.com/ws/v1
+[관련] AsyncAPI 3.0.0 · info.version 1.2.3(2026-11 확인, 1.2.2 에서 시작) · wss://openapi-ws.tossinvest.com/ws/v1
 """
 import json
 import logging
@@ -144,6 +144,147 @@ def test_선언_실패는_경고로_남기되_기존_구독을_지운다고_말�
             "code": "rate-limit-exceeded", "message": "declare rate limit exceeded"}}))
     assert "rate-limit-exceeded" in caplog.text
     assert feed._subscribed is True
+
+
+def test_선언_실패는_장부를_비워_다음_주기에_다시_선언하게_한다():
+    """서버는 이전 구독을 유지하는데 장부에는 방금 보낸 목록이 '선언함'으로 남는다.
+
+    비우지 않으면 내용이 같은 동안 다시 보내지 않아, 거부된 선언이 그 연결 내내 복구되지 않는다.
+    """
+    feed = _quote_feed()
+    assert _declared(feed, force=True) is not None
+    feed._on_message(json.dumps({"type": "error", "error": {
+        "code": "rate-limit-exceeded", "message": "declare rate limit exceeded"}}))
+    assert feed._declared == ()
+    assert _declared(feed, force=False) is not None, "장부가 비었는데 다시 선언하지 않았다"
+
+
+def test_시세를_꺼도_선언이_거부되면_주문_채널을_다시_선언한다(monkeypatch):
+    """시세를 끄면 로테이션이 선언을 건너뛰었다 — 거부된 주문 채널이 연결 내내 비어 있었다."""
+    import asyncio
+    import config
+    monkeypatch.setattr(config, "TOSS_WS_SUBSCRIBE_QUOTES", False, raising=False)
+    monkeypatch.setattr(config, "WS_ROTATE_INTERVAL_SEC", 0, raising=False)
+    sent = []
+
+    class _Ws:
+        async def send(self, msg):
+            sent.append(json.loads(msg))
+            raise RuntimeError("한 번 보내면 끝낸다")
+
+    feed = rt.TossWsFeed()
+    feed._declared = ()                 # 선언 거부 뒤의 장부
+    try:
+        asyncio.run(feed._rotate_loop(_Ws(), "3"))
+    except RuntimeError:
+        pass
+    assert sent and [e for e in sent[0] if e.get("type")] == [
+        {"type": "personal:order", "codes": ["3"]}]
+
+
+def test_시세를_꺼_두면_장부가_그대로일_때_다시_보내지_않는다(monkeypatch):
+    """선언 빈도 한도(5회/초) — 바뀐 것이 없으면 로테이션이 아무것도 보내지 않는다(종전과 같다)."""
+    import asyncio
+    import config
+    monkeypatch.setattr(config, "TOSS_WS_SUBSCRIBE_QUOTES", False, raising=False)
+    monkeypatch.setattr(config, "WS_ROTATE_INTERVAL_SEC", 0, raising=False)
+    feed = rt.TossWsFeed()
+    feed._declared = (("personal:order", ("3",)),)
+    sent = []
+    ticks = []
+
+    class _Ws:
+        async def send(self, msg):
+            sent.append(msg)
+
+    async def _run_a_few_ticks():
+        task = asyncio.ensure_future(feed._rotate_loop(_Ws(), "3"))
+        for _ in range(5):
+            await asyncio.sleep(0)
+            ticks.append(1)
+        task.cancel()
+
+    asyncio.run(_run_a_few_ticks())
+    assert sent == []
+
+
+# ------------------------------------------------- 토큰 재검증 (AsyncAPI 1.2.3)
+def test_auth_revoked_는_예정된_끊김이라_안내로_남긴다(caplog):
+    """토큰이 하루에 한 번 갈릴 때마다 온다 — 경고로 적으면 매일 가짜 경보가 된다.
+
+    그리고 '기존 구독은 유지된다'고 적으면 안 된다. 이 프레임 직후 서버가 연결을 닫는다.
+    """
+    feed, _ = _feed_with_sink()
+    feed._conn_token = "TOKEN-A"
+    with caplog.at_level(logging.INFO, logger="hts"):
+        feed._on_message(json.dumps({"type": "error", "error": {
+            "code": "auth-revoked", "message": "token revoked"}}))
+    rec = [r for r in caplog.records if "auth-revoked" in r.message]
+    assert rec and rec[0].levelno == logging.INFO
+    assert "유지" not in rec[0].message
+
+
+def test_auth_revoked_를_받은_토큰은_다음_연결에_다시_쓰지_않는다(monkeypatch):
+    """캐시는 만료 시각만 본다 — 다른 기기의 재발급으로 죽은 토큰도 '유효'라고 돌려준다.
+
+    그것을 다시 들고 가면 접속 401 만 되풀이한다. 거절당한 토큰을 stale_token 으로 넘겨
+    재발급하게 한다(다른 스레드가 이미 재발급했으면 그 토큰을 쓰는 같은 장치).
+    """
+    from brokers import toss_api
+    calls = []
+    monkeypatch.setattr(toss_api, "get_access_token",
+                        lambda force_refresh=False, stale_token=None:
+                        calls.append((force_refresh, stale_token)) or "TOKEN-B")
+    feed, _ = _feed_with_sink()
+    feed._conn_token = "TOKEN-A"
+    feed._on_message(json.dumps({"type": "error", "error": {"code": "auth-revoked"}}))
+    assert feed._fetch_token() == "TOKEN-B"
+    assert calls == [(True, "TOKEN-A")]
+
+
+def test_거절당한_토큰이_없으면_캐시를_그대로_쓴다(monkeypatch):
+    """평소 재연결(서버 배포·idle 끊김)마다 재발급하면 같은 앱키의 다른 기기를 밀어낸다."""
+    from brokers import toss_api
+    calls = []
+    monkeypatch.setattr(toss_api, "get_access_token",
+                        lambda force_refresh=False, stale_token=None:
+                        calls.append((force_refresh, stale_token)) or "TOKEN-A")
+    feed = rt.TossWsFeed()
+    assert feed._fetch_token() == "TOKEN-A"
+    assert calls == [(False, None)]
+
+
+def test_접속_거절_상태를_websockets_버전과_무관하게_읽는다():
+    """14 미만은 exc.status_code, 14 이상은 exc.response.status_code 다."""
+    from http import HTTPStatus
+
+    class _Old(Exception):
+        status_code = 401
+
+    class _Resp:
+        status_code = HTTPStatus.UNAUTHORIZED
+
+    class _New(Exception):
+        response = _Resp()
+
+    assert rt.TossWsFeed._handshake_status(_Old()) == 401
+    assert rt.TossWsFeed._handshake_status(_New()) == 401
+    assert rt.TossWsFeed._handshake_status(RuntimeError("network")) is None
+
+
+def test_설치된_websockets_의_접속_거절_예외에서도_401을_읽는다():
+    """실제 예외 클래스로 확인한다 — 가짜 클래스만 보면 라이브러리가 자리를 옮겨도 모른다."""
+    import pytest
+    pytest.importorskip("websockets")
+    try:
+        from websockets.exceptions import InvalidStatus
+        from websockets.http11 import Response
+        from websockets.datastructures import Headers
+        exc = InvalidStatus(Response(401, "Unauthorized", Headers()))
+    except ImportError:                      # websockets < 14
+        from websockets.exceptions import InvalidStatusCode
+        exc = InvalidStatusCode(401, None)
+    assert rt.TossWsFeed._handshake_status(exc) == 401
 
 
 def test_pong과_빈_프레임은_조용히_흘린다():

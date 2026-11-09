@@ -72,6 +72,27 @@ def fetch_period_realized(cano=None, acnt_prdt_cd=None, start_date=None, end_dat
         return None
 
 
+def fetch_period_cash_flows(start_date, end_date=None):
+    """증권사 거래내역의 구간 현금 흐름(주식 매매 제외). 조회할 수 없으면 **None**.
+
+    fetch_period_realized 와 짝이다 — 그쪽은 KIS 기간 실현손익, 이쪽은 토스 거래내역(1.2.28)이고,
+    둘 다 정지 중 입출금 보정이 '우리가 모르는 매매가 있는가'를 대조하는 데 쓴다.
+    날짜는 YYYY-MM-DD 또는 YYYYMMDD 를 받는다.
+    """
+    def _iso(d):
+        if not d:
+            return None
+        d = str(d).replace("-", "")
+        return f"{d[:4]}-{d[4:6]}-{d[6:8]}" if len(d) == 8 else None
+
+    try:
+        book = api.get_period_cash_flows(_iso(start_date), _iso(end_date))
+        return book if isinstance(book, dict) else None
+    except Exception as e:
+        logger.debug(f"[기간 현금 흐름] 조회 실패: {e}")
+        return None
+
+
 def fetch_today_history(cano=None, acnt_prdt_cd=None, target_date=None):
     summary = {'buy_total': 0, 'sell_total': 0}
     try:
@@ -2002,7 +2023,8 @@ def offer_holdings_backfill():
             continue
         line = f"  {p['name']}({p['code']}) 보유 {p['qty']}주 → 신규 {new_cnt}건"
         if p['missing'] > 0:
-            line += f" [yellow](부분 복원: {p['missing']}주가 조회 구간보다 과거)[/yellow]"
+            line += (f" [yellow](부분 복원: "
+                     f"{hb.describe_missing(p['missing'], p.get('transfer_in', 0))})[/yellow]")
         config.console.print(line)
 
     #  토스는 이 계좌가 곧 자동매매 계좌다 — 기록만 하고 제한을 빼먹으면 다음 기동 동기화도

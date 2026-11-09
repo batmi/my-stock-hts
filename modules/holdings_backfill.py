@@ -167,8 +167,34 @@ def plan(holdings, cano=None, acnt_prdt_cd=None, months=12):
             r['name'] = r['name'] or name
         already = sum(1 for r in records if _exists(r['odno'], on_date=odno_scope_date(r)))
         out.append({'code': code, 'name': name, 'qty': qty,
-                    'records': records, 'missing': missing, 'already': already})
+                    'records': records, 'missing': missing, 'already': already,
+                    'transfer_in': 0})
+
+    #  [2026-11-08] 남은 수량이 주문 없이 들어온 주식(타사 이관·주식배당 입고)일 수 있다. 토스 거래내역
+    #   (1.2.28)이 그 수량을 준다. 평단이 없으므로 기록은 만들지 않고 진단만 바로잡는다 — 그대로 두면
+    #   '진입이 조회 구간보다 과거'라는 틀린 원인이 보고된다. 모르면(None·한투) 종전 문구 그대로다.
+    short = [p['code'] for p in out if p['missing'] > 0]
+    if short:
+        moves = api.get_period_securities_moves(short, months=months) or {}
+        for p in out:
+            if p['missing'] > 0:
+                p['transfer_in'] = max(0, int(moves.get(p['code'], 0) or 0))
     return out
+
+
+def describe_missing(missing, transfer_in=0, months=None):
+    """'부분 복원'의 원인 문구. 화면·텔레그램·도구가 같은 말을 쓰게 한다.
+
+    transfer_in: 같은 기간의 증권 입고 순수량(토스 거래내역). 0 이면 원인을 모르는 것이고, 그때는
+    종전처럼 '조회 구간보다 과거에 진입'이라고 적는다 — 역산이 0 까지 못 내려간 가장 흔한 이유다.
+    """
+    span = f"({months}개월)" if months else ""
+    if transfer_in and transfer_in >= missing:
+        return f"{missing}주가 증권 입고분(타사 이관·주식배당 등 — 체결 기록·평단 없음)"
+    if transfer_in:
+        return (f"{missing}주 중 {transfer_in}주는 증권 입고분, 나머지는 조회 구간{span}보다 "
+                f"과거에 진입")
+    return f"{missing}주가 조회 구간{span}보다 과거에 진입"
 
 
 def odno_scope_date(rec):
@@ -349,6 +375,9 @@ def sync_account(cano=None, acnt_prdt_cd=None, months=12, register_restrictions=
             return summary
 
         summary['partial'] = [(p['code'], p['name'], p['missing']) for p in plans if p['missing'] > 0]
+        moved = {p['code']: p['transfer_in'] for p in plans if p.get('transfer_in')}
+        if moved:     # 있을 때만 싣는다 — 소비자는 res.get('transfer_in') 로 읽는다(없으면 종전 문구)
+            summary['transfer_in'] = moved
 
         summary['written'], summary['skipped'], summary['restricted'] = apply_and_restrict(
             plans, cano=cano, acnt_prdt_cd=acnt_prdt_cd, register_restrictions=register_restrictions)
