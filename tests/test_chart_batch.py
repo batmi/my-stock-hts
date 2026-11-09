@@ -139,6 +139,67 @@ def test_menu_flow_watchlist_all_then_run():
     assert p_type == "weekly" and all(b["ovs"] is False for b in basket)
 
 
+# ── [7] 선택 삭제 (2026-11-09) ─────────────────────────────────────
+def _basket():
+    return [dict(t) for t in T] + [{"code": "028260", "name": "삼성물산", "ovs": False}]
+
+
+def _remove(inputs, basket=None):
+    basket = _basket() if basket is None else basket
+    with patch("rich.prompt.Prompt.ask", side_effect=list(inputs)):
+        removed = chart_batch._remove_from_basket(basket, chart_batch._pick_to_remove(basket))
+    return removed, [b["code"] for b in basket]
+
+
+def test_remove_picks_numbers_and_ranges():
+    assert _remove(["1,3"]) == (2, ["000660", "028260"])
+    assert _remove(["2-3"]) == (2, ["005930", "028260"])
+
+
+def test_remove_zero_empties_the_basket():
+    assert _remove(["0"]) == (4, [])
+    assert _remove(["all"]) == (4, [])        # 담을 때의 문법도 받는다
+
+
+def test_remove_zero_mixed_with_numbers_is_asked_again():
+    """'0,2' 는 모두인지 2번인지 모른다 — 빼지 않고 다시 묻는다."""
+    assert _remove(["0,2", "2"]) == (1, ["005930", "NVDA", "028260"])
+
+
+@pytest.mark.parametrize("cancel", ["", "b", "q"])
+def test_remove_cancel_keeps_everything(cancel):
+    """빈 Enter 는 취소다 — 공용 다중 선택에서는 '빈 검색어'라 한 종목짜리 바구니가 Enter 한 번에 비었다."""
+    assert _remove([cancel]) == (0, ["005930", "000660", "NVDA", "028260"])
+    one = [{"code": "005930", "name": "삼성전자", "ovs": False}]
+    assert _remove([cancel], one) == (0, ["005930"])
+
+
+def test_remove_by_search_needs_a_single_match():
+    """검색이 여러 종목에 맞으면 빼지 않고 번호를 알려 준 뒤 다시 묻는다."""
+    assert _remove(["삼성", "4"]) == (1, ["005930", "000660", "NVDA"])
+    assert _remove(["nvda"]) == (1, ["005930", "000660", "028260"])
+
+
+def test_remove_out_of_range_number_is_not_a_code_search():
+    """'9' 가 범위 밖이라고 9 가 든 005930 을 빼면 안 된다. 코드와 정확히 같을 때만 그 종목이다."""
+    assert _remove(["9", ""]) == (0, ["005930", "000660", "NVDA", "028260"])
+    assert _remove(["005930"]) == (1, ["000660", "NVDA", "028260"])
+    assert _remove(["1,9", "2"]) == (1, ["005930", "NVDA", "028260"])   # 여러 토큰의 범위 밖은 다시 묻는다
+
+
+def test_menu_flow_remove_one_then_run():
+    """3-7 → 국내 주식 → all → [7] 2번 빼기 → [8] 실행 — 남은 종목만 그린다."""
+    stocks = [{"code": "005930", "name": "삼성전자"}, {"code": "000660", "name": "SK하이닉스"},
+              {"code": "028260", "name": "삼성물산"}]
+    inputs = iter(["1", "all", "7", "2", "8", "1"])
+    with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **k: next(inputs, "b")), \
+         patch.object(config.session, "stock_data", {"stocks_kr": stocks}, create=True), \
+         patch("core.utils.pause"), patch("core.utils.clear_screen"), \
+         patch.object(chart_batch, "run_batch") as run:
+        chart_batch.batch_chart_menu()
+    assert [b["code"] for b in run.call_args.args[0]] == ["005930", "028260"]
+
+
 def test_menu_default_is_last_choice():
     """[2026-10-15] 다른 메뉴처럼 마지막 선택이 기본값 — 바구니가 차도 8번에 고정되지 않는다.
     비활성(바구니가 빈 7·8)이 마지막 선택이면 1번으로."""

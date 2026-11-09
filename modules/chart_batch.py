@@ -114,6 +114,60 @@ def _add_to_basket(basket, items):
     return added, dropped
 
 
+def _remove_from_basket(basket, picked):
+    """picked 에 든 종목((code, ovs))을 바구니에서 뺀다. 뺀 개수."""
+    keys = {(p["code"], p["ovs"]) for p in picked or []}
+    before = len(basket)
+    basket[:] = [b for b in basket if (b["code"], b["ovs"]) not in keys]
+    return before - len(basket)
+
+
+def _pick_to_remove(basket):
+    """[7] 바구니에서 뺄 종목을 고른다. 고른 항목 리스트, 취소면 [].
+
+    번호(`1,3,5-8`)·`0`(모두 비우기)·종목명/코드 검색을 받는다. 담을 때의 `all` 도 '모두'로 받는다.
+    [공용 select_multiple_from_list 를 쓰지 않는 이유] 거기서는 빈 Enter 가 '빈 검색어'로 읽혀
+     모든 항목에 맞는다. 담을 때는 무해하지만, 뺄 때는 한 종목만 담긴 바구니가 Enter 한 번에 빈다.
+     그래서 여기서는 빈 Enter 를 취소로 읽고, 검색이 여러 종목에 맞으면 빼지 않고 번호를 알려 준다.
+     범위 밖 번호(예: 9)는 그 숫자가 든 종목코드(005930)를 검색하지 않는다 — 코드와 같을 때만 그 종목이다.
+    """
+    while True:
+        config.console.print(f"[bold]담긴 종목 {len(basket)}개[/bold]")
+        for i, b in enumerate(basket, 1):
+            config.console.print(f"[{i}] {escape(b['name'])} ({escape(b['code'])})")
+        config.console.print("[0] 모두 비우기")
+        config.console.print()
+        sel = Prompt.ask("뺄 번호 [dim](예: 1,3,5-8 · 모두 비우기: 0)[/dim] 또는 종목명·코드 "
+                         "[dim](취소: Enter·b)[/dim]", default="", show_default=False).strip()
+        config.console.print()
+        if not sel or sel.lower() in ("b", "q"):
+            return []
+        if sel == "0":
+            return list(basket)
+        try:
+            idx = utils.parse_multi_selection(sel, len(basket))
+        except ValueError as e:
+            config.console.print(f"[red]{e}[/red]\n")
+            continue
+        if idx is not None:
+            return [basket[i] for i in idx]
+        if sel.isdigit():
+            hits = [i for i, b in enumerate(basket) if b["code"] == sel]
+            if not hits:
+                config.console.print(f"[red]'{sel}' 는 목록 범위(1~{len(basket)})를 벗어납니다.[/red]\n")
+                continue
+        else:
+            hits = [i for i, b in enumerate(basket)
+                    if sel.lower() in b["name"].lower() or sel.upper() in b["code"].upper()]
+        if len(hits) == 1:
+            return [basket[hits[0]]]
+        if not hits:
+            config.console.print(f"[yellow]'{escape(sel)}' 에 맞는 종목이 없습니다.[/yellow]\n")
+        else:
+            config.console.print(f"[yellow]'{escape(sel)}' 이(가) {len(hits)}개에 맞습니다"
+                                 f"({', '.join(str(i + 1) for i in hits)}번) — 번호로 골라 주세요.[/yellow]\n")
+
+
 def parse_direct_codes(text):
     """'005930, 000660 NVDA' → [(code, ovs)]. 국내 6자리 코드는 국내, 나머지는 해외 티커."""
     out = []
@@ -249,7 +303,7 @@ def batch_chart_menu():
             ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"),
             ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"),
             ("5", "시장 지수", "Market Indices"), ("6", "직접 입력", "Direct Input, comma-separated"),
-            ("7", "선택 비우기", "Clear"), ("8", "차트 생성 실행", "Run"),
+            ("7", "선택 삭제", "Delete"), ("8", "차트 생성 실행", "Run"),
         ]
         #  [2026-10-15] 다른 메뉴와 같이 마지막 선택을 기본값으로 둔다(종전엔 바구니가 차면 늘 8번 고정).
         #   비활성 항목(바구니가 비었을 때의 7·8)이 마지막 선택이면 1번으로 돌아간다.
@@ -282,7 +336,10 @@ def batch_chart_menu():
             continue
 
         if choice == "7":
-            basket.clear()
+            #  [2026-11-09] 종전에는 묻지 않고 전부 비웠다. 이제 골라 빼거나 0 으로 비운다.
+            #   남은 종목은 메뉴 위 '선택 N개' 줄에 바로 보인다.
+            if basket:
+                _remove_from_basket(basket, _pick_to_remove(basket))
             continue
 
         if choice == "8" and basket:
