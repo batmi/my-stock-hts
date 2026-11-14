@@ -1,5 +1,5 @@
 {
- "version": 1,
+ "version": 2,
  "tables": {
   "corp_action_refs": [
    [
@@ -69,6 +69,20 @@
    ],
    [
     "principal",
+    "REAL",
+    0,
+    null,
+    0
+   ],
+   [
+    "book_transfer_asof",
+    "REAL",
+    0,
+    null,
+    0
+   ],
+   [
+    "book_income_asof",
     "REAL",
     0,
     null,
@@ -1084,7 +1098,7 @@
  ],
  "ddl": [
   "CREATE TABLE corp_action_refs (\n                        code TEXT PRIMARY KEY,\n                        ref_date TEXT,\n                        ref_close REAL DEFAULT 0.0,\n                        source TEXT,\n                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n                    )",
-  "CREATE TABLE daily_asset_history (\n                        date TEXT,\n                        account TEXT,\n                        asset REAL, net_transfer REAL DEFAULT 0, principal REAL,\n                        PRIMARY KEY (date, account)\n                    )",
+  "CREATE TABLE daily_asset_history (\n                        date TEXT,\n                        account TEXT,\n                        asset REAL, net_transfer REAL DEFAULT 0, principal REAL, book_transfer_asof REAL, book_income_asof REAL,\n                        PRIMARY KEY (date, account)\n                    )",
   "CREATE TABLE fill_latency (\n                        date TEXT,\n                        odno TEXT,\n                        broker TEXT,                 -- 'toss' | 'kis'\n                        code TEXT,\n                        side TEXT,\n                        ws_event_at REAL,            -- 그 주문의 첫 WS 이벤트(epoch). NULL = WS가 안 알림\n                        recognized_at REAL NOT NULL, -- 감시기가 체결을 알아챈 순간(epoch)\n                        woke_by_ws INTEGER DEFAULT 0,-- 이 주기가 WS 통보로 깨워졌는가\n                        poll_interval REAL,          -- 그 순간의 폴링 주기(초) — WS 없을 때의 최대 대기\n                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n                        PRIMARY KEY (date, odno, broker)\n                    )",
   "CREATE TABLE half_tp_status (\n                        code TEXT PRIMARY KEY,\n                        update_time TEXT\n                    )",
   "CREATE TABLE journal_opening (\n                        account TEXT PRIMARY KEY,\n                        as_of TEXT,\n                        sent_at TEXT,\n                        count INTEGER DEFAULT 0\n                    )",

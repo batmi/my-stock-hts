@@ -443,3 +443,143 @@ def test_ledger_tolerance_absorbs_buy_commissions(trader):
     with _ledger(_book(transfer=-1_000_000.0)):
         ok, _ = trader._cash_flows_match_broker("2026-08-01", "2026-08-10", -1_200_000.0, 50_000)
     assert not ok
+
+
+# ───────── ⑨ 대조점 날의 '기준선 이전' 거래를 두 번 세지 않는다 (2026-11-14) ─────────
+#  대조점 원금은 그날 기준선을 **잰 시각**의 값이고, 거래내역 조회는 날짜 단위(그날 0시부터)다.
+#  '입금하고 프로그램을 켠 날'이 대조점이면 그 입금은 원금에 이미 들어 있는데 거래내역에도 잡혀,
+#  둘이 그만큼 어긋났다 — '모르는 매매'로 보류되고 그 사이 정지 중 입출금까지 묻혔다.
+
+def _fake_transactions(rows):
+    """결제일(from~to, 포함)로 거르는 가짜 GET /transactions — 한 쪽으로 끝난다."""
+    def _get(transaction_types=None, from_date=None, to_date=None, cursor=None, limit=None):
+        out = [r for r in rows
+               if (not from_date or r['day'] >= from_date) and (not to_date or r['day'] <= to_date)]
+        return {'transactions': out, 'hasNext': False, 'nextCursor': None}
+    return _get
+
+
+def _tx(kind, amount, day):
+    return {'transactionType': kind, 'currency': 'KRW', 'assetClass': None, 'isCancellation': False,
+            'netAmount': str(amount), 'marketCountry': 'KR', 'day': day}
+
+
+def _toss(rows):
+    """토스 모드로 두고 거래내역 API 만 가짜로 — 분류(api.toss)와 계좌 래퍼는 실제 코드가 돈다."""
+    from contextlib import ExitStack
+    from brokers import toss_api
+    stack = ExitStack()
+    stack.enter_context(patch.object(config.session, 'is_toss', True))
+    stack.enter_context(patch('api.account._paper_active', return_value=False))
+    stack.enter_context(patch.object(toss_api, 'get_transactions', _fake_transactions(rows)))
+    return stack
+
+
+def test_a_deposit_before_the_baseline_does_not_block_the_next_reconcile(db, trader):
+    """[실재현] D 07시 입금 +100만 → 09시 기동(대조점) → 저녁 정지 뒤 −30만 출금 → 다음 날 재기동.
+
+    수정 전: 거래내역 +70만 vs 원금 변화 −30만 = 100만 어긋남 → 보류, −30만이 적히지 않았다.
+    """
+    D = _d(1)
+    rows = [_tx('DEPOSIT', 1_000_000, D)]                       # D 07:00 — 기동 전
+    db.save_daily_asset(_d(3), ACC, 10_000_000.0, principal=10_000_000.0)
+    with _toss(rows):
+        asof = trader._book_flows_asof_now(D)                   # D 09:00 기준선을 잡는 순간
+        assert asof == (1_000_000.0, 0.0)
+        db.save_daily_asset(D, ACC, 11_000_000.0, principal=11_000_000.0, book_asof=asof)
+        rows.append(_tx('WITHDRAWAL', 300_000, D))              # D 21:00 — 프로그램이 꺼진 뒤
+        amount, _ = _reconcile(trader, 10_700_000)
+    assert amount == -300_000, f"정지 중 30만 출금을 적지 못했다(기록 {amount:+,})"
+    assert _net(db, D) == -300_000.0
+
+
+def test_a_reference_row_without_the_asof_keeps_the_old_comparison(db, trader):
+    """남긴 몫이 없는 대조점(옛 행·그때 조회 실패)은 빼지 않고 대조한다 — 어긋나면 보류하고 원인 후보를 적는다."""
+    D = _d(1)
+    rows = [_tx('DEPOSIT', 1_000_000, D), _tx('WITHDRAWAL', 300_000, D)]
+    db.save_daily_asset(D, ACC, 11_000_000.0, principal=11_000_000.0)       # book_asof 없음
+    assert db.get_book_asof(D, ACC) is None
+    logs = []
+    trader.log = logs.append
+    with _toss(rows):
+        assert _reconcile(trader, 10_700_000)[0] == 0
+    assert any("기동 전의 입출금" in m for m in logs), logs
+
+
+def test_income_before_the_baseline_is_not_subtracted_again(db, trader):
+    """기준선 이전 배당(이미 대조점 원금에 든 돈)을 수익분으로 또 빼면 정지 중 입금이 그만큼 작게 적힌다."""
+    D = _d(1)
+    rows = [_tx('DIVIDEND', 80_000, D)]
+    rows[0]['assetClass'] = 'STOCK'
+    with _toss(rows):
+        db.save_daily_asset(D, ACC, 10_080_000.0, principal=10_080_000.0,
+                            book_asof=trader._book_flows_asof_now(D))
+        assert db.get_book_asof(D, ACC) == (0.0, 80_000.0)
+        rows.append(_tx('DEPOSIT', 1_000_000, D))                # 정지 뒤 입금
+        amount, _ = _reconcile(trader, 11_080_000)
+    assert amount == 1_000_000
+
+
+def test_unreadable_rows_at_the_baseline_mean_unknown(trader):
+    """해석 못 한 거래가 섞인 합계는 '기준선 이전 몫'으로 남기지 않는다. 장부가 없는 모드도 모른다."""
+    D = _d(0)
+    with _toss([_tx('DEPOSIT', 1_000_000, D), _tx('SOMETHING_NEW', 5, D)]):
+        assert trader._book_flows_asof_now(D) is None
+    assert trader._book_flows_asof_now(D) is None                # 가상투자·한투 — 조회 자체가 없다
+
+
+def test_the_asof_lives_and_dies_with_the_principal(db):
+    """원금을 새로 적으면 그 옆의 몫도 함께 바뀐다(없으면 비운다). 자산·순입출금만 고치는 호출은 보존한다."""
+    D = _d(1)
+    db.save_daily_asset(D, ACC, 100.0, principal=100.0, book_asof=(30.0, 2.0))
+    db.save_daily_asset(D, ACC, 110.0)                           # 자산만
+    db.save_daily_asset(D, ACC, 110.0, net_transfer=-5)          # 순입출금만
+    assert db.get_book_asof(D, ACC) == (30.0, 2.0)
+    assert db.get_last_principal_snapshot(ACC, D) == (D, 100.0) and _net(db, D) == -5.0
+    db.save_daily_asset(D, ACC, 110.0, principal=120.0)          # 원금을 다시 쟀는데 몫은 모른다
+    assert db.get_book_asof(D, ACC) is None, "옛 시각의 몫이 새 원금 옆에 남았다"
+    assert db.get_book_asof(_d(9), ACC) is None                  # 없는 행
+
+
+def test_the_baseline_snapshot_carries_the_asof():
+    """기준 원금을 대조점으로 남기는 자리가 그 시각의 장부 몫을 함께 넘긴다(소스 가드)."""
+    import ast
+    import inspect
+    from modules.auto_trade import account_sync
+    tree = ast.parse(inspect.getsource(account_sync))
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and getattr(n.func, 'attr', '') == 'save_daily_asset'
+             and any(k.arg == 'principal' for k in n.keywords)]
+    assert calls, "기준 원금 스냅샷 저장 자리를 찾지 못했다"
+    for c in calls:
+        assert any(k.arg == 'book_asof' for k in c.keywords), \
+            f"{c.lineno}행: 원금만 남기고 그 시각의 장부 몫을 안 남긴다"
+
+
+# ───────── ⑩ 장중 기록을 되돌리는 몫을 '정지 중 입출금'이라 알리지 않는다 (2026-11-14) ─────────
+
+def test_reversing_an_intraday_dividend_is_not_called_a_withdrawal(db, trader):
+    """[실재현] 장중 배당 +8만이 '입금'으로 적힌 다음 날 — 대조가 −8만으로 되돌린다(숫자는 맞다).
+
+    수정 전에는 그것이 '정지 중 출금 자동 반영 −80,000원'으로 알려졌다. 출금은 없었다.
+    """
+    db.save_daily_asset(_d(1), ACC, 10_000_000.0, principal=10_000_000.0)
+    db.save_daily_asset(_d(1), ACC, 10_000_000.0, net_transfer=80_000)     # 장중 감지가 남긴 '입금'
+    logs = []
+    trader.log = logs.append
+    with _ledger(_book(income=80_000.0)):
+        amount, tg = _reconcile(trader, 10_080_000)
+    assert amount == -80_000 and _net(db, _d(1)) == 0.0
+    msg = str(tg.call_args)
+    assert "입출금 기록 정정" in msg and "정지 중" not in msg
+    assert "조치할 것은 없습니다" in msg
+    assert any("입출금 기록 정정" in m for m in logs) and not any("정지 중" in m for m in logs)
+
+
+def test_a_plain_offline_transfer_keeps_its_wording(db, trader):
+    """수익분만 있거나(정지 중 배당+입금) 장중 기록만 있으면 종전 문구 그대로다."""
+    db.save_daily_asset(_d(10), ACC, 10_000_000.0, principal=10_000_000.0)
+    db.save_daily_asset(_d(1), ACC, 11_080_000.0)
+    with _ledger(_book(transfer=1_000_000.0, income=80_000.0)):
+        _, tg = _reconcile(trader, 11_080_000)
+    assert "정지 중 입금 자동 반영" in str(tg.call_args)

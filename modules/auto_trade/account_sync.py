@@ -147,7 +147,27 @@ class TraderAccountSyncMixin:
             logger.debug(f"[오프라인 입출금] 증권사 실현손익 대조 실패(보정은 계속): {e}")
             return True
 
-    def _cash_flows_match_broker(self, start_date, end_date, residual, tolerance):
+    def _book_flows_asof_now(self, day=None):
+        """지금까지 오늘(day) 결제된 증권사 거래내역의 (입출금, 수익분). 모르면 None.
+
+        기준 원금을 대조점으로 남길 때 함께 적는다(db.save_daily_asset book_asof). 원금은 '이 시각'의
+        값이고 거래내역 조회는 날짜 단위라, 다음 대조는 이 몫을 빼야 같은 구간을 비교한다.
+        해석하지 못한 거래가 섞였으면 합계를 믿을 수 없으므로 모른다고 답한다 — 그 거래는 다음
+        대조의 창에도 들어 있어 어차피 보류된다. 가상투자·한투는 장부가 없어 늘 None 이다.
+        ※ 증권 입출고(금액 없음)는 여기에 담을 수 없다. 기동 전에 입고가 있었던 날이 대조점이면
+          다음 대조는 종전처럼 보류된다(모르면 안 건드린다).
+        """
+        day = day or datetime.now().strftime("%Y-%m-%d")
+        try:
+            book = account.fetch_period_cash_flows(day, day)
+        except Exception as e:
+            logger.debug(f"[오프라인 입출금] 기준선 시각의 거래내역 조회 실패(다음 대조는 빼지 않고 본다): {e}")
+            return None
+        if not book or book.get('unknown'):
+            return None
+        return float(book.get('transfer') or 0), float(book.get('income') or 0)
+
+    def _cash_flows_match_broker(self, start_date, end_date, residual, tolerance, account_key=None):
         """정지 구간의 추정 입출금(원금 잔차)을 증권사 거래내역과 대조한다. 반환: (통과, 장부의 수익분).
 
         [왜 필요한가] _realized_matches_broker 와 같은 자리다. 잔차는 '주식 매매로 설명되지 않는
@@ -163,6 +183,11 @@ class TraderAccountSyncMixin:
         [보류하는 경우] 국내 증권 입출고(타사 이관·주식배당)가 있으면 금액이 없어 원금 변화를 잴 수
          없고, 해석 못 한 거래가 있으면 합계를 믿을 수 없다 — 둘 다 '모르면 안 건드린다'.
         [장부가 없으면] 가상투자·한투·조회 실패는 (True, 0) — 대조 불가가 기능 정지가 되면 안 된다.
+        [대조점 날의 기준선 이전 몫 · 2026-11-14] 잔차는 대조점 원금을 **잰 시각** 이후의 변화인데,
+         거래내역은 그날 0시부터 센다. '입금하고 프로그램을 켠 날'이 대조점이면 그 입금은 거래내역에만
+         있어 그만큼 어긋나고, 종전에는 '모르는 매매'로 보류됐다(그 사이 정지 중 입출금도 함께 묻혔다).
+         account_key 를 주면 그날 원금과 함께 남긴 몫(db.get_book_asof)을 입출금·수익분에서 각각 뺀다.
+         남긴 값이 없으면(옛 행·그때 조회 실패) 종전처럼 빼지 않고 대조한다 — 어긋나면 보류된다.
         """
         try:
             book = account.fetch_period_cash_flows(start_date, end_date)
@@ -179,14 +204,21 @@ class TraderAccountSyncMixin:
             self.log(f"[오프라인 입출금] 해석하지 못한 거래 {book['unknown']}건이 있어 거래내역 합계를 "
                      f"믿을 수 없습니다. 보정을 보류합니다.")
             return False, 0.0
-        expected = float(book.get('transfer') or 0) + float(book.get('income') or 0)
+        asof = db_manager.db.get_book_asof(start_date, account_key) if account_key else None
+        pre_transfer, pre_income = asof if asof else (0.0, 0.0)
+        income = float(book.get('income') or 0) - pre_income
+        expected = float(book.get('transfer') or 0) - pre_transfer + income
         gap = float(residual) - expected
         if abs(gap) > max(tolerance, 1000.0):
+            #  남긴 몫이 없는 대조점이면 '그날 기동 전 입출금'이 원인일 수 있다 — 운용자가 가려 보게 적는다.
+            hint = ("" if asof or not account_key else
+                    f" 대조점({start_date})에 기준선 이전 거래 기록이 없어, 그날 기동 전의 입출금이 "
+                    f"원인일 수도 있습니다.")
             self.log(f"[오프라인 입출금] 거래내역의 입출금·배당 합계({expected:+,.0f}원)와 원금 변화"
                      f"({float(residual):+,.0f}원)가 {abs(gap):,.0f}원 어긋납니다 — 우리가 모르는 매매가 "
-                     f"있어 보정을 보류합니다. (수동 매매 기록은 보유 종목만 복원됩니다)")
+                     f"있어 보정을 보류합니다. (수동 매매 기록은 보유 종목만 복원됩니다){hint}")
             return False, 0.0
-        return True, float(book.get('income') or 0)
+        return True, income
 
     def _reconcile_offline_transfer(self, account_key, current_principal, realized_ok):
         """프로그램이 꺼져 있던 사이의 입출금을 스스로 되찾아 자산 이력에 적는다.
@@ -263,7 +295,8 @@ class TraderAccountSyncMixin:
             residual = float(current_principal) - float(last_principal) - float(realized)
             #  거래내역 구간은 대조점 날부터 **오늘까지**다 — 잔차에는 오늘 기준선을 잡기 전까지의
             #  입출금도 들어 있다(실현손익과 달리 오늘 몫이 상쇄되지 않는다).
-            cash_ok, income = self._cash_flows_match_broker(last_date, today, residual, threshold)
+            cash_ok, income = self._cash_flows_match_broker(last_date, today, residual, threshold,
+                                                            account_key=account_key)
             if not cash_ok:
                 return 0
             recorded, recorded_ok = db_manager.db.get_net_transfer_between(
@@ -289,17 +322,35 @@ class TraderAccountSyncMixin:
                 extra += f", 이미 기록된 입출금 {int(recorded):+,}원 제외"
             if income:
                 extra += f", 배당·이자·수수료 {int(income):+,}원 제외"
-            self.log(f"💰 정지 중 발생한 예수금 {action_str} 자동 반영: {amount:+,}원 "
-                     f"(대조점 {last_date}, 구간 실현손익 {int(realized):+,}원{extra})")
+            detail = (f"(대조: {last_date} 원금 {int(last_principal):,}원 → 현재 "
+                      f"{int(current_principal):,}원, 그 사이 실현손익 {int(realized):+,}원{extra})")
+            #  [2026-11-14] 장중 감지는 배당·이자를 입금과 구분하지 못해 문턱을 넘으면 '입금'으로 적는다.
+            #   거래내역이 그것을 수익분이라고 알려 주면 이 금액은 그 기록을 되돌리는 몫을 담는다 —
+            #   '정지 중 출금'이 아니다(재현: 장중 배당 +8만 기록 → 다음 날 −8만이 '정지 중 출금'으로
+            #   알려졌다). 이미 기록된 몫과 수익분이 함께 있으면 어느 쪽인지 금액만으로 가를 수 없으므로
+            #   '정지 중 입출금'이라 단정하지 않고 내역을 적는다. 적는 금액과 자리는 같다.
+            if recorded and income:
+                self.log(f"💰 입출금 기록 정정: {amount:+,}원 (대조점 {last_date}, 구간 실현손익 "
+                         f"{int(realized):+,}원{extra}) — 장중에 입금으로 적힌 배당·이자를 되돌린 몫이 "
+                         f"들어 있을 수 있습니다")
+                tg = (f"💰 [입출금 기록 정정]\n"
+                      f"{last_date} 이후의 원금 변화를 증권사 거래내역과 대조해 자산 이력의 입출금 기록을 "
+                      f"{amount:+,}원 고쳤습니다.\n"
+                      f"장중에 '입금'으로 적혔던 배당·이자를 되돌린 몫이 들어 있을 수 있습니다 — 그만큼은 "
+                      f"실제 {action_str}이 아닙니다.\n\n"
+                      f"✅ 드로다운 기준(자산 고점)이 고친 기록으로 계산되므로 조치할 것은 없습니다.\n"
+                      f"{detail}")
+            else:
+                self.log(f"💰 정지 중 발생한 예수금 {action_str} 자동 반영: {amount:+,}원 "
+                         f"(대조점 {last_date}, 구간 실현손익 {int(realized):+,}원{extra})")
+                tg = (f"💰 [정지 중 {action_str} 자동 반영]\n"
+                      f"프로그램이 꺼져 있던 사이({last_date} 이후)의 {action_str} "
+                      f"약 {abs(amount):,}원을 확인해 자산 이력에 반영했습니다.\n\n"
+                      f"✅ 드로다운 기준(자산 고점)이 이 금액을 빼고 계산되므로 "
+                      f"조치할 것은 없습니다.\n"
+                      f"{detail}")
             try:
-                api.send_telegram_message(
-                    f"💰 [정지 중 {action_str} 자동 반영]\n"
-                    f"프로그램이 꺼져 있던 사이({last_date} 이후)의 {action_str} "
-                    f"약 {abs(amount):,}원을 확인해 자산 이력에 반영했습니다.\n\n"
-                    f"✅ 드로다운 기준(자산 고점)이 이 금액을 빼고 계산되므로 "
-                    f"조치할 것은 없습니다.\n"
-                    f"(대조: {last_date} 원금 {int(last_principal):,}원 → 현재 "
-                    f"{int(current_principal):,}원, 그 사이 실현손익 {int(realized):+,}원{extra})")
+                api.send_telegram_message(tg)
             except Exception:
                 pass
             return amount
@@ -773,12 +824,16 @@ class TraderAccountSyncMixin:
                             #  자산이 0(시세 결손 의심)인 날은 남기지 않는다 — 그런 행은
                             #  get_max_daily_asset의 환산에서 빠져 보정이 사라진다. 그날을
                             #  건너뛰어도 다음 대조는 그 이전 스냅샷과 이뤄져 식은 그대로 성립한다.
+                            #  [2026-11-14] 이 원금은 '지금 시각'의 값이라 오늘 0시~지금의 입출금을 이미
+                            #   담고 있다. 그 몫(증권사 거래내역 기준)을 함께 남겨, 다음 대조가 날짜 단위
+                            #   거래내역 합에서 빼게 한다(_book_flows_asof_now · _cash_flows_match_broker).
                             if realized_ok and self.initial_asset > 0:
                                 try:
                                     _ok = db_manager.db.save_daily_asset(
                                         datetime.now().strftime("%Y-%m-%d"),
                                         f"{target_cano}-{acnt_cd}", self.initial_asset,
-                                        principal=int(current_principal))
+                                        principal=int(current_principal),
+                                        book_asof=self._book_flows_asof_now())
                                 except Exception as _e:
                                     _ok = False
                                     logger.debug(f"[입출금] 기준 원금 스냅샷 저장 예외: {_e}")

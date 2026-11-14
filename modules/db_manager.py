@@ -59,7 +59,8 @@ def _daily_asset_write_failed(date_str, account, exc):
 #  · 열 추가는 지금처럼 '없으면 더한다'(멱등, _add_missing_columns)로 쓴다. 매 기동 돌아 어떤 세대의 파일이든 빠진
 #    열을 메운다 — 번호로 건너뛰지 않는 이유다(실측 10-25: 맥 실전·파이 두 DB 모두 이 방식으로 새 DB 와 같은 열).
 #  · 멱등으로 쓸 수 없는 변경(테이블 재생성 등)이 생기면 그때 `if ver < N:` 단계로 둔다. 번호는 오르기만 한다.
-SCHEMA_VERSION = 1
+#  [세대] 1 = 2026-10-25 기준 · 2 = 2026-11-14 daily_asset_history.book_transfer_asof·book_income_asof
+SCHEMA_VERSION = 2
 
 
 class DBManager:
@@ -610,9 +611,15 @@ class DBManager:
                 # [마이그레이션 2026-09-01] principal: 그날의 기준 원금(현금+매입원가-실현손익).
                 #  프로그램이 꺼져 있던 사이의 입출금을 되찾는 유일한 대조점이다
                 #  (trader._reconcile_offline_transfer 주석 참조).
+                # [마이그레이션 2026-11-14] book_*_asof: 그 원금을 잰 **시각까지** 그날 결제된 증권사
+                #  거래내역의 입출금·수익분(토스 1.2.28). 원금은 '그 시각'의 값인데 거래내역 조회는
+                #  날짜 단위라, 다음 대조가 이 몫을 빼야 같은 구간을 비교한다(save_daily_asset 참조).
+                #  NULL = 모른다(한투·가상·조회 실패·이 열이 생기기 전의 행).
                 failed += self._add_missing_columns(cursor, "daily_asset_history", (
                     ("net_transfer", "REAL DEFAULT 0"),
-                    ("principal", "REAL")))
+                    ("principal", "REAL"),
+                    ("book_transfer_asof", "REAL"),
+                    ("book_income_asof", "REAL")))
 
                 # [마이그레이션 2026-08-30 / 2026-09-08] 계좌 상태·시장 필터 차단 컬럼 추가.
                 #  PK가 그대로라 ADD로 족하다. (이 지점은 위 is_sim 재생성 뒤라 컬럼 목록을
@@ -2215,13 +2222,21 @@ class DBManager:
                 if not quiet:
                     logger.warning(f"[DB] 백업 파일 정리 실패({p}): {e}")
 
-    def save_daily_asset(self, date_str, account, asset_value, net_transfer=None, principal=None):
+    def save_daily_asset(self, date_str, account, asset_value, net_transfer=None, principal=None,
+                         book_asof=None):
         """일일 총 자산 스냅샷 저장.
 
         net_transfer: 그날의 누적 순입출금(입금 +, 출금 −). None이면 기존 값을 보존한다 —
           자산만 갱신하는 호출이 입출금 기록을 지우면 드로다운 기준이 다시 어긋난다.
         principal: 그날의 기준 원금(현금+매입원가-실현손익). None이면 기존 값을 보존한다 —
           같은 이유다. 이 값이 지워지면 재기동 때 오프라인 입출금을 되찾을 대조점이 사라진다.
+        book_asof: (입출금, 수익분) — principal 을 잰 **그 시각까지** 그날 결제된 증권사 거래내역 합.
+          [왜 · 2026-11-14] 원금은 '그 시각'의 값이라 그날 0시~그 시각의 입출금을 이미 담고 있다.
+           그런데 다음 대조의 거래내역 조회는 날짜 단위라 그날 0시부터 센다 — 이 몫을 빼지 않으면
+           '입금하고 프로그램을 켠 날'이 대조점일 때 거래내역과 원금 변화가 그만큼 어긋나
+           '모르는 매매'로 보류된다(재현: 기동 전 +100만·정지 중 −30만 → 장부 +70만 vs 원금 −30만).
+          **원금과 한 몸이다**: principal 을 새로 적으면 이 값도 함께 바뀐다(None 이면 '모른다'로
+           비운다 — 옛 시각의 값을 새 원금 옆에 남기면 틀린 몫을 뺀다). principal 이 None 이면 보존.
 
         **성공 여부를 돌려준다.**
 
@@ -2239,21 +2254,26 @@ class DBManager:
                 try:
                     conn = self._get_conn()
                     cursor = conn.cursor()
+                    #  원금을 새로 적는 호출이면 장부 몫은 넘겨받은 값(없으면 '모른다')으로 함께 바뀐다.
+                    _bt, _bi = ((float(book_asof[0]), float(book_asof[1]))
+                                if principal is not None and book_asof is not None else (None, None))
                     if net_transfer is None or principal is None:
                         cursor.execute(
-                            "SELECT net_transfer, principal FROM daily_asset_history "
-                            "WHERE date = ? AND account = ?", (date_str, account))
+                            "SELECT net_transfer, principal, book_transfer_asof, book_income_asof "
+                            "FROM daily_asset_history WHERE date = ? AND account = ?", (date_str, account))
                         _row = cursor.fetchone()
                         if net_transfer is None:
                             net_transfer = (_row[0] if _row and _row[0] is not None else 0)
                         if principal is None:
                             principal = (_row[1] if _row else None)
+                            _bt, _bi = ((_row[2], _row[3]) if _row else (None, None))
                     cursor.execute('''
                         INSERT OR REPLACE INTO daily_asset_history
-                            (date, account, asset, net_transfer, principal)
-                        VALUES (?, ?, ?, ?, ?)
+                            (date, account, asset, net_transfer, principal,
+                             book_transfer_asof, book_income_asof)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                     ''', (date_str, account, asset_value, float(net_transfer or 0),
-                          None if principal is None else float(principal)))
+                          None if principal is None else float(principal), _bt, _bi))
                     conn.commit()
                     return True
                 except sqlite3.OperationalError as e:
@@ -2357,6 +2377,27 @@ class DBManager:
             return row[0], float(row[1])
         except Exception as e:
             _swallowed("get_last_principal_snapshot", e)
+            return None
+
+    def get_book_asof(self, date_str, account):
+        """그날 기준 원금을 잰 시각까지의 증권사 거래내역 (입출금, 수익분). 모르면 None.
+
+        save_daily_asset(book_asof=) 가 원금과 함께 남긴 값이다. 다음 대조
+        (trader._cash_flows_match_broker)가 날짜 단위 거래내역 합에서 이 몫을 뺀다 — 이미 그날
+        원금에 들어 있는 돈이라, 빼지 않으면 원금 변화와 거래내역이 그만큼 어긋난다.
+        None 은 '0'이 아니라 '모른다'다(한투·가상·조회 실패·이 열이 생기기 전의 행·읽기 실패) —
+        호출부는 그때 종전처럼 빼지 않고 대조한다(어긋나면 보류되는 쪽이라 틀린 값을 적지 않는다).
+        """
+        try:
+            cursor = self._get_conn().cursor()
+            cursor.execute("SELECT book_transfer_asof, book_income_asof FROM daily_asset_history "
+                           "WHERE date = ? AND account = ?", (date_str, account))
+            row = cursor.fetchone()
+            if not row or row[0] is None or row[1] is None:
+                return None
+            return float(row[0]), float(row[1])
+        except Exception as e:
+            _swallowed("get_book_asof", e)
             return None
 
     def add_net_transfer(self, date_str, account, amount):
