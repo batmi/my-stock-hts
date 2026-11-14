@@ -175,10 +175,13 @@ def plan(holdings, cano=None, acnt_prdt_cd=None, months=12):
     #   '진입이 조회 구간보다 과거'라는 틀린 원인이 보고된다. 모르면(None·한투) 종전 문구 그대로다.
     short = [p['code'] for p in out if p['missing'] > 0]
     if short:
-        moves = api.get_period_securities_moves(short, months=months) or {}
-        for p in out:
-            if p['missing'] > 0:
-                p['transfer_in'] = max(0, int(moves.get(p['code'], 0) or 0))
+        moves = api.get_period_securities_moves(short, months=months)
+        #  None = 모른다(한투·가상·토스 조회 실패) — '입고 0'으로 접지 않고 transfer_in 을 비워 둔다
+        #  (describe_missing 이 종전 문구로 적는다). 빈 dict 는 '입고 없음'이라는 사실이다.
+        if moves is not None:
+            for p in out:
+                if p['missing'] > 0:
+                    p['transfer_in'] = max(0, int(moves.get(p['code'], 0) or 0))
     return out
 
 
