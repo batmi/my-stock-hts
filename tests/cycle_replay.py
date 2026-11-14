@@ -722,6 +722,10 @@ def run(tmp_path, cycles=None, scenario="base"):
         #   측정 불가, 피크 = 현재)으로 고정한다 — 경보(_warn_if_memory_low)도 가용 0 이면 돌지 않는다. lifecycle 은 아래에서
         #   경보 경로를 지나도록 따로 바꾼다. 클래스 속성이라 메서드를 다른 모듈로 옮겨도 같은 자리에서 찾아진다(MRO).
         P(_trader_mod.AutoTrader, "_health_memory", staticmethod(lambda: (400.0, 0.0, 400.0)))
+        #  관제 화면의 '코드' 줄 — 진짜 값은 이 저장소의 지금 커밋이라 커밋할 때마다 기록이 달라진다. 고정한다.
+        from core import code_version as _code_version
+        P(_code_version, "label", lambda: "0000000 (replay)")
+        P(_code_version, "drift", lambda: None)
         life = {"starts": 0, "cycle": None, "attempt": -1, "health": list(LIFE_SERVER_HEALTH),
                 "emptied": set(), "deposit_none": False}
         if scenario == "lifecycle":

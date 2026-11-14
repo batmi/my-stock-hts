@@ -157,6 +157,19 @@ def instance_paths(base=None):
 _BEAT_FAILURES = {}
 
 
+def _code_commit():
+    """기동 때의 코드 커밋(7자). 모르면 None.
+
+    도장을 찍는 쪽(살아 있는 프로세스)만 부른다 — 감시자(cron)가 이 모듈을 가볍게 import 하도록
+    함수 안에서 불러온다.
+    """
+    try:
+        from core import code_version
+        return code_version.short(code_version.started()[0])
+    except Exception:           # noqa: BLE001 - 표시용 정보 하나로 생존 신호가 막히면 안 된다
+        return None
+
+
 def beat_failure_streak(mode=None, path=None):
     """이 인스턴스의 도장 찍기가 연속 몇 번 실패했는가. 0 이면 정상."""
     return int(_BEAT_FAILURES.get(path or path_for(mode), 0))
@@ -192,6 +205,8 @@ def beat(interval_sec=60, running=None, mode=None, instance=None, holdings=None,
             "interval_sec": interval_sec,
             "pid": os.getpid(),
             "host": socket.gethostname(),
+            #  기동 때의 코드 커밋(7자, 모르면 null). 파일을 복사해 와도 어느 코드로 돌던 것인지 보인다.
+            "commit": _code_commit(),
             "mode": mode,
             "instance": instance,
             "auto_running": running,
@@ -226,6 +241,7 @@ def stopped(reason="정상 종료", path=None, mode=None):
             "iso": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)),
             "pid": os.getpid(),
             "host": socket.gethostname(),
+            "commit": _code_commit(),
             "mode": mode,
             "reason": reason,
         })

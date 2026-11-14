@@ -34,6 +34,7 @@ from rich.table import Table
 
 import api
 import config
+from core import code_version
 from core import context
 from core import indicators
 from core import utils
@@ -729,9 +730,21 @@ class TraderReportingMixin:
         except Exception:
             pass
 
+        #  [2026-11-14] 지금 도는 코드의 커밋. 기동 뒤 저장소가 바뀌었으면(pull 만 하고 재기동하지 않음)
+        #   도는 코드는 옛 커밋 그대로다 — 고친 것이 반영됐다고 믿고 지나가지 않게 주의로 올린다.
+        code_text = code_version.label()
+        try:
+            _drift = code_version.drift()
+        except Exception:
+            _drift = None
+        if _drift:
+            warnings.append(f"저장소가 기동 뒤 바뀌었습니다(실행 중 {code_text} → 저장소 {_drift}) "
+                            f"— 재기동해야 새 코드가 반영됩니다")
+
         lines = [
             f"{icon} [운영 관제 /health: {state}]",
             f"• 모드/계좌: {mode} / {account or '-'}",
+            f"• 코드: {code_text}",
             f"• 실행 시간: {run_text}",
             f"• 자동매매 루프: 최근 시작 {self._health_time(self.last_cycle_at)} · 정상 완료 {self._health_time(self.last_success_at)}",
             f"• 주기 소요: {cycle_text}",

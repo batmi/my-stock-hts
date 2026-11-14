@@ -583,3 +583,14 @@ def test_a_plain_offline_transfer_keeps_its_wording(db, trader):
     with _ledger(_book(transfer=1_000_000.0, income=80_000.0)):
         _, tg = _reconcile(trader, 11_080_000)
     assert "정지 중 입금 자동 반영" in str(tg.call_args)
+
+
+def test_a_ledger_mismatch_tells_the_operator_once(db, trader):
+    """장부 불일치 보류는 다시 대조하지 않는다(대조점이 전진한다) — 화면 로그만으로는 운용자가 모른다."""
+    db.save_daily_asset(_d(10), ACC, 10_000_000.0, principal=10_000_000.0)
+    db.save_daily_asset(_d(1), ACC, 9_000_000.0)
+    with _ledger(_book(transfer=0.0)):
+        amount, tg = _reconcile(trader, 9_000_000)
+    assert amount == 0 and trader._offline_reconcile_deferred is None
+    assert tg.call_count == 1 and "정지 중 입출금 보정 보류" in str(tg.call_args)
+    assert "-1,000,000원" in str(tg.call_args)

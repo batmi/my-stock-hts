@@ -112,6 +112,35 @@ class TraderAccountSyncMixin:
         return max(OFFLINE_TRANSFER_FLOOR,
                    min(OFFLINE_TRANSFER_ABS_MIN, base * OFFLINE_TRANSFER_RATIO))
 
+    def _note_offline_block(self, reason):
+        """증권사 장부가 어긋나 정지 중 입출금 보정을 보류한 사유를 로그에 남기고, 알림용으로 기억한다."""
+        self._offline_block_reason = reason
+        self.log(f"[오프라인 입출금] {reason}")
+
+    def _alert_offline_block(self, last_date, residual):
+        """장부 불일치로 보류한 구간을 운용자에게 한 번 알린다.
+
+        [왜 · 2026-11-14] 이 보류는 다시 시도해도 같으므로 오늘 원금이 새 대조점이 되고, 그 구간의
+         입출금은 자산 이력에 **영영** 실리지 않는다. 종전에는 화면 로그 한 줄뿐이라, 드로다운 기준이
+         어긋난 채 룩백(DD_LOOKBACK_DAYS) 내내 가는 것을 운용자가 알 길이 없었다. 입금이 빠지면 고점이
+         낮게 남아 드로다운이 작게 계산된다 — 한도가 열리는 방향이다.
+        """
+        reason = getattr(self, '_offline_block_reason', None)
+        if not reason:
+            return
+        self._offline_block_reason = None
+        lookback = int(getattr(config, 'DD_LOOKBACK_DAYS', 90) or 90)
+        try:
+            api.send_telegram_message(
+                f"⚠️ [정지 중 입출금 보정 보류]\n"
+                f"{reason}\n\n"
+                f"{last_date} 이후 원금 변화 {int(residual):+,}원 가운데 입출금이 얼마인지 가릴 수 없어 "
+                f"자산 이력에 반영하지 않았습니다. 이 구간은 다시 대조하지 않습니다.\n"
+                f"그 안에 실제 입출금이 있었다면 드로다운 기준(자산 고점)이 그만큼 어긋난 채 최대 "
+                f"{lookback}일 갑니다 — 입금이면 드로다운이 작게, 출금이면 크게 계산됩니다.")
+        except Exception as e:
+            logger.debug(f"[오프라인 입출금] 보류 알림 실패: {e}")
+
     def _realized_matches_broker(self, start_date, end_date, realized_db, tolerance):
         """구간 실현손익을 **우리가 다 알고 있는가**를 증권사 장부와 대조한다.
 
@@ -139,9 +168,10 @@ class TraderAccountSyncMixin:
                       abs(realized_db - (book['realized'] - book['cost'])))
             if gap <= max(tolerance, 1000.0):
                 return True
-            self.log(f"[오프라인 입출금] 증권사 실현손익({book['realized']:+,}원)과 기록"
-                     f"({realized_db:+,}원)이 {gap:,.0f}원 어긋납니다 — 우리가 모르는 매매가 "
-                     f"있어 보정을 보류합니다. (수동 매매 기록은 보유 종목만 복원됩니다)")
+            self._note_offline_block(
+                f"증권사 실현손익({book['realized']:+,}원)과 기록({realized_db:+,}원)이 {gap:,.0f}원 "
+                f"어긋납니다 — 우리가 모르는 매매가 있어 보정을 보류합니다. "
+                f"(수동 매매 기록은 보유 종목만 복원됩니다)")
             return False
         except Exception as e:
             logger.debug(f"[오프라인 입출금] 증권사 실현손익 대조 실패(보정은 계속): {e}")
@@ -197,12 +227,14 @@ class TraderAccountSyncMixin:
         if not book:
             return True, 0.0
         if book.get('securities_moves'):
-            self.log(f"[오프라인 입출금] 구간에 증권 입출고 {book['securities_moves']}건이 있어(타사 이관·"
-                     f"주식배당 — 금액 없음) 원금 변화를 잴 수 없습니다. 보정을 보류합니다.")
+            self._note_offline_block(
+                f"구간에 증권 입출고 {book['securities_moves']}건이 있어(타사 이관·주식배당 — 금액 없음) "
+                f"원금 변화를 잴 수 없습니다. 보정을 보류합니다.")
             return False, 0.0
         if book.get('unknown'):
-            self.log(f"[오프라인 입출금] 해석하지 못한 거래 {book['unknown']}건이 있어 거래내역 합계를 "
-                     f"믿을 수 없습니다. 보정을 보류합니다.")
+            self._note_offline_block(
+                f"해석하지 못한 거래 {book['unknown']}건이 있어 거래내역 합계를 믿을 수 없습니다. "
+                f"보정을 보류합니다.")
             return False, 0.0
         asof = db_manager.db.get_book_asof(start_date, account_key) if account_key else None
         pre_transfer, pre_income = asof if asof else (0.0, 0.0)
@@ -214,9 +246,10 @@ class TraderAccountSyncMixin:
             hint = ("" if asof or not account_key else
                     f" 대조점({start_date})에 기준선 이전 거래 기록이 없어, 그날 기동 전의 입출금이 "
                     f"원인일 수도 있습니다.")
-            self.log(f"[오프라인 입출금] 거래내역의 입출금·배당 합계({expected:+,.0f}원)와 원금 변화"
-                     f"({float(residual):+,.0f}원)가 {abs(gap):,.0f}원 어긋납니다 — 우리가 모르는 매매가 "
-                     f"있어 보정을 보류합니다. (수동 매매 기록은 보유 종목만 복원됩니다){hint}")
+            self._note_offline_block(
+                f"거래내역의 입출금·배당 합계({expected:+,.0f}원)와 원금 변화({float(residual):+,.0f}원)가 "
+                f"{abs(gap):,.0f}원 어긋납니다 — 우리가 모르는 매매가 있어 보정을 보류합니다. "
+                f"(수동 매매 기록은 보유 종목만 복원됩니다){hint}")
             return False, 0.0
         return True, income
 
@@ -252,8 +285,18 @@ class TraderAccountSyncMixin:
          하지 않는다. 잘린 실현손익은 그대로 가짜 '출금'이 되고, 출금 방향의 오탐은
          고점을 낮춰 **한도를 여는** 위험한 방향이다.
 
+        [보류의 두 종류 · 2026-11-14] 0 을 돌려주는 보류에는 '다시 해 보면 될 수 있는 것'(구간
+         실현손익·기록분의 DB 읽기 실패, 예외)과 '다시 해도 같은 것'(증권사 장부 불일치, 손익을 모르는
+         외부 매도)이 있다. 앞의 것은 self._offline_reconcile_deferred 에 사유를 남긴다 — 호출부가
+         오늘 원금을 새 대조점으로 **저장하지 않아**, 다음 기준선(내일·다음 기동)이 같은 대조점으로
+         다시 잰다. 종전에는 어느 보류든 호출부가 같은 주기에 대조점을 전진시켜, 주석의 '다음 주기에
+         다시 해 본다'가 실제로는 일어나지 않고 그 구간의 입출금이 영영 빠졌다(재현: 첫 주기에 기록분
+         읽기가 한 번 실패 → 정지 중 −30만 누락). 뒤의 것은 전진시키되 운용자에게 알린다.
+
         반환: 기록한 금액(입금 +, 출금 −). 아무것도 안 했으면 0.
         """
+        self._offline_reconcile_deferred = None
+        self._offline_block_reason = None
         if not realized_ok or not current_principal or current_principal <= 0:
             return 0
         try:
@@ -282,29 +325,37 @@ class TraderAccountSyncMixin:
                 return 0
 
             yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-            realized, ok = db_manager.db.get_realized_profit_between(
-                last_date, yesterday, account_key)
+            _res = db_manager.db.get_realized_profit_between(
+                last_date, yesterday, account_key, detail=True)
+            realized, ok = _res[0], _res[1]
             if not ok:
                 self.log("[오프라인 입출금] 구간 실현손익을 신뢰할 수 없어 보정하지 않습니다.")
-                return 0          # 못 쟀으면 표시하지 않는다 — 다음 주기에 다시 해 본다
-
-            threshold = self._offline_transfer_threshold(last_principal)
-            if not self._realized_matches_broker(last_date, yesterday, realized, threshold):
+                #  조회 자체가 실패했으면 다음 기준선에서 다시 잰다. 손익을 모르는 외부 매도는 그 행이
+                #  채워지기 전에는 다시 재도 같으므로 미루지 않는다(대조점은 전진한다 — 종전과 같다).
+                if len(_res) > 2 and _res[2] == 'read':
+                    self._offline_reconcile_deferred = "구간 실현손익을 읽지 못했습니다"
                 return 0
 
+            threshold = self._offline_transfer_threshold(last_principal)
             residual = float(current_principal) - float(last_principal) - float(realized)
+            if not self._realized_matches_broker(last_date, yesterday, realized, threshold):
+                self._alert_offline_block(last_date, residual)
+                return 0
+
             #  거래내역 구간은 대조점 날부터 **오늘까지**다 — 잔차에는 오늘 기준선을 잡기 전까지의
             #  입출금도 들어 있다(실현손익과 달리 오늘 몫이 상쇄되지 않는다).
             cash_ok, income = self._cash_flows_match_broker(last_date, today, residual, threshold,
                                                             account_key=account_key)
             if not cash_ok:
+                self._alert_offline_block(last_date, residual)
                 return 0
             recorded, recorded_ok = db_manager.db.get_net_transfer_between(
                 last_date, yesterday, account_key)
             if not recorded_ok:
                 self.log("[오프라인 입출금] 이미 기록된 순입출금을 읽지 못해 보정하지 않습니다 "
                          "— 같은 돈을 두 번 적을 수 있습니다.")
-                return 0          # 다음 주기에 다시 해 본다
+                self._offline_reconcile_deferred = "이미 기록된 순입출금을 읽지 못했습니다"
+                return 0          # 다음 기준선에서 같은 대조점으로 다시 잰다
             self._offline_reconcile_date = today      # 쟀다 = 오늘 몫은 끝났다
 
             unrecorded = residual - income - recorded
@@ -356,6 +407,7 @@ class TraderAccountSyncMixin:
             return amount
         except Exception as e:
             logger.warning(f"[오프라인 입출금] 보정 실패 — 그대로 둡니다: {e}")
+            self._offline_reconcile_deferred = f"대조 중 오류({e})"
             return 0
 
     def _reevaluate_buy_halt_after_transfer(self, current_total, action_str="입출금"):
@@ -827,7 +879,17 @@ class TraderAccountSyncMixin:
                             #  [2026-11-14] 이 원금은 '지금 시각'의 값이라 오늘 0시~지금의 입출금을 이미
                             #   담고 있다. 그 몫(증권사 거래내역 기준)을 함께 남겨, 다음 대조가 날짜 단위
                             #   거래내역 합에서 빼게 한다(_book_flows_asof_now · _cash_flows_match_broker).
-                            if realized_ok and self.initial_asset > 0:
+                            #  [2026-11-14] 대조를 끝내지 못했으면(읽기 실패 등 — 다시 해 보면 될 수 있다)
+                            #   오늘 원금을 대조점으로 남기지 않는다. 남기면 내일의 대조가 오늘부터 재므로
+                            #   그 구간의 입출금이 영영 빠진다. 옛 대조점을 그대로 두면 다음 기준선이 같은
+                            #   구간을 다시 잰다(오늘 장중 감지가 적는 몫은 그때 '이미 기록된 몫'으로 빠진다).
+                            #   메모리·파일의 기준 원금은 위에서 이미 잡았다 — 오늘의 장중 감지는 그대로 돈다.
+                            _deferred = getattr(self, '_offline_reconcile_deferred', None)
+                            if _deferred and realized_ok and self.initial_asset > 0:
+                                self.log(f"[오프라인 입출금] 대조를 끝내지 못해({_deferred}) 오늘은 대조점을 "
+                                         f"새로 남기지 않습니다 — 다음 기준선(내일·다음 기동)에서 같은 "
+                                         f"대조점으로 다시 잽니다.")
+                            elif realized_ok and self.initial_asset > 0:
                                 try:
                                     _ok = db_manager.db.save_daily_asset(
                                         datetime.now().strftime("%Y-%m-%d"),

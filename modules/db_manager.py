@@ -2447,8 +2447,12 @@ class DBManager:
             _swallowed("get_net_transfer_between", e)
             return 0.0, False
 
-    def get_realized_profit_between(self, start_date, end_date, account, is_sim=False):
+    def get_realized_profit_between(self, start_date, end_date, account, is_sim=False, detail=False):
         """[start_date, end_date] 구간의 실현손익 합계와 신뢰 여부를 (합계, ok)로 돌려준다.
+
+        detail=True 면 (합계, ok, 사유) — 사유는 ''(성공)·'read'(조회 실패, 다시 해 보면 될 수 있다)·
+        'external_sell'(손익을 모르는 외부 매도, 그 행이 채워지기 전에는 다시 해도 같다). 정지 중 입출금
+        대조가 '오늘 대조점을 새로 남길지'를 이 구분으로 정한다(trader._reconcile_offline_transfer).
 
         조회가 실패하면 (0, False)다 — 0과 '못 쟀다'를 가르지 않으면 그 금액이 그대로
         가짜 입출금으로 둔갑한다(이 파일이 아니라 호출부의 실패 모드다. trader의
@@ -2471,7 +2475,7 @@ class DBManager:
             rows = cursor.fetchall()
         except Exception as e:
             logger.warning(f"[DB] 구간 실현손익 조회 실패({account} {start_date}~{end_date}): {e}")
-            return 0, False
+            return (0, False, 'read') if detail else (0, False)
 
         picked = {}
         loose = 0
@@ -2488,13 +2492,14 @@ class DBManager:
                 if "(외부)" in type_str:
                     logger.info(f"[DB] 실현손익을 모르는 외부 매도가 있다({account} {day}) "
                                 f"— 구간 실현손익을 신뢰할 수 없다.")
-                    return 0, False
+                    return (0, False, 'external_sell') if detail else (0, False)
                 continue
             if odno:
                 picked[(day, odno)] = profit      # 나중 행이 앞 행을 덮는다(id 오름차순)
             else:
                 loose += profit
-        return sum(picked.values()) + loose, True
+        total = sum(picked.values()) + loose
+        return (total, True, '') if detail else (total, True)
 
     #  [고립 고점] 이 배수를 넘고 **혼자만** 높은 행은 기록 오류로 보고 고점에서 뺀다.
     #   진짜 성장이면 그 수준의 행이 여러 날 남는다(아래 주석 참조).

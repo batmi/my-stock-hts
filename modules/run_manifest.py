@@ -41,23 +41,9 @@ _STATE = {"active": False, "path": None, "started_at": None, "notes": {}, "unive
 def git_info(root=ROOT):
     """커밋·브랜치는 .git 파일에서 직접 읽는다. 수정 여부는 git 명령(없으면 None)."""
     out = {"commit": None, "branch": None, "dirty": None, "dirty_files": None}
-    gd = os.path.join(root, ".git")
-    try:
-        head = open(os.path.join(gd, "HEAD"), encoding="utf-8").read().strip()
-        if head.startswith("ref:"):
-            ref = head.split(" ", 1)[1].strip()
-            out["branch"] = ref.rsplit("/", 1)[-1]
-            p = os.path.join(gd, ref)
-            if os.path.exists(p):
-                out["commit"] = open(p, encoding="utf-8").read().strip()
-            else:
-                for line in open(os.path.join(gd, "packed-refs"), encoding="utf-8"):
-                    if line.strip().endswith(ref):
-                        out["commit"] = line.split()[0]
-        else:
-            out["commit"] = head
-    except Exception:           # noqa: BLE001
-        pass
+    #  커밋·브랜치 읽기는 core.code_version 하나다(기동 로그·하트비트·관제 화면과 같은 값).
+    from core import code_version
+    out["commit"], out["branch"] = code_version.read_head(root)
     try:
         import subprocess
         r = subprocess.run(["git", "status", "--porcelain"], cwd=root, capture_output=True,

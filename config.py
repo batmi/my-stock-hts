@@ -4012,9 +4012,12 @@ def log_system_start():
     기본값(WARNING)이면 루트 로거의 INFO 가 막혀 이 한 줄까지 사라지기 때문이다.
     """
     level_name = settings.FILE_DEBUG_LEVEL.upper()
+    #  [2026-11-14] 어느 커밋으로 떴는지 함께 남긴다 — pull 과 재기동이 따로 일어나는 운영 기기에서
+    #   '지금 도는 코드'를 로그 한 줄로 확인할 수 있게 한다(core.code_version).
+    from core import code_version
     logging.getLogger(STARTUP_LOGGER_NAME).info(
         f"=== MyStock HTS 시스템 시작 "
-        f"(PID {os.getpid()}, 파일 로그 레벨: {level_name}) ===")
+        f"(PID {os.getpid()}, 코드 {code_version.label()}, 파일 로그 레벨: {level_name}) ===")
 
 # [추가] 시스템 트레이딩 전용 로거 설정 함수
 def get_autotrade_logger():
