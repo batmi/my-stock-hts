@@ -1057,7 +1057,13 @@ class GlobalSettings(BaseModel):
     #   그래서 '신규 진입만' 막는 별도 게이트로 둔다 — 청산 경로는 손대지 않는다.
     #  기준 시각은 KRX 정규장 개장과 START_TIME 중 늦은 쪽이다(0800 프리마켓 운용 시
     #   08:00~08:30이 아니라 09:00~09:30을 막는다 — 감사가 잰 것이 그것이다).
-    SYSTEM_ENTRY_OPEN_DELAY_USE: bool = True                        # 개장 직후 신규 진입 보류 사용
+    #  [2026-11-15 · 증액(피라미딩)도 같은 게이트를 본다] 종전에는 신규 매수 판정(_check_buy_conditions)에만
+    #   있어 증액이 비켜 갔다(2026-08-26 09:01:30 한국콜마 증액, 가상 원장 증액 5건 중 4건이 09:00~09:29).
+    #   증액의 발동 조건이 '수익률 +10% 도달'이라 개장 스파이크가 바로 그 문턱을 넘겨 주는 사건이고, 나가는
+    #   현금·늘어나는 노출은 신규 매수와 같다(시드를 쓰는 두 경로는 같은 가드를 갖는다). 백테스트는 09:30
+    #   이전 체결이 없어 이 구간을 재지 못한다(tools/audit_pyramid_time_of_day.py) — 성과 근거가 아니라
+    #   규약에 따른 결정이고, 대가는 최대 30분 늦은 증액이다. 청산은 여전히 이 게이트와 무관하다.
+    SYSTEM_ENTRY_OPEN_DELAY_USE: bool = True                        # 개장 직후 신규 진입·증액 보류 사용
     SYSTEM_ENTRY_OPEN_DELAY_MINUTES: int = Field(default=30, ge=0, le=120)  # 보류 시간(분). 60분(=첫 두 봉)은 실측 열위
 
     # [관측성] 장 마감 후 청산 신호 1회 스캔 · 텔레그램 알림 (주문은 내지 않는다).
@@ -4425,8 +4431,8 @@ CONFIG_DESCRIPTIONS = {
     "GAP_RISK_BUFFER": "갭 리스크 버퍼 (사이징 시 손절폭 배수, 1.0=미사용)",
     "SLIPPAGE_RATE": "주문가 보정 및 백테스트 슬리피지 비율",
     "SYSTEM_TRADING_START_TIME": "거래 시작 시간 (HHMM)",
-    "SYSTEM_ENTRY_OPEN_DELAY_USE": "개장 직후 신규 진입 보류 사용",
-    "SYSTEM_ENTRY_OPEN_DELAY_MINUTES": "개장 직후 신규 진입 보류 시간(분)",
+    "SYSTEM_ENTRY_OPEN_DELAY_USE": "개장 직후 신규 진입·증액 보류 사용",
+    "SYSTEM_ENTRY_OPEN_DELAY_MINUTES": "개장 직후 신규 진입·증액 보류 시간(분)",
     "SYSTEM_TRADING_END_TIME": "거래 종료 시간 (HHMM)",
     "CONCLUSION_CHECK_INTERVAL": "주문 직후 집중 체결 확인 주기 (초)",
     "CONCLUSION_CHECK_IDLE_INTERVAL": "평상시 체결 확인 주기 (초)",

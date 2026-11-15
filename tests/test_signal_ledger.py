@@ -401,3 +401,110 @@ def test_옛_원장_파일에도_컬럼이_생긴다(db, tmp_path):
             old.local.conn.close()
     finally:
         config.DB_FILE_PATH = original
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 주문 단계 보류 (blocked_size / blocked_heat · 2026-11-15)
+#
+# [왜 생겼는가] 위 두 칸(슬롯·예수금)은 후보 분석 **앞에서** 이미 아는 계좌 상태다. 그런데 후보가 된
+#  뒤 주문을 짜다가 접는 경우가 따로 있다 — 1주 가격이 배분액의 상한 배수를 넘거나, 총 리스크 한도에
+#  남은 예산이 1주에 못 미치거나, 같은 주기의 앞 순위 후보가 마지막 슬롯을 쓴 경우다. 원장은 그 전에
+#  이미 쓰였으므로 이런 주기는 '통과·차단 0'으로만 남았다.
+#  실제 기록: 2026-10-23 가상투자 삼성바이오로직스 — 통과 4주기·차단 0·매수 0. 로그에는
+#  "1주 1,478,000원이 배분액의 2.3배(상한 1.3배)"가 있었다.
+# ──────────────────────────────────────────────────────────────────────────
+
+def _blocks(db, date="20261023", code="207940"):
+    return db.execute_query(
+        "SELECT cycles, passed, blocked_slot, blocked_cash, blocked_size, blocked_heat "
+        "FROM signal_ledger WHERE date=? AND code=?", (date, code), fetch='one')
+
+
+def test_주문_단계_보류는_통과한_행에_얹힌다(db):
+    """[핵심] 통과 1주기 + '1주 가격 초과' 1 — 주기 수는 늘지 않는다(같은 주기의 두 번째 쓰기다)."""
+    db.record_signal_ledger("20261023", [_row(code="207940", name="삼성바이오로직스", outcome="passed")])
+    db.add_signal_ledger_account_blocks("20261023", {"207940": "size"})
+    r = _blocks(db)
+    assert (r['cycles'], r['passed'], r['blocked_size'], r['blocked_heat']) == (1, 1, 1, 0)
+
+
+def test_총_리스크_한도와_순위에서_밀린_슬롯도_제_칸에_간다(db):
+    db.record_signal_ledger("20261023", [_row(code="207940", outcome="passed"),
+                                         _row(code="000660", outcome="passed"),
+                                         _row(code="005930", outcome="passed")])
+    db.add_signal_ledger_account_blocks("20261023", {"207940": "heat", "000660": "slot", "005930": "cash"})
+    assert _blocks(db, code="207940")['blocked_heat'] == 1
+    assert _blocks(db, code="000660")['blocked_slot'] == 1
+    assert _blocks(db, code="005930")['blocked_cash'] == 1
+    assert _blocks(db, code="207940")['blocked_size'] == 0, "다른 칸까지 올랐다"
+
+
+def test_주문_단계_보류도_주기마다_누적된다(db):
+    for _ in range(4):                                  # 10-23 삼성바이오로직스: 4주기 내내 같은 사유
+        db.record_signal_ledger("20261023", [_row(code="207940", outcome="passed")])
+        db.add_signal_ledger_account_blocks("20261023", {"207940": "size"})
+    r = _blocks(db)
+    assert (r['cycles'], r['passed'], r['blocked_size']) == (4, 4, 4)
+
+
+def test_통과_기록이_없는_행에는_얹지_않는다(db):
+    """게이트가 막은 신호를 계좌 탓으로 세면 '시드만 늘리면 샀다'는 틀린 기회비용이 된다."""
+    db.record_signal_ledger("20261023", [_row(code="207940", outcome="gate_vol")])
+    db.add_signal_ledger_account_blocks("20261023", {"207940": "size"})
+    r = _blocks(db)
+    assert (r['passed'], r['blocked_size']) == (0, 0)
+
+
+def test_행이_없거나_모르는_사유면_아무것도_만들지_않는다(db):
+    db.add_signal_ledger_account_blocks("20261023", {"207940": "size"})       # 그날 행이 없다
+    assert _blocks(db) is None, "판정 기록 없이 행이 생겼다"
+    db.record_signal_ledger("20261023", [_row(code="207940", outcome="passed")])
+    db.add_signal_ledger_account_blocks("20261023", {"207940": "unknown-reason"})
+    db.add_signal_ledger_account_blocks("20261023", {})
+    db.add_signal_ledger_account_blocks("20261023", None)
+    r = _blocks(db)
+    assert (r['blocked_slot'], r['blocked_cash'], r['blocked_size'], r['blocked_heat']) == (0, 0, 0, 0)
+
+
+def test_주문_단계_기록_실패가_매매를_막지_않는다(db, monkeypatch):
+    db.record_signal_ledger("20261023", [_row(code="207940", outcome="passed")])
+
+    def _boom():
+        raise RuntimeError("disk full")
+    monkeypatch.setattr(db, "_get_conn", _boom)
+    db.add_signal_ledger_account_blocks("20261023", {"207940": "size"})       # 예외가 새면 실패
+
+
+def test_옛_원장_파일에도_주문_단계_칸이_생긴다(tmp_path):
+    """[마이그레이션] 슬롯·예수금 칸까지만 있는 원장(2026-11-14 이전 파일)에 두 칸이 붙고 기존 행이 남는다."""
+    import sqlite3
+    path = str(tmp_path / "old2.sqlite")
+    con = sqlite3.connect(path)
+    con.execute("""CREATE TABLE signal_ledger (
+        date TEXT, code TEXT, is_sim INTEGER DEFAULT 0, name TEXT,
+        cycles INTEGER DEFAULT 0, passed INTEGER DEFAULT 0,
+        blocked_vol INTEGER DEFAULT 0, blocked_abr INTEGER DEFAULT 0,
+        blocked_hold INTEGER DEFAULT 0, blocked_corr INTEGER DEFAULT 0,
+        blocked_rs INTEGER DEFAULT 0, blocked_tq INTEGER DEFAULT 0,
+        blocked_reentry INTEGER DEFAULT 0, blocked_other INTEGER DEFAULT 0,
+        blocked_slot INTEGER DEFAULT 0, blocked_cash INTEGER DEFAULT 0,
+        blocked_market INTEGER DEFAULT 0,
+        max_score REAL DEFAULT 0.0, max_vol REAL, min_abr REAL, last_state TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (date, code, is_sim))""")
+    con.execute("INSERT INTO signal_ledger (date, code, name, cycles, passed, blocked_slot) "
+                "VALUES ('20261023','207940','삼성바이오로직스', 4, 4, 0)")
+    con.commit(); con.close()
+
+    original = config.DB_FILE_PATH
+    config.DB_FILE_PATH = path
+    old = None
+    try:
+        old = DBManager()
+        old.add_signal_ledger_account_blocks("20261023", {"207940": "size"})
+        r = old.execute_query("SELECT cycles, passed, blocked_size, blocked_heat FROM signal_ledger", fetch='one')
+        assert (r['cycles'], r['passed'], r['blocked_size'], r['blocked_heat']) == (4, 4, 1, 0)
+    finally:
+        if old is not None and getattr(getattr(old, "local", None), "conn", None):
+            old.local.conn.close()
+        config.DB_FILE_PATH = original

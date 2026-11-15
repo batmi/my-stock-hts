@@ -32,6 +32,8 @@ GATES = [("blocked_vol", "체결강도"), ("blocked_abr", "호가잔량비"),
          ("blocked_hold", "보유중"), ("blocked_rs", "RS"), ("blocked_tq", "추세품질"),
          ("blocked_reentry", "재진입"), ("blocked_cash", "현금"), ("blocked_other", "기타")]
 # 시장 구조상의 제약이지 '신호 판정'이 아닌 것 — 게이트 귀책에서 제외한다.
+#  (주문 단계 보류 blocked_size·blocked_heat 도 같은 부류지만 passed 와 함께만 오르므로 완전 차단
+#   행에는 나타나지 않는다 — 옛 원장에는 칸 자체가 없어 GATES 에 넣지 않는다.)
 NOT_A_JUDGEMENT = {"blocked_slot", "blocked_cash", "blocked_hold"}
 
 

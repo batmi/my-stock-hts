@@ -592,7 +592,7 @@ def view_system_config(group=None):
         #  (BACKTESTED_HIDDEN_KEYS 주석 참조). 운영자에게는 ON/OFF만 남긴다.
         _eod_use = getattr(config.settings, 'SYSTEM_ENTRY_OPEN_DELAY_USE', True)
         _eod_min = getattr(config.settings, 'SYSTEM_ENTRY_OPEN_DELAY_MINUTES', 30)
-        row("개장 직후 진입 보류", f"개장 후 {_eod_min}분간 신규 매수만 보류 (손절·트레일링 감시는 계속)", "SYSTEM_ENTRY_OPEN_DELAY_USE", "ON" if _eod_use else "OFF")
+        row("개장 직후 진입 보류", f"개장 후 {_eod_min}분간 신규 매수·증액만 보류 (손절·트레일링 감시는 계속)", "SYSTEM_ENTRY_OPEN_DELAY_USE", "ON" if _eod_use else "OFF")
 
         subheader("5-2. 주문·체결 감시")
         row("체결 감시 주기", "주문 직후 체결 확인 간격", "CONCLUSION_CHECK_INTERVAL", f"{getattr(config.settings, 'CONCLUSION_CHECK_INTERVAL', 5)}")
@@ -1690,7 +1690,7 @@ def _trading_cycle_items():
         {"desc": "모니터링 주기 (초)", "help": "자동매매 루프 실행 간격", "name": "SYSTEM_TRADING_INTERVAL", "type": "int", "section": "5-1. 거래 시간·주기",
          "get": lambda: getattr(config.settings, 'SYSTEM_TRADING_INTERVAL', 60), "set": lambda v: setattr(config.settings, 'SYSTEM_TRADING_INTERVAL', v)},
 
-        {"desc": "개장 직후 진입 보류", "help": "개장(09:00) 후 30분간 신규 매수만 보류합니다(손절·트레일링 감시는 계속). 개장 첫 30분 진입은 스파이크를 고점에서 추격하고 되돌림을 맞는다는 실측 결과에 따른 것이며, 보류 시간 30분은 잠겨 있습니다. 거래 시작 시간을 늦추는 것과 다릅니다 — 그쪽은 청산까지 멈춥니다", "name": "SYSTEM_ENTRY_OPEN_DELAY_USE", "type": "bool", "choices": ["y", "n"], "section": "5-1. 거래 시간·주기",
+        {"desc": "개장 직후 진입 보류", "help": "개장(09:00) 후 30분간 신규 매수와 증액(피라미딩)만 보류합니다(손절·트레일링 감시는 계속). 개장 첫 30분 진입은 스파이크를 고점에서 추격하고 되돌림을 맞는다는 실측 결과에 따른 것이며, 보류 시간 30분은 잠겨 있습니다. 거래 시작 시간을 늦추는 것과 다릅니다 — 그쪽은 청산까지 멈춥니다", "name": "SYSTEM_ENTRY_OPEN_DELAY_USE", "type": "bool", "choices": ["y", "n"], "section": "5-1. 거래 시간·주기",
          "get": lambda: getattr(config.settings, 'SYSTEM_ENTRY_OPEN_DELAY_USE', True), "set": lambda v: setattr(config.settings, 'SYSTEM_ENTRY_OPEN_DELAY_USE', v)},
         {"desc": "진입 보류 시간 (분)", "help": "개장(09:00) 후 신규 매수를 보류할 시간. 실측 30분이 최적이며 60분은 오히려 열위다. 0이면 미사용", "name": "SYSTEM_ENTRY_OPEN_DELAY_MINUTES", "type": "int", "section": "5-1. 거래 시간·주기",
          "get": lambda: getattr(config.settings, 'SYSTEM_ENTRY_OPEN_DELAY_MINUTES', 30), "set": lambda v: setattr(config.settings, 'SYSTEM_ENTRY_OPEN_DELAY_MINUTES', v)},

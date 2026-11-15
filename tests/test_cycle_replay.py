@@ -258,10 +258,15 @@ def test_매수_재생은_매수_경로를_실제로_지난다(buy_trace):
     assert counts.get("101010") == 1 and counts.get("101020") == 1, buy_trace["anchors"]
     assert [r[3] for r in buy_trace["reserved"]] == ["CANCELED"], buy_trace["reserved"]
     ledger = {r[0]: r for r in buy_trace["signal_ledger"]}
-    #  (code, cycles, passed, vol, abr, hold, corr, rs, tq, reentry, other, slot, cash, market, …)
+    #  (code, cycles, passed, vol, abr, hold, corr, rs, tq, reentry, other, slot, cash, market, max_score, last_state,
+    #   size, heat)
     assert ledger["101070"][6] >= 1 and ledger["101080"][8] >= 1 and ledger["101100"][4] == 1
     assert ledger["101030"][9] == 1 and ledger["101040"][9] == 2 and ledger["101190"][13] == 1
-    assert ledger["101160"][11] == 1 and ledger["101160"][12] == 1, ledger["101160"]
+    #  재생대기열: 만석이던 주기 1 + 같은 주기의 앞 순위가 마지막 슬롯을 써서 밀린 주기 1 = 슬롯 2, 빈 지갑 1.
+    #   [2026-11-15] 밀린 주기는 종전에 '통과'로만 남았다(주문 단계 보류를 원장에 얹기 전).
+    assert ledger["101160"][11] == 2 and ledger["101160"][12] == 1, ledger["101160"]
+    #  재생고가: 1주 값이 배분액 상한을 넘어 접은 주기가 '1주 가격' 칸에 남는다.
+    assert ledger["101140"][16] >= 1 and ledger["101140"][2] >= ledger["101140"][16], ledger["101140"]
     held = {p["code"] for p in buy_trace["positions"]}
     assert held == {"101010", "101020", "101040"}, held        # 재생유실은 접수되지 않았다
     #  ATR 손절도 '손절가보다 비싸게 되사지 않는다'에 걸린다 — 되산 값은 그날 손절가(50,000) 아래다.

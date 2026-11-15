@@ -43,6 +43,13 @@ BLOCK_COLS = {
     "blocked_other": "기타",
 }
 GATE_COLS = ("blocked_vol", "blocked_abr", "blocked_hold")   # 실매매 전용 수급 게이트
+#  [계좌·주문 단계] 게이트 판정과 직교한다 — passed 와 함께 오른다(db_manager._LEDGER_ACCOUNT_COLS).
+ACCOUNT_COLS = {
+    "blocked_slot": "보유 슬롯 만석·순위에서 밀림",
+    "blocked_cash": "예수금 부족",
+    "blocked_size": "1주 가격이 배분액 상한 초과",
+    "blocked_heat": "총 리스크 한도(히트 캡)",
+}
 #  [시장 필터] 위 사유들과 분모가 다르다. 나머지는 '분석해 보니 미달'이지만 이것은 분석
 #   자체를 막은 주기라, 그 종목이 신호였는지 원장은 모른다. 차단율의 분자에 섞으면
 #   '게이트가 이만큼 막았다'가 부풀고, 분모에 남기면 게이트 통과율이 눌린다.
@@ -193,9 +200,23 @@ def main():
         sig_n = sum(1 for r in rows if r[col] > 0 and r["passed"] == 0)
         if sig_n:
             print(f"   {BLOCK_COLS[col]:<22} 완전 차단 신호 {sig_n}건")
-    print("   [읽는 법] 슬롯 포화는 원장에 남지 않는다(후보까지는 됐으므로 '통과'다). "
-          "진입이 없는데 통과가 많으면 원인은 게이트가 아니라 슬롯이다 — "
-          "tools/audit_pi_operation.py 의 [3]을 함께 볼 것.")
+
+    # ── ⑤ 게이트는 통과했는데 왜 못 샀나 (계좌·주문 단계)
+    #  passed 와 함께 오르는 칸들이다 — '통과가 많은데 매수가 없다'의 사유가 여기 있다.
+    #  뒤의 두 칸은 2026-11-15 신설이다. 이 도구가 원장을 열면 없는 칸이 0 으로 채워져 생기므로
+    #   그 전 날짜의 0 은 '없었다'가 아니라 '적지 않았다'다(아래 안내 줄).
+    print("\n[5] 통과했는데 못 산 주기 (계좌·주문 단계 — 통과 주기에 얹혀 센다)")
+    for col, label in ACCOUNT_COLS.items():
+        if not any(col in r for r in rows):
+            print(f"   {label:<34} 기록 없음(이 원장은 이 칸이 생기기 전 것이다)")
+            continue
+        n = sum(r.get(col) or 0 for r in rows)
+        sig_n = sum(1 for r in rows if (r.get(col) or 0) > 0)
+        print(f"   {label:<34} {n:>8,}회 · 신호 {sig_n}건"
+              + (f" ({n / passed_cycles * 100:5.1f}% of 통과)" if passed_cycles else ""))
+    print("   ※ 1주 가격·총 리스크 한도 칸은 2026-11-15 이후 기동분부터 적힌다 — 그 전 날짜의 0 은 '기록 없음'이다.")
+    print("   [읽는 법] 통과 주기에서 이 칸들을 뺀 나머지가 '주문까지 간 주기'의 상한이다. 슬롯·예수금은 "
+          "보유가 비어야 풀리고, 1주 가격은 시드의 한계이며, 총 리스크 한도는 리스크 배수가 조여진 날에 몰린다.")
 
 
 if __name__ == "__main__":

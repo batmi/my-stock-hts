@@ -60,7 +60,7 @@ def _daily_asset_write_failed(date_str, account, exc):
 #    열을 메운다 — 번호로 건너뛰지 않는 이유다(실측 10-25: 맥 실전·파이 두 DB 모두 이 방식으로 새 DB 와 같은 열).
 #  · 멱등으로 쓸 수 없는 변경(테이블 재생성 등)이 생기면 그때 `if ver < N:` 단계로 둔다. 번호는 오르기만 한다.
 #  [세대] 1 = 2026-10-25 기준 · 2 = 2026-11-14 daily_asset_history.book_transfer_asof·book_income_asof
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class DBManager:
@@ -499,6 +499,15 @@ class DBManager:
                         --  로그 파싱은 원장을 만든 이유 자체이므로 되돌아갈 수 없다.
                         blocked_slot INTEGER DEFAULT 0,
                         blocked_cash INTEGER DEFAULT 0,
+                        -- [주문 단계 · 2026-11-15] 게이트도 통과하고 슬롯·예수금도 있었는데 **주문을 짜다가**
+                        --  접은 주기. 역시 passed 와 함께 오른다.
+                        --   blocked_size: 1주 가격이 배분액의 상한 배수(MAX_POSITION_OVERSHOOT)를 넘었다
+                        --   blocked_heat: 포트폴리오 총 리스크 한도(히트 캡)에 남은 예산이 1주에 못 미쳤다
+                        --  이 둘이 없던 동안 그런 주기는 '통과·차단 0'으로만 남았다(2026-10-23 가상투자
+                        --  삼성바이오로직스: 통과 4주기·차단 0·매수 0 — 실제는 1주 1,478,000원이 배분액의 2.3배).
+                        --  같은 주기의 앞 순위 후보가 마지막 슬롯·예수금을 써서 밀린 후보는 위 두 칸에 센다.
+                        blocked_size INTEGER DEFAULT 0,
+                        blocked_heat INTEGER DEFAULT 0,
                         -- [시장 필터] 종목 판정 **자체를 못 한** 주기. 위 게이트들과 성격이
                         --  다르다 — 나머지는 '분석해 보니 미달'이지만 이것은 시장 필터가
                         --  분석 전에 잘라, 그 종목이 신호였는지 알 수 없다는 뜻이다.
@@ -624,10 +633,13 @@ class DBManager:
                 # [마이그레이션 2026-08-30 / 2026-09-08] 계좌 상태·시장 필터 차단 컬럼 추가.
                 #  PK가 그대로라 ADD로 족하다. (이 지점은 위 is_sim 재생성 뒤라 컬럼 목록을
                 #  다시 읽는다 — 재생성된 표에는 이 칸들이 없다.)
+                #  [2026-11-15] 주문 단계 보류 2칸(blocked_size·blocked_heat) — 같은 방식.
                 failed += self._add_missing_columns(cursor, "signal_ledger", (
                     ("blocked_slot", "INTEGER DEFAULT 0"),
                     ("blocked_cash", "INTEGER DEFAULT 0"),
-                    ("blocked_market", "INTEGER DEFAULT 0")))
+                    ("blocked_market", "INTEGER DEFAULT 0"),
+                    ("blocked_size", "INTEGER DEFAULT 0"),
+                    ("blocked_heat", "INTEGER DEFAULT 0")))
 
                 # 컬럼 확장 (마이그레이션)
                 failed += self._add_missing_columns(cursor, "trades", {
@@ -1833,6 +1845,9 @@ class DBManager:
     _LEDGER_ACCOUNT_COLS = {
         "slot": "blocked_slot",             # 보유 슬롯 만석
         "cash": "blocked_cash",             # 예수금 부족
+        #  [주문 단계] 후보가 된 뒤 주문을 짜다가 접은 경우 — add_signal_ledger_account_blocks 가 더한다.
+        "size": "blocked_size",             # 1주 가격이 배분액의 상한 배수 초과
+        "heat": "blocked_heat",             # 포트폴리오 총 리스크 한도(히트 캡)
     }
 
     def record_signal_ledger(self, date_str, rows):
@@ -1869,16 +1884,17 @@ class DBManager:
                 counts["passed"], counts["blocked_vol"], counts["blocked_abr"],
                 counts["blocked_hold"], counts["blocked_corr"], counts["blocked_rs"],
                 counts["blocked_tq"], counts["blocked_reentry"], counts["blocked_other"],
-                counts["blocked_slot"], counts["blocked_cash"], counts["blocked_market"],
+                counts["blocked_slot"], counts["blocked_cash"], counts["blocked_size"],
+                counts["blocked_heat"], counts["blocked_market"],
                 float(r.get("score") or 0.0), r.get("vol"), r.get("abr"), r.get("state"),
             ))
         sql = '''
             INSERT INTO signal_ledger
                 (date, code, is_sim, name, cycles, passed, blocked_vol, blocked_abr, blocked_hold,
                  blocked_corr, blocked_rs, blocked_tq, blocked_reentry, blocked_other,
-                 blocked_slot, blocked_cash, blocked_market,
+                 blocked_slot, blocked_cash, blocked_size, blocked_heat, blocked_market,
                  max_score, max_vol, min_abr, last_state, updated_at)
-            VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(date, code, is_sim) DO UPDATE SET
                 cycles          = cycles + 1,
                 passed          = passed + excluded.passed,
@@ -1892,6 +1908,8 @@ class DBManager:
                 blocked_other   = blocked_other + excluded.blocked_other,
                 blocked_slot    = blocked_slot + excluded.blocked_slot,
                 blocked_cash    = blocked_cash + excluded.blocked_cash,
+                blocked_size    = blocked_size + excluded.blocked_size,
+                blocked_heat    = blocked_heat + excluded.blocked_heat,
                 blocked_market  = blocked_market + excluded.blocked_market,
                 max_score       = MAX(max_score, excluded.max_score),
                 -- NULL은 '못 쟀다'이지 0이 아니다. 한쪽만 값이 있으면 그 값을 남긴다.
@@ -1915,6 +1933,34 @@ class DBManager:
                 conn.commit()
             except Exception as e:
                 logger.warning(f"[Ledger] 신호 원장 기록 실패 (매매에는 영향 없음): {e}")
+
+    def add_signal_ledger_account_blocks(self, date_str, blocks):
+        """주문 단계에서 계좌 사정으로 접은 후보를 그날 행에 더한다. blocks: {code: 'size'|'heat'|'slot'|'cash'}
+
+        [왜 따로 쓰나] record_signal_ledger 는 후보 분석이 끝난 자리에서 주기당 한 번 쓴다 — 그때는 아직
+         주문을 짜기 전이라, 배분액·총 리스크 예산·같은 주기 앞 순위 후보가 쓴 슬롯을 알 수 없다. 그 뒤에
+         갈린 결과만 이 함수가 같은 행에 얹는다(그런 후보가 있던 주기에만 쓰기 1회).
+        [passed 와 함께] 대상은 그 주기에 게이트를 통과한 후보뿐이다 — 통과 기록이 없는 행은 건드리지 않는다
+         (게이트가 막은 신호를 계좌 탓으로 세면 '시드·슬롯만 늘리면 이만큼 더 샀다'는 틀린 기회비용이 나온다).
+        모르는 사유·실패는 삼킨다(계측은 매매를 막지 않는다).
+        """
+        payload = {}
+        for code, why in (blocks or {}).items():
+            col = self._LEDGER_ACCOUNT_COLS.get(why)
+            if col and code:
+                payload.setdefault(col, []).append((date_str, code))
+        if not payload:
+            return
+        with self.lock:
+            try:
+                conn = self._get_conn()
+                for col, keys in payload.items():       # col 은 위 표의 값(고정 이름)만 온다
+                    conn.executemany(
+                        f"UPDATE signal_ledger SET {col} = {col} + 1, updated_at = CURRENT_TIMESTAMP "
+                        f"WHERE date = ? AND code = ? AND is_sim = 0 AND passed > 0", keys)
+                conn.commit()
+            except Exception as e:
+                logger.warning(f"[Ledger] 주문 단계 보류 기록 실패 (매매에는 영향 없음): {e}")
 
     _BUYISH_STATES = ("매수", "강매수", "역매수")
 

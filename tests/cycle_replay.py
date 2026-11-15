@@ -1120,7 +1120,8 @@ def _collect(t, telegrams, scenario="base"):
         #  신호 원장 — 매수 신호였던 주기를 게이트별로 센다(updated_at 은 SQLite 의 진짜 시계라 뺀다).
         out["signal_ledger"] = [list(r) for r in db_manager.db.execute_query(
             "SELECT code, cycles, passed, blocked_vol, blocked_abr, blocked_hold, blocked_corr, blocked_rs, blocked_tq, "
-            "blocked_reentry, blocked_other, blocked_slot, blocked_cash, blocked_market, max_score, last_state "
+            "blocked_reentry, blocked_other, blocked_slot, blocked_cash, blocked_market, max_score, last_state, "
+            "blocked_size, blocked_heat "       # [2026-11-15] 주문 단계 보류 — 뒤에 붙여 앞 칸의 자리를 지킨다
             "FROM signal_ledger ORDER BY code", fetch="all") or []]
     if scenario == "lifecycle":
         out["state"].update({k: _jsonable(getattr(t, k, None)) for k in (

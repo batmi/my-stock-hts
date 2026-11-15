@@ -850,11 +850,12 @@ def is_system_market_open():
 KRX_REGULAR_OPEN_TIME = "0900"   # KRX 정규장 개장 (프리마켓 설정과 무관한 고정 기준)
 
 
-# [진입 게이트] 개장 직후 신규 진입 보류 (청산에는 관여하지 않는다)
+# [진입 게이트] 개장 직후 신규 진입·증액 보류 (청산에는 관여하지 않는다)
 def entry_open_delay_remaining(now=None):
     """개장 직후 보류가 걸려 있으면 남은 초, 아니면 0을 돌려준다.
 
-    **신규 진입에만 쓴다.** 손절·트레일링은 이 함수를 보지 않는다 — 거래 시간
+    **시드를 쓰는 두 경로 — 신규 진입(_check_buy_conditions)과 증액(_try_pyramid_buy) — 에만 쓴다.**
+    손절·트레일링은 이 함수를 보지 않는다 — 거래 시간
     설정(SYSTEM_TRADING_START_TIME)을 늦춰 같은 효과를 내려 하면 매수와 청산이 함께
     멈춰 개장 직후 갭 구간이 무방비가 된다(is_system_market_open 참조).
 

@@ -212,6 +212,35 @@ class TraderBuyingMixin:
             if not is_market_open:
                 self.log(f"[장마감] 피라미딩 신호 감지 (주문 미전송): {name} - {reason}")
                 return
+
+            # [개장 직후 보류] 신규 진입과 같은 게이트다(entry_open_delay_remaining · [[seed-spend-guard-parity]]).
+            #  종전에는 이 게이트가 _check_buy_conditions 에만 있었다. 증액은 매도 판정 루프가 '보유'로 본
+            #  종목마다 부르는 경로라 구조적으로 비켜 갔고, 개장 1분 30초에 증액이 나갔다(2026-08-26 09:01:30
+            #  한국콜마). 가상 원장(08-21~10-23)의 증액 5건 중 4건이 09:00~09:29 였다.
+            #  게이트를 둔 이유 — 개장 직후의 스파이크를 고점에서 추격하고 되돌림을 맞는다 — 는 증액에 더
+            #  직접 걸린다: 증액의 발동 조건이 '수익률이 문턱(+10%)을 넘었다'인데, 스파이크가 바로 그 문턱을
+            #  잠깐 넘겨 주는 사건이고, 그 가격에 산 증액분이 평단을 올린다. 나가는 현금과 늘어나는 노출은
+            #  신규 매수와 같다.
+            #  [측정할 수 없는 자리] 백테스트의 가장 이른 체결이 09:30 이라(30분봉 종가) 09:00~09:29 증액은
+            #   모델에 대응물이 없다(tools/audit_pyramid_time_of_day.py — 09:30 이후에는 증액 시각이 무동작).
+            #   그래서 이 변경은 성과 근거가 아니라 '시드를 쓰는 두 경로는 같은 가드를 갖는다'는 규약에 따른다.
+            #   보류의 대가는 최대 30분 늦은 증액이다 — 09:30 에도 조건이 살아 있으면 그때 나간다.
+            #  청산은 이 게이트를 보지 않는다(이 함수는 매수만 한다 — 손절·트레일링 판정은 selling 에 있다).
+            delay_left = entry_open_delay_remaining()
+            if delay_left > 0:
+                #  같은 종목을 30분 내내 주기마다 적지 않는다 — 하루에 종목당 한 줄.
+                #  (매도 워커 스레드가 동시에 지나가도 최악이 같은 줄 두 번이라 잠그지 않는다)
+                _day = datetime.now().strftime("%Y%m%d")
+                _seen = getattr(self, '_pyramid_open_delay_logged', None)
+                if not _seen or _seen[0] != _day:
+                    _seen = (_day, set())
+                    self._pyramid_open_delay_logged = _seen
+                if code not in _seen[1]:
+                    _seen[1].add(code)
+                    self.log(f"피라미딩 보류: {name} - 개장 직후 증액 보류 — {delay_left // 60}분 "
+                             f"{delay_left % 60}초 남음 ({reason})")
+                return
+
             if self.order_manager.is_pending(code):
                 return
 
@@ -1248,7 +1277,15 @@ class TraderBuyingMixin:
 
 
     def _execute_buy_orders(self, candidates, avail_cash, invest_ratio, current_holdings_count, max_holdings):
-        for cand in candidates:
+        # [신호 원장 · 주문 단계 보류] 여기 온 후보는 전부 게이트를 통과했고(passed), 원장은 그 사실까지만
+        #  적힌 채 이미 쓰였다(_analyze_candidates). 그 뒤 주문을 짜다가 계좌 사정으로 접은 것 —
+        #  1주 가격이 배분액 상한 초과(size)·총 리스크 한도(heat)·앞 순위 후보가 쓴 슬롯(slot)·예수금(cash) —
+        #  은 로그에만 남아, 원장만 읽으면 '통과했는데 왜 안 샀나'에 답할 수 없었다
+        #  (2026-10-23 가상투자 삼성바이오로직스: 통과 4주기·차단 0·매수 0).
+        #  {code: 사유} 로 모아 함수 끝에서 한 번 쓴다. 데이터 결손으로 미룬 것(실시간가 없음·오염 일봉·
+        #  손절 기준 없음·리스크 산출 실패)과 주문 실패는 계좌 사정이 아니라 여기 세지 않는다.
+        exec_blocks = {}
+        for idx, cand in enumerate(candidates):
             if not self.is_running: break
 
             # [판단 불가는 매수 허용이 아니다] 실시간 현재가를 못 받은 후보는 주문하지 않는다.
@@ -1271,11 +1308,15 @@ class TraderBuyingMixin:
             # [수정] 최소 주문 가능 금액 하향 조정
             if avail_cash < 1000:
                 self.log(f"매수 중단: 잔여 예수금 부족 ({avail_cash:,}원)")
+                for _c in candidates[idx:]:         # 이 후보와 그 뒤 순위는 전부 예수금에 막혔다
+                    exec_blocks.setdefault(_c.get('code'), 'cash')
                 break
             
             # [추가] 최대 보유 종목 수 도달 시 추가 매수 중단
             if current_holdings_count >= max_holdings:
                 self.log(f"매수 중단: 최대 보유 종목 수({max_holdings}개) 도달")
+                for _c in candidates[idx:]:         # 앞 순위가 마지막 슬롯을 썼다 — 순위에서 밀린 후보
+                    exec_blocks.setdefault(_c.get('code'), 'slot')
                 break
 
             # [추가] 손절률, ATR 여부 및 투자 비중 확인 (개별 룰 or 전역 설정)
@@ -1369,6 +1410,7 @@ class TraderBuyingMixin:
                     self.log(f"매수 보류: {cand.get('name', '')}({cand.get('code', '')}) - "
                              f"1주 {order_price:,}원이 배분액 {int(invest_amt):,}원의 {ratio} "
                              f"(상한 {overshoot_cap:.1f}배). 의도한 비중으로 담을 수 없는 종목입니다.")
+                    exec_blocks[cand.get('code')] = 'size'
                     continue
                 invest_amt = order_price
 
@@ -1393,6 +1435,7 @@ class TraderBuyingMixin:
                                 why = (f"포트폴리오 총 리스크 한도({cap:.1f}%) 도달 "
                                        f"(현재 오픈 리스크 {self.portfolio_heat_amt:,.0f}원, "
                                        f"남은 예산 {max(budget_left, 0):,.0f}원)")
+                                exec_blocks[cand.get('code')] = 'heat'   # 한도에 '닿은' 경우만 — 산출 실패는 결손이다
                             self.log(f"매수 보류: {cand['name']} - {why}")
                             continue
                         self.log(f"[히트 캡] {cand['name']} 투자금 축소: {invest_amt:,}원 → {allowed_amt:,}원 "
@@ -1420,6 +1463,7 @@ class TraderBuyingMixin:
             # [추가] 예수금 부족 로그
             if qty < 1:
                 self.log(f"매수 실패: {cand['name']} - 매수 가능 수량 부족 (목표:{target_qty}, 가능:{max_qty}) | 예수금:{avail_cash:,}원, 필요:{order_price:,}원(1주)")
+                exec_blocks[cand.get('code')] = 'cash'
                 continue
             
             rsi_val = f"{cand['rsi']:.1f}" if cand['rsi'] is not None else "-"
@@ -1492,6 +1536,7 @@ class TraderBuyingMixin:
                         self.log(f"매수 보류: {cand['name']} - 포트폴리오 총 리스크 예산이 "
                                  f"주문 직전에 소진됨 (필요 {new_risk_amt:,.0f}원 > 남은 "
                                  f"{max(budget_now, 0):,.0f}원)")
+                        exec_blocks[cand.get('code')] = 'heat'
                         continue
                     self.portfolio_heat_amt += new_risk_amt
 
@@ -1573,3 +1618,12 @@ class TraderBuyingMixin:
                     "stop_loss_rate": sl_rate # [추가] 계산된 손절률 기록 (매도 시 참조 가능하도록)
                 }
                 self.trade_records.append(record)
+
+        # [신호 원장] 주문 단계 보류를 그날 행에 얹는다 — 그런 후보가 있던 주기에만 쓰기 1회.
+        #  실패해도 매매는 그대로 간다(계측이 매매를 막지 않는다).
+        if exec_blocks:
+            try:
+                db_manager.db.add_signal_ledger_account_blocks(
+                    datetime.now().strftime("%Y%m%d"), exec_blocks)
+            except Exception as e:
+                logger.warning(f"[Ledger] 주문 단계 보류 기록 생략: {e}")

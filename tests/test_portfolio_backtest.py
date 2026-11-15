@@ -795,3 +795,18 @@ def test_heat_basis_defaults_to_cost(universe):
     cost = _heat_run(universe, "cost")
     assert default["total_return"] == pytest.approx(cost["total_return"])
     assert default["heat_capped_buys"] == cost["heat_capped_buys"]
+
+
+def test_cash_curve_shares_the_equity_axis(universe):
+    """[2026-11-15] 결과의 cash_curve 는 equity 와 같은 날짜 축이다 — 노출을 맞춘 지수 대조
+    (modules.benchmark.exposure_matched)가 날짜마다 짝지어 읽는 입력이다. avg_cash_ratio 는 그 평균이고,
+    첫날은 아직 아무것도 사기 전이라 100% 다(그날 종가 시점·그날 매매 전의 값).
+    """
+    dfs, status, dates = universe
+    res = pbt.run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=3)
+    assert len(res["cash_curve"]) == len(res["equity"]) == len(dates)
+    assert res["cash_curve"][0] == pytest.approx(100.0)
+    #  만재 구간의 현금은 수수료 올림 때문에 0 아래로 실낱만큼 내려갈 수 있다(실측 -0.00006%) — 대조 산식이 0~1 로 자른다.
+    assert all(-0.01 <= v <= 100.0 + 1e-6 for v in res["cash_curve"])
+    assert sum(res["cash_curve"]) / len(dates) == pytest.approx(res["avg_cash_ratio"])
+    assert min(res["cash_curve"]) < 100.0, "한 번도 사지 않은 표본이다 — 축 길이 말고는 아무것도 못 잰다"

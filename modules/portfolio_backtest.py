@@ -795,6 +795,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
     reserved_cash = float(reserved_cash or 0.0)
     cash = float(initial_capital) - reserved_cash
     positions, trades, equity_curve, cash_ratios, full_slot_cash = {}, [], [], [], []
+    cash_curve = []         # 날짜 축과 같은 길이의 현금 비중(%) — 노출을 맞춘 지수 대조(benchmark.exposure_matched)의 입력
     peak, mdd, slot_usage = initial_capital, 0.0, 0
     max_pos_weight = max_buy_weight = max_buy_risk = 0.0
     risk_cap_breaches = 0
@@ -1078,6 +1079,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
             if _r is not None and _mark(_r["close"]):
                 mark_px[_c] = _r["close"]
         equity_curve.append(_equity(day))
+        cash_curve.append(cash / equity_curve[-1] * 100 if equity_curve[-1] > 0 else 100.0)
         if equity_curve[-1] > 0:
             cash_ratios.append(cash / equity_curve[-1] * 100)
             # [집중도] 한 종목이 계좌에서 차지하는 최대 비중. 사이징 상한이 실제로
@@ -1746,6 +1748,7 @@ def run_portfolio(dfs, status, dates, initial_capital=10_000_000, slots=4,
         "rank_no_tq_pct": (rank_diag["no_tq"] / rank_diag["calls"] * 100
                            if rank_diag["calls"] else 0.0),
         "equity": equity_curve,
+        "cash_curve": cash_curve,                        # equity 와 같은 축 — 그날 종가 시점(매매 전) 현금 비중(%)
     }
 
 

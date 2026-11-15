@@ -176,3 +176,58 @@ def test_a_held_buy_returns_its_heat_reservation(trader):
 def test_a_stale_half_tp_record_does_not_block_the_buy(trader):
     """반익절 기록은 방향이 다르다 — 남아 있어도 '없는 매도'를 만들지는 않는다."""
     assert _buy_with_anchor_delete(trader, ok=True, half_ok=False).called
+
+
+# ─────────── ④ 개장 직후에는 신규도 증액도 사지 않는다 (2026-11-15) ───────────
+#
+#  개장 직후 보류 게이트는 신규 매수 판정(_check_buy_conditions) 맨 앞에만 있었다. 증액은 매도 판정
+#  루프가 '보유'로 본 종목마다 부르는 경로라 그 게이트를 지나지 않았고, 개장 1분 30초에 증액이 나갔다
+#  (2026-08-26 09:01:30 한국콜마 · 가상 원장 증액 5건 중 4건이 09:00~09:29).
+#  게이트의 이유(개장 스파이크를 고점에서 추격)는 증액에 더 직접 걸린다 — 증액의 발동 조건이
+#  '수익률 문턱 도달'이고 스파이크가 바로 그 문턱을 넘겨 주는 사건이기 때문이다.
+#  신규 매수 쪽의 런타임 확인은 tests/test_entry_open_delay.py 에 있다(같은 함수 이름을 같은 모듈에서 읽는다).
+#  [주의] conftest 가 스위트 전역에서 이 게이트를 0 으로 꺼 둔다 — 여기서 명시적으로 되살린다.
+
+def test_pyramid_holds_during_the_open_delay(trader, monkeypatch):
+    """[핵심] 보류 중에는 증액 주문이 나가지 않고, 횟수·리스크 예산도 건드리지 않는다."""
+    from modules.auto_trade import buying as buying_mod
+    monkeypatch.setattr(buying_mod, "entry_open_delay_remaining", lambda *a, **k: 28 * 60 + 30)
+    trader.portfolio_heat_amt = 0.0
+    with patch.object(db_manager.db, 'bump_pyramid_count', return_value=True) as bump, \
+         patch.object(trader, 'log') as log:
+        order = _pyramid(trader)
+    assert not order.called, "개장 직후 보류 중인데 증액 주문이 나갔다"
+    assert trader.portfolio_heat_amt == 0.0, "보류인데 리스크 예산이 선점된 채 남았다"
+    logged = " ".join(str(c) for c in log.call_args_list)
+    assert "개장 직후 증액 보류" in logged, f"보류 사유를 남기지 않는다: {logged}"
+    del bump    # _pyramid 가 같은 이름을 다시 감싸므로 바깥 patch 는 호출 수를 볼 수 없다
+
+
+def test_pyramid_goes_out_once_the_open_delay_is_over(trader, monkeypatch):
+    """[대조군] 보류가 끝나면 그대로 나간다 — 상시 보류로 기능이 죽은 상태도 '통과'가 되기 때문이다."""
+    from modules.auto_trade import buying as buying_mod
+    monkeypatch.setattr(buying_mod, "entry_open_delay_remaining", lambda *a, **k: 0)
+    assert _pyramid(trader).called, "보류가 없는데 증액이 막혔다"
+
+
+def test_pyramid_open_delay_is_logged_once_per_stock_per_day(trader, monkeypatch):
+    """보류는 30분 동안 주기마다 걸린다 — 같은 종목 줄이 주기 수만큼 쌓이면 로그가 그것으로 덮인다."""
+    from modules.auto_trade import buying as buying_mod
+    monkeypatch.setattr(buying_mod, "entry_open_delay_remaining", lambda *a, **k: 600)
+    with patch.object(trader, 'log') as log:
+        for _ in range(5):
+            assert not _pyramid(trader).called
+    lines = [str(c) for c in log.call_args_list if "개장 직후 증액 보류" in str(c)]
+    assert len(lines) == 1, f"같은 종목 보류 줄이 {len(lines)}번 적혔다"
+
+
+def test_the_open_delay_comes_after_the_pyramid_signal(trader, monkeypatch):
+    """증액 조건이 서지 않은 보유 종목은 보류 줄도 남기지 않는다(보유 종목마다 매 주기 불리는 경로다)."""
+    from modules.auto_trade import buying as buying_mod
+    monkeypatch.setattr(buying_mod, "entry_open_delay_remaining", lambda *a, **k: 600)
+    result = {'state': '보유', 'score': 5.0, 'ind': {'atr': 1000}}
+    with patch.object(db_manager.db, 'get_pyramid_count', return_value=0), \
+         patch.object(trader.strategy, 'analyze_pyramid', return_value=(False, "")), \
+         patch.object(trader, 'log') as log:
+        trader._try_pyramid_buy(CODE, NAME, 100, 70_000, 3.0, result, None, is_market_open=True)
+    assert not any("개장 직후" in str(c) for c in log.call_args_list)

@@ -151,3 +151,108 @@ def test_an_empty_wallet_is_reported_as_a_cash_block(trader):
 
 def test_a_healthy_account_reports_no_block(trader):
     assert _run_buy_cycle(trader, [_hold('161890', '한국콜마')], cash=5_000_000) is None
+
+
+# ───────────────────── 주문 단계에서 접은 후보 (2026-11-15) ─────────────────────
+#  위 사유들은 후보 분석 **앞에서** 이미 아는 계좌 상태다(만석·빈 지갑). 여기는 그 뒤다 — 게이트를
+#  통과해 후보가 됐고 슬롯·예수금도 있었는데, 주문을 짜다가 접은 경우. 원장은 그 전에 이미 '통과'로
+#  쓰였으므로, 접은 사유를 따로 얹지 않으면 '통과했는데 매수 0'만 남는다.
+#  실제 기록: 2026-10-23 가상투자 삼성바이오로직스 — 통과 4주기·차단 0·매수 0
+#  (로그: "1주 1,478,000원이 배분액의 2.3배(상한 1.3배)").
+
+ATR_STOP = {"USE_ATR_STOP": True, "STOP_LOSS_RATE": -7.0, "ATR_STOP_MULTIPLIER": 2.0}
+
+
+def _cand(code, name, price=70_000, score=9.0):
+    return {'code': code, 'name': name, 'price': price, 'score': score, 'rsi': 50, 'adx': 30,
+            'cci': 100, 'is_custom_rule': False, 'atr': price * 0.02}
+
+
+def _execute(trader, cands, *, cash=10_000_000, held=0, slots=4, alloc=None, budget_left=None,
+             heat_unknown=False):
+    """주문 집행부를 한 번 돌리고 (주문 Mock, 원장에 얹은 사유 dict | None) 을 돌려준다."""
+    from modules import db_manager
+    trader.buy_halted = False
+    trader.pending_restore_ok = True
+    trader.initial_asset = 10_000_000
+    trader.current_total_asset = 10_000_000
+    trader.portfolio_heat_amt = 0.0
+    trader.portfolio_heat_unknown = heat_unknown
+    patches = [
+        patch.dict(config.SELL_STRATEGY, ATR_STOP),
+        patch.object(trader, '_clamp_order_price', side_effect=lambda c, p: p),
+        patch.object(trader, 'log'),
+        patch('modules.auto_trade.api.fetch_buyable_quantity', return_value=1000),
+        patch('modules.auto_trade.db_manager.db.delete_trailing_stop', return_value=True),
+        patch('modules.auto_trade.db_manager.db.delete_half_tp', return_value=True),
+        patch('modules.auto_trade.db_manager.db.cancel_reserved_buy_orders', return_value=0),
+    ]
+    if alloc is not None:
+        patches.append(patch.object(trader.risk_manager, 'allocate_budget', return_value=alloc))
+    if budget_left is not None:
+        patches.append(patch.object(trader.risk_manager, 'portfolio_risk_budget_left', return_value=budget_left))
+    for p in patches:
+        p.start()
+    try:
+        with patch.object(trader.order_manager, 'send_order', return_value="ODNO1") as order, \
+             patch.object(db_manager.db, 'add_signal_ledger_account_blocks') as rec:
+            trader._execute_buy_orders(cands, cash, 0.25, held, slots)
+    finally:
+        for p in reversed(patches):
+            p.stop()
+    return order, (rec.call_args[0][1] if rec.called else None)
+
+
+def test_a_share_too_expensive_for_the_allocation_reaches_the_ledger(trader):
+    """[핵심] 10-23 삼성바이오로직스 — 1주 값이 배분액 상한을 넘어 접은 사실이 원장까지 간다."""
+    order, blocks = _execute(trader, [_cand('207940', '삼성바이오로직스', price=1_478_000)], alloc=640_000)
+    assert not order.called
+    assert blocks == {'207940': 'size'}
+
+
+def test_a_heat_cap_hold_reaches_the_ledger(trader):
+    """총 리스크 한도에 남은 예산이 1주에도 못 미쳐 접은 경우."""
+    order, blocks = _execute(trader, [_cand('005930', '삼성전자')], budget_left=100)
+    assert not order.called
+    assert blocks == {'005930': 'heat'}
+
+
+def test_a_heat_hold_from_missing_data_is_not_blamed_on_the_cap(trader):
+    """한도에 '닿은' 것과 한도를 '계산 못 한' 것은 다르다 — 뒤쪽은 데이터 결손이라 계좌 사유로 세지 않는다."""
+    order, blocks = _execute(trader, [_cand('005930', '삼성전자')], budget_left=100, heat_unknown=True)
+    assert not order.called
+    assert blocks is None
+
+
+def test_a_candidate_outranked_for_the_last_slot_is_a_slot_block(trader):
+    """같은 주기의 앞 순위가 마지막 슬롯을 쓰면, 뒤 순위는 '슬롯'에 막힌 것이다(순위에서 밀린 후보)."""
+    cands = [_cand('005930', '삼성전자', score=9.5), _cand('000660', 'SK하이닉스'), _cand('035420', 'NAVER')]
+    order, blocks = _execute(trader, cands, held=3, slots=4)
+    assert order.call_count == 1 and order.call_args[0][0] == '005930'
+    assert blocks == {'000660': 'slot', '035420': 'slot'}
+
+
+def test_running_out_of_cash_mid_cycle_is_a_cash_block(trader):
+    order, blocks = _execute(trader, [_cand('005930', '삼성전자'), _cand('000660', 'SK하이닉스')], cash=900)
+    assert not order.called
+    assert blocks == {'005930': 'cash', '000660': 'cash'}
+
+
+def test_an_executed_buy_writes_no_block(trader):
+    """대조군 — 산 주기에 사유가 붙으면 '못 산 주기'가 부풀고, 쓰기도 주기마다 한 번씩 는다."""
+    order, blocks = _execute(trader, [_cand('005930', '삼성전자')])
+    assert order.called
+    assert blocks is None
+
+
+def test_a_ledger_failure_does_not_stop_the_next_cycle(trader):
+    """계측 실패는 삼킨다 — 주문 집행부가 예외로 끝나면 주 루프가 그 주기를 오류로 센다."""
+    from modules import db_manager
+    with patch.object(db_manager.db, 'add_signal_ledger_account_blocks', side_effect=RuntimeError("disk full")), \
+         patch.object(trader, 'log'), \
+         patch.object(trader.risk_manager, 'allocate_budget', return_value=640_000), \
+         patch.dict(config.SELL_STRATEGY, ATR_STOP), \
+         patch.object(trader, '_clamp_order_price', side_effect=lambda c, p: p), \
+         patch.object(trader.order_manager, 'send_order', return_value="ODNO1"):
+        trader.is_running = True
+        trader._execute_buy_orders([_cand('207940', '삼성바이오로직스', price=1_478_000)], 10_000_000, 0.25, 0, 4)

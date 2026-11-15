@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from core import trading_cost
+from modules import benchmark
 from tools import audit_common as A
 
 
@@ -112,3 +113,45 @@ def test_포트폴리오_화면_대조군_행과_생존편향_안내(tmp_path, m
     assert "같은 종목 단순 보유" in cells and any("자료 없음" in x for x in cells)
     texts = " ".join(str(a) for a in args if not hasattr(a, "columns"))
     assert "생존 편향" in texts and "--only index" in texts
+
+
+# ── [2026-11-15] 노출을 맞춘 지수 — '덜 들고 있어서'와 '종목을 못 골라서'를 가른다 ─────────────
+def test_지수_일별_시계열은_구간_수익과_같은_저장분을_읽는다(tmp_path, monkeypatch):
+    _index_db(tmp_path, monkeypatch, [("20260101", "코스피", 100.0), ("20260102", "코스피", 120.0),
+                                      ("20260103", "코스피", 90.0)])
+    assert benchmark.index_series("코스피", "20260101", "20260103") == [
+        ("20260101", 100.0), ("20260102", 120.0), ("20260103", 90.0)]
+    #  구간을 못 덮으면 수익과 마찬가지로 '없음'이다 — 잘린 시계열로 노출 대조를 만들지 않는다.
+    assert benchmark.index_series("코스피", "20250101", "20260103") is None
+    assert benchmark.index_series("코스닥", "20260101", "20260103") is None
+
+
+def test_현금_100이면_지수가_움직여도_0이고_현금_0이면_지수와_같다():
+    series = [("20260101", 100.0), ("20260102", 120.0), ("20260103", 90.0), ("20260104", 108.0)]
+    dates = [d for d, _ in series]
+    ret, mdd, exp = benchmark.exposure_matched(series, dates, [100.0] * 4)
+    assert (ret, mdd, exp) == (pytest.approx(0.0), pytest.approx(0.0), pytest.approx(0.0))
+    ret, mdd, exp = benchmark.exposure_matched(series, dates, [0.0] * 4)
+    assert ret == pytest.approx(8.0)                    # 100 → 108
+    assert mdd == pytest.approx(-25.0)                  # 120 → 90
+    assert exp == pytest.approx(100.0)
+
+
+def test_그날_잰_비중이_직전_봉부터_그날까지의_등락에_곱해진다():
+    """전략은 종가에 매매한다 — dates[i] 의 현금 비중은 dates[i-1]→dates[i] 구간에 들고 있던 몫이다."""
+    series = [("20260101", 100.0), ("20260102", 110.0), ("20260103", 99.0)]
+    dates = [d for d, _ in series]
+    #  첫날 값은 쓰이지 않는다(그 앞 구간이 없다). +10% 에 절반, -10% 에 전부 들고 있었다.
+    ret, mdd, exp = benchmark.exposure_matched(series, dates, [0.0, 50.0, 0.0])
+    assert ret == pytest.approx((1.05 * 0.90 - 1) * 100)
+    assert mdd == pytest.approx(-10.0)
+    assert exp == pytest.approx(75.0)
+
+
+def test_노출_대조는_입력이_어긋나면_만들지_않는다():
+    series = [("20260101", 100.0), ("20260102", 110.0)]
+    none3 = (None, None, None)
+    assert benchmark.exposure_matched(None, ["20260101", "20260102"], [0.0, 0.0]) == none3
+    assert benchmark.exposure_matched(series, ["20260101", "20260102"], [0.0]) == none3      # 길이 다름
+    assert benchmark.exposure_matched(series, ["20260101", "20260102"], None) == none3
+    assert benchmark.exposure_matched(series, ["20250101"], [0.0]) == none3                  # 겹치는 날 없음
