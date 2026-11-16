@@ -16,6 +16,7 @@
 import logging
 import os
 import re
+import string
 
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, MofNCompleteColumn, TimeElapsedColumn
 from rich.prompt import Prompt
@@ -26,6 +27,7 @@ from rich.markup import escape
 import api
 import config
 from core import context
+from core import jsonio
 from core import utils
 from modules import chart, web_dashboard
 
@@ -123,7 +125,7 @@ def _remove_from_basket(basket, picked):
 
 
 def _pick_to_remove(basket):
-    """[7] 바구니에서 뺄 종목을 고른다. 고른 항목 리스트, 취소면 [].
+    """[8] 바구니에서 뺄 종목을 고른다. 고른 항목 리스트, 취소면 [].
 
     번호(`1,3,5-8`)·`0`(모두 비우기)·종목명/코드 검색을 받는다. 담을 때의 `all` 도 '모두'로 받는다.
     [공용 select_multiple_from_list 를 쓰지 않는 이유] 거기서는 빈 Enter 가 '빈 검색어'로 읽혀
@@ -166,6 +168,209 @@ def _pick_to_remove(basket):
         else:
             config.console.print(f"[yellow]'{escape(sel)}' 이(가) {len(hits)}개에 맞습니다"
                                  f"({', '.join(str(i + 1) for i in hits)}번) — 번호로 골라 주세요.[/yellow]\n")
+
+
+# ==========================================================
+# [그룹 · 2026-11-16] 바구니를 A~Z 슬롯에 저장해 두고 다음에 불러와 바로 그린다
+# ==========================================================
+#  · 저장 파일은 config.CHART_GROUPS_FILE(json/chart_groups.json) 하나다. 관심종목(stock.json)에
+#    섞지 않는다 — 그건 자동매매가 읽는 매매 대상 목록이고, 그룹에는 지수·직접 입력 티커도 든다.
+#  · 항목은 바구니와 같은 모양({code, name, ovs})으로 둔다. 불러올 때 종목명을 다시 조회하지 않는다.
+#  · 읽기 실패(None)와 그룹 없음({})을 가른다. 읽지 못했으면 저장·삭제하지 않는다 — 다른 슬롯을
+#    빈 것으로 알고 덮으면 저장된 그룹이 통째로 사라진다.
+#  · 저장·삭제는 파일을 다시 읽어 그 슬롯만 바꾼다(다른 모드의 프로세스가 같은 파일을 쓸 수 있다).
+#  · 슬롯을 묻는 자리의 취소는 빈 Enter 하나다. b·q 는 B·Q 슬롯이라 취소로 읽지 않는다.
+#    대신 덮어쓰기·삭제는 한 번 더 묻는다.
+GROUP_SLOTS = tuple(string.ascii_uppercase)
+_GROUPS_VERSION = 1
+
+
+def _clean_item(it):
+    """저장된 항목 하나를 바구니 항목으로. 모양이 틀리면 None."""
+    if not isinstance(it, dict):
+        return None
+    code, name, ovs = it.get("code"), it.get("name"), it.get("ovs")
+    if not isinstance(code, str) or not code or not isinstance(ovs, bool):
+        return None
+    return {"code": code, "name": name if isinstance(name, str) and name else code, "ovs": ovs}
+
+
+def load_groups():
+    """저장된 그룹 {슬롯: [{code, name, ovs}]}. 파일이 없으면 {}, 읽지 못했으면 None.
+
+    모양이 틀린 슬롯·항목은 로그를 남기고 건너뛴다(나머지는 쓴다).
+    """
+    path = config.CHART_GROUPS_FILE
+    if not os.path.exists(path):
+        return {}
+    data = jsonio.load_json(path, default=None)
+    raw = data.get("groups") if isinstance(data, dict) else None
+    if not isinstance(raw, dict):
+        logger.error(f"[chart_batch] 그룹 파일을 읽지 못했습니다({path}): 형식이 다릅니다")
+        return None
+    groups = {}
+    for slot, items in raw.items():
+        if slot not in GROUP_SLOTS or not isinstance(items, list):
+            logger.warning(f"[chart_batch] 그룹 파일의 알 수 없는 슬롯을 건너뜁니다: {slot!r}")
+            continue
+        cleaned = [c for c in (_clean_item(it) for it in items) if c]
+        if len(cleaned) != len(items):
+            logger.warning(f"[chart_batch] 그룹 {slot} 의 형식이 틀린 항목 {len(items) - len(cleaned)}개를 건너뜁니다")
+        if cleaned:
+            groups[slot] = cleaned
+    return groups
+
+
+def write_group(slot, items):
+    """slot 을 items 로 저장한다(items 가 None 이면 슬롯을 지운다). 바뀐 전체 그룹, 실패면 None.
+
+    파일을 다시 읽어 그 슬롯만 바꾼다. 읽지 못하면 쓰지 않는다(다른 슬롯을 지우지 않게).
+    """
+    groups = load_groups()
+    if groups is None:
+        return None
+    if items is None:
+        groups.pop(slot, None)
+    else:
+        groups[slot] = [{"code": i["code"], "name": i["name"], "ovs": bool(i["ovs"])} for i in items]
+    data = {"version": _GROUPS_VERSION, "groups": {k: groups[k] for k in GROUP_SLOTS if k in groups}}
+    if not jsonio.save_json(config.CHART_GROUPS_FILE, data):
+        return None
+    return groups
+
+
+def _keys(items):
+    return [(i["code"], i["ovs"]) for i in items]
+
+
+def _group_line(slot, items, width=70):
+    names = ", ".join(i["name"] for i in items)
+    if len(names) > width:
+        names = names[:width - 1] + "…"
+    return f"[{slot}] {len(items)}개 · {escape(names)}"
+
+
+def _groups_text(groups):
+    if groups is None:
+        return "[red]그룹 파일을 읽지 못했습니다 — 저장·삭제를 막았습니다 (상세는 로그 참조)[/red]\n"
+    if not groups:
+        return "[dim]저장된 그룹 없음 — 종목을 담은 뒤 [2] 로 A~Z 중 한 슬롯에 저장합니다[/dim]\n"
+    lines = [_group_line(s, groups[s]) for s in GROUP_SLOTS if s in groups]
+    return "[bold]저장된 그룹[/bold]\n" + "\n".join(lines) + "\n"
+
+
+def _ask_slot(groups, question, must_exist):
+    """A~Z 슬롯 하나. 취소(빈 Enter)면 None. must_exist 면 저장된 슬롯만 받는다."""
+    while True:
+        sel = Prompt.ask(f"{question} [dim](A~Z · 취소: Enter)[/dim]", default="", show_default=False).strip()
+        config.console.print()
+        if not sel:
+            return None
+        slot = sel.upper()
+        if slot not in GROUP_SLOTS:
+            config.console.print(f"[red]'{escape(sel)}' — 슬롯은 A~Z 한 글자입니다.[/red]\n")
+            continue
+        if must_exist and slot not in (groups or {}):
+            config.console.print(f"[yellow]슬롯 {slot} — 비어 있습니다.[/yellow]\n")
+            continue
+        return slot
+
+
+def _ask_yes(question):
+    ans = Prompt.ask(f"{question} \\[y/N]", default="n", show_default=False).strip().lower()
+    config.console.print()
+    return ans in ("y", "yes")
+
+
+def _load_group(basket, groups):
+    """그룹을 바구니에 넣는다. 담긴 종목이 있으면 교체(기본)/추가를 묻는다. 불러온 슬롯, 취소면 None.
+
+    바구니가 이미 그 그룹과 같으면 묻지 않는다 — 교체든 추가든 결과가 같아 질문이 뜻이 없다.
+    """
+    slot = _ask_slot(groups, "불러올 그룹", must_exist=True)
+    if slot is None:
+        return None
+    if basket and _keys(basket) == _keys(groups[slot]):
+        #  문구는 슬롯 글자 뒤에 조사를 붙이지 않는다(L·M·N·R 은 받침으로 읽혀 '와/로/를'이 틀린다).
+        config.console.print(f"[dim]담긴 {len(basket)}개가 이미 그룹 {slot} 내용과 같습니다.[/dim]")
+        utils.pause()
+        return slot
+    replace = True
+    if basket:
+        ans = Prompt.ask(f"이미 {len(basket)}개가 담겨 있습니다. [1] 비우고 그룹 {slot} 불러오기  "
+                         f"[2] 담긴 종목 뒤에 그룹 {slot} 추가 [dim](취소: b)[/dim]",
+                         choices=["1", "2", "b", "q"], default="1").strip().lower()
+        config.console.print()
+        if ans in ("b", "q"):
+            return None
+        replace = ans == "1"
+    if replace:
+        basket.clear()
+    added, dropped = _add_to_basket(basket, [dict(i) for i in groups[slot]])
+    if dropped:
+        config.console.print(f"[yellow]최대 {config.BATCH_CHART_MAX}개까지 담을 수 있어 그룹 {slot} 의 {dropped}개는 "
+                             f"빠졌습니다 (BATCH_CHART_MAX 로 조정).[/yellow]")
+        utils.pause()
+    logger.info(f"[chart_batch] 그룹 {slot} 불러오기({'교체' if replace else '추가'}): {added}개 담음")
+    return slot
+
+
+def _save_group(basket, groups):
+    """바구니를 슬롯에 저장한다. (바뀐 그룹, 저장한 슬롯). 취소·실패면 (groups, None)."""
+    slot = _ask_slot(groups, "저장할 슬롯", must_exist=False)
+    if slot is None:
+        return groups, None
+    if slot in (groups or {}) and not _ask_yes(f"그룹 {slot}({len(groups[slot])}개)에 지금 선택 {len(basket)}개를 덮어쓸까요?"):
+        return groups, None
+    new = write_group(slot, basket)
+    if new is None:
+        config.console.print(f"[red]그룹 {slot} 저장 실패 — 바뀌지 않았습니다 (상세는 로그 참조)[/red]")
+        utils.pause()
+        return groups, None
+    logger.info(f"[chart_batch] 그룹 {slot} 저장: {', '.join(b['code'] for b in basket)}")
+    return new, slot
+
+
+def _delete_group(groups):
+    """슬롯 하나를 지운다. (바뀐 그룹, 지운 슬롯). 취소·실패면 (groups, None)."""
+    slot = _ask_slot(groups, "지울 그룹", must_exist=True)
+    if slot is None or not _ask_yes(f"그룹 {slot}({len(groups[slot])}개) — 지울까요?"):
+        return groups, None
+    new = write_group(slot, None)
+    if new is None:
+        config.console.print(f"[red]그룹 {slot} 삭제 실패 — 바뀌지 않았습니다 (상세는 로그 참조)[/red]")
+        utils.pause()
+        return groups, None
+    logger.info(f"[chart_batch] 그룹 {slot} 삭제")
+    return new, slot
+
+
+def _group_menu(basket, groups, origin):
+    """[7] 그룹 설정 — 불러오기·저장·삭제 중 하나를 하고 3-7 메뉴로 돌아간다. (바뀐 그룹, 바구니의 출처 슬롯)."""
+    menu_items = [("1", "그룹 불러오기", "Load"), ("2", "현재 선택을 그룹으로 저장", "Save"),
+                  ("3", "그룹 삭제", "Delete")]
+    disabled = set()
+    if not groups:
+        disabled |= {"1", "3"}
+    if not basket or groups is None:
+        disabled.add("2")
+    if groups is None:
+        disabled.add("3")
+    default = next((k for k, _, _ in menu_items if k not in disabled), "1")
+    choice = utils.show_menu("그룹 설정 (Groups Setting)", menu_items, default_choice=default,
+                             text_before=_basket_text(basket, origin, groups) + _groups_text(groups),
+                             disabled=disabled)
+    if choice.lower() in ("b", "q") or choice in disabled:
+        return groups, origin
+    context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {dict((k, v) for k, v, _ in menu_items)[choice]}")
+    if choice == "1":
+        slot = _load_group(basket, groups)
+        return groups, (slot or origin)
+    if choice == "2":
+        groups, slot = _save_group(basket, groups)
+        return groups, (slot or origin)
+    groups, slot = _delete_group(groups)
+    return groups, (None if slot and slot == origin else origin)
 
 
 def parse_direct_codes(text):
@@ -218,11 +423,16 @@ def _pick_from_watchlist(src):
     return [{"code": it["code"], "name": it["name"], "ovs": ovs} for it in picked or []]
 
 
-def _basket_text(basket):
+def _basket_text(basket, origin=None, groups=None):
+    """메뉴 위 바구니 줄. origin 은 바구니를 불러오거나 저장한 그룹 슬롯이다.
+    그 그룹과 내용이 달라졌으면 '수정됨'을 붙인다 — 저장하지 않은 변경이 있다는 표시다."""
     if not basket:
-        return f"[dim]선택된 종목 없음 — 목록에서 여러 종목을 담은 뒤 [8] 로 생성합니다 (최대 {config.BATCH_CHART_MAX}개)[/dim]\n"
+        return f"[dim]선택된 종목 없음 — 목록에서 여러 종목을 담은 뒤 [9] 로 생성합니다 (최대 {config.BATCH_CHART_MAX}개)[/dim]\n"
+    tag = ""
+    if origin and groups and origin in groups:
+        tag = f" (그룹 {origin}{' · 수정됨' if _keys(basket) != _keys(groups[origin]) else ''})"
     names = ", ".join(escape(b["name"]) for b in basket)
-    return f"[bold cyan]선택 {len(basket)}/{config.BATCH_CHART_MAX}개:[/bold cyan] {names}\n"
+    return f"[bold cyan]선택 {len(basket)}/{config.BATCH_CHART_MAX}개{tag}:[/bold cyan] {names}\n"
 
 
 def _ask_period():
@@ -293,30 +503,45 @@ def run_batch(basket, period_type, months):
 
 
 def batch_chart_menu():
-    """[3]-7 일괄 차트 생성 메뉴. 바구니는 메뉴를 나갈 때까지 유지된다(같은 종목으로 유형만 바꿔 다시 그리기)."""
+    """[3]-7 일괄 차트 생성 메뉴. 바구니는 메뉴를 나갈 때까지 유지된다(같은 종목으로 유형만 바꿔 다시 그리기).
+    [7] 그룹 설정으로 바구니를 A~Z 슬롯에 저장해 두고 다음에 불러온다."""
     basket = []
+    groups = load_groups()
+    origin = None
     base_len = len(context.USER_ACTION_BREADCRUMB)
-    last_choice = "1"
+    #  [2026-11-16] 저장된 그룹이 있으면 처음 기본값을 7번(그룹)으로 둔다 — 들어와서 Enter 두 번이면
+    #   불러오기까지 간다. 그 뒤로는 종전처럼 마지막 선택이 기본값이다.
+    last_choice = "7" if groups else "1"
     while True:
         context.USER_ACTION_BREADCRUMB = context.USER_ACTION_BREADCRUMB[:base_len]
+        #  [2026-11-16] 순서: 담기(1~6) → 그룹(7) → 선택 삭제(8) → 실행(9). 실행이 늘 맨 끝이다.
         menu_items = [
             ("1", "국내 주식", "Domestic Stock"), ("2", "국내 ETF", "Domestic ETF"),
             ("3", "미국 주식", "US Stock"), ("4", "미국 ETF", "US ETF"),
             ("5", "시장 지수", "Market Indices"), ("6", "직접 입력", "Direct Input, comma-separated"),
-            ("7", "선택 삭제", "Delete"), ("8", "차트 생성 실행", "Run"),
+            ("7", "그룹 설정", "Groups Setting"),
+            ("8", "선택 삭제", "Delete"), ("9", "차트 생성 실행", "Run"),
         ]
-        #  [2026-10-15] 다른 메뉴와 같이 마지막 선택을 기본값으로 둔다(종전엔 바구니가 차면 늘 8번 고정).
-        #   비활성 항목(바구니가 비었을 때의 7·8)이 마지막 선택이면 1번으로 돌아간다.
-        default = "1" if (not basket and last_choice in ("7", "8")) else last_choice
+        #  [2026-10-15] 다른 메뉴와 같이 마지막 선택을 기본값으로 둔다(종전엔 바구니가 차면 늘 실행 고정).
+        #   비활성 항목(바구니가 비었을 때의 8·9, 바구니도 그룹도 없을 때의 7)이 마지막 선택이면 1번으로 돌아간다.
+        #   그룹을 못 읽었으면(None) 7번을 열어 둔다 — 들어가서 읽기 실패 안내를 본다.
+        disabled = set() if basket else {"8", "9"}
+        if not basket and groups == {}:
+            disabled.add("7")
+        default = "1" if last_choice in disabled else last_choice
         choice = utils.show_menu("일괄 차트 생성 (Batch Chart)", menu_items,
                                  default_choice=default,
-                                 text_before=_basket_text(basket),
-                                 disabled=None if basket else {"7", "8"})
+                                 text_before=_basket_text(basket, origin, groups),
+                                 disabled=disabled or None)
         if choice.lower() in ("b", "q"):
             return
         last_choice = choice
         sub_map = dict((k, v) for k, v, _ in menu_items)
         context.USER_ACTION_BREADCRUMB.append(f"[{choice}] {sub_map.get(choice, '')}")
+
+        if choice == "7":
+            groups, origin = _group_menu(basket, groups, origin)
+            continue
 
         if choice in _SOURCE_KEYS or choice in ("5", "6"):
             if choice in _SOURCE_KEYS:
@@ -335,14 +560,14 @@ def batch_chart_menu():
                 utils.pause()
             continue
 
-        if choice == "7":
+        if choice == "8":
             #  [2026-11-09] 종전에는 묻지 않고 전부 비웠다. 이제 골라 빼거나 0 으로 비운다.
             #   남은 종목은 메뉴 위 '선택 N개' 줄에 바로 보인다.
             if basket:
                 _remove_from_basket(basket, _pick_to_remove(basket))
             continue
 
-        if choice == "8" and basket:
+        if choice == "9" and basket:
             sel = _ask_period()
             if sel is None:
                 continue

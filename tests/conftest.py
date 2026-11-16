@@ -637,6 +637,8 @@ def isolate_test_files(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "TOKEN_CACHE_FILE", str(test_token))
     monkeypatch.setattr(config, "DB_FILE_PATH", str(test_db))
     monkeypatch.setattr(config, "JSON_DIR", str(tmp_path)) # 시스템 설정(dynamic_config.json) 덮어쓰기 방지
+    #  일괄 차트 그룹(json/chart_groups.json)도 import 시점에 고정된 운영 경로다.
+    monkeypatch.setattr(config, "CHART_GROUPS_FILE", str(tmp_path / "chart_groups.json"))
 
     # [격리] RESTRICTED_FILE/DAILY_STATE_FILE은 import 시점에 config.JSON_DIR로 고정되므로 위
     # JSON_DIR 패치만으로는 격리되지 않는다. 또한 load/save 함수는 '패키지 재수출 속성'이 아니라
