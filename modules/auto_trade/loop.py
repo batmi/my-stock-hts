@@ -418,15 +418,20 @@ class TraderLoopMixin:
                     if self.was_market_open is not None:
                         if not self.was_market_open and current_market_status:
                             now_time_str = datetime.now().strftime("%H%M")
+                            #  [2026-11-23] 경계를 그 날 값으로 읽는다 — 수능일(정규장 10:00·애프터 17:00)에는
+                            #   리터럴 09:00·16:00 에 걸리지 않아 두 번 다 '거래 시작'으로만 찍혔다.
+                            _open_hm = api.krx_hm("0900", "open")
+                            _after_hm = api.krx_hm("1600", "close")
+                            _after_label = f"KRX 애프터마켓({_after_hm[:2]}:{_after_hm[2:]}~20:00)"
                             self.log("━" * 80)
-                            if "0900" <= now_time_str < "0910":
+                            if _open_hm <= now_time_str < api.krx_hm("0910", "open"):
                                 self.log(f"📢 [정규장 시작] 정규 주식 시장 거래가 개시되었습니다. ({datetime.now().strftime('%H:%M')})")
                                 msg = "🔔 [정규장 시작] 정규 주식 시장 거래가 개시되었습니다."
-                            elif "1600" <= now_time_str < "1610":
+                            elif _after_hm <= now_time_str < api.krx_hm("1610", "close"):
                                 # [2026-09-14] 15:30~16:00 은 시장 없는 휴게라 종전 '15:30 재개' 분기는 도달 불가.
                                 #  거래 종료 시간을 2000 으로 넓힌 경우 16:00 에 KRX 애프터마켓으로 재개한다.
-                                self.log(f"📢 [애프터마켓 개시] KRX 애프터마켓(16:00~20:00) 거래를 재개합니다. ({datetime.now().strftime('%H:%M')})")
-                                msg = "🔔 [애프터마켓 개시] KRX 애프터마켓(16:00~20:00) 거래를 재개합니다. (ETF/ETN 제외)"
+                                self.log(f"📢 [애프터마켓 개시] {_after_label} 거래를 재개합니다. ({datetime.now().strftime('%H:%M')})")
+                                msg = f"🔔 [애프터마켓 개시] {_after_label} 거래를 재개합니다. (ETF/ETN 제외)"
                             else:
                                 self.log(f"📢 [거래 시작] 시스템 트레이딩 거래가 시작되었습니다. ({datetime.now().strftime('%H:%M')})")
                                 msg = "🔔 [장 시작] 거래 가능 시간이 되었습니다."

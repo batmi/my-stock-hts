@@ -545,7 +545,9 @@ def market_session_label(is_overseas=False, is_domestic_etf=False):
         return ("KRX 애프터마켓", "yellow")
     if phase == 'nxt_after':
         # KRX 휴게 15:30~16:00 — 어느 시장도 열려 있지 않다. 값은 정규장 종가에 멈춰 있다.
-        return ("KRX 휴게(15:30~16:00) · 정규장 종가", "dim")
+        #  [2026-11-23] 시각은 그 날 값으로 적는다(수능일 16:30~17:00 에 '15:30~16:00' 으로 찍혔다).
+        lo, hi = krx_hm("1530", "close"), krx_hm("1600", "close")
+        return (f"KRX 휴게({lo[:2]}:{lo[2:]}~{hi[:2]}:{hi[2:]}) · 정규장 종가", "dim")
     if phase == 'nxt_pre':
         # ETF/ETN은 NXT 비거래 → 세션은 열려 있어도 이 표의 값은 KRX 종가에서 멈춰 있다
         if is_domestic_etf:

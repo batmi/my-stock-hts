@@ -177,9 +177,13 @@ class AutoTrader(TraderReportingMixin, TraderMarketRiskMixin, TraderAccountSyncM
                 #  오판해 매도 감시까지 멈추는 것을 막은 횟수이기도 하다.
                 cls._instance.code_error_streaks = 0
                 cls._instance._code_error_alerted_at = 0.0
-
-            cls._instance.initialized = False # [추가] 초기화 상태 플래그
-            cls._instance.last_session_phase = None # [추가] 시장 세션 상태 변경 추적용
+                #  [Fix 2026-11-23] 아래 두 줄은 생성 블록 **밖**에 있었다 — AutoTrader() 를 부를 때마다
+                #   돌고 있는 인스턴스의 값이 지워졌다. 가상투자에서는 체결 감시(_check_paper_conclusions)가
+                #   한가할 때 60초마다 AutoTrader() 를 불러, 루프가 다음 주기에 세션 기억값이 빈 것을 보고
+                #   말없이 기준만 다시 잡았다 — 세션 전환 알림(로그·텔레그램)이 날마다 들쭉날쭉 빠졌고
+                #   2026-11-19 수능일에는 아침 두 번(09:00 프리마켓·10:00 정규장)이 모두 빠졌다.
+                cls._instance.initialized = False # [추가] 초기화 상태 플래그
+                cls._instance.last_session_phase = None # [추가] 시장 세션 상태 변경 추적용
             # [추가] 로그 디렉토리 확인 및 생성
             log_dir = getattr(config, 'SYSTEM_TRADING_LOG_DIR', 'logs')
             if not os.path.exists(log_dir):

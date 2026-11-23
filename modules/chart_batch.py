@@ -195,10 +195,32 @@ def _clean_item(it):
     return {"code": code, "name": name if isinstance(name, str) and name else code, "ovs": ovs}
 
 
+def _index_tickers():
+    from modules import market
+    return dict(market.ALL_INDICES)
+
+
+def _reresolve_index(it, tickers):
+    """지수 항목의 조회 코드를 '지금' 기준으로 다시 정한다. 지수가 아니면 그대로.
+
+    [왜 · 2026-11-18] 지수 코드는 고르는 순간 정해진다 — 코스피200선물은 그 시각의 세션에 따라
+     K200FUT_F(주간)/K200FUT_CM(야간)이 된다(market.resolve_index_source). 그 코드를 그대로 저장해
+     두면 밤에 저장한 그룹을 낮에 불러와도 야간 계약을 그린다. [5] 에서 바로 고르면 늘 지금 세션이다.
+     지수는 이름이 목록(ALL_INDICES)의 키라 이름으로 다시 푼다.
+    """
+    ticker = tickers.get(it["name"])
+    if ticker is None:
+        return it
+    from modules import market
+    code, ovs = market.resolve_index_source(it["name"], ticker)
+    return {"code": code, "name": it["name"], "ovs": ovs}
+
+
 def load_groups():
     """저장된 그룹 {슬롯: [{code, name, ovs}]}. 파일이 없으면 {}, 읽지 못했으면 None.
 
     모양이 틀린 슬롯·항목은 로그를 남기고 건너뛴다(나머지는 쓴다).
+    지수 항목의 코드는 지금 세션 기준으로 다시 푼다(_reresolve_index).
     """
     path = config.CHART_GROUPS_FILE
     if not os.path.exists(path):
@@ -209,6 +231,7 @@ def load_groups():
         logger.error(f"[chart_batch] 그룹 파일을 읽지 못했습니다({path}): 형식이 다릅니다")
         return None
     groups = {}
+    tickers = _index_tickers()
     for slot, items in raw.items():
         if slot not in GROUP_SLOTS or not isinstance(items, list):
             logger.warning(f"[chart_batch] 그룹 파일의 알 수 없는 슬롯을 건너뜁니다: {slot!r}")
@@ -217,7 +240,7 @@ def load_groups():
         if len(cleaned) != len(items):
             logger.warning(f"[chart_batch] 그룹 {slot} 의 형식이 틀린 항목 {len(items) - len(cleaned)}개를 건너뜁니다")
         if cleaned:
-            groups[slot] = cleaned
+            groups[slot] = [_reresolve_index(c, tickers) for c in cleaned]
     return groups
 
 
@@ -290,7 +313,19 @@ def _load_group(basket, groups):
     slot = _ask_slot(groups, "불러올 그룹", must_exist=True)
     if slot is None:
         return None
-    if basket and _keys(basket) == _keys(groups[slot]):
+    #  [2026-11-18] 이 모드에서 고를 수 없는 지수(토스 모드의 KIS 전용 지수)는 빼고 알린다 — [5] 목록이
+    #   막는 것을 그룹이 비켜 가지 않게. 그룹 파일은 모드와 상관없이 하나라 다른 모드에서 저장했을 수 있다.
+    from modules import market
+    blocked = set(market.blocked_kis_only_indices())
+    items = [i for i in groups[slot] if i["name"] not in blocked]
+    skipped = [i["name"] for i in groups[slot] if i["name"] in blocked]
+    if skipped:
+        config.console.print(f"[yellow]그룹 {slot} 의 {', '.join(skipped)} — 이 모드에서는 그릴 수 없는 지수라 "
+                             f"빼고 불러옵니다.[/yellow]")
+        utils.pause()
+    if not items:
+        return None
+    if basket and _keys(basket) == _keys(items):
         #  문구는 슬롯 글자 뒤에 조사를 붙이지 않는다(L·M·N·R 은 받침으로 읽혀 '와/로/를'이 틀린다).
         config.console.print(f"[dim]담긴 {len(basket)}개가 이미 그룹 {slot} 내용과 같습니다.[/dim]")
         utils.pause()
@@ -306,7 +341,7 @@ def _load_group(basket, groups):
         replace = ans == "1"
     if replace:
         basket.clear()
-    added, dropped = _add_to_basket(basket, [dict(i) for i in groups[slot]])
+    added, dropped = _add_to_basket(basket, [dict(i) for i in items])
     if dropped:
         config.console.print(f"[yellow]최대 {config.BATCH_CHART_MAX}개까지 담을 수 있어 그룹 {slot} 의 {dropped}개는 "
                              f"빠졌습니다 (BATCH_CHART_MAX 로 조정).[/yellow]")

@@ -897,11 +897,19 @@ def is_single_price_break(now=None):
     """지금이 거래일의 단일가(동시호가) 휴게 구간인지 확인 (휴장일에는 항상 False)
 
     KRX 장 마감 동시호가는 15:20~15:30(10분)이다 — is_system_market_open과 경계를 맞춘다.
+
+    [Fix 2026-11-23] 경계를 리터럴로 비교해 특수 세션일(수능일·연초 개장일)을 몰랐다. 2026-11-19 수능일
+     16:20(밀린 종가 단일가)에 거래 시간 판정은 닫혔는데 이 함수는 '휴게 아님'이라 답해, 루프가 그 전환을
+     '거래 종료'로 읽고 종가 확정 전에 장 마감 알림·AI 마감 브리핑을 냈다(20:01 에 한 번 더). 예약 주문
+     감시도 그 10분을 단일가로 보지 않고, 거꾸로 그날 연속매매인 15:20~15:30 은 건너뛰었다.
+     is_system_market_open 과 같은 krx_hm 경계를 쓴다.
     """
     if api.is_holiday_today(): return False
 
-    current_time = (now or datetime.now()).strftime("%H%M")
-    return ("0850" <= current_time < "0900") or ("1520" <= current_time < "1530")
+    now = now or datetime.now()
+    current_time, day = now.strftime("%H%M"), now.strftime("%Y%m%d")
+    return ((api.krx_hm("0850", "open", day) <= current_time < api.krx_hm("0900", "open", day))
+            or (api.krx_hm("1520", "close", day) <= current_time < api.krx_hm("1530", "close", day)))
 
 def effective_time_stop_days(code=None, rule=None):
     """이 종목에 **실제로 적용되는** 시간청산 일수. 개별 룰이 있으면 그 값이 이긴다.

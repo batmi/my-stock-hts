@@ -392,3 +392,51 @@ def test_load_same_group_does_not_ask_replace_or_append():
     #  질문을 했다면 '9' 를 답으로 먹어 실행 입력이 어긋난다.
     run = _run_menu(["1", "all", "7", "1", "A", "9", "1"])
     assert [b["code"] for b in run.call_args.args[0]] == ["005930", "000660"]
+
+
+# ── 그룹의 지수 항목은 불러올 때 다시 푼다 (2026-11-18) ─────────────────
+K200_NIGHT = {"code": "K200FUT_CM", "name": "코스피200선물", "ovs": False}
+
+
+@pytest.mark.parametrize("night,code", [(False, "K200FUT_F"), (True, "K200FUT_CM")])
+def test_group_index_code_follows_current_session(night, code):
+    """밤에 저장한 코스피200선물(CM)을 낮에 불러오면 주간(F)으로 — [5] 에서 지금 고른 것과 같아야 한다."""
+    _write_raw({"version": 1, "groups": {"A": [K200_NIGHT, T[0]]}})
+    with patch("modules.market._k200_night_session", return_value=night):
+        got = chart_batch.load_groups()
+    assert got["A"] == [{"code": code, "name": "코스피200선물", "ovs": False}, T[0]]
+
+
+def test_group_domestic_index_keeps_source_code_and_overseas_index_untouched():
+    _write_raw({"version": 1, "groups": {"A": [
+        {"code": "KOSPI", "name": "코스피", "ovs": False},
+        {"code": "^IXIC", "name": "나스닥", "ovs": True}, T[2]]}})
+    got = chart_batch.load_groups()["A"]
+    assert got[0] == {"code": "KOSPI", "name": "코스피", "ovs": False}
+    assert got[1]["code"] == "^IXIC" and got[1]["ovs"] is True
+    assert got[2] == T[2]
+
+
+def test_load_group_skips_indices_blocked_in_this_mode():
+    """토스 모드의 KIS 전용 지수는 [5] 목록에서 막힌다 — 그룹으로 비켜 가지 않는다."""
+    groups = {"A": [K200_NIGHT, T[0]], "B": [K200_NIGHT]}
+    with patch("modules.market.blocked_kis_only_indices", return_value=("V코스피200", "코스피200선물")), \
+         patch("rich.prompt.Prompt.ask", side_effect=["A"]), patch("core.utils.pause"), \
+         patch.object(config.console, "print") as out:
+        basket = []
+        assert chart_batch._load_group(basket, groups) == "A"
+        assert basket == [T[0]]
+        assert any("코스피200선물" in str(c.args[0]) for c in out.call_args_list if c.args)
+    with patch("modules.market.blocked_kis_only_indices", return_value=("코스피200선물",)), \
+         patch("rich.prompt.Prompt.ask", side_effect=["B"]), patch("core.utils.pause"):
+        basket = [T[1]]
+        assert chart_batch._load_group(basket, groups) is None      # 남는 게 없으면 바구니를 건드리지 않는다
+        assert basket == [T[1]]
+
+
+def test_load_group_keeps_blocked_index_in_modes_that_allow_it():
+    with patch("modules.market.blocked_kis_only_indices", return_value=()), \
+         patch("rich.prompt.Prompt.ask", side_effect=["A"]), patch("core.utils.pause"):
+        basket = []
+        assert chart_batch._load_group(basket, {"A": [K200_NIGHT]}) == "A"
+    assert basket == [K200_NIGHT]

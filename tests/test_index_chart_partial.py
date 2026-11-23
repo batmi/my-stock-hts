@@ -25,8 +25,15 @@ def _page(n, start_day):
 
 
 @pytest.fixture(autouse=True)
-def _kis_mode():
+def _kis_mode(monkeypatch):
     config.session.is_toss = False
+    #  [2026-11-18] 평일에는 market_today 가 오늘의 휴장 여부를 call_api(chk_holiday)로 묻는다 — 그 호출이
+    #   아래 테스트들이 순서대로 준비한 페이지 목(side_effect)의 첫 장을 먹는다. 같은 프로세스의 앞선 테스트가
+    #   휴장 캐시를 채워 두면 지나가서, 전체 실행에선 통과하고 이 파일만(또는 워커 첫 테스트로) 돌면 실패했다.
+    #   오늘을 거래일로 확정해 둔다(monkeypatch 가 끝나면 되돌린다).
+    from datetime import datetime
+    from api import market_calendar
+    monkeypatch.setitem(market_calendar._HOLIDAY_CACHE, datetime.now().strftime("%Y%m%d"), False)
     api.clear_chart_cache()
     yield
     api.clear_chart_cache()
