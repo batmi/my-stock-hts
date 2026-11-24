@@ -584,6 +584,14 @@ class TraderLifecycleMixin:
             self.initialized = False
 
         except Exception as e:
+            #  [Fix 2026-11-24] 초기화 결과는 이번 기동 한 번에만 쓴다 — 성공 경로(위)와 똑같이 되돌린다.
+            #   initialize() 가 성공한 뒤 예외가 나면(시작 알림 조립 중 보유 분석 등) initialized 가 True 로
+            #   남아, 같은 프로세스의 다음 start() 가 초기화를 건너뛰었다 — 미체결 복원·트레일링 캐시·
+            #   시작 자산·초기 잔고가 그 기동의 낡은 값으로 돈다. 7f4a513 전에는 다른 경로의 AutoTrader()
+            #   호출이 매번 이 플래그를 지워 가려졌다.
+            self.initial_holdings = None
+            self.initial_summary = None
+            self.initialized = False
             # 매매 루프가 뜨지 못했으면 잠금을 붙들고 있을 이유가 없다.
             # (붙들면 다음 실행 시도가 '이미 실행 중'으로 거부된다)
             if not self.is_running:

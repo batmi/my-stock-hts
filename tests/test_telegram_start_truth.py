@@ -221,3 +221,46 @@ def test_DB_손상_사유도_원격까지_간다(bot, monkeypatch):
 
     assert bot.trader._check_db_health() is False
     assert "DB 무결성 검사 실패" in bot._start_failure_reason()
+
+
+def test_초기화_뒤_예외로_끝난_기동은_다음_기동의_초기화를_막지_않는다(bot, monkeypatch):
+    """[2026-11-24] initialize() 가 성공한 뒤 시작 알림 조립에서 예외가 나면 initialized 가 True 로 남아,
+    같은 프로세스의 다음 start() 가 초기화(미체결 복원·트레일링 캐시·시작 자산·초기 잔고)를 건너뛰었다.
+    7f4a513 전에는 다른 경로의 AutoTrader() 호출이 매번 이 플래그를 지워 가려졌다."""
+    import config
+    from modules.auto_trade import AutoTrader
+    from modules.auto_trade import lifecycle as tr
+
+    calls = []
+    monkeypatch.setattr(config.session, 'is_paper', True, raising=False)
+    monkeypatch.setattr(config.session, 'is_toss', False, raising=False)
+    monkeypatch.setattr(tr.api, 'send_telegram_message', lambda *a, **k: None)
+    monkeypatch.setattr(tr.api, '_is_screen_output_allowed', lambda: False)
+    monkeypatch.setattr(type(bot.trader), 'log', lambda self, *a, **k: None, raising=False)
+    monkeypatch.setattr(type(bot.trader), '_acquire_instance_lock', lambda self: True)
+    monkeypatch.setattr(type(bot.trader), '_release_instance_lock', lambda self: None)
+    monkeypatch.setattr(type(bot.trader), '_check_db_health', lambda self: True)
+    monkeypatch.setattr(type(bot.trader), '_run_loop', lambda self: None)
+    monkeypatch.setattr(type(bot.trader), 'is_market_open', lambda self: True)
+
+    def _init(self):
+        calls.append(1)
+        self.initialized = True
+        self.initial_holdings, self.initial_summary = [{'pdno': 'OLD'}], [{}]
+        return True
+    monkeypatch.setattr(type(bot.trader), 'initialize', _init)
+
+    def _boom():
+        raise RuntimeError("시작 알림 조립 실패")
+    monkeypatch.setattr(tr._pkg(), 'ts_activation_label', _boom)
+    bot.trader.initialized = False
+    bot.trader.initial_asset = 0
+
+    bot.trader.start(interactive=False)
+    assert bot.trader.initialized is False, "실패한 기동의 초기화 결과가 다음 기동까지 남는다"
+    assert bot.trader.initial_holdings is None and bot.trader.initial_summary is None
+
+    bot.trader.is_running = False            # 정지했다고 치고
+    AutoTrader()                             # 다른 경로가 싱글톤을 불러도 플래그는 지워지지 않는다(7f4a513)
+    bot.trader.start(interactive=False)
+    assert len(calls) == 2, "다음 기동이 초기화를 건너뛰었다"
