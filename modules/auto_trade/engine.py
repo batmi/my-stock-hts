@@ -1705,6 +1705,13 @@ class OrderManager:
         #  풀리지 않아 그 종목의 매도·손절 판정이 무기한 건너뛰어진다 — 자동 복구가 안 되는
         #  상태라 한도를 넘기면 운영자에게 알린다. 취소 성공 시 항목을 지운다.
         self.cancel_failures = {}
+        # [2026-11-27 토스 1.2.31] 휴게(15:30~16:00)에 '접수 불가 시간'으로 거부돼 미룬 취소
+        #  {odno: 마지막 시도 시각}. 1.2.31 부터 DAY 주문은 국내도 애프터마켓 종료까지 살아 있을
+        #  수 있어, 휴게에 걸린 미체결이 16:00 애프터에서 체결될 수 있다. 이 거부는 거래소가
+        #  쉬는 것이지 취소가 막힌 게 아니므로 실패로 세지 않는다(손절 멈춤 경보 오발 방지).
+        self.cancel_deferred = {}
+        # 휴게 생존 주문 점검을 마친 날짜(YYYYMMDD) — 하루 한 번만 본다.
+        self.break_survivor_checked_day = None
         # [안전장치] '고아 주문' 경보를 이미 보낸 주문번호. API 미체결 목록에서 사라졌는데
         #  로컬 폴백(ORDER_SENT 전용)도 건드리지 않는 상태(ACCEPTED·PARTIAL_FILLED)라
         #  어느 경로로도 pending이 풀리지 않는 주문이다. 주문 종결 시 항목을 지운다.
@@ -2041,6 +2048,76 @@ class OrderManager:
     # 취소가 연속 이 횟수만큼 실패하면 운영자에게 알린다. 이 상태는 자동 복구되지 않는다 —
     # pending이 유지되어 해당 종목의 매도·손절 판정이 계속 건너뛰어지기 때문이다.
     CANCEL_FAILURE_ALERT_THRESHOLD = 3
+    # 토스 '주문 접수 불가 시간' 오류 코드(주문·정정·취소 공통 422).
+    ORDER_HOURS_CLOSED = "order-hours-closed"
+    # 휴게 중 미룬 취소의 재시도 간격(초). 5초 주기 그대로 두면 30분간 수백 번 거부 로그가 쌓인다.
+    BREAK_CANCEL_RETRY_SECONDS = 30
+    # 휴게 진입 후 생존 주문을 보기까지 기다리는 시간(분) — 15:30 종가 단일가 체결이 주문 목록에
+    #  반영되기 전이면 이미 체결된 주문이 '살아 있다'로 잡힌다.
+    BREAK_SURVIVOR_SETTLE_MINUTES = 2
+
+    def _defer_cancel_in_break(self, odno, code, name, now):
+        """휴게 중 '접수 불가 시간'으로 거부된 취소를 실패로 세지 않고 미룬다.
+
+        첫 거부에만 알린다 — 주문이 16:00 애프터마켓 개장 때 체결될 수 있다는 사실이 요점이다.
+        재시도는 manage_unfilled_orders 가 BREAK_CANCEL_RETRY_SECONDS 간격으로, 휴게가 끝나면
+        평소 주기로 한다.
+        """
+        key = str(odno)
+        first = key not in self.cancel_deferred
+        self.cancel_deferred[key] = now
+        if not first:
+            return
+        self.trader.log(f"[미체결 관리] {name}({code}) 주문 {odno} — 휴게(15:30~16:00) 중이라 "
+                        f"취소가 접수되지 않았습니다. 16:00 애프터마켓 개장 직후까지 계속 시도합니다.")
+        api.send_telegram_message(
+            f"🕒 [취소 보류] {name}({code})\n"
+            f"주문번호: {utils.format_order_no(odno)}\n"
+            f"정규장이 끝난 휴게(15:30~16:00)라 취소가 접수되지 않았습니다.\n"
+            f"계속 취소를 시도하지만, 16:00 KRX 애프터마켓이 열릴 때 먼저 체결될 수 있습니다.")
+
+    def _check_break_survivors(self, now):
+        """정규장이 끝난 뒤에도 열려 있는 주문을 휴게 중 하루 한 번 점검해 알린다.
+
+        [토스 1.2.31] 당일(DAY) 주문은 국내도 '늦어도 애프터마켓 종료 후' 취소된다 — 종전
+         설명은 '정규장 종료까지'였다. 15:30 에 사라진다고 믿던 주문이 16:00 애프터에서
+         체결될 수 있으므로, 살아남은 주문을 운영자에게 보여 준다. 분류는 자동 취소 규칙과
+         같다: DB 에 없거나 '(외부)' 인 주문은 손대지 않고(알림만), 그 밖은 자동 취소 대상.
+        조회 실패(None)는 '없음'이 아니다 — 점검 완료로 표시하지 않고 다음 호출에 다시 본다.
+        """
+        day = now.strftime("%Y%m%d")
+        if self.break_survivor_checked_day == day:
+            return
+        settled = now - timedelta(minutes=self.BREAK_SURVIVOR_SETTLE_MINUTES)
+        if not (api.domestic_break_window(now) and api.domestic_break_window(settled)):
+            return
+        try:
+            rows = api.get_unfilled_orders()
+        except Exception as e:   # noqa: BLE001 — 점검 실패가 미체결 관리를 막으면 안 된다
+            logger.debug(f"[생존 주문 점검] 미체결 조회 실패: {e}")
+            return
+        if rows is None:
+            return
+        self.break_survivor_checked_day = day
+
+        lines = []
+        for item in rows:
+            odno = item.get('odno')
+            qty = api.safe_int(item.get('rmn_qty'))
+            if not odno or qty <= 0:
+                continue
+            trade = db_manager.db.get_trade_by_odno(odno, on_date=utils.odno_scope_date(item))
+            external = (not trade) or "(외부)" in (trade.get('type') or '')
+            who = "외부 주문 — 손대지 않음" if external else "자동 취소 대상 — 계속 시도"
+            lines.append(f"· {item.get('prdt_name') or ''}({item.get('pdno')}) 잔량 {qty}주 "
+                         f"No.{utils.format_order_no(odno)} [{who}]")
+        if not lines:
+            return
+        self.trader.log(f"[생존 주문 점검] 정규장 마감 후 열려 있는 주문 {len(lines)}건")
+        api.send_telegram_message(
+            f"🕒 [장 마감 후 열린 주문] {len(lines)}건\n" + "\n".join(lines) +
+            "\n\n16:00 KRX 애프터마켓이 열리면 체결될 수 있습니다"
+            "(당일 주문은 늦어도 애프터마켓 종료 후 취소).")
 
     def _note_cancel_failure(self, odno, code, name, res, elapsed):
         """미체결 취소 실패를 누적하고, 한도를 넘으면 1회 경보한다."""
@@ -2075,7 +2152,10 @@ class OrderManager:
 
     def manage_unfilled_orders(self):
         """오래된 미체결 주문 확인 및 취소"""
-        
+
+        # 휴게 생존 주문 점검은 로컬 대기 주문이 없어도 한다(외부·수동 주문도 애프터에서 체결된다).
+        self._check_break_survivors(datetime.now())
+
         # [추가] 장 마감 상태이며 로컬에 진행 중인 주문이 없을 경우 API 호출 생략 (트래픽 낭비 원천 차단)
         if not self.trader.is_market_open():
             with self._lock:
@@ -2151,7 +2231,13 @@ class OrderManager:
                             # [추가] 외부에서 들어온 주문은 시스템이 자동 취소(타임아웃)하지 않도록 보호
                             if trade and "(외부)" in trade.get('type', ''):
                                 continue
-                                
+
+                            # 휴게에서 이미 한 번 거부된 취소는 간격을 두고 다시 낸다.
+                            _deferred_at = self.cancel_deferred.get(str(odno))
+                            if (_deferred_at is not None and api.domestic_break_window(now)
+                                    and (now - _deferred_at).total_seconds() < self.BREAK_CANCEL_RETRY_SECONDS):
+                                continue
+
                             self.trader.log(f"[미체결 관리] {name}({code}) 주문({odno})이 {int(elapsed)}초 동안 체결되지 않아 취소합니다.")
                             
                             #  [Fix 2026-09-06] 예외도 '취소 실패'다. revise_cancel_order 는
@@ -2182,6 +2268,12 @@ class OrderManager:
                                 cancel_odno = str((res.get('output') or {}).get('ODNO') or '').strip() or f"CANCEL_{odno}"
                                 db_manager.db.insert_trade(f"{t_type}취소(자동)", code, name, qty, 0, cancel_odno, org_odno=odno, reason=f"미체결 시간 초과 (자동 취소)", order_status="취소")
                                 self.cancel_failures.pop(str(odno), None)
+                                self.cancel_deferred.pop(str(odno), None)
+                            elif (str(res.get('msg_cd') or '') == self.ORDER_HOURS_CLOSED
+                                  and api.domestic_break_window(now)):
+                                # 휴게라 거래소가 안 받는 것 — 실패로 세지 않는다. 휴게 밖에서
+                                #  같은 코드가 오면 아래 평소 경로로 세어 경보까지 간다.
+                                self._defer_cancel_in_break(odno, code, name, now)
                             else:
                                 # [Fix] 종전에는 실패를 로그 한 줄로 넘겨, 취소가 계속 실패하면
                                 #  pending이 영원히 안 풀렸다. 그 종목은 is_pending 때문에 매도
