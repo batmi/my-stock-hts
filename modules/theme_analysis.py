@@ -646,8 +646,10 @@ def _gemini_generate(content, generation_config, timeout, timeout_retries=1):
     자동 전환하여 재시도한다. 안내 메시지는 화면에 그대로 출력한다.
 
     응답은 스트리밍(stream=True)으로 수신하며, timeout은 첫 응답 조각까지의
-    제한으로 적용된다. 타임아웃 시에는 같은 모델로 timeout_retries회까지
-    재시도한다.
+    제한으로 적용된다. 타임아웃 시 폴백 모델이 남아 있으면 같은 모델을 다시 기다리지
+    않고 곧바로 폴백 모델로 넘어간다 — 기본 모델이 과부하로 멈춰 있을 때 재시도는
+    대개 503 으로 끝나 대기 시간만 늘린다(2026-11 3.8 Flash 실측). 폴백이 없는
+    마지막 모델만 같은 모델로 timeout_retries회까지 재시도한다.
 
     반환: generate_content 응답 객체. 최종 실패 시 예외를 그대로 전파한다.
     """
@@ -658,19 +660,26 @@ def _gemini_generate(content, generation_config, timeout, timeout_retries=1):
 
     last_exc = None
     for idx, model_name in enumerate(models):
+        has_fallback = idx < len(models) - 1
+        retries = 0 if has_fallback else timeout_retries
         try:
-            for attempt in range(timeout_retries + 1):
+            for attempt in range(retries + 1):
                 try:
                     return _gemini_stream_response(content, model_name, generation_config, timeout)
                 except GeminiTimeoutError:
-                    if attempt < timeout_retries:
+                    if attempt < retries:
                         config.console.print("\n[yellow]API 응답 대기 시간 초과 - 같은 모델로 다시 시도합니다...[/yellow]")
-                        logger.warning(f"Gemini timeout on {model_name} (attempt {attempt + 1}/{timeout_retries + 1}); retrying")
+                        logger.warning(f"Gemini timeout on {model_name} (attempt {attempt + 1}/{retries + 1}); retrying")
                         continue
                     raise
         except Exception as e:
             last_exc = e
-            has_fallback = idx < len(models) - 1
+            if has_fallback and isinstance(e, GeminiTimeoutError):
+                next_model = models[idx + 1]
+                config.console.print(f"\n[yellow]API 응답 대기 시간 초과 - 모델: {model_name}[/yellow]")
+                config.console.print(f"[dim]  '{next_model}' 모델로 자동 전환 후 다시 시도합니다.[/dim]")
+                logger.warning(f"Gemini timeout on {model_name}; falling back to {next_model}. {e}")
+                continue
             if has_fallback and _is_gemini_rate_limit(e):
                 next_model = models[idx + 1]
                 config.console.print(f"\n[yellow]Gemini API 호출 한도 초과 (Rate Limit) - 모델: {model_name}[/yellow]")

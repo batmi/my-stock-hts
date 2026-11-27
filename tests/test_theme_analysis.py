@@ -137,6 +137,18 @@ def test_analyze_market_trends_success():
         finally:
             config.GEMINI_API_KEY = original_key
 
+@pytest.fixture
+def distinct_gemini_models(monkeypatch):
+    """기본·폴백 모델을 서로 다른 이름으로 고정한다.
+
+    config 는 셸의 GEMINI_MODEL 을 읽으므로, 운용자가 기본을 lite 로 돌려 두면(기본=폴백)
+    폴백 경로가 사라져 폴백 테스트가 환경 탓에 깨진다(2026-11-27 실례).
+    """
+    monkeypatch.setattr(config, "GEMINI_MODEL", "primary-model")
+    monkeypatch.setattr(config, "GEMINI_FALLBACK_MODEL", "fallback-model")
+
+
+@pytest.mark.usefixtures("distinct_gemini_models")
 def test_gemini_generate_503_fallback():
     """기본 모델 503(서버 과부하) 시 폴백 모델로 자동 전환 테스트"""
     pytest.importorskip("google.genai")
@@ -147,12 +159,39 @@ def test_gemini_generate_503_fallback():
         assert mock_stream.call_args_list[1][0][1] == config.GEMINI_FALLBACK_MODEL
 
 
+@pytest.mark.usefixtures("distinct_gemini_models")
 def test_gemini_generate_429_fallback():
     """기본 모델 429(한도 초과) 시 폴백 모델로 자동 전환 테스트"""
     pytest.importorskip("google.genai")
     theme_analysis._ensure_genai()
     with patch('modules.theme_analysis._gemini_stream') as mock_stream:
         _run_fallback_scenario(mock_stream, "429 RESOURCE_EXHAUSTED: Quota exceeded")
+
+
+def test_gemini_generate_timeout_falls_back_without_retry():
+    """폴백 모델이 있으면 타임아웃 시 같은 모델을 다시 기다리지 않고 곧바로 폴백한다"""
+    ok = MagicMock(text="폴백 응답")
+    with patch.object(config, "GEMINI_MODEL", "primary-model"), \
+         patch.object(config, "GEMINI_FALLBACK_MODEL", "fallback-model"), \
+         patch('modules.theme_analysis._gemini_stream_response',
+               side_effect=[theme_analysis.GeminiTimeoutError("timeout"), ok]) as mock_resp:
+        result = theme_analysis._gemini_generate("p", {}, 5.0)
+
+    assert result is ok
+    assert [c[0][1] for c in mock_resp.call_args_list] == ["primary-model", "fallback-model"]
+
+
+def test_gemini_generate_timeout_retries_same_model_without_fallback():
+    """폴백이 없으면(기본=폴백) 넘어갈 곳이 없으니 같은 모델로 한 번 더 시도한다"""
+    ok = MagicMock(text="재시도 응답")
+    with patch.object(config, "GEMINI_MODEL", "only-model"), \
+         patch.object(config, "GEMINI_FALLBACK_MODEL", "only-model"), \
+         patch('modules.theme_analysis._gemini_stream_response',
+               side_effect=[theme_analysis.GeminiTimeoutError("timeout"), ok]) as mock_resp:
+        result = theme_analysis._gemini_generate("p", {}, 5.0)
+
+    assert result is ok
+    assert [c[0][1] for c in mock_resp.call_args_list] == ["only-model", "only-model"]
 
 
 def _run_fallback_scenario(mock_stream, error_message):
